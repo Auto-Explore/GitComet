@@ -1,15 +1,42 @@
+use crate::model::{BranchExistsPromptOperation, BranchExistsPromptState};
 use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
-use gitcomet_core::error::Error;
-use gitcomet_core::services::GitRepository;
+use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, path_context, paths_context, send_or_log,
-    short_commit_id, single_line_context, spawn_with_repo,
+    GitOperationTask, RepoMap, message_subject, missing_repo_error, path_context, paths_context,
+    send_or_log, short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
+
+/// Runs a repo action against the repo's handle, or finishes it at once when
+/// the worker holds none (the tab is still opening, or its open failed).
+///
+/// The reducer counted the action in flight when it dispatched the effect, and
+/// only the completion releases that count, so a silently dropped action would
+/// leave the stage, unstage and discard controls disabled for good.
+fn spawn_repo_action(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    repo_id: RepoId,
+    msg_tx: StoreWorkerSender,
+    action: RepoActionKind,
+    task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender) + Send + 'static,
+) {
+    spawn_with_repo_or_else(executor, repos, repo_id, msg_tx, task, move |msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(InternalMsg::RepoActionFinished {
+                repo_id,
+                action,
+                result: Err(missing_repo_error(repo_id)),
+            }),
+        );
+    });
+}
 
 fn schedule_repo_action_with_hook<F, H, M>(
     executor: &TaskExecutor,
@@ -26,18 +53,25 @@ fn schedule_repo_action_with_hook<F, H, M>(
     H: FnOnce(&StoreWorkerSender, RepoId, &Result<(), Error>) + Send + 'static,
     M: FnOnce(RepoId, Result<(), Error>) -> InternalMsg + Send + 'static,
 {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let operation =
-            GitOperationTask::start(repo_id, action.hook_activity_label(), context, &msg_tx);
-        let result = {
-            let _scope = operation.attach();
-            run(repo)
-        };
-        hook(&msg_tx, repo_id, &result);
-        let outcome = GitOperationTask::outcome(&result);
-        let message = finish(repo_id, result);
-        operation.finish(outcome, message);
-    });
+    spawn_repo_action(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        action,
+        move |repo, msg_tx| {
+            let operation =
+                GitOperationTask::start(repo_id, action.hook_activity_label(), context, &msg_tx);
+            let result = {
+                let _scope = operation.attach();
+                run(repo)
+            };
+            hook(&msg_tx, repo_id, &result);
+            let outcome = GitOperationTask::outcome(&result);
+            let message = finish(repo_id, result);
+            operation.finish(outcome, message);
+        },
+    );
 }
 
 fn schedule_repo_action_with_result<T, F, M>(
@@ -54,6 +88,16 @@ fn schedule_repo_action_with_result<T, F, M>(
     F: FnOnce(Arc<dyn GitRepository>) -> Result<T, Error> + Send + 'static,
     M: FnOnce(RepoId, Result<T, Error>) -> InternalMsg + Send + 'static,
 {
+    // See `spawn_repo_action`: a missing handle must still complete the action.
+    if !repos.contains_key(&repo_id) {
+        if !msg_tx.is_cancelled() {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(finish(repo_id, Err(missing_repo_error(repo_id)))),
+            );
+        }
+        return;
+    }
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
@@ -149,48 +193,214 @@ fn run_with_git_auth<R>(
     }
 }
 
+/// Where an action on a branch runs: here, or in the other worktree that has
+/// the branch checked out (git refuses to check a branch out twice).
+enum BranchActionHost {
+    Here,
+    OtherWorktree(PathBuf),
+}
+
+/// What to do when the branch lives in another worktree.
+#[derive(Clone, Copy)]
+enum WorktreeRedirect {
+    /// Run nothing; just report the worktree so it gets opened.
+    OpenOnly,
+    /// Run the action through a handle opened at that worktree, then open it.
+    RunThere,
+}
+
+fn branch_action_host(repo: &dyn GitRepository, branch: &str) -> Result<BranchActionHost, Error> {
+    Ok(match repo.branch_checked_out_in_other_worktree(branch)? {
+        Some(path) => BranchActionHost::OtherWorktree(path),
+        None => BranchActionHost::Here,
+    })
+}
+
+/// Opens `path` and checks it is a different worktree that still has `branch`
+/// checked out, so the action never lands somewhere unexpected.
+fn open_worktree_holding_branch(
+    backend: &dyn GitBackend,
+    origin: &dyn GitRepository,
+    path: &Path,
+    branch: &str,
+) -> Result<Arc<dyn GitRepository>, Error> {
+    let handle = backend.open(path)?;
+    if handle.spec().workdir == origin.spec().workdir {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "worktree at '{}' is this repository's own working directory",
+            path.display()
+        ))));
+    }
+    let current = handle.current_branch()?;
+    if current != branch {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "the worktree at '{}' no longer has branch '{branch}' checked out",
+            path.display()
+        ))));
+    }
+    Ok(handle)
+}
+
+fn is_branch_already_exists(result: &Result<(), Error>) -> bool {
+    matches!(
+        result,
+        Err(error) if matches!(
+            error.kind(),
+            ErrorKind::Git(failure) if failure.id() == GitFailureId::BranchAlreadyExists
+        )
+    )
+}
+
+/// Finish an action that hit an existing branch: refresh the possibly stale
+/// branch list and let shared state open the collision prompt.
+fn finish_branch_collision(
+    operation: GitOperationTask,
+    msg_tx: &StoreWorkerSender,
+    action: RepoActionKind,
+    prompt: BranchExistsPromptState,
+    result: &Result<(), Error>,
+) {
+    send_or_log(
+        msg_tx,
+        Msg::RefreshBranches {
+            repo_id: prompt.repo_id,
+        },
+    );
+    let outcome = GitOperationTask::outcome(result);
+    operation.finish(outcome, InternalMsg::BranchAlreadyExists { action, prompt });
+}
+
+/// Runs `run` on `branch` where git allows it, redirecting to the worktree
+/// that has the branch checked out.
+#[allow(clippy::too_many_arguments)]
+fn schedule_branch_action(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    context: Option<String>,
+    branch: String,
+    redirect: WorktreeRedirect,
+    run: impl FnOnce(&dyn GitRepository) -> Result<(), Error> + Send + 'static,
+) {
+    spawn_repo_action(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        action,
+        move |repo, msg_tx| {
+            let operation =
+                GitOperationTask::start(repo_id, action.hook_activity_label(), context, &msg_tx);
+            let (host, result, ran) = {
+                let _scope = operation.attach();
+                match branch_action_host(&*repo, &branch) {
+                    Err(err) => (BranchActionHost::Here, Err(err), false),
+                    Ok(BranchActionHost::Here) => (BranchActionHost::Here, run(&*repo), true),
+                    Ok(BranchActionHost::OtherWorktree(path)) => {
+                        let (result, ran) = match redirect {
+                            WorktreeRedirect::OpenOnly => (Ok(()), false),
+                            WorktreeRedirect::RunThere => (
+                                open_worktree_holding_branch(&*backend, &*repo, &path, &branch)
+                                    .and_then(|handle| run(&*handle)),
+                                true,
+                            ),
+                        };
+                        (BranchActionHost::OtherWorktree(path), result, ran)
+                    }
+                }
+            };
+            if ran {
+                send_refresh_branches_and_load_worktrees_on_success(&msg_tx, repo_id, &result);
+            }
+            let outcome = GitOperationTask::outcome(&result);
+            let message = match host {
+                BranchActionHost::Here => InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action,
+                    result,
+                },
+                BranchActionHost::OtherWorktree(worktree_path) => {
+                    InternalMsg::RepoActionFinishedInWorktree {
+                        repo_id,
+                        action,
+                        worktree_path,
+                        result,
+                    }
+                }
+            };
+            operation.finish(outcome, message);
+        },
+    );
+}
+
 pub(super) fn schedule_checkout_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
     let context = single_line_context(&name);
-    schedule_repo_action_with_hook(
+    let branch = name.clone();
+    schedule_branch_action(
         executor,
         repos,
+        backend,
         msg_tx,
         repo_id,
         RepoActionKind::CheckoutBranch,
         context,
+        branch,
+        WorktreeRedirect::OpenOnly,
         move |repo| repo.checkout_branch(&name),
-        send_refresh_branches_and_load_worktrees_on_success,
-        repo_action_finished(RepoActionKind::CheckoutBranch),
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_checkout_remote_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     branch: String,
     local_branch: String,
+    mode: CheckoutRemoteBranchMode,
 ) {
     let context = single_line_context(format!("{remote}/{branch} → {local_branch}"));
-    schedule_repo_action_with_hook(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoActionKind::CheckoutRemoteBranch,
-        context,
-        move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch),
-        send_refresh_branches_and_load_worktrees_on_success,
-        repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
-    );
+    match mode {
+        CheckoutRemoteBranchMode::Create => schedule_repo_action_with_hook(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            RepoActionKind::CheckoutRemoteBranch,
+            context,
+            move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
+            send_refresh_branches_and_load_worktrees_on_success,
+            repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
+        ),
+        CheckoutRemoteBranchMode::Overwrite => {
+            let target = local_branch.clone();
+            schedule_branch_action(
+                executor,
+                repos,
+                backend,
+                msg_tx,
+                repo_id,
+                RepoActionKind::CheckoutRemoteBranch,
+                context,
+                target,
+                WorktreeRedirect::RunThere,
+                move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
+            )
+        }
+    }
 }
 
 pub(super) fn schedule_checkout_commit(
@@ -211,25 +421,6 @@ pub(super) fn schedule_checkout_commit(
         move |repo| repo.checkout_commit(&commit_id),
         send_load_worktrees_on_success,
         repo_action_finished(RepoActionKind::CheckoutCommit),
-    );
-}
-
-pub(super) fn schedule_revert_commit(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-) {
-    let context = Some(short_commit_id(commit_id.as_ref()));
-    schedule_repo_action(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoActionKind::RevertCommit,
-        context,
-        move |repo| repo.revert(&commit_id),
     );
 }
 
@@ -258,69 +449,169 @@ pub(super) fn schedule_create_branch(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_create_branch_and_checkout(
     executor: &TaskExecutor,
     repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     target: String,
+    force: bool,
 ) {
     let context = single_line_context(format!("{name} at {target}"));
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let operation = GitOperationTask::start(
+    if force {
+        let branch = name.clone();
+        schedule_branch_action(
+            executor,
+            repos,
+            backend,
+            msg_tx,
             repo_id,
-            RepoActionKind::CreateBranchAndCheckout.hook_activity_label(),
+            RepoActionKind::CreateBranchAndCheckout,
             context,
-            &msg_tx,
-        );
-        let result = {
-            let _scope = operation.attach();
-            let target = gitcomet_core::domain::CommitId(target.into());
-            let created = repo.create_branch(&name, &target);
-            let refresh = created.is_ok();
-            let result = created.and_then(|()| repo.checkout_branch(&name));
-            (refresh, result)
-        };
-        let (refresh, result) = result;
-        if refresh {
-            send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
-        }
-        if result.is_ok() {
-            send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
-            send_or_log(&msg_tx, Msg::LoadWorktreeDirty { repo_id });
-        }
-        let outcome = GitOperationTask::outcome(&result);
-        operation.finish(
-            outcome,
-            InternalMsg::RepoActionFinished {
-                repo_id,
-                action: RepoActionKind::CreateBranchAndCheckout,
-                result,
+            branch,
+            WorktreeRedirect::RunThere,
+            move |repo| {
+                let target_id = gitcomet_core::domain::CommitId(target.into());
+                repo.create_branch_force_and_checkout(&name, &target_id)
             },
         );
-    });
+        return;
+    }
+
+    spawn_repo_action(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        RepoActionKind::CreateBranchAndCheckout,
+        move |repo, msg_tx| {
+            let operation = GitOperationTask::start(
+                repo_id,
+                RepoActionKind::CreateBranchAndCheckout.hook_activity_label(),
+                context,
+                &msg_tx,
+            );
+            let created = {
+                let _scope = operation.attach();
+                let target_id = gitcomet_core::domain::CommitId(target.clone().into());
+                repo.create_branch(&name, &target_id)
+            };
+            if is_branch_already_exists(&created) {
+                finish_branch_collision(
+                    operation,
+                    &msg_tx,
+                    RepoActionKind::CreateBranchAndCheckout,
+                    BranchExistsPromptState {
+                        repo_id,
+                        name,
+                        target,
+                        operation: BranchExistsPromptOperation::CreateBranch,
+                    },
+                    &created,
+                );
+                return;
+            }
+
+            let refresh = created.is_ok();
+            let result = {
+                let _scope = operation.attach();
+                created.and_then(|()| repo.checkout_branch(&name))
+            };
+            if refresh {
+                send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
+            }
+            if result.is_ok() {
+                send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
+                send_or_log(&msg_tx, Msg::LoadWorktreeDirty { repo_id });
+            }
+            let outcome = GitOperationTask::outcome(&result);
+            operation.finish(
+                outcome,
+                InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action: RepoActionKind::CreateBranchAndCheckout,
+                    result,
+                },
+            );
+        },
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_rename_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     old_name: String,
     new_name: String,
+    force: bool,
 ) {
     let context = single_line_context(format!("{old_name} → {new_name}"));
-    schedule_repo_action_with_hook(
+    if force {
+        let branch = new_name.clone();
+        schedule_branch_action(
+            executor,
+            repos,
+            backend,
+            msg_tx,
+            repo_id,
+            RepoActionKind::RenameBranch,
+            context,
+            branch,
+            WorktreeRedirect::RunThere,
+            move |repo| repo.rename_branch_force(&old_name, &new_name),
+        );
+        return;
+    }
+
+    spawn_repo_action(
         executor,
         repos,
-        msg_tx,
         repo_id,
+        msg_tx,
         RepoActionKind::RenameBranch,
-        context,
-        move |repo| repo.rename_branch(&old_name, &new_name),
-        send_refresh_branches_and_load_worktrees_on_success,
-        repo_action_finished(RepoActionKind::RenameBranch),
+        move |repo, msg_tx| {
+            let operation = GitOperationTask::start(
+                repo_id,
+                RepoActionKind::RenameBranch.hook_activity_label(),
+                context,
+                &msg_tx,
+            );
+            let result = {
+                let _scope = operation.attach();
+                repo.rename_branch(&old_name, &new_name)
+            };
+            if is_branch_already_exists(&result) {
+                finish_branch_collision(
+                    operation,
+                    &msg_tx,
+                    RepoActionKind::RenameBranch,
+                    BranchExistsPromptState {
+                        repo_id,
+                        name: new_name,
+                        target: old_name.clone(),
+                        operation: BranchExistsPromptOperation::RenameBranch { old_name },
+                    },
+                    &result,
+                );
+                return;
+            }
+            send_refresh_branches_and_load_worktrees_on_success(&msg_tx, repo_id, &result);
+            let outcome = GitOperationTask::outcome(&result);
+            operation.finish(
+                outcome,
+                InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action: RepoActionKind::RenameBranch,
+                    result,
+                },
+            );
+        },
     );
 }
 
@@ -690,33 +981,40 @@ pub(super) fn schedule_pop_stash(
     index: usize,
 ) {
     let context = Some(format!("stash@{{{index}}}"));
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let operation = GitOperationTask::start(
-            repo_id,
-            RepoActionKind::PopStash.hook_activity_label(),
-            context,
-            &msg_tx,
-        );
-        let (applied, result) = {
-            let _scope = operation.attach();
-            let apply_result = repo.stash_apply(index);
-            let applied = apply_result.is_ok();
-            let result = apply_result.and_then(|()| repo.stash_drop(index));
-            (applied, result)
-        };
-        if applied {
-            send_or_log(&msg_tx, Msg::LoadStashes { repo_id });
-        }
-        let outcome = GitOperationTask::outcome(&result);
-        operation.finish(
-            outcome,
-            InternalMsg::RepoActionFinished {
+    spawn_repo_action(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        RepoActionKind::PopStash,
+        move |repo, msg_tx| {
+            let operation = GitOperationTask::start(
                 repo_id,
-                action: RepoActionKind::PopStash,
-                result,
-            },
-        );
-    });
+                RepoActionKind::PopStash.hook_activity_label(),
+                context,
+                &msg_tx,
+            );
+            let (applied, result) = {
+                let _scope = operation.attach();
+                let apply_result = repo.stash_apply(index);
+                let applied = apply_result.is_ok();
+                let result = apply_result.and_then(|()| repo.stash_drop(index));
+                (applied, result)
+            };
+            if applied {
+                send_or_log(&msg_tx, Msg::LoadStashes { repo_id });
+            }
+            let outcome = GitOperationTask::outcome(&result);
+            operation.finish(
+                outcome,
+                InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action: RepoActionKind::PopStash,
+                    result,
+                },
+            );
+        },
+    );
 }
 
 pub(super) fn schedule_drop_stash(

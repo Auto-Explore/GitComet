@@ -14,16 +14,12 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(popover_title("Change submodule pointer"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child(format!("Submodule: {}", path.display())),
-        )
+        .child(popover_title(theme, "Change submodule pointer"))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(
+            theme,
+            format!("Submodule: {}", path.display()),
+        ))
         .child(input_label(theme, "Target ref / branch / tag / commit"))
         .child(
             div()
@@ -33,14 +29,9 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.submodule_ref_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button(
                         "submodule_change_pointer_cancel",

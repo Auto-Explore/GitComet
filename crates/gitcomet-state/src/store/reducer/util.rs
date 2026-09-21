@@ -6,18 +6,136 @@ use crate::model::{
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
-use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth};
-use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
+use gitcomet_core::auth::{
+    GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
+};
+#[cfg(test)]
+use gitcomet_core::domain::Upstream;
+use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
 use smallvec::{Array, SmallVec};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+
+/// Replace pending demand with the selection and current viewport. Attempts are
+/// memoized only when started, so scrolling never marks skipped commits done.
+pub(super) fn verify_commit_signatures_effect(
+    formats: SignatureFormats,
+    repo_state: &mut RepoState,
+    repo_id: RepoId,
+    ids: impl IntoIterator<Item = CommitId>,
+) -> Option<Effect> {
+    if formats.is_empty() {
+        return None;
+    }
+    let history = &mut repo_state.history_state;
+    let mut unique = FxHashSet::default();
+    let pending: Vec<_> = ids
+        .into_iter()
+        .chain(history.selected_commit.iter().cloned())
+        .chain(history.commit_signatures_visible.iter().cloned())
+        .filter(|id| {
+            !history.commit_signatures_requested.contains(id)
+                && !history.commit_signatures.contains_key(id)
+                && unique.insert(id.clone())
+        })
+        .take(257)
+        .collect();
+    history.commit_signatures_queue.clear();
+    history
+        .commit_signatures_queue
+        .extend(pending.chunks(16).map(Arc::from));
+    if history.commit_signatures_in_flight {
+        return None;
+    }
+    let commit_ids = history.commit_signatures_queue.pop_front()?;
+    let requested = Arc::make_mut(&mut history.commit_signatures_requested);
+    let order = Arc::make_mut(&mut history.commit_signatures_attempt_order);
+    for id in commit_ids.iter() {
+        if requested.insert(id.clone()) {
+            order.push_back(id.clone());
+        }
+    }
+    while order.len() > 4096 {
+        let id = order.pop_front().unwrap();
+        requested.remove(&id);
+        if history.commit_signatures.contains_key(&id) {
+            Arc::make_mut(&mut history.commit_signatures).remove(&id);
+            history.commit_signatures_rev = history.commit_signatures_rev.wrapping_add(1);
+        }
+    }
+    history.commit_signatures_in_flight = true;
+    history.commit_signatures_batch = history.commit_signatures_batch.wrapping_add(1);
+    Some(Effect::VerifyCommitSignatures {
+        repo_id,
+        epoch: history.commit_signatures_epoch,
+        batch: history.commit_signatures_batch,
+        cancellation: history.commit_signatures_cancellation.clone(),
+        commit_ids,
+        formats,
+    })
+}
+
+pub(super) fn reverify_loaded_commit_signatures_effect(
+    formats: SignatureFormats,
+    repo_state: &mut RepoState,
+) -> Option<Effect> {
+    repo_state.clear_commit_signatures();
+    // The UI republishes its viewport for the new epoch; never scan loaded pages.
+    verify_commit_signatures_effect(formats, repo_state, repo_state.id, [])
+}
+
+pub(super) fn reverify_all_commit_signatures_effects(state: &mut AppState) -> Vec<Effect> {
+    let formats = state.signature_verification_formats();
+    let active = state.active_repo;
+    state
+        .repos
+        .iter_mut()
+        .filter_map(|repo| {
+            reverify_loaded_commit_signatures_effect(
+                if active == Some(repo.id) {
+                    formats
+                } else {
+                    SignatureFormats::NONE
+                },
+                repo,
+            )
+        })
+        .collect()
+}
+
+pub(super) fn set_commit_signature_targets(
+    state: &mut AppState,
+    repo_id: RepoId,
+    epoch: u64,
+    commit_ids: Arc<[CommitId]>,
+) -> Vec<Effect> {
+    if !state.git_log_settings.verify_commit_signatures || state.active_repo != Some(repo_id) {
+        return Vec::new();
+    }
+    let formats = state.signature_verification_formats();
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if epoch != repo.history_state.commit_signatures_epoch {
+        return Vec::new();
+    }
+    repo.history_state.commit_signatures_visible = if commit_ids.len() > 256 {
+        Arc::from(&commit_ids[..256])
+    } else {
+        commit_ids
+    };
+    verify_commit_signatures_effect(formats, repo, repo_id, [])
+        .into_iter()
+        .collect()
+}
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
@@ -365,8 +483,9 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
                 return repo_state.head_gitlink_paths.contains(path);
             }
 
-            let dot_git = repo_state.spec.workdir.join(path).join(".git");
-            dot_git.is_file() || dot_git.is_dir()
+            let mut dot_git = repo_state.spec.workdir.join(path);
+            dot_git.push(".git");
+            std::fs::metadata(&dot_git).is_ok_and(|meta| meta.is_file() || meta.is_dir())
         }
         DiffTarget::Commit {
             commit_id,
@@ -608,6 +727,41 @@ pub(super) fn append_requested_status_refresh_effects(
         (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
         (false, false) => {}
     }
+    repo_state.loads_in_flight.invalidate_line_stats();
+}
+
+/// Reuse the settled status lanes; never fall back to an older combined status.
+pub(super) fn append_ready_line_stats_effect(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    let ready = matches!(
+        (&repo_state.staged_status, &repo_state.worktree_status),
+        (Loadable::Ready(_), Loadable::Ready(_))
+    );
+    if let Some(generation) = repo_state.loads_in_flight.start_line_stats(ready) {
+        let (Loadable::Ready(staged), Loadable::Ready(unstaged)) =
+            (&repo_state.staged_status, &repo_state.worktree_status)
+        else {
+            unreachable!("start_line_stats requires ready status lanes");
+        };
+        crate::store::repo_load_trace::trace!(
+            "line_stats_start repo_id={:?} generation={} snapshot=reused staged={} unstaged={}",
+            repo_id,
+            generation,
+            staged.len(),
+            unstaged.len()
+        );
+        effects.push_effect(Effect::LoadUncommittedLineStats {
+            repo_id,
+            generation,
+            status: std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::clone(staged),
+                unstaged: std::sync::Arc::clone(unstaged),
+            }),
+        });
+    }
 }
 
 fn push_rebase_and_merge_refresh_effect(effects: &mut impl EffectAccumulator, repo_id: RepoId) {
@@ -651,6 +805,23 @@ pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::Pe
     }
 }
 
+/// Preserve the loaded extent. The effects layer captures the Ready page and
+/// asks the backend for a snapshot refresh; this limit also describes the
+/// initial extent when a queued request is promoted.
+pub(super) fn refresh_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
+    crate::model::PendingLogLoad {
+        limit: refresh_log_limit(repo_state),
+        ..first_page_log_request(repo_state)
+    }
+}
+
+pub(super) fn refresh_log_limit(repo_state: &RepoState) -> usize {
+    match &repo_state.log {
+        Loadable::Ready(page) => DEFAULT_LOG_PAGE_SIZE.max(page.commits.len()),
+        _ => DEFAULT_LOG_PAGE_SIZE,
+    }
+}
+
 /// Requests `load` and returns the effect that starts it, or `None` when it was
 /// coalesced into a walk already in flight. The effect carries the sequence
 /// number the request was given, which is how its replies are recognised.
@@ -681,7 +852,7 @@ pub(super) fn append_refresh_primary_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let log_request = first_page_log_request(repo_state);
+    let log_request = refresh_log_request(repo_state);
 
     if let Some(seq) = repo_state
         .loads_in_flight
@@ -692,6 +863,8 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
         push_rebase_and_merge_refresh_effect(effects, repo_id);
         effects.push_effect(Effect::LoadStatus { repo_id });
+        // This batch short-circuits the status-refresh funnel.
+        repo_state.loads_in_flight.invalidate_line_stats();
         effects.push_effect(Effect::LoadLog {
             repo_id,
             seq,
@@ -764,7 +937,7 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
     append_requested_status_refresh_effects(repo_state, effects);
-    let log_request = first_page_log_request(repo_state);
+    let log_request = refresh_log_request(repo_state);
     if let Some(effect) = request_log_effect(repo_state, log_request) {
         repo_state.set_log_loading_more(false);
         effects.push_effect(effect);
@@ -944,11 +1117,13 @@ pub(super) fn push_command_log(
         ok,
         command: command_text,
         summary,
-        stdout: output.stdout.clone(),
+        stdout: command_log_text(&output.stdout),
         stderr: if output.stderr.is_empty() {
-            error.map(format_error_for_user).unwrap_or_default()
+            error
+                .map(format_error_for_user)
+                .map_or_else(|| Arc::from(""), |text| command_log_text(&text))
         } else {
-            output.stderr.clone()
+            command_log_text(&output.stderr)
         },
         announce_success: command_success_is_worth_announcing(command),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
@@ -973,14 +1148,32 @@ pub(super) fn push_action_log(
         ok,
         command,
         summary,
-        stdout: String::new(),
-        stderr: error.map(format_error_for_user).unwrap_or_default(),
+        stdout: Arc::from(""),
+        stderr: error
+            .map(format_error_for_user)
+            .map_or_else(|| Arc::from(""), |text| command_log_text(&text)),
         announce_success: true,
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     });
     if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
         repo_state.feedback.command_log.drain(0..extra);
+    }
+}
+
+/// Per-stream cap for command output kept in the log; the tail is what a
+/// user reads when a command fails, and the hook-activity log uses the same
+/// bound.
+const MAX_COMMAND_LOG_OUTPUT_BYTES: usize = 256 * 1024;
+
+fn command_log_text(text: &str) -> Arc<str> {
+    if text.len() <= MAX_COMMAND_LOG_OUTPUT_BYTES {
+        Arc::from(text)
+    } else {
+        Arc::from(super::git_hook_activity::utf8_tail(
+            text,
+            MAX_COMMAND_LOG_OUTPUT_BYTES,
+        ))
     }
 }
 
@@ -1056,19 +1249,26 @@ fn sequencer_paused(output: &CommandOutput) -> bool {
 }
 
 /// Continue/abort share one UI action and backend entry point for rebases,
-/// `git am`, and cherry-picks. Use the command that actually ran so native
-/// cherry-picks are not recorded as rebases in action history.
+/// `git am`, cherry-picks, and reverts. Use the command that actually ran so
+/// they are not all recorded as rebases in action history.
 fn sequencer_operation_label(output: &CommandOutput, error: Option<&Error>) -> &'static str {
-    let is_cherry_pick = |command: &str| command.trim_start().starts_with("git cherry-pick");
-    if is_cherry_pick(&output.command) {
-        return "Cherry-pick";
-    }
-    if let Some((command, _)) = error.and_then(try_format_git_backend_error)
-        && is_cherry_pick(&command)
-    {
-        return "Cherry-pick";
-    }
-    "Rebase"
+    let label_for = |command: &str| {
+        let command = command.trim_start();
+        if command.starts_with("git cherry-pick") {
+            Some("Cherry-pick")
+        } else if command.starts_with("git revert") {
+            Some("Revert")
+        } else {
+            None
+        }
+    };
+    label_for(&output.command)
+        .or_else(|| {
+            error
+                .and_then(try_format_git_backend_error)
+                .and_then(|(command, _)| label_for(&command))
+        })
+        .unwrap_or("Rebase")
 }
 
 fn summarize_command(
@@ -1088,6 +1288,7 @@ fn summarize_command(
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::SquashRef { .. } => "Squash",
+            RepoCommandKind::PushWithTags { request } => request.mode.label(),
             RepoCommandKind::Push => "Push",
             RepoCommandKind::PushAfterCommit { .. } => "Push after commit",
             RepoCommandKind::ForcePush => "Force push",
@@ -1114,6 +1315,7 @@ fn summarize_command(
             }
             RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
             RepoCommandKind::CherryPick { .. } => "Cherry-pick",
+            RepoCommandKind::Revert { .. } => "Revert",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1257,6 +1459,12 @@ fn summarize_command(
                 "Force push with lease: Completed".to_string()
             }
         }
+        RepoCommandKind::PushWithTags { request } => format!(
+            "{} to {}/{}: Completed",
+            request.mode.label(),
+            request.remote,
+            request.branch
+        ),
         RepoCommandKind::PushSetUpstream { remote, branch } => {
             let base = if output.stderr.contains("Everything up-to-date") {
                 "Everything up-to-date"
@@ -1266,7 +1474,10 @@ fn summarize_command(
             format!("Push -u {remote}/{branch}: {base}")
         }
         RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
-            format!("Branch {branch}: Upstream set to {upstream}")
+            format!(
+                "Branch {branch}: Upstream set to {}/{}",
+                upstream.remote, upstream.branch
+            )
         }
         RepoCommandKind::UnsetUpstreamBranch { branch } => {
             format!("Branch {branch}: Upstream unlinked")
@@ -1339,14 +1550,23 @@ fn summarize_command(
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => {
             let operation = sequencer_operation_label(output, None);
-            if sequencer_paused(output) {
+            if output.command == gitcomet_core::services::REVERT_SKIP_COMMAND {
+                "Revert: Skipped the revert the resolution left empty".to_string()
+            } else if sequencer_paused(output) {
                 format!("{operation}: Paused at the next conflict")
             } else {
                 format!("{operation}: Continued")
             }
         }
         RepoCommandKind::RebaseAbort => {
-            format!("{}: Aborted", sequencer_operation_label(output, None))
+            if output
+                .stdout
+                .contains(gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL)
+            {
+                "Revert: Sequence cleared; HEAD was left where it is".to_string()
+            } else {
+                format!("{}: Aborted", sequencer_operation_label(output, None))
+            }
         }
         RepoCommandKind::InteractiveRebase { base, interactive } => {
             let state = if sequencer_paused(output) {
@@ -1388,6 +1608,35 @@ fn summarize_command(
                     format!("Cherry-picked {short}: {summary}")
                 } else {
                     format!("Cherry-picked {short} without committing: {summary}")
+                }
+            }
+        }
+        RepoCommandKind::Revert {
+            commit_id,
+            commit,
+            summary,
+            ..
+        } => {
+            let sha = commit_id.as_ref();
+            let short = sha.get(0..7).unwrap_or(sha);
+            if output
+                .stdout
+                .contains(gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL)
+            {
+                format!(
+                    "Nothing to revert: the current branch no longer has the changes from {short}."
+                )
+            } else {
+                let summary = summary.lines().next().unwrap_or("").trim();
+                let subject = if summary.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {summary}")
+                };
+                if *commit {
+                    format!("Reverted {short}{subject}")
+                } else {
+                    format!("Reverted {short} without committing{subject}")
                 }
             }
         }
@@ -1488,9 +1737,13 @@ pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<Auth
     }
 
     let passphrase = lower.contains("could not read passphrase")
-        || lower.contains("enter passphrase for key")
+        // OpenSSH uses "for key '<path>'", while ssh-keygen signing uses
+        // "for \"<path>\"".
+        || lower.contains("enter passphrase for")
         || lower.contains("read_passphrase")
         || lower.contains("passphrase for key")
+        || lower.contains("incorrect passphrase supplied to decrypt private key")
+        || lower.contains(&SSH_PASSPHRASE_PROMPT_MARKER.to_ascii_lowercase())
         || (lower.contains("passphrase") && lower.contains("terminal prompts disabled"));
     let ssh_publickey = lower.contains("permission denied (publickey")
         || (lower.contains("could not read from remote repository") && lower.contains("publickey"));
@@ -1696,8 +1949,8 @@ mod tests {
             ok: true,
             command: format!("cmd-{ix}"),
             summary: String::new(),
-            stdout: String::new(),
-            stderr: String::new(),
+            stdout: Arc::from(""),
+            stderr: Arc::from(""),
             announce_success: true,
             hook_operation_id: None,
         }
@@ -1802,7 +2055,7 @@ mod tests {
         let svg_path = PathBuf::from("assets/diagram.svg");
         let png_path = PathBuf::from("assets/logo.png");
         repo.status = Loadable::Ready(Shared::new(RepoStatus {
-            unstaged: vec![
+            unstaged: std::sync::Arc::new(vec![
                 FileStatus {
                     path: svg_path.clone(),
                     kind: FileStatusKind::Untracked,
@@ -1813,8 +2066,8 @@ mod tests {
                     kind: FileStatusKind::Untracked,
                     conflict: None,
                 },
-            ],
-            staged: vec![],
+            ]),
+            staged: std::sync::Arc::new(vec![]),
         }));
 
         // An untracked SVG has no patch, but its source still has to load: the
@@ -1860,6 +2113,13 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
         );
+        // Counts wait for the status snapshot, including on the batch path.
+        assert!(
+            !primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. })),
+            "counts must not launch a second worktree walk"
+        );
         assert!(matches!(
             primary_effects[4],
             Effect::LoadLog {
@@ -1891,6 +2151,11 @@ mod tests {
             full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
+        assert!(
+            !full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
         );
         assert!(
             !full_effects.iter().any(|effect| {
@@ -1968,7 +2233,7 @@ mod tests {
 
     #[test]
     fn push_notification_and_diagnostic_cap_old_entries() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         for ix in 0..205 {
             push_notification(
                 &mut state,
@@ -2006,7 +2271,7 @@ mod tests {
                 .last()
                 .expect("last command log entry")
                 .stderr,
-            "stderr from git"
+            "stderr from git".into()
         );
 
         repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
@@ -2100,7 +2365,10 @@ mod tests {
             (
                 RepoCommandKind::SetUpstreamBranch {
                     branch: "main".into(),
-                    upstream: "origin/main".into(),
+                    upstream: Upstream {
+                        remote: "origin".into(),
+                        branch: "main".into(),
+                    },
                 },
                 "Set as tracking upstream",
             ),
@@ -2361,7 +2629,10 @@ mod tests {
         let (_, set_upstream_summary) = summarize_command(
             &RepoCommandKind::SetUpstreamBranch {
                 branch: "feature".into(),
-                upstream: "origin/feature".into(),
+                upstream: Upstream {
+                    remote: "origin".into(),
+                    branch: "feature".into(),
+                },
             },
             &command_output(
                 "git branch --set-upstream-to origin/feature feature",
@@ -2472,6 +2743,43 @@ mod tests {
         );
         assert_eq!(cherry_pick_abort_summary, "Cherry-pick: Aborted");
 
+        for (command, kind, expected) in [
+            (
+                "git revert --continue",
+                RepoCommandKind::RebaseContinue,
+                "Revert: Continued",
+            ),
+            (
+                gitcomet_core::services::REVERT_SKIP_COMMAND,
+                RepoCommandKind::RebaseContinue,
+                "Revert: Skipped the revert the resolution left empty",
+            ),
+            (
+                "git revert --abort",
+                RepoCommandKind::RebaseAbort,
+                "Revert: Aborted",
+            ),
+        ] {
+            let (_, summary) =
+                summarize_command(&kind, &command_output(command, "", ""), true, None);
+            assert_eq!(summary, expected, "{command}");
+        }
+
+        let (_, kept_head) = summarize_command(
+            &RepoCommandKind::RebaseAbort,
+            &command_output(
+                "git revert --abort",
+                gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL,
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            kept_head,
+            "Revert: Sequence cleared; HEAD was left where it is"
+        );
+
         let mut paused_cherry_pick = command_output("git cherry-pick --continue", "", "");
         paused_cherry_pick.exit_code = Some(1);
         let (_, cherry_pick_pause_summary) = summarize_command(
@@ -2560,6 +2868,39 @@ mod tests {
             cherry_pick_already_applied_summary,
             "Current branch already has all the changes from the cherry-picked commit."
         );
+
+        let revert = |commit: bool, summary: &str| RepoCommandKind::Revert {
+            commit_id: CommitId("abcdef1234567890".into()),
+            commit,
+            mainline: None,
+            summary: summary.into(),
+        };
+        for (kind, stdout, expected) in [
+            (
+                revert(true, "fix parser\n\nbody"),
+                "",
+                "Reverted abcdef1: fix parser",
+            ),
+            (
+                revert(false, "fix parser"),
+                "",
+                "Reverted abcdef1 without committing: fix parser",
+            ),
+            (revert(true, ""), "", "Reverted abcdef1"),
+            (
+                revert(true, "fix parser"),
+                gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL,
+                "Nothing to revert: the current branch no longer has the changes from abcdef1.",
+            ),
+        ] {
+            let (_, summary) = summarize_command(
+                &kind,
+                &command_output("git revert abcdef1", stdout, ""),
+                true,
+                None,
+            );
+            assert_eq!(summary, expected);
+        }
 
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,
@@ -2702,6 +3043,25 @@ mod tests {
             Some(crate::model::AuthPromptKind::HostVerification)
         );
         assert!(detect_auth_prompt_kind_from_message("git status failed").is_none());
+
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git commit failed: error: Load key \"C:\\Users\\dev\\.ssh\\id_ed25519\": incorrect passphrase supplied to decrypt private key\nfatal: failed to write commit object"
+            ),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git tag failed: Enter passphrase for \"/home/dev/.ssh/id_ed25519\":"
+            ),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(&format!(
+                "git commit failed\n{SSH_PASSPHRASE_PROMPT_MARKER}\nEnter passphrase for key"
+            )),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
 
         let structured = Error::new(ErrorKind::Git(GitFailure::new(
             "git fetch origin",

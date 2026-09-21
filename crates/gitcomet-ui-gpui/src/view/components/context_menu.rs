@@ -2,7 +2,7 @@ use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
-use gpui::{CursorStyle, Div, ElementId, Rgba, SharedString, Stateful, WeakEntity, div, px, rems};
+use gpui::{CursorStyle, Div, ElementId, Rgba, SharedString, Stateful, WeakEntity, div, px};
 
 use super::control_height_md;
 use super::{TextTruncationProfile, TruncatedText, TruncatedTextTooltipMode, shortcut_keys};
@@ -104,7 +104,7 @@ pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
 /// primary line names the object at the same size as the entries below it, and
 /// the secondary line under it is smaller and muted.
 ///
-/// Both sizes have to be handed to [`TruncatedText`] explicitly. A `.text_xs()`
+/// Both sizes have to be handed to [`TruncatedText`] explicitly. A `.text_size(theme.ui_text(12.0))`
 /// on the wrapping div never reaches it — it measures and shapes its line from
 /// `window.text_style()` inside a deferred measure closure, after the ancestor
 /// text style has been unwound — so a single-line heading takes the window
@@ -120,28 +120,40 @@ pub fn context_menu_header<V: 'static>(
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
 ) -> Div {
-    let ui_scale = ui_scale.into();
-    let scaled_px = |value| ui_scale.px(value);
+    let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let title = title.into();
     let max_lines = title.resolved_max_lines(1);
     div()
         .px(scaled_px(8.0))
-        .py(scaled_px(4.0))
-        .text_size(rems(MENU_PRIMARY_REMS))
-        .line_height(scaled_px(18.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.colors.foreground.primary)
-        .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
-        .when(max_lines > 1, |s| s.line_clamp(max_lines))
-        .child(context_menu_text_content(
-            title,
-            tooltip_host,
-            cx,
-            max_lines,
-            theme.colors.foreground.primary,
-            rems(MENU_PRIMARY_REMS),
-            Some(gpui::FontWeight::MEDIUM),
-        ))
+        // At least an entry-sized box, not padding around a text run:
+        // `TruncatedText` reserves its own line box. A minimum rather than a
+        // fixed height so a multi-line heading grows instead of clipping.
+        .min_h(control_height_md(ui_scale))
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .child(
+            div()
+                .debug_selector(|| "context_menu_header_text".to_string())
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .text_size(theme.ui_text(MENU_PRIMARY_REMS * 16.0))
+                .line_height(ui_scale.ui_text(18.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.colors.foreground.primary)
+                .when(max_lines == 1, |s| s.whitespace_nowrap())
+                .when(max_lines > 1, |s| s.line_clamp(max_lines))
+                .child(context_menu_text_content(
+                    title,
+                    tooltip_host,
+                    cx,
+                    max_lines,
+                    theme.colors.foreground.primary,
+                    theme.ui_text(MENU_PRIMARY_REMS * 16.0),
+                    Some(gpui::FontWeight::MEDIUM),
+                )),
+        )
 }
 
 /// Muted helper text under a menu header — explains what the options do,
@@ -153,15 +165,15 @@ pub fn context_menu_description<V: 'static>(
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
 ) -> Div {
-    let ui_scale = ui_scale.into();
-    let scaled_px = |value| ui_scale.px(value);
+    let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let text = text.into();
     let max_lines = text.resolved_max_lines(3);
     div()
         .px(scaled_px(8.0))
         .pb(scaled_px(4.0))
-        .text_size(rems(MENU_SECONDARY_REMS))
-        .line_height(scaled_px(14.0))
+        .text_size(theme.ui_text(MENU_SECONDARY_REMS * 16.0))
+        .line_height(ui_scale.ui_text(14.0))
         .text_color(theme.colors.foreground.secondary)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
@@ -171,7 +183,7 @@ pub fn context_menu_description<V: 'static>(
             cx,
             max_lines,
             theme.colors.foreground.secondary,
-            rems(MENU_SECONDARY_REMS),
+            theme.ui_text(MENU_SECONDARY_REMS * 16.0),
             None,
         ))
 }
@@ -188,15 +200,15 @@ pub fn context_menu_label<V: 'static>(
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
 ) -> Div {
-    let ui_scale = ui_scale.into();
-    let scaled_px = |value| ui_scale.px(value);
+    let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let text = text.into();
     let max_lines = text.resolved_max_lines(2);
     div()
         .px(scaled_px(8.0))
         .pb(scaled_px(4.0))
-        .text_size(rems(MENU_SECONDARY_REMS))
-        .line_height(scaled_px(14.0))
+        .text_size(theme.ui_text(MENU_SECONDARY_REMS * 16.0))
+        .line_height(ui_scale.ui_text(14.0))
         .text_color(theme.colors.foreground.secondary)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
@@ -206,14 +218,14 @@ pub fn context_menu_label<V: 'static>(
             cx,
             max_lines,
             theme.colors.foreground.secondary,
-            rems(MENU_SECONDARY_REMS),
+            theme.ui_text(MENU_SECONDARY_REMS * 16.0),
             None,
         ))
 }
 
 pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
     let ui_scale = ui_scale.into();
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     div()
         .my(scaled_px(2.0))
         .border_t_1()
@@ -283,6 +295,21 @@ impl ContextMenuEntry {
     ) -> Stateful<Div> {
         context_menu_entry(self, theme, ui_scale, cx)
     }
+
+    /// All menu entries share completed-click activation, focus preservation and the
+    /// same disabled gate, including menus embedded in pickers and prompts.
+    pub fn on_select<V: 'static>(
+        self,
+        theme: AppTheme,
+        ui_scale: impl Into<UiScale>,
+        cx: &gpui::Context<V>,
+        handler: impl Fn(&mut V, &gpui::ClickEvent, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+    ) -> Stateful<Div> {
+        use crate::kit::interaction::ControlInteractionExt as _;
+        let disabled = self.disabled;
+        self.render(theme, ui_scale, cx)
+            .on_menu_activate(disabled, cx.listener(handler))
+    }
 }
 
 fn context_menu_entry<V: 'static>(
@@ -301,8 +328,8 @@ fn context_menu_entry<V: 'static>(
         disabled,
         tooltip_host,
     } = entry;
-    let ui_scale = ui_scale.into();
-    let scaled_px = |value| ui_scale.px(value);
+    let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let max_lines = label.resolved_max_lines(2);
     let icon_path = match &icon {
         ContextMenuIconSlot::Icon(name) => context_menu_icon_path(name.as_ref(), label.as_ref()),
@@ -310,28 +337,8 @@ fn context_menu_entry<V: 'static>(
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
-    // Text-alpha overlays stay visible on the elevated popover surface, where
-    // the `hover` token (tuned for the darker canvas) has no contrast.
-    let hover_overlay = theme.hover_overlay();
-    let active_overlay = theme.active_overlay();
-
-    let mut row = div()
-        .id(id)
-        .min_h(control_height_md(ui_scale))
-        .py(scaled_px(4.0))
-        .px(scaled_px(8.0))
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(scaled_px(20.0))
-        .rounded(px(theme.radii.row))
+    let mut row = crate::kit::menu::menu_item(id, theme, ui_scale, selected, disabled)
         .text_color(text_color)
-        .when(selected, |s| s.bg(hover_overlay))
-        .when(!disabled, |s| {
-            s.cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(hover_overlay))
-                .active(move |s| s.bg(active_overlay))
-        })
         .child(
             div()
                 .flex()
@@ -360,8 +367,8 @@ fn context_menu_entry<V: 'static>(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
-                        .text_size(rems(MENU_PRIMARY_REMS))
-                        .line_height(scaled_px(18.0))
+                        .text_size(theme.ui_text(MENU_PRIMARY_REMS * 16.0))
+                        .line_height(ui_scale.ui_text(18.0))
                         .text_color(text_color)
                         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
                         .when(max_lines > 1, |s| s.line_clamp(max_lines))
@@ -371,7 +378,7 @@ fn context_menu_entry<V: 'static>(
                             cx,
                             max_lines,
                             text_color,
-                            rems(MENU_PRIMARY_REMS),
+                            theme.ui_text(MENU_PRIMARY_REMS * 16.0),
                             None,
                         )),
                 ),
@@ -382,8 +389,8 @@ fn context_menu_entry<V: 'static>(
         .items_center()
         .gap(scaled_px(8.0))
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-        .text_xs()
-        .line_height(scaled_px(14.0))
+        .text_size(theme.ui_text(12.0))
+        .line_height(ui_scale.ui_text(14.0))
         .text_color(theme.colors.foreground.secondary);
 
     if let Some(shortcut) = shortcut {
@@ -434,10 +441,12 @@ fn context_menu_icon_color(
     }
 
     // Semantic-ish mapping for common actions.
-    if matches!(
-        icon_path,
-        Some("icons/trash.svg") | Some("icons/repo_tab_close.svg")
-    ) || label.contains("Delete")
+    if label.starts_with("Force push")
+        || matches!(
+            icon_path,
+            Some("icons/trash.svg") | Some("icons/repo_tab_close.svg")
+        )
+        || label.contains("Delete")
         || label.contains("Drop")
         || label.contains("Remove")
     {
@@ -570,10 +579,9 @@ fn context_menu_text_content<V: 'static>(
         // `text_size`/`font_weight` are set on the element itself: it shapes its
         // line from `window.text_style()` in a deferred measure closure, so the
         // caller's text styling on the wrapping div does not reach it.
-        let mut truncated = TruncatedText::new(text.text.clone())
+        let mut truncated = TruncatedText::new(text.text.clone(), text_size)
             .profile(text.profile)
-            .text_color(text_color)
-            .text_size(text_size);
+            .text_color(text_color);
         if let Some(font_weight) = font_weight {
             truncated = truncated.font_weight(font_weight);
         }
@@ -642,21 +650,104 @@ mod tests {
         let (_view, cx) = cx.add_window_view(|_window, _cx| HeadingBlock { theme });
         crate::view::test_support::redraw(cx);
 
+        // The primary heading's outer box is a row, so measure the text box
+        // inside it; the secondary heading is the text box itself.
         let primary = cx
-            .debug_bounds("heading_primary")
+            .debug_bounds("context_menu_header_text")
             .expect("expected the primary heading");
         let secondary = cx
             .debug_bounds("heading_secondary")
             .expect("expected the secondary heading");
 
-        // Both carry 4px of bottom padding; the primary adds 4px on top.
-        let primary_line = primary.size.height - px(8.0);
+        let primary_line = primary.size.height;
         let secondary_line = secondary.size.height - px(4.0);
         assert!(
             secondary_line < primary_line,
             "secondary heading must render smaller than the primary, got \
              {secondary_line:?} vs {primary_line:?}"
         );
+    }
+
+    struct RowKinds {
+        theme: AppTheme,
+    }
+
+    impl gpui::Render for RowKinds {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let theme = self.theme;
+            let scale = crate::ui_scale::UiScale::current(cx);
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    ContextMenuEntry::new("plain", SharedString::from("Plain"))
+                        .icon(ContextMenuIconSlot::Reserved)
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_plain".to_string()),
+                )
+                .child(
+                    ContextMenuEntry::new("text", SharedString::from("Text shortcut"))
+                        .icon(ContextMenuIconSlot::Reserved)
+                        .shortcut(Some("A".into()))
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_text_shortcut".to_string()),
+                )
+                .child(
+                    ContextMenuEntry::new("keycap", SharedString::from("Keycap shortcut"))
+                        .icon(ContextMenuIconSlot::Reserved)
+                        .shortcut(Some("Ctrl+W".into()))
+                        .shortcut_keycaps(true)
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_keycap".to_string()),
+                )
+                .child(
+                    context_menu_header(theme, scale, SharedString::from("Header"), None, cx)
+                        .id("row_header_id")
+                        .debug_selector(|| "row_header".to_string()),
+                )
+        }
+    }
+
+    /// Every kind of menu row is one height, at both densities. Keycaps and
+    /// headings each used to reserve a taller box than a plain entry.
+    #[gpui::test]
+    fn every_menu_row_kind_shares_one_height(cx: &mut gpui::TestAppContext) {
+        for density in crate::appearance::UiDensity::ALL {
+            let _guard = crate::test_support::lock_visual_test();
+            cx.update(|app| {
+                app.set_global(crate::appearance::Appearance {
+                    density,
+                    ..crate::appearance::Appearance::default()
+                });
+            });
+            let theme = cx.update(|app| {
+                crate::theme::AppTheme::gitcomet_dark()
+                    .with_appearance(crate::appearance::current(app))
+            });
+            let (_view, cx) = cx.add_window_view(|_window, _cx| RowKinds { theme });
+            crate::view::test_support::redraw(cx);
+
+            let plain = cx
+                .debug_bounds("row_plain")
+                .expect("expected a plain entry to render")
+                .size
+                .height;
+            for selector in ["row_text_shortcut", "row_keycap", "row_header"] {
+                let height = cx
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("expected {selector} to render"))
+                    .size
+                    .height;
+                assert_eq!(
+                    height, plain,
+                    "{selector} must match a plain entry at {density:?} density"
+                );
+            }
+        }
     }
 
     #[test]
@@ -758,7 +849,16 @@ mod tests {
             theme.colors.accent.foreground
         );
         assert_eq!(
-            context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),
+            context_menu_icon_color(
+                theme,
+                false,
+                "Force push (with lease)…",
+                Some("icons/warning.svg")
+            ),
+            theme.colors.status.danger.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Discard changes", Some("icons/warning.svg")),
             theme.colors.status.warning.foreground
         );
     }

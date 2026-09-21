@@ -20,6 +20,7 @@ impl Error {
 pub enum GitFailureId {
     CommandFailed,
     Timeout,
+    BranchAlreadyExists,
     StashApplyConflict,
     UntrackedRestoreConflict,
     WorktreeWouldBeOverwritten,

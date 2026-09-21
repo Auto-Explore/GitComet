@@ -336,7 +336,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::JinjaText => Some((
             tree_sitter_jinja_dialects::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(JINJA_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_injections(
+                JINJA_HIGHLIGHTS_QUERY,
+                JINJA_TEXT_INJECTIONS_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Vue => Some((
             tree_sitter_vue::LANGUAGE.into(),

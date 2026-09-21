@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn status_and_conflict_stages_cover_all_conflict_kinds() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -178,9 +176,7 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
 
 #[test]
 fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     #[derive(Clone, Copy)]
     struct ConflictCheckoutFixture {
         kind: FileConflictKind,
@@ -330,9 +326,7 @@ fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
 
 #[test]
 fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     #[derive(Clone, Copy)]
     struct ConflictDeleteFixture {
         kind: FileConflictKind,
@@ -436,9 +430,7 @@ fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
 
 #[test]
 fn status_reports_single_conflict_for_modify_delete() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -492,9 +484,7 @@ fn status_reports_single_conflict_for_modify_delete() {
 
 #[test]
 fn status_reports_conflict_kind_for_add_add() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -542,9 +532,7 @@ fn status_reports_conflict_kind_for_add_add() {
 
 #[test]
 fn conflict_file_stages_preserve_non_utf8_bytes() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -616,9 +604,7 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
 
 #[test]
 fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -690,9 +676,7 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
 
 #[test]
 fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -736,9 +720,7 @@ fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
 
 #[test]
 fn diff_file_text_handles_modify_delete_conflicts() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -786,9 +768,7 @@ fn diff_file_text_handles_modify_delete_conflicts() {
 
 #[test]
 fn checkout_conflict_side_resolves_modify_delete_using_ours() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -844,9 +824,7 @@ fn checkout_conflict_side_resolves_modify_delete_using_ours() {
 
 #[test]
 fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -891,9 +869,8 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
         "expected theirs resolution to restore file contents"
     );
     let status = opened.status().unwrap();
-    assert_eq!(
-        status.unstaged,
-        Vec::new(),
+    assert!(
+        status.unstaged.is_empty(),
         "expected theirs resolution to clear unstaged entries"
     );
     assert!(
@@ -907,9 +884,7 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
 
 #[test]
 fn checkout_conflict_side_stages_resolution() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -963,11 +938,70 @@ fn checkout_conflict_side_stages_resolution() {
     assert_eq!(on_disk, "theirs\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_reports_a_symlink_conflict_as_such() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_symlink_conflict(repo, "link", "ours.txt", "theirs.txt");
+    assert!(
+        fs::symlink_metadata(repo.join("link"))
+            .unwrap()
+            .is_symlink()
+    );
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", "true");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    // Git launches no tool here either, so the refusal must say what to do.
+    let err = opened
+        .launch_mergetool(Path::new("link"))
+        .expect_err("a symlink conflict has no mergetool");
+    let ErrorKind::Backend(message) = err.kind() else {
+        panic!("expected a backend refusal, got {err:?}");
+    };
+    assert!(message.contains("symbolic-link conflict"), "{message}");
+    assert!(message.contains("local or remote"), "{message}");
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_keeps_tool_output_when_the_result_is_a_symlink() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+    write(repo, "victim.txt", "keep\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    set_repo_local_mergetool_cmd_with_consent(
+        repo,
+        "fake",
+        "echo tool-ran; rm -f \"$MERGED\"; ln -s victim.txt \"$MERGED\"",
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened
+        .launch_mergetool(Path::new("a.txt"))
+        .expect("the tool ran; its output must survive an unsafe readback");
+    assert!(!result.success, "{result:?}");
+    assert!(result.output.stdout.contains("tool-ran"), "{result:?}");
+    assert_eq!(result.output.exit_code, Some(0));
+    assert!(result.merged_contents.is_none(), "{result:?}");
+    assert_eq!(
+        fs::read_to_string(repo.join("victim.txt")).unwrap(),
+        "keep\n"
+    );
+}
+
 #[test]
 fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1009,9 +1043,7 @@ fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
 
 #[test]
 fn launch_mergetool_reflects_config_written_after_backend_open() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1055,9 +1087,7 @@ fn launch_mergetool_reflects_config_written_after_backend_open() {
 
 #[test]
 fn launch_mergetool_trust_exit_false_requires_content_change() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1096,9 +1126,7 @@ fn launch_mergetool_trust_exit_false_requires_content_change() {
 
 #[test]
 fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1138,9 +1166,7 @@ fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
 
 #[test]
 fn launch_mergetool_rejects_unresolved_marker_output() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1196,9 +1222,7 @@ fn launch_mergetool_rejects_unresolved_marker_output() {
 #[cfg(not(windows))]
 #[test]
 fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let conflicted_path = "docs/a space.txt";
@@ -1247,9 +1271,7 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
 #[test]
 #[cfg(windows)]
 fn launch_mergetool_custom_cmd_supports_cmd_percent_env_variables() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let conflicted_path = "docs/a space.txt";
@@ -1278,9 +1300,7 @@ fn launch_mergetool_custom_cmd_supports_cmd_percent_env_variables() {
 
 #[test]
 fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let conflicted_path = "docs/spaced 日本語 file.txt";
@@ -1328,9 +1348,7 @@ fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
 
 #[test]
 fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1355,9 +1373,7 @@ fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
 #[cfg(unix)]
 #[test]
 fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1380,6 +1396,9 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+    // Both the tool name and its path come from `.git/config`, so the launch
+    // needs the same consent a repository-local `.cmd` does.
+    allow_repo_local_mergetool_cmd(repo, "fake");
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -1395,10 +1414,66 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
 
 #[cfg(unix)]
 #[test]
+fn launch_mergetool_refuses_repo_local_tool_path_without_consent() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    // A hostile `.git/config` can point `mergetool.<tool>.path` at any file in
+    // the checkout. The script drops a marker so the test proves it never ran,
+    // not merely that the launch reported an error. `codecompare` is a git
+    // built-in, so only the path is repository-controlled here, and its real
+    // program (`CodeMerge`) exists only on Windows: the backend reads the
+    // developer's own global git config, so a common tool such as `kdiff3`
+    // could fall back to a trusted path and launch a real GUI mid-test.
+    let script_path = repo.join("repo-controlled-tool.sh");
+    let marker_path = repo.join("tool-ran");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\n: > \"{}\"\ncat \"$3\" > \"$4\"\n",
+            marker_path.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&script_path);
+
+    run_git(repo, &["config", "merge.tool", "codecompare"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.codecompare.path",
+            git_path_arg(&script_path).as_str(),
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let message = opened
+        .launch_mergetool(Path::new("a.txt"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("Refusing to use repository-local mergetool.codecompare.path"),
+        "{message}"
+    );
+    assert!(
+        !marker_path.exists(),
+        "repository-local mergetool.<tool>.path executed without consent"
+    );
+    let conflicted = fs::read_to_string(repo.join("a.txt")).unwrap();
+    assert!(
+        conflicted.contains("<<<<<<<"),
+        "conflict must stay unresolved: {conflicted:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1433,6 +1508,8 @@ fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
         ],
     );
     run_git(repo, &["config", "mergetool.kdiff3.trustExitCode", "true"]);
+    // `mergetool.kdiff3.path` in `.git/config` is repository-controlled.
+    allow_repo_local_mergetool_cmd(repo, "kdiff3");
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -1479,9 +1556,7 @@ fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
 
 #[test]
 fn launch_mergetool_rejects_builtin_tool_that_cannot_merge() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1507,9 +1582,7 @@ fn launch_mergetool_rejects_builtin_tool_that_cannot_merge() {
 #[cfg(unix)]
 #[test]
 fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1550,9 +1623,7 @@ fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
 
 #[test]
 fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1593,9 +1664,7 @@ fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
 
 #[test]
 fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
@@ -1609,6 +1678,18 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
     let opened = backend.open(repo).unwrap();
     let result = opened.launch_mergetool(Path::new("docs/note.txt")).unwrap();
     assert!(result.success, "{result:?}");
+    // On Windows the filesystem form uses backslashes, but gix index keys
+    // retain slashes. The REMOTE bytes prove those two path forms stayed apart.
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("theirs\n".as_bytes()),
+        "the nested conflict's REMOTE stage must reach the mergetool"
+    );
+    assert_eq!(
+        fs::read(repo.join("docs/note.txt")).unwrap(),
+        b"theirs\n",
+        "the mergetool must not stage an empty resolution for a nested path"
+    );
 
     let vars = read_stage_env_vars(&repo.join("docs/note.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
@@ -1634,9 +1715,7 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
 
 #[test]
 fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
@@ -1670,9 +1749,7 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files()
 
 #[test]
 fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_on_abort() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
@@ -1713,9 +1790,7 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_o
 
 #[test]
 fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1765,9 +1840,7 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() 
 
 #[test]
 fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on_abort() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1824,9 +1897,7 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on
 
 #[test]
 fn launch_mergetool_no_base_conflict_passes_empty_base_file() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_added_text_conflict(repo, "new.txt", "ours added\n", "theirs added\n");

@@ -23,6 +23,13 @@ fn push_entry(
 }
 
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
+    model_with_update_checks_disabled(this, crate::view::update_checks_disabled_by_environment())
+}
+
+pub(super) fn model_with_update_checks_disabled(
+    this: &PopoverHost,
+    update_checks_disabled: bool,
+) -> ContextMenuModel {
     let active_repo_id = this.active_repo().map(|repo| repo.id);
     let active_repo_workdir = this.active_repo().map(|repo| repo.spec.workdir.clone());
     let external_editor_configured = crate::external_editor::configured_setting().is_some();
@@ -83,6 +90,18 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         !can_locate,
         AppMenuAction::LocateFileInExplorer,
     );
+    let can_open_remote = this
+        .active_repo()
+        .is_some_and(|repo| remote_web_request(repo).unavailable_reason().is_none());
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_open_remote_in_browser",
+        crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
+        Shortcut::Secondary("K"),
+        !can_open_remote,
+        AppMenuAction::OpenRemoteInBrowser,
+    );
 
     // Sits with the other repository-scoped views rather than the app-wide rows
     // above: it opens a panel about *this* repo's history.
@@ -109,6 +128,15 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         AppMenuAction::ApplyPatch {
             repo_id: active_repo_id,
         },
+    );
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_check_for_updates",
+        crate::menu_labels::CHECK_FOR_UPDATES,
+        Shortcut::None,
+        update_checks_disabled,
+        AppMenuAction::CheckForUpdates,
     );
     items.push(ContextMenuItem::Separator);
 
@@ -166,6 +194,12 @@ pub(super) fn activate(
                 root.locate_open_file_in_explorer(cx);
             });
         }
+        AppMenuAction::OpenRemoteInBrowser => {
+            this.close_popover_and_restore_focus(window, cx);
+            // Dispatched, not called: this runs inside the host's update, and
+            // opening the picker would update the host again.
+            window.dispatch_action(Box::new(crate::view::OpenRemoteInBrowser), cx);
+        }
         AppMenuAction::Settings => {
             this.close_popover_and_restore_focus(window, cx);
             cx.defer(crate::view::open_settings_window);
@@ -215,6 +249,12 @@ pub(super) fn activate(
                     });
                 })
                 .detach();
+        }
+        AppMenuAction::CheckForUpdates => {
+            this.close_popover_and_restore_focus(window, cx);
+            let _ = this.root_view.update(cx, |root, cx| {
+                root.check_for_updates_manually(cx);
+            });
         }
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         AppMenuAction::InstallDesktopIntegration => {

@@ -2,9 +2,11 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::git_operation::GitOperationId;
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
-    ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    CheckoutRemoteBranchMode, ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
+    SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -12,6 +14,8 @@ use super::RepoPathList;
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     PersistSession {
         repo_id: Option<RepoId>,
         action: &'static str,
@@ -65,6 +69,11 @@ pub enum Effect {
     LoadStagedStatus {
         repo_id: RepoId,
     },
+    LoadUncommittedLineStats {
+        repo_id: RepoId,
+        generation: crate::model::LineStatsGeneration,
+        status: std::sync::Arc<RepoStatus>,
+    },
     LoadStatus {
         repo_id: RepoId,
     },
@@ -104,10 +113,14 @@ pub enum Effect {
         limit: usize,
         request_rev: u64,
     },
+    /// One page of a file's history. `cursor: None` is the bounded first
+    /// page; a cursor page resumes after it and is served from the backend's
+    /// cached full follow walk, so one such request can ask for everything.
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
         limit: usize,
+        cursor: Option<LogCursor>,
     },
     LoadBlame {
         repo_id: RepoId,
@@ -148,6 +161,18 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Verify the signatures of `commit_ids`. Batched because verification
+    /// shells out to `git`; the backend drops unsigned commits for free.
+    VerifyCommitSignatures {
+        repo_id: RepoId,
+        epoch: u64,
+        batch: u64,
+        cancellation: gitcomet_core::services::CancellationToken,
+        commit_ids: std::sync::Arc<[CommitId]>,
+        /// Only signatures in these formats are checked: the others have no
+        /// verifier installed.
+        formats: gitcomet_core::domain::SignatureFormats,
+    },
     LoadHoverCommitMessage {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -157,6 +182,17 @@ pub enum Effect {
     ResolveCommitForReveal {
         repo_id: RepoId,
         reference: CommitId,
+    },
+    /// Resolve a commit reference for the Reveal Commit dialog's preview row.
+    /// Lighter than `ResolveCommitForReveal` — no parent diff — because it runs
+    /// while the user is still typing.
+    ResolveCommitLookup {
+        repo_id: RepoId,
+        reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
+        /// Echoed back on the reply so a completion that lost a race against a
+        /// newer lookup can be dropped. See `CommitLookup::request`.
+        request: u64,
     },
     LoadRangeFiles {
         repo_id: RepoId,
@@ -193,6 +229,7 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
         path: PathBuf,
+        content_preview: bool,
     },
     LoadDiff {
         repo_id: RepoId,
@@ -264,6 +301,7 @@ pub enum Effect {
         remote: String,
         branch: String,
         local_branch: String,
+        mode: CheckoutRemoteBranchMode,
     },
     CheckoutCommit {
         repo_id: RepoId,
@@ -279,6 +317,11 @@ pub enum Effect {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
+        /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
     },
     CreateBranch {
         repo_id: RepoId,
@@ -289,11 +332,15 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
         target: String,
+        /// Reset the branch to `target` first when a branch with this name
+        /// already exists, instead of failing with "already exists".
+        force: bool,
     },
     RenameBranch {
         repo_id: RepoId,
         old_name: String,
         new_name: String,
+        force: bool,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -311,6 +358,7 @@ pub enum Effect {
     CloneRepo {
         url: String,
         dest: PathBuf,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     AbortCloneRepo {
@@ -345,9 +393,11 @@ pub enum Effect {
         branch: Option<String>,
         name: Option<String>,
         force: bool,
+        remote_url_policy: RemoteUrlPolicy,
     },
     CheckSubmoduleUpdateTrust {
         repo_id: RepoId,
+        remote_url_policy: RemoteUrlPolicy,
     },
     AddSubmodule {
         repo_id: RepoId,
@@ -357,21 +407,25 @@ pub enum Effect {
         name: Option<String>,
         force: bool,
         approved_sources: Vec<SubmoduleTrustTarget>,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     UpdateSubmodules {
         repo_id: RepoId,
         approved_sources: Vec<SubmoduleTrustTarget>,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     CheckSubmoduleLoadTrust {
         repo_id: RepoId,
         path: PathBuf,
+        remote_url_policy: RemoteUrlPolicy,
     },
     LoadSubmodule {
         repo_id: RepoId,
         path: PathBuf,
         approved_sources: Vec<SubmoduleTrustTarget>,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     ChangeSubmodulePointer {
@@ -449,12 +503,14 @@ pub enum Effect {
     Pull {
         repo_id: RepoId,
         mode: PullMode,
+        prune: bool,
         auth: Option<StagedGitAuth>,
     },
     PullBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,
+        prune: bool,
         auth: Option<StagedGitAuth>,
     },
     MergeRef {
@@ -464,6 +520,17 @@ pub enum Effect {
     SquashRef {
         repo_id: RepoId,
         reference: String,
+    },
+    PushWithTags {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        auth: Option<StagedGitAuth>,
+    },
+    PreviewTagPush {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        cancellation: gitcomet_core::services::CancellationToken,
+        generation: u64,
     },
     Push {
         repo_id: RepoId,
@@ -493,7 +560,7 @@ pub enum Effect {
     SetUpstreamBranch {
         repo_id: RepoId,
         branch: String,
-        upstream: String,
+        upstream: Upstream,
     },
     UnsetUpstreamBranch {
         repo_id: RepoId,
@@ -590,6 +657,7 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
         url: String,
+        remote_url_policy: RemoteUrlPolicy,
     },
     RemoveRemote {
         repo_id: RepoId,
@@ -600,6 +668,7 @@ pub enum Effect {
         name: String,
         url: String,
         kind: RemoteUrlKind,
+        remote_url_policy: RemoteUrlPolicy,
     },
     CheckoutConflictSide {
         repo_id: RepoId,

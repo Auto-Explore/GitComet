@@ -336,7 +336,7 @@ pub(super) fn builtin_tool_program(tool: &str) -> Option<String> {
 /// Git looks for `mergetools/<tool>` first and falls back to the name with a
 /// single trailing digit removed, which is how variants such as `bc3`, `bc4` or
 /// `vimdiff2` resolve to their base tool.
-fn builtin_tool_key(tool: &str) -> Option<&'static str> {
+pub(super) fn builtin_tool_key(tool: &str) -> Option<&'static str> {
     const BUILTIN_TOOLS: &[&str] = &[
         "araxis",
         "bc",

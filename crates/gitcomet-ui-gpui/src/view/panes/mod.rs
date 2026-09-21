@@ -1,17 +1,19 @@
 mod details;
-mod history;
+pub(in crate::view) mod history;
 pub(in crate::view) mod main;
 mod reflog;
 mod sidebar;
 
-pub(super) use details::{DetailsPaneInit, DetailsPaneView};
+pub(super) use details::{
+    ComparisonCardCache, ComparisonOrderCache, DetailsPaneInit, DetailsPaneView,
+};
 pub(super) use history::HistoryView;
 #[allow(unused_imports)]
 pub(in crate::view) use history::{
-    HistoryColumnDragLayout, HistoryPrimarySelection, history_column_resize_drag_params,
-    history_column_resize_max_width, history_column_resize_state, history_primary_selection,
-    history_resize_state_visible_columns, history_visible_columns_for_layout,
-    history_visible_columns_for_layout_with_resize_state,
+    HistoryColumnDragLayout, HistoryPrimarySelection, HistoryRowHoverArea,
+    history_column_resize_drag_params, history_column_resize_max_width,
+    history_column_resize_state, history_primary_selection, history_resize_state_visible_columns,
+    history_visible_columns_for_layout, history_visible_columns_for_layout_with_resize_state,
 };
 #[cfg(test)]
 #[allow(unused_imports)]

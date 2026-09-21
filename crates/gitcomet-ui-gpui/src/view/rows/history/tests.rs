@@ -1,15 +1,15 @@
 use super::{
     DiffSearchMatchEmphasis, MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource,
     MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
-    build_cached_diff_styled_text, history_message_text_left_px,
+    MarkdownRemoteImageAccess, build_cached_diff_styled_text, history_message_text_left_px,
     history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
-    markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
-    markdown_preview_image_source, markdown_preview_inline_highlight,
-    markdown_preview_no_picture_sizes, markdown_preview_picture_skeleton,
-    markdown_preview_row_background, markdown_preview_row_height,
-    markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
-    markdown_preview_row_marker, markdown_preview_row_styled_text, markdown_preview_row_typography,
-    worktree_preview_apply_query_overlay,
+    markdown_preview_alert_title_label, markdown_preview_code_background,
+    markdown_preview_expanded_slice_range, markdown_preview_image_source,
+    markdown_preview_inline_highlight, markdown_preview_no_picture_sizes,
+    markdown_preview_picture_skeleton, markdown_preview_row_background,
+    markdown_preview_row_height, markdown_preview_row_horizontal_padding,
+    markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
+    markdown_preview_row_typography, worktree_preview_apply_query_overlay,
 };
 use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
 use crate::view::markdown_preview::MarkdownInlineSpan;
@@ -21,6 +21,7 @@ use crate::view::{
 };
 use gitcomet_core::domain::LogScope;
 use gpui::{FontWeight, SharedString, px};
+use palette::IntoColor;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -637,6 +638,26 @@ fn markdown_preview_row_styled_text_maps_inline_styles_and_skips_normal_spans() 
 }
 
 #[test]
+fn amber_inline_code_spans_use_the_neutral_code_surface() {
+    let theme = AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+        .expect("Amber Dark theme should load");
+    let highlight = markdown_preview_inline_highlight(theme, MarkdownInlineStyle::Code);
+
+    assert_eq!(
+        highlight.background_color,
+        Some(markdown_preview_code_background(theme).into_color())
+    );
+    assert_ne!(
+        highlight.background_color,
+        Some(
+            crate::theme::with_alpha(theme.colors.interaction.selected_background, 0.75)
+                .into_color()
+        ),
+        "inline backticks must not use Amber's orange selection color"
+    );
+}
+
+#[test]
 fn wrapped_slices_map_onto_the_tab_expanded_painted_text() {
     // Wrap ranges are measured on `row.text`, where a tab is one byte, but
     // the painted text expands each tab to four spaces. Slicing the
@@ -727,6 +748,32 @@ fn image_paths_resolve_only_inside_the_documents_own_directory() {
     let _ = std::fs::remove_file(&outside);
 }
 
+#[test]
+fn markdown_remote_image_access_requires_exact_url_approval_in_ask_mode() {
+    let approved = [SharedString::from("https://example.com/image.png")]
+        .into_iter()
+        .collect();
+    let access = MarkdownRemoteImageAccess {
+        policy: crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+        approved_urls: Arc::new(approved),
+        approval_view: None,
+    };
+
+    assert!(access.permits(&SharedString::from("https://example.com/image.png")));
+    assert!(!access.permits(&SharedString::from("https://example.com/other.png")));
+
+    let url = SharedString::from("https://example.com/other.png");
+    assert!(MarkdownRemoteImageAccess::default().permits(&url));
+    assert!(
+        !MarkdownRemoteImageAccess {
+            policy: crate::view::RemoteMarkdownImagePolicy::NeverLoad,
+            approved_urls: access.approved_urls.clone(),
+            approval_view: None,
+        }
+        .permits(&url)
+    );
+}
+
 /// A picture row carrying `source`, and whatever size the document declared.
 fn picture_row(source: &str, width_px: Option<u32>, height_px: Option<u32>) -> MarkdownPreviewRow {
     let mut row = markdown_row(MarkdownPreviewRowKind::Image {
@@ -759,6 +806,7 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
     // Read from the file: the picture's own pixels, which is what an
     // undeclared picture lays out at.
     let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
         &picture_row("demo.gif", None, None),
         100,
         &measured("demo.gif", 1280, 720),
@@ -768,6 +816,7 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
 
     // A declared size wins, and scales with the UI the way the picture will.
     let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
         &picture_row("demo.gif", Some(200), Some(100)),
         200,
         &measured("demo.gif", 1280, 720),
@@ -777,13 +826,35 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
 
     // Nothing to go on: fall back to the rows the parser set aside, which
     // is all the row grid ever had.
-    let skeleton =
-        markdown_preview_picture_skeleton(&picture_row("demo.gif", None, None), 100, empty);
+    let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
+        &picture_row("demo.gif", None, None),
+        100,
+        empty,
+    );
     assert_eq!(skeleton.width, None);
     assert_eq!(skeleton.aspect_ratio, None);
     assert_eq!(
         skeleton.reserved_height,
-        markdown_preview_row_height(100) * 8.0
+        markdown_preview_row_height(AppTheme::gitcomet_dark(), 100) * 8.0
+    );
+}
+
+#[test]
+fn a_height_only_skeleton_scales_the_measured_width_with_the_picture() {
+    let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
+        &picture_row("wide.gif", None, Some(60)),
+        100,
+        &measured("wide.gif", 1280, 720),
+    );
+
+    let expected_ratio = 1280.0 / 720.0;
+    let expected_width = px(60.0 * expected_ratio);
+    assert_eq!(skeleton.aspect_ratio, Some(expected_ratio));
+    assert!(
+        (skeleton.width.expect("measured width") - expected_width).abs() <= px(0.01),
+        "the placeholder must reserve the same scaled width as the height-only decoded image"
     );
 }
 

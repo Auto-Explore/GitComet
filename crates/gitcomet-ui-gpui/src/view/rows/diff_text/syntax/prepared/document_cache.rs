@@ -155,7 +155,7 @@ pub(crate) fn build_line_token_chunk_for_state(
         return (None, 0);
     };
     let started = Instant::now();
-    let chunk = collect_treesitter_document_line_tokens_for_line_window(
+    let chunk = collect_treesitter_document_line_tokens_for_line_window_with_combined_layers(
         &tree_state.tree,
         highlight,
         tree_state.text.as_bytes(),
@@ -163,6 +163,7 @@ pub(crate) fn build_line_token_chunk_for_state(
         chunk_start,
         chunk_end,
         tree_state.source_hash,
+        tree_state.combined_layers(),
     );
     let chunk_build_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let arc_chunk = share_recent_line_token_arcs(chunk);

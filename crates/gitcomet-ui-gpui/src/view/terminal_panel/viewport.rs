@@ -193,19 +193,31 @@ impl TerminalViewportView {
         focus_handle: FocusHandle,
         term_lock: AlacrittyTermLock,
         pty_sender: terminal_alacritty::PtySender,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
-        Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender))
+        Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender), cx)
     }
 
-    /// Shared constructor. Tests use it to build a viewport over a real `Term`
-    /// but with no PTY, since a `PtySender` can only come from a spawned event
-    /// loop.
+    /// Shared constructor. Tests use a real `Term` with either no PTY or a
+    /// sender that records messages without spawning a process.
     pub(super) fn with_backend(
         theme: AppTheme,
         focus_handle: FocusHandle,
         term_lock: Option<AlacrittyTermLock>,
         pty_sender: Option<terminal_alacritty::PtySender>,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
+            if !this.selection_owner.is_stale(cx) {
+                return;
+            }
+            // Not folded into the condition above: `clear_selection` also ends
+            // any drag and invalidates the autoscroll ticker, which is too much
+            // to hide behind `&&`.
+            if this.clear_selection() {
+                cx.notify();
+            }
+        });
         Self {
             theme,
             focus_handle,
@@ -232,6 +244,8 @@ impl TerminalViewportView {
             selection_drag_moved: false,
             selection_autoscroll_seq: 0,
             ime_state: None,
+            selection_owner: Default::default(),
+            _selection_owner_observer: selection_owner_observer,
         }
     }
 
@@ -409,10 +423,16 @@ impl TerminalViewportView {
     pub(super) fn handle_key_down(
         &mut self,
         keystroke: &gpui::Keystroke,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         if let Some(action) = terminal_clipboard_shortcut_action(keystroke) {
-            self.perform_clipboard_action(action, cx);
+            self.perform_command(
+                action,
+                crate::clipboard::CopySource::TerminalShortcut,
+                window,
+                cx,
+            );
             cx.stop_propagation();
             return true;
         }
@@ -439,42 +459,53 @@ impl TerminalViewportView {
         false
     }
 
-    pub(super) fn perform_clipboard_action(
+    pub(super) fn perform_command(
         &mut self,
-        action: TerminalShortcutAction,
+        action: TerminalCommand,
+        copy_source: crate::clipboard::CopySource,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match action {
-            TerminalShortcutAction::Copy => {
-                let text = if self.select_all_active {
-                    self.copy_entire_buffer()
-                } else if let Some((start, end)) = self.selection_start.zip(self.selection_end) {
-                    self.copy_grid_range(start, end)
-                } else {
-                    // Fallback: copy visible screen content when no selection
-                    self.copy_visible_screen()
-                };
+            TerminalCommand::Copy => {
+                let text = self.selected_text().unwrap_or_else(|| {
+                    // Keyboard Copy also works without a selection.
+                    if copy_source == crate::clipboard::CopySource::TerminalShortcut
+                        && !self.has_selection()
+                    {
+                        self.copy_visible_screen()
+                    } else {
+                        String::new()
+                    }
+                });
                 if !text.is_empty() {
-                    crate::clipboard::write_text(
-                        cx,
-                        text,
-                        crate::clipboard::CopySource::TerminalShortcut,
-                    );
+                    crate::clipboard::write_text(cx, text, copy_source);
                 }
             }
-            TerminalShortcutAction::Paste => {
-                let bracketed = self
-                    .last_content
-                    .as_ref()
-                    .map(|c| c.mode.contains(TerminalModes::BRACKETED_PASTE))
-                    .unwrap_or(false);
+            TerminalCommand::Paste => {
                 if let Some(text) = crate::clipboard::read_text(cx) {
-                    let bytes = terminal_paste_bytes(&text, bracketed);
-                    self.queue_input(bytes, cx);
+                    self.paste_text(&text, cx);
                 }
             }
-            TerminalShortcutAction::SelectAll => self.select_all(cx),
+            TerminalCommand::SelectAll => self.select_all(window, cx),
+            TerminalCommand::ClearScreenAndScrollback => self.clear_screen_and_scrollback(cx),
         }
+    }
+
+    pub(super) fn clear_screen_and_scrollback(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(term_lock) = &self.term_lock else {
+            return;
+        };
+        {
+            let mut term = term_lock.lock();
+            clear_terminal_screen_and_scrollback(&mut term);
+            self.last_content = Some(make_terminal_content(&term));
+        }
+        self.clear_selection();
+        self.content_epoch = self.content_epoch.wrapping_add(1);
+        self.render_cache = TerminalRenderCache::default();
+        self.reset_cursor_blink(cx);
+        cx.notify();
     }
 
     pub(super) fn copy_grid_range(
@@ -645,7 +676,7 @@ impl TerminalViewportView {
         })
     }
 
-    pub(super) fn select_all(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn select_all(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
         let Some(geometry) = self.grid_geometry() else {
             return;
         };
@@ -661,6 +692,7 @@ impl TerminalViewportView {
             geometry.columns as u16 - 1,
         ));
         self.select_all_active = true;
+        self.selection_owner.adopt(window, cx);
         cx.notify();
     }
 
@@ -839,6 +871,10 @@ impl TerminalViewportView {
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
         crate::press_gesture::claim_press(cx);
+        // Every button, like `TextInput::on_mouse_down`: a right-click opens a
+        // menu that copies this selection, and a middle-click paste must not
+        // let the press resolver collapse it either.
+        self.selection_owner.adopt(window, cx);
 
         let mode = self.live_modes();
         if mode.mouse_mode() {
@@ -1540,8 +1576,8 @@ impl Render for TerminalViewportView {
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.handle_mouse_move(e, window, cx);
             }))
-            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
-                this.handle_key_down(&e.keystroke, cx);
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                this.handle_key_down(&e.keystroke, window, cx);
             }))
             .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, window, cx| {
                 this.handle_scroll_wheel(e, window, cx);
@@ -1620,6 +1656,11 @@ where
     style.font_family = crate::font_preferences::current_editor_font_family(cx).into();
     style.font_features = gpui::FontFeatures::disable_ligatures();
     style.font_weight = FontWeight::NORMAL;
+    let appearance =
+        cx.update_default_global::<crate::appearance::Appearance, _>(|appearance, _| *appearance);
+    style.font_size =
+        crate::ui_scale::design_px_from_window(appearance.editor_font_size_px as f32, window)
+            .into();
     style.font_style = gpui::FontStyle::Normal;
     style.color = terminal_default_foreground(theme).into_color();
     style.white_space = gpui::WhiteSpace::Nowrap;
@@ -1642,7 +1683,7 @@ fn terminal_grid_size(bounds: Bounds<Pixels>, metrics: TerminalTextMetrics) -> T
 
 fn terminal_layout_cache(mut base_style: gpui::TextStyle, window: &Window) -> TerminalLayoutCache {
     let rem_size = window.rem_size();
-    let font_size = base_style.font_size.to_pixels(rem_size) * TERMINAL_FONT_SCALE;
+    let font_size = base_style.font_size.to_pixels(rem_size);
     let line_height = terminal_line_height(font_size);
     base_style.line_height = line_height.into();
     let font_id = window.text_system().resolve_font(&base_style.font());

@@ -489,7 +489,7 @@ impl Render for CommitMessageHoverHost {
                     .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.popover))
                     .shadow(crate::theme::shadow_popover(theme))
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.primary)
                     .child(message_text)
                     .when(has_footer, |card| {
@@ -540,7 +540,7 @@ mod tests {
     }
 
     fn host(cx: &mut gpui::TestAppContext) -> Entity<CommitMessageHoverHost> {
-        let (store, _events) = AppStore::new(Arc::new(NoopBackend));
+        let (store, _events) = AppStore::new_test(Arc::new(NoopBackend));
         let store = Arc::new(store);
         cx.update(|cx| {
             let ui_model = cx.new(|_cx| AppUiModel::new(store.snapshot()));

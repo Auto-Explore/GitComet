@@ -2,6 +2,7 @@
 #include "tree_sitter/array.h"
 #include "tree_sitter/parser.h"
 
+#include <string.h>
 #include <wctype.h>
 
 enum TokenType {
@@ -17,6 +18,7 @@ enum TokenType {
     RAW_STRING_START,
     RAW_STRING_END,
     RAW_STRING_CONTENT,
+    LAMBDA_PAREN_OPEN,
 };
 
 typedef enum {
@@ -46,6 +48,71 @@ typedef struct {
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 
 static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
+
+// ---- Helpers for LAMBDA_PAREN_OPEN scanning ---------------------------
+
+static inline bool is_id_start(int32_t c) {
+    return c == '_' || iswalpha(c);
+}
+
+static inline bool is_id_continue(int32_t c) {
+    return c == '_' || iswalnum(c);
+}
+
+// Skip whitespace, line comments (//...), and block comments (/* ... */).
+// Does NOT skip preprocessor directives — simple-lambda parameter lists
+// cannot legally contain them.
+static void skip_ws_and_comments(TSLexer *lexer) {
+    for (;;) {
+        int32_t c = lexer->lookahead;
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            advance(lexer);
+        } else if (c == '/') {
+            advance(lexer);
+            if (lexer->lookahead == '/') {
+                while (lexer->lookahead != 0 && lexer->lookahead != '\n') {
+                    advance(lexer);
+                }
+            } else if (lexer->lookahead == '*') {
+                advance(lexer);
+                int32_t prev = 0;
+                while (lexer->lookahead != 0 &&
+                       !(prev == '*' && lexer->lookahead == '/')) {
+                    prev = lexer->lookahead;
+                    advance(lexer);
+                }
+                if (lexer->lookahead == '/') advance(lexer);
+            } else {
+                // a stray '/' isn't valid in a param list; bail out by
+                // making the caller see something unexpected
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+}
+
+// Consume an identifier into a fixed-size buffer. Returns the actual
+// length consumed (may exceed `max`, in which case `buf` is only filled
+// up to `max` bytes — useful for "too long to be a keyword" detection).
+static size_t consume_identifier_into(TSLexer *lexer, char *buf, size_t max) {
+    size_t n = 0;
+    while (is_id_continue(lexer->lookahead)) {
+        if (n < max) {
+            buf[n] = (char)lexer->lookahead;
+        }
+        n++;
+        advance(lexer);
+    }
+    return n;
+}
+
+// True iff the first `n` bytes of `buf` equal the C string `kw`.
+static bool buf_equals(const char *buf, size_t n, const char *kw) {
+    size_t klen = strlen(kw);
+    return n == klen && memcmp(buf, kw, klen) == 0;
+}
 
 void *tree_sitter_c_sharp_external_scanner_create() {
     Scanner *scanner = ts_calloc(1, sizeof(Scanner));
@@ -107,12 +174,164 @@ void tree_sitter_c_sharp_external_scanner_deserialize(void *payload, const char 
     assert(size == length);
 }
 
+// Outcome of `scan_lambda_paren_open` — distinguishes "didn't start"
+// (lexer untouched, wrapper can fall through to other token handlers)
+// from "started and failed" (lexer cursor advanced past characters
+// the wrapper must not let other handlers consume — they would emit
+// tokens with wrong spans, e.g. an `INTERPOLATION_REGULAR_START`
+// span covering `(false, $` in `return (false, $"...");`).
+typedef enum {
+    LAMBDA_SCAN_NO_PAREN,         // not a '(', no advance() done
+    LAMBDA_SCAN_FAILED_AFTER_PAREN, // '(' was consumed, dirty state
+    LAMBDA_SCAN_SUCCESS,
+} LambdaScanResult;
+
+// Try to recognize a C# 14 simple-lambda parameter list at the current
+// position. On SUCCESS, `lexer->result_symbol` is LAMBDA_PAREN_OPEN
+// and `mark_end` is set on the opening '('. On NO_PAREN, the lexer is
+// untouched (only `skip(lexer)` over leading whitespace, which doesn't
+// participate in token boundaries). On FAILED_AFTER_PAREN, the lexer
+// has advanced past at least the opening '(' and the caller must
+// surface this as a false return from the external_scanner_scan
+// function so tree-sitter rewinds.
+//
+// Grammar of the pattern (after the opening '('):
+//
+//   element (',' element)* ')' '=>'
+//
+//   element  := modifier+ identifier
+//             | identifier
+//
+//   modifier ∈ { scoped, ref, out, in, readonly }
+//
+// At least one element must carry a modifier; otherwise we'd over-fire
+// on plain `(x, y) => ...` which is already handled by the existing
+// `_lambda_parameters` choice.
+//
+// Implementation note: identifier-tokens are consumed *whole* into a
+// small buffer before being classified as modifier-or-name. A
+// character-by-character probe against each candidate keyword would be
+// unworkable because `ref` is a prefix of `readonly` (they share `re`)
+// and TSLexer has no rewind primitive: any probe order leaves one of
+// the two keywords unreachable. Buffering the whole identifier
+// sidesteps the prefix conflict entirely.
+static LambdaScanResult scan_lambda_paren_open(TSLexer *lexer) {
+    // External scanners run before whitespace `extras` are skipped, so
+    // we need to skip leading whitespace/comments ourselves before
+    // checking for the opening '('. `skip(lexer)` consumes the char as
+    // an extra (not part of any token), so even on NO_PAREN return the
+    // wrapper's fall-through into other handlers is safe — those
+    // handlers do their own whitespace skipping.
+    while (iswspace(lexer->lookahead)) {
+        skip(lexer);
+    }
+    if (lexer->lookahead != '(') return LAMBDA_SCAN_NO_PAREN;
+    advance(lexer);
+    lexer->mark_end(lexer);
+
+    // From this point on, the lexer cursor has moved past '('. Any
+    // return must be FAILED_AFTER_PAREN unless we reach SUCCESS.
+    #define BAIL return LAMBDA_SCAN_FAILED_AFTER_PAREN
+
+    // We require at least one "hard" modifier (ref/out/in/readonly) across
+    // the whole list before committing. `scoped` alone is not a valid C#
+    // parameter modifier — it must always combine with a hard modifier —
+    // and `scoped` is also a legal type name, so accepting `(scoped x) =>`
+    // as a modifier+name pair would collide with the existing
+    // `parameter_list` path on input that semantically means
+    // type+identifier.
+    bool saw_hard_modifier = false;
+    bool expecting_element = true;
+
+    for (;;) {
+        skip_ws_and_comments(lexer);
+        int32_t c = lexer->lookahead;
+
+        if (c == 0) BAIL;   // EOF mid-list
+
+        if (c == ')') {
+            advance(lexer);
+            skip_ws_and_comments(lexer);
+            if (!saw_hard_modifier) BAIL;
+            if (lexer->lookahead != '=') BAIL;
+            advance(lexer);
+            if (lexer->lookahead != '>') BAIL;
+            lexer->result_symbol = LAMBDA_PAREN_OPEN;
+            return LAMBDA_SCAN_SUCCESS;
+        }
+
+        if (!expecting_element) {
+            if (c != ',') BAIL;
+            advance(lexer);
+            expecting_element = true;
+            continue;
+        }
+
+        // Consume identifier-tokens in this element. Each one is either a
+        // parameter modifier (`scoped`/`ref`/`out`/`in`/`readonly`) — in which
+        // case we continue looking for more — or the parameter name, which
+        // ends the element. Consuming the whole token before classifying
+        // avoids any need to rewind the lexer on a prefix-conflict (e.g. ref
+        // vs readonly).
+        bool consumed_name = false;
+        while (!consumed_name) {
+            skip_ws_and_comments(lexer);
+            if (!is_id_start(lexer->lookahead)) BAIL;
+
+            char buf[9];  // "readonly" is 8 chars
+            size_t n = consume_identifier_into(lexer, buf, sizeof(buf));
+
+            bool is_hard_modifier = (n <= 8) && (
+                buf_equals(buf, n, "ref") ||
+                buf_equals(buf, n, "out") ||
+                buf_equals(buf, n, "in") ||
+                buf_equals(buf, n, "readonly")
+            );
+            bool is_soft_modifier = (n == 6) && buf_equals(buf, n, "scoped");
+
+            if (is_hard_modifier) {
+                saw_hard_modifier = true;
+            } else if (is_soft_modifier) {
+                // `scoped` is a modifier only when followed by a hard
+                // modifier; keep scanning. If the element turns out to
+                // end with `scoped <identifier>` and no hard modifier
+                // appeared, the final `saw_hard_modifier` check fails
+                // and we fall back to the regular parameter_list path.
+            } else {
+                consumed_name = true;
+            }
+        }
+        expecting_element = false;
+    }
+}
+#undef BAIL
+
 bool tree_sitter_c_sharp_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
     Scanner *scanner = (Scanner *)payload;
 
     uint8_t brace_advanced = 0;
     uint8_t quote_count = 0;
     bool did_advance = false;
+
+    // Lambda-paren scanning advances forward speculatively past the
+    // opening `(`. If it consumes input and then bails, the lexer
+    // cursor is mispositioned and must not be reused by other token
+    // handlers below — they would emit tokens with spans starting at
+    // the original scan position but ending at the dirty cursor (e.g.
+    // an INTERPOLATION_REGULAR_START swallowing `(false, $` in
+    // `return (false, $"...");`). When the scanner consumed `(` but
+    // didn't confirm a lambda, return false here so tree-sitter
+    // rewinds and lets the built-in `(` tokenizer match.
+    if (valid_symbols[LAMBDA_PAREN_OPEN]) {
+        switch (scan_lambda_paren_open(lexer)) {
+            case LAMBDA_SCAN_SUCCESS:
+                return true;
+            case LAMBDA_SCAN_FAILED_AFTER_PAREN:
+                return false;
+            case LAMBDA_SCAN_NO_PAREN:
+                break;  // lexer untouched; fall through
+        }
+    }
 
     // error recovery, gives better trees this way
     if (valid_symbols[OPT_SEMI] && valid_symbols[INTERPOLATION_REGULAR_START]) {

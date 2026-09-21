@@ -46,6 +46,7 @@ mod history_column_resize_drag_step;
 mod history_graph;
 mod history_load_more_append;
 mod history_scope_switch;
+mod indexed_history;
 mod keyboard;
 mod large_file_diff_scroll;
 mod large_html_syntax;
@@ -132,6 +133,7 @@ pub(crate) use history_column_resize_drag_step::bench_history_column_resize_drag
 pub(crate) use history_graph::bench_history_graph;
 pub(crate) use history_load_more_append::bench_history_load_more_append;
 pub(crate) use history_scope_switch::bench_history_scope_switch;
+pub(crate) use indexed_history::bench_indexed_history;
 pub(crate) use keyboard::bench_keyboard;
 pub(crate) use large_file_diff_scroll::bench_large_file_diff_scroll;
 pub(crate) use large_html_syntax::bench_large_html_syntax;

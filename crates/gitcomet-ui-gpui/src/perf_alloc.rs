@@ -3,7 +3,7 @@ use gitcomet_tree_sitter_alloc::{
     install_tracking_allocator as install_tree_sitter_tracking_allocator_impl,
     measure_allocations as measure_tree_sitter_allocations,
 };
-use mimalloc::MiMalloc;
+use rustfs_mimalloc::MiMalloc;
 use serde_json::{Map, Value, json};
 use stats_alloc::{Region, Stats, StatsAlloc};
 

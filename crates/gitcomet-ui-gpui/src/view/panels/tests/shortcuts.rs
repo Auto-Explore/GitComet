@@ -217,7 +217,7 @@ pub(super) fn app_state_with_active_repo(repo: RepoState) -> Arc<AppState> {
     Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 
@@ -429,6 +429,9 @@ fn set_diff_text_selection_on_row(
                 });
                 pane.diff_selection_anchor = Some(visible_ix);
                 pane.diff_selection_range = None;
+                // Match production: a real selection owns the window's, so a
+                // seeded one must too or the next press collapses it.
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });
@@ -538,8 +541,9 @@ fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
 fn open_popover_for_test(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
-    kind: PopoverKind,
+    kind: impl Into<PopoverRequest>,
 ) {
+    let kind: PopoverRequest = kind.into();
     cx.update(|window, app| {
         let kind = kind.clone();
         view.update(app, |this, cx| {
@@ -570,7 +574,7 @@ fn assert_context_menu_entry_fills_popover_width(
     );
 }
 
-fn shortcut_fixture_repo(
+pub(super) fn shortcut_fixture_repo(
     repo_id: RepoId,
     workdir: &std::path::Path,
     commit_id: &CommitId,
@@ -642,7 +646,7 @@ fn simple_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
 #[gpui::test]
 fn recent_repository_shortcut_does_not_select_diff_content(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -808,16 +812,18 @@ fn simple_worktree_repo(
     let mut repo = shortcut_fixture_repo(repo_id, workdir, commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: paths
-                .iter()
-                .cloned()
-                .map(|path| gitcomet_core::domain::FileStatus {
-                    path,
-                    kind: gitcomet_core::domain::FileStatusKind::Modified,
-                    conflict: None,
-                })
-                .collect(),
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(
+                paths
+                    .iter()
+                    .cloned()
+                    .map(|path| gitcomet_core::domain::FileStatus {
+                        path,
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    })
+                    .collect(),
+            ),
         }
         .into(),
     );
@@ -874,7 +880,7 @@ fn simple_conflict_repo(
 
 #[gpui::test]
 fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1031,7 +1037,7 @@ fn author_filter_repo_with_many_authors(repo_id: RepoId, count: usize) -> RepoSt
 #[gpui::test]
 fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1079,7 +1085,7 @@ fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1145,7 +1151,7 @@ fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
 #[gpui::test]
 fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1158,12 +1164,11 @@ fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppCont
     );
 
     let invoker: SharedString = "history_author_filter_header".into();
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some(invoker.clone()), cx);
-        });
-    });
-    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    open_popover_for_test(
+        cx,
+        &view,
+        (PopoverKind::HistoryAuthorFilter { repo_id }).invoked_by(invoker),
+    );
     draw_and_drain_test_window(cx);
 
     let active = cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone());
@@ -1179,7 +1184,7 @@ fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1204,7 +1209,7 @@ fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1254,7 +1259,7 @@ fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppConte
 #[gpui::test]
 fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1295,7 +1300,7 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1340,7 +1345,7 @@ fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui
 
 #[gpui::test]
 fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1351,7 +1356,21 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         "gitcomet_ui_test_{}_repo_shortcuts",
         std::process::id()
     ));
-    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+        name: "main".to_string(),
+        target: commit_id.clone(),
+        upstream: Some(gitcomet_core::domain::Upstream {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+        }),
+        divergence: None,
+    }]));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: commit_id.clone(),
+    }]));
     apply_state(cx, &view, app_state_with_active_repo(repo));
 
     let pull_model =
@@ -1444,48 +1463,15 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             app,
             PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: local_branch_name.clone(),
+                target: BranchMenuTarget::local(local_branch_name.clone()),
             },
         )
     });
-    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S", "B"]);
+    assert_declared_shortcuts(&local_branch_model, &[] as &[&str]);
     assert_shortcut_action!(
         local_branch_model,
         "Enter",
         ContextMenuAction::CheckoutBranch { repo_id: rid, name } if *rid == repo_id && name == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "P",
-        ContextMenuAction::PullBranch {
-            repo_id: rid,
-            remote,
-            branch
-        } if *rid == repo_id && remote == "." && branch == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "M",
-        ContextMenuAction::MergeRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "S",
-        ContextMenuAction::SquashRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "B",
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
-        } if *rid == repo_id && onto == "feature"
     );
     assert!(local_branch_model.items.iter().any(|item| {
         matches!(
@@ -1505,15 +1491,13 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         )
     }));
 
-    let remote_branch_name = "origin/feature".to_string();
     let remote_branch_model = cx.update(|_window, app| {
         context_menu_model_for(
             &view,
             app,
             PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Remote,
-                name: remote_branch_name.clone(),
+                target: BranchMenuTarget::remote("origin", "feature"),
             },
         )
     });
@@ -1523,7 +1507,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             ContextMenuItem::Entry { label, .. } if label.as_ref() == "Rename branch"
         )
     }));
-    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "B", "F"]);
+    assert_declared_shortcuts(&remote_branch_model, &[] as &[&str]);
     assert_shortcut_action!(
         remote_branch_model,
         "Enter",
@@ -1534,43 +1518,6 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
                 branch
             }
         } if *rid == repo_id && remote == "origin" && branch == "feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "P",
-        ContextMenuAction::PullBranch {
-            repo_id: rid,
-            remote,
-            branch
-        } if *rid == repo_id && remote == "origin" && branch == "feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "M",
-        ContextMenuAction::MergeRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "origin/feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "S",
-        ContextMenuAction::SquashRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "origin/feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "B",
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
-        } if *rid == repo_id && onto == "origin/feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "F",
-        ContextMenuAction::FetchAll { repo_id: rid } if *rid == repo_id
     );
 
     let remote_menu_model = cx.update(|_window, app| {
@@ -1624,7 +1571,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
 
 #[gpui::test]
 fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1644,12 +1591,12 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: staged_path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Added,
                 conflict: None,
-            }],
-            unstaged: vec![
+            }]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: unstaged_path.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -1665,7 +1612,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                     kind: gitcomet_core::domain::FileStatusKind::Conflicted,
                     conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -2124,7 +2071,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
 fn commit_context_menu_disables_history_rewrites_during_active_operations(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2138,7 +2085,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
 
     // Each in-flight operation must disable every history-rewriting entry:
     // they all contend for git's single sequencer slot.
-    let busy_states: [(&str, fn(&mut RepoState)); 3] = [
+    let busy_states: [(&str, fn(&mut RepoState)); 4] = [
         ("pending merge", |repo| {
             repo.merge_commit_message = Loadable::Ready(Some("merge message".to_string()));
         }),
@@ -2149,7 +2096,31 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
             repo.sequencer_state =
                 Loadable::Ready(gitcomet_core::services::SequencerState::CherryPick);
         }),
+        ("revert sequencer", |repo| {
+            repo.sequencer_state = Loadable::Ready(gitcomet_core::services::SequencerState::Revert);
+        }),
     ];
+    let idle_model = {
+        apply_state(
+            cx,
+            &view,
+            app_state_with_active_repo(shortcut_fixture_repo(repo_id, &workdir, &commit_id)),
+        );
+        cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                },
+            )
+        })
+    };
+    assert!(
+        !context_menu_entry_disabled_by_label(&idle_model, "Revert cafebabe…"),
+        "Revert names the clicked commit and is enabled when idle"
+    );
     for (state_name, make_busy) in busy_states {
         let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
         make_busy(&mut repo);
@@ -2169,7 +2140,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
             "Cherry-pick enabled during {state_name}"
         );
         assert!(
-            context_menu_entry_disabled_by_label(&model, "Revert"),
+            context_menu_entry_disabled_by_label_prefix(&model, "Revert "),
             "Revert enabled during {state_name}"
         );
         assert!(
@@ -2187,8 +2158,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
                 app,
                 PopoverKind::BranchMenu {
                     repo_id,
-                    section: BranchSection::Local,
-                    name: "feature".to_string(),
+                    target: BranchMenuTarget::local("feature"),
                 },
             )
         });
@@ -2201,7 +2171,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
 
 #[gpui::test]
 fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2219,8 +2189,8 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: untracked_a.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -2236,7 +2206,7 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -2264,7 +2234,7 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
 fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2282,8 +2252,8 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: untracked.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -2299,7 +2269,7 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -2326,7 +2296,7 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
 #[gpui::test]
 fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2401,12 +2371,60 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     );
 }
 
+/// The diff pane is a selection owner like any other: once another surface
+/// takes the window's selection, its highlight must go too.
+#[gpui::test]
+fn another_surface_taking_the_selection_clears_the_diff_text_selection(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70512);
+    let commit_id = CommitId("fedcba0987654323".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_selection_ownership",
+        std::process::id()
+    ));
+    let target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(std::path::PathBuf::from("src/only.rs")),
+    };
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    set_diff_text_selection_on_row(cx, &view, 4);
+    assert!(
+        diff_text_has_selection(cx, &view),
+        "precondition: the diff pane holds a text selection"
+    );
+
+    cx.update(|window, app| {
+        let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
+        elsewhere.adopt(window, app);
+    });
+    cx.run_until_parked();
+
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "the diff pane must drop its highlight once another surface owns the selection"
+    );
+}
+
 #[gpui::test]
 fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selection(
     cx: &mut gpui::TestAppContext,
 ) {
     let _clipboard_guard = crate::test_support::lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2497,7 +2515,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.select_all_diff_text();
+                pane.select_all_diff_text(window, cx);
                 cx.notify();
             });
         });
@@ -2521,7 +2539,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
 fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2607,7 +2625,7 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
 
 #[gpui::test]
 fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2623,12 +2641,12 @@ fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestA
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: hunk_path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
+            }]),
         }
         .into(),
     );
@@ -2688,7 +2706,7 @@ fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2748,8 +2766,7 @@ fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui
 
 #[gpui::test]
 fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let store_for_assert = store.clone();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2765,12 +2782,12 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: staged_path,
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
-            unstaged: vec![],
+            }]),
+            unstaged: std::sync::Arc::new(vec![]),
         }
         .into(),
     );
@@ -2788,29 +2805,18 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
         let _ = window.draw(app);
     });
 
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
     cx.simulate_keystrokes("secondary-enter");
     draw_and_drain_test_window(cx);
 
-    wait_until(cx, "commit to be dispatched to store", |_cx| {
-        let snapshot = store_for_assert.snapshot();
-        snapshot
-            .repos
-            .iter()
-            .any(|repo| repo.id == repo_id && repo.commit_in_flight > 0)
-    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+        "expected secondary-enter from the commit message input to dispatch a commit"
+    );
 
     cx.update(|window, app| {
         let root = view.read(app);
-        let snapshot = root.store.snapshot();
-        let repo = snapshot
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .expect("expected repo in store snapshot");
-        assert_eq!(
-            repo.commit_in_flight, 1,
-            "expected secondary-enter from the commit message input to dispatch a commit"
-        );
         let focus = root
             .details_pane
             .read(app)
@@ -2837,7 +2843,7 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
 fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_stealing_focus(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2924,8 +2930,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     );
     assert_eq!(
         diff_selection_range(cx, &view),
-        Some((third_change, third_change)),
-        "expected F3 to replace the selected diff area with the target change"
+        None,
+        "expected F3 to replace the selected diff area with an anchor on the target change"
     );
 
     set_diff_selection_area(
@@ -2943,8 +2949,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     );
     assert_eq!(
         diff_selection_range(cx, &view),
-        Some((first_change, first_change)),
-        "expected F2 to replace the selected diff area with the target change"
+        None,
+        "expected F2 to replace the selected diff area with an anchor on the target change"
     );
 
     set_diff_text_selection_on_row(cx, &view, second_change);
@@ -3025,7 +3031,7 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
 fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3042,8 +3048,8 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: first.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -3054,7 +3060,7 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -3128,7 +3134,7 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
 fn create_branch_popover_text_input_f1_navigates_previous_diff_without_closing_popover(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3212,7 +3218,7 @@ fn create_branch_popover_text_input_f1_navigates_previous_diff_without_closing_p
 
 #[gpui::test]
 fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3273,7 +3279,7 @@ fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3321,7 +3327,7 @@ fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3368,7 +3374,7 @@ fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
 fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3402,7 +3408,7 @@ fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
 
 #[gpui::test]
 fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3560,7 +3566,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
 
 #[gpui::test]
 fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3611,7 +3617,7 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn diff_search_input_slot_grows_for_multiline_query(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3670,7 +3676,7 @@ fn diff_search_input_slot_grows_for_multiline_query(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn diff_search_input_slot_caps_tall_multiline_query(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3734,7 +3740,7 @@ fn diff_search_input_slot_caps_tall_multiline_query(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3912,7 +3918,7 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4006,7 +4012,7 @@ fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4083,7 +4089,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
 
 #[gpui::test]
 fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4197,7 +4203,7 @@ fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::Test
 
 #[gpui::test]
 fn diff_search_preserve_current_scrolls_when_matches_first_appear(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4273,7 +4279,7 @@ fn diff_search_preserve_current_scrolls_when_matches_first_appear(cx: &mut gpui:
 
 #[gpui::test]
 fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4391,7 +4397,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
 fn diff_search_text_input_file_navigation_preserves_focus_and_last_file_boundary(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4451,7 +4457,7 @@ fn diff_search_text_input_file_navigation_preserves_focus_and_last_file_boundary
 
 #[gpui::test]
 fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4573,7 +4579,7 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
 fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4809,7 +4815,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
 #[gpui::test]
 fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4873,7 +4879,7 @@ fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::Te
 fn commit_message_text_input_secondary_f_without_visible_diff_is_noop(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4918,7 +4924,7 @@ fn commit_message_text_input_secondary_f_without_visible_diff_is_noop(
 fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5000,7 +5006,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
 #[gpui::test]
 fn commit_message_text_input_space_does_not_stage_or_advance_diff(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5045,7 +5051,7 @@ fn commit_message_text_input_space_does_not_stage_or_advance_diff(cx: &mut gpui:
 fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5135,7 +5141,7 @@ fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
 
 #[gpui::test]
 fn non_text_context_menu_focus_f4_uses_app_level_diff_navigation(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5187,7 +5193,7 @@ fn non_text_context_menu_focus_f4_uses_app_level_diff_navigation(cx: &mut gpui::
 
 #[gpui::test]
 fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5250,7 +5256,7 @@ fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::Test
 
 #[gpui::test]
 fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5383,7 +5389,7 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn space_asks_before_staging_a_file_with_conflict_markers(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5419,12 +5425,12 @@ fn space_asks_before_staging_a_file_with_conflict_markers(cx: &mut gpui::TestApp
     );
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: conflicted.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
-            }],
+            }]),
         }
         .into(),
     );
@@ -5464,7 +5470,7 @@ fn space_asks_before_staging_a_file_with_conflict_markers(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5488,12 +5494,12 @@ fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext
     );
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: resolved.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
-            }],
+            }]),
         }
         .into(),
     );
@@ -5515,7 +5521,7 @@ fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5593,7 +5599,7 @@ fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
 /// unstaged and the selection stranded.
 #[gpui::test]
 fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5625,8 +5631,8 @@ fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext
     );
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: conflicted.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -5642,7 +5648,7 @@ fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -5738,7 +5744,7 @@ fn ctrl_selected_unstaged_paths(
 
 #[gpui::test]
 fn detached_window_focus_space_stages_and_advances_diff(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5779,7 +5785,7 @@ fn detached_window_focus_space_stages_and_advances_diff(cx: &mut gpui::TestAppCo
 fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5836,7 +5842,7 @@ fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
 fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5940,17 +5946,27 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
         "expected selecting the collapsed entry to update the global diff content mode"
     );
 
+    // Nothing is focused after the mode switch, so the first F3 lands on the
+    // first change and the second on the next one.
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let first_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 after closing diff mode settings to navigate to a change");
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
     let next_change = diff_selection_anchor(cx, &view)
-        .expect("expected F3 after closing diff mode settings to navigate to a change");
+        .expect("expected a second F3 to navigate to the next change");
+    assert!(
+        next_change > first_change,
+        "expected each F3 to move one change forward"
+    );
 
     cx.simulate_keystrokes("f2");
     draw_and_drain_test_window(cx);
     let previous_change = diff_selection_anchor(cx, &view)
         .expect("expected F2 after closing diff mode settings to navigate to a change");
-    assert!(
-        previous_change < next_change,
+    assert_eq!(
+        previous_change, first_change,
         "expected F2 after closing diff mode settings to refresh and move to the previous change"
     );
 }
@@ -5959,7 +5975,7 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
 fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigation(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5977,8 +5993,8 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: untracked_a.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -5994,7 +6010,7 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -6060,7 +6076,7 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
 fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -6076,12 +6092,12 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
+            }]),
         }
         .into(),
     );
@@ -6117,4 +6133,5 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
 }
 
 mod hook_activity;
+mod status_selection;
 mod window_and_file_actions;

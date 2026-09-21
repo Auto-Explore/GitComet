@@ -10,12 +10,12 @@ use std::time::{Duration, Instant, SystemTime};
 /// The linked-worktree rows live in this table, so the two revs behind them
 /// have to move the fingerprint. Without them a finished scan -- or a row
 /// being selected -- changed nothing the pane hashed, and the rows sat stale
-/// until some unrelated rev happened to move. Not reachable from a
-/// `#[gpui::test]`: `stable_cached_view` returns the uncached view under
-/// `cfg!(test)`, so the missed repaint is invisible there.
+/// until some unrelated rev happened to move. Most visual tests use uncached
+/// mounts because GPUI does not replay debug bounds during cache reuse; focused
+/// invalidation tests can opt into the production cache path.
 #[test]
 fn the_history_fingerprint_tracks_the_worktree_revs() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state
         .repos
         .push(gitcomet_state::model::RepoState::new_opening(
@@ -84,6 +84,10 @@ fn set_history_view_state_for_tests(
     state: Arc<AppState>,
 ) {
     cx.update(|window, app| {
+        // Cache replacements become visible during render. Mount the fixture
+        // in the application too, so drawing the window actually draws history.
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| model.set_state(Arc::clone(&state), cx));
         let history_view = view.read(app).main_pane.read(app).history_view.clone();
         history_view.update(app, |history, cx| {
             history.notify_fingerprint =
@@ -208,7 +212,8 @@ fn lane_branch_labels(
     let base_request = HistoryBaseCacheRequest {
         repo_id: RepoId(1),
         history_scope: LogScope::AllBranches,
-        log_fingerprint: 0,
+        log_source: 0,
+        history_author_filter: None,
         head_branch_rev: 0,
         detached_head_commit: None,
         head_branch_target: None,
@@ -254,9 +259,12 @@ fn lane_branch_labels(
 }
 
 mod base_cache;
+mod branch_names;
 mod columns;
 mod interaction;
 mod lane_attribution;
+mod refresh;
 mod reveal;
+mod row_tooltips;
 mod selection;
 mod worktree_anchors;

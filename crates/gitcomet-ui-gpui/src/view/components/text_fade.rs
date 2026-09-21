@@ -299,7 +299,7 @@ mod tests {
         ) -> impl IntoElement {
             let bg = rgba(0x202020ff);
             let label = |text: &'static str, flag: &mut Rc<Cell<bool>>| {
-                let fading = FadingText::new(div().text_sm().child(text), bg);
+                let fading = FadingText::new(div().text_size(gpui::rems(0.875)).child(text), bg);
                 *flag = fading.overflow_flag();
                 fading.render(100u32).flex_1()
             };

@@ -1,0 +1,42 @@
+[profile.ci]
+fail-fast = false
+retries = 0
+test-threads = "num-cpus"
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+leak-timeout = { period = "500ms", result = "fail" }
+success-output = "never"
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = true
+report-skipped = "ignored"
+
+# Opt-in repetitions must not overwrite the inventory-checked CI report.
+[profile.ci-watch-stress]
+fail-fast = false
+retries = 0
+test-threads = "num-cpus"
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+leak-timeout = { period = "500ms", result = "fail" }
+failure-output = "immediate-final"
+
+[profile.ci-watch-stress.junit]
+path = "junit.xml"
+store-success-output = true
+
+[[profile.ci.overrides]]
+filter = 'binary(git_cli_scoreboard)'
+success-output = "immediate"
+
+# Optional experiment: leave watcher waits room to run while limiting the
+# CLI/backend suites to four concurrent tests. Inherit every CI safety check.
+[test-groups.git-heavy]
+max-threads = 4
+
+[profile.ci-git-limited]
+inherits = "ci"
+
+[[profile.ci-git-limited.overrides]]
+filter = 'package(=gitcomet-git-gix) | binary(=difftool_git_integration) | binary(=mergetool_git_integration) | binary(=standalone_tool_mode_integration)'
+test-group = 'git-heavy'

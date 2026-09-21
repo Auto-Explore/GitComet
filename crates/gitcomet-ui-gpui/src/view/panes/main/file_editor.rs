@@ -332,6 +332,9 @@ impl MainPaneView {
     /// sits in, and its own caret autoscroll is vertical only, so a match far
     /// along a long line otherwise scrolls into view still off the right edge.
     fn reveal_file_editor_search_match_horizontally(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.diff_word_wrap {
+            return;
+        }
         let Some(range) = self.file_editor_search_current_range() else {
             return;
         };
@@ -1636,6 +1639,7 @@ impl MainPaneView {
     pub(in crate::view) fn render_file_editor(
         &mut self,
         theme: AppTheme,
+        window: &gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         if let Some(message) = self.file_editor_error.clone() {
@@ -1657,12 +1661,13 @@ impl MainPaneView {
             if let Some(range) = self.file_editor_search_current_range() {
                 // Its autoscroll is also what covers a reveal computed before the
                 // scroll handle had been laid out and had bounds to centre against.
-                self.file_editor_input
-                    .update(cx, |input, cx| input.set_selected_range(range, true, cx));
+                self.file_editor_input.update(cx, |input, cx| {
+                    input.set_selected_range(range, true, window, cx)
+                });
                 // The caret has moved but not been laid out at its new place yet,
                 // so the sideways half waits for the frame that paints it. The
                 // input's own caret autoscroll only handles the vertical axis.
-                self.file_editor_search_reveal_x_pending = true;
+                self.file_editor_search_reveal_x_pending = !self.diff_word_wrap;
             }
         } else if self.file_editor_search_reveal_x_pending {
             self.file_editor_search_reveal_x_pending = false;
@@ -1691,8 +1696,7 @@ impl MainPaneView {
         // gutter's rows and padding have to be too — a flat 20px row drifts a
         // whole line out of step every third line at 150%.
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let row_height =
-            ui_scale::design_px_from_percent(RESOLVED_OUTPUT_ROW_HEIGHT_PX, ui_scale_percent);
+        let row_height = self.theme.editor_row_height(ui_scale_percent);
         // Blame rides in the same gutter as the line numbers rather than in a
         // column of its own, so the editor keeps one scroll-synced strip.
         let blame_ctx = self.blame_render_ctx();
@@ -1704,8 +1708,11 @@ impl MainPaneView {
         };
         self.file_editor_blame = blame_ctx;
         self.file_editor_blame_width = blame_width;
-        let gutter_width =
-            file_editor_gutter_width(line_count, show_line_numbers, ui_scale_percent) + blame_width;
+        let gutter_width = file_editor_gutter_width(
+            line_count,
+            show_line_numbers,
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+        ) + blame_width;
         self.file_editor_gutter_row_height = row_height;
 
         // A wrapped line owns several rows in the buffer and must own the same
@@ -1730,10 +1737,12 @@ impl MainPaneView {
 
         let editor_scroll = self.file_editor_scroll.clone();
         let gutter_scroll = self.file_editor_gutter_scroll.clone();
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            editor_scroll.clone(),
-            components::ScrollbarAxis::Vertical,
-        );
+        let scrollbar_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
+        let horizontal_gutter = if soft_wrap {
+            px(0.0)
+        } else {
+            components::Scrollbar::gutter(components::ScrollbarAxis::Horizontal)
+        };
         let editor_scrollbar =
             components::Scrollbar::new("file_editor_scrollbar", editor_scroll.clone());
         #[cfg(test)]
@@ -1786,6 +1795,7 @@ impl MainPaneView {
                         .id("file_editor_gutter")
                         .w(gutter_width)
                         .h_full()
+                        .pb(horizontal_gutter)
                         .min_h(px(0.0))
                         .flex_shrink_0()
                         .bg(theme.colors.editor.gutter_background)
@@ -1818,6 +1828,7 @@ impl MainPaneView {
                     .flex_1()
                     .min_w(px(0.0))
                     .h_full()
+                    .pb(horizontal_gutter)
                     .min_h(px(0.0))
                     .child(
                         div()
@@ -1836,14 +1847,43 @@ impl MainPaneView {
                             .min_h(px(0.0))
                             .pl_2()
                             .pr(scrollbar_gutter)
-                            .when(soft_wrap, |d| d.overflow_y_scroll())
+                            .when(soft_wrap, |d| {
+                                restrict_scroll_to_vertical_axis(
+                                    d.overflow_hidden().overflow_y_scroll(),
+                                )
+                            })
                             .when(!soft_wrap, |d| d.overflow_scroll())
                             .track_scroll(&self.file_editor_scroll)
                             .child(self.file_editor_input.clone()),
                     )
                     // The track must be outside the moving scroll surface or
                     // GPUI applies the content offset to the scrollbar itself.
-                    .child(editor_scrollbar.render(theme)),
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom(horizontal_gutter)
+                            .w(scrollbar_gutter)
+                            .child(editor_scrollbar.render(theme)),
+                    )
+                    .when(!soft_wrap, |container| {
+                        let scrollbar = components::Scrollbar::horizontal(
+                            "file_editor_hscrollbar",
+                            editor_scroll.clone(),
+                        );
+                        #[cfg(test)]
+                        let scrollbar = scrollbar.debug_selector("file_editor_hscrollbar");
+                        container.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right(scrollbar_gutter)
+                                .bottom_0()
+                                .h(horizontal_gutter)
+                                .child(scrollbar.render(theme)),
+                        )
+                    }),
             )
             .when_some(annotate_handle, |row, handle| row.child(handle))
             .into_any_element()
@@ -1940,7 +1980,7 @@ impl MainPaneView {
                                 .px_2()
                                 .flex()
                                 .justify_end()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.editor.line_number)
                                 .child(if is_continuation {
                                     String::new()
@@ -2069,8 +2109,10 @@ pub(in crate::view) fn file_editor_line_for_visual_row(
 pub(in crate::view) fn file_editor_gutter_width(
     line_count: usize,
     show_line_numbers: bool,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
     if !show_line_numbers {
         return px(0.0);
     }
@@ -2078,5 +2120,5 @@ pub(in crate::view) fn file_editor_gutter_width(
     // clipped once the digits grow with the UI. The digit width itself is already
     // scaled by `resolved_output_line_no_width`.
     let padding = ui_scale::design_px_from_percent(8.0 + 8.0, ui_scale_percent);
-    rows::resolved_output_line_no_width(line_count, ui_scale_percent) + padding
+    rows::resolved_output_line_no_width(line_count, scale) + padding
 }

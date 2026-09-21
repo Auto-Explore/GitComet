@@ -29,7 +29,10 @@
 
 ; Conditionals
 
-"if" @conditional
+[
+  "if"
+  "else"
+] @conditional
 
 ; Repeats
 
@@ -43,6 +46,7 @@
 
 [
   "let"
+  "try"
 ] @keyword
 
 [
@@ -70,13 +74,25 @@
   "!~"
 	"!"
 	"="
+	"~"
 ] @operator
 
 ; Fields & Properties
 
-(field 
-	 (label 
+(field
+	 (label
 		 (identifier) @field))
+
+; `foo?:` and `foo!:` wrap the name in an `optional`/`required` node, so the
+; pattern above stops matching them. Upstream's query has the same hole.
+
+(field
+	 (label
+		 (optional (identifier) @field)))
+
+(field
+	 (label
+		 (required (identifier) @field)))
 
 (selector_expression
 	  (_)

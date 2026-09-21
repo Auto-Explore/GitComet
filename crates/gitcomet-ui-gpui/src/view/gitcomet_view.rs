@@ -36,6 +36,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.minimized_hook_activity_repos.insert(repo_id);
+        self.sync_minimized_hook_activity_indicator(cx);
         self.minimize_hook_activity_chains(chains, cx);
     }
 
@@ -45,9 +46,16 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.minimized_hook_activity_repos.remove(&repo_id);
+        self.sync_minimized_hook_activity_indicator(cx);
         self.minimized_hook_activity_chains
             .retain(|(minimized_repo_id, _)| *minimized_repo_id != repo_id);
         cx.notify();
+    }
+
+    pub(super) fn sync_minimized_hook_activity_indicator(&mut self, cx: &mut gpui::Context<Self>) {
+        self.bottom_status_bar.update(cx, |bar, cx| {
+            bar.set_minimized_hook_activity_repos(&self.minimized_hook_activity_repos, cx);
+        });
     }
 
     pub(in crate::view) fn hook_activity_workflow_is_open(&self, cx: &App) -> bool {
@@ -60,12 +68,14 @@ impl GitCometView {
 
     pub(in crate::view) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
+        let mut kind: PopoverRequest = kind.into();
+        kind.new_source = true;
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -92,16 +102,18 @@ impl GitCometView {
 
     pub(in crate::view) fn open_popover_centered(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let PopoverKind::HookActivity { repo_id, .. } = &kind {
+        let mut kind: PopoverRequest = kind.into();
+        kind.new_source = true;
+        if let PopoverKind::HookActivity { repo_id, .. } = &kind.kind {
             self.pending_hook_activity_open = None;
             self.minimized_hook_activity_chains
                 .retain(|(suppressed_repo_id, _)| suppressed_repo_id != repo_id);
         }
-        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host
@@ -119,12 +131,14 @@ impl GitCometView {
 
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
+        let mut kind: PopoverRequest = kind.into();
+        kind.new_source = true;
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -137,15 +151,45 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Both are scrim-backed modals over the same overlay layer, so opening
+        // one on top of the other stacks two scrims and leaves the lower one
+        // behind when the upper is dismissed. Closing first also means the
+        // focus captured below is the one the closed modal handed back, not its
+        // own input.
+        if self.reveal_commit_open {
+            self.close_reveal_commit(window, cx);
+        }
         self.command_palette_open = true;
         let restore_focus = window
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
         let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-        let has_active_repo = self.active_repo_id().is_some();
+        let context = self.command_palette_context(cx);
         self.command_palette.update(cx, |palette, cx| {
-            palette.open(restore_focus, fallback_focus, has_active_repo, window, cx);
+            palette.open(restore_focus, fallback_focus, context, window, cx);
         });
+    }
+
+    /// The state palette commands are enabled against. Mirrors the conditions
+    /// the action bar and menus use, so a command is greyed out exactly when
+    /// its button or menu entry would be.
+    pub(super) fn command_palette_context(&self, cx: &App) -> command_palette::PaletteContext {
+        let repo = self.active_repo();
+        let host = self.popover_host.read(cx);
+        command_palette::PaletteContext {
+            has_active_repo: repo.is_some(),
+            external_editor: crate::external_editor::configured_setting().is_some(),
+            merging: repo.is_some_and(merge_in_progress),
+            sequencer: repo.is_some_and(|repo| {
+                active_sequencer_state(repo) != gitcomet_core::services::SequencerState::None
+            }),
+            sequencer_busy: repo.is_some_and(|repo| repo.sequencer_actions_in_flight > 0),
+            unresolved_conflicts: repo.is_some_and(|repo| repo.has_unstaged_conflicts),
+            push_with_tags_unavailable: gitcomet_core::tag_push::TagPushMode::ALL
+                .map(|mode| host.push_with_tags_unavailable(mode)),
+            remote_web_page_unavailable: repo
+                .and_then(|repo| remote_web_request(repo).unavailable_reason()),
+        }
     }
 
     pub(super) fn close_command_palette(
@@ -180,6 +224,68 @@ impl GitCometView {
         } else {
             self.open_command_palette(window, cx);
         }
+    }
+
+    pub(super) fn open_reveal_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        // See `open_command_palette`: two stacked modal scrims are never right.
+        if self.command_palette_open {
+            self.close_command_palette(window, cx);
+        }
+        self.reveal_commit_open = true;
+        let restore_focus = window
+            .focused(cx)
+            .or_else(|| self.pre_palette_focus.clone());
+        let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        let repo_id = self.active_repo_id();
+        self.reveal_commit_dialog.update(cx, |dialog, cx| {
+            dialog.open(restore_focus, fallback_focus, repo_id, window, cx);
+        });
+    }
+
+    pub(super) fn close_reveal_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.reveal_commit_open = false;
+        self.reveal_commit_dialog
+            .update(cx, |dialog, cx| dialog.close(window, cx));
+    }
+
+    pub(super) fn reveal_commit_did_close(
+        &mut self,
+        target: Option<CommitId>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.reveal_commit_open = false;
+        let (Some(repo_id), Some(target)) = (self.active_repo_id(), target) else {
+            return;
+        };
+        self.main_pane.update(cx, |main, cx| {
+            main.reveal_history_commit(
+                repo_id,
+                target,
+                Some(gitcomet_core::domain::LogScope::AllBranches),
+                cx,
+            );
+        });
+    }
+
+    pub(crate) fn toggle_reveal_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.reveal_commit_open {
+            self.close_reveal_commit(window, cx);
+            return;
+        }
+        // Nothing to reveal outside a normal window, or without a repository.
+        if !command_palette_available(self.view_mode) || self.active_repo_id().is_none() {
+            return;
+        }
+        self.open_reveal_commit(window, cx);
     }
 
     pub(super) fn execute_command(
@@ -245,6 +351,78 @@ impl GitCometView {
                 self.activate_next_repo_tab(cx);
             }
             "open-active-view-search" => cx.defer(|cx| cx.dispatch_action(&OpenActiveViewSearch)),
+            // Routed through the action so this takes the same path — and the
+            // same availability gate — as the hotkey.
+            "reveal-commit" => cx.defer(|cx| cx.dispatch_action(&ToggleRevealCommit)),
+            // The app-level `CheckForUpdates` and `InitializeRepository` actions
+            // only have handlers on macOS, so these call what the menus call.
+            "check-for-updates" => self.check_for_updates_manually(cx),
+            "initialize-repository" => {
+                if let Some(window) = window
+                    && !self.blocks_repository_management_actions()
+                {
+                    self.prompt_init_repo(window, cx);
+                }
+            }
+            "toggle-terminal" => {
+                if let Some(window) = window {
+                    self.toggle_terminal_for_active_repo(window, cx);
+                }
+            }
+            "open-external-terminal" => {
+                if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
+                    self.open_external_terminal_from_menu(repo_id, window, cx);
+                }
+            }
+            "open-in-code-editor" => self.open_active_repo_in_external_code_editor(cx),
+            "open-remote-in-browser" => {
+                if let Some(window) = window {
+                    self.open_remote_in_browser(window, cx);
+                }
+            }
+            "prune-merged-branches" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::PruneMergedBranches { repo_id });
+                }
+            }
+            "prune-local-tags" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::PruneLocalTags { repo_id });
+                }
+            }
+            "push-with-annotated-tags" | "push-with-all-tags" => {
+                let mode = if command_id == "push-with-all-tags" {
+                    gitcomet_core::tag_push::TagPushMode::All
+                } else {
+                    gitcomet_core::tag_push::TagPushMode::FollowAnnotated
+                };
+                if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
+                    self.popover_host.update(cx, |host, cx| {
+                        host.push_with_tags(repo_id, mode, None, window, cx);
+                    });
+                }
+            }
+            // Both abort through the action bar's confirmation.
+            "abort-merge" | "abort-rebase" => {
+                if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
+                    self.open_popover_centered(
+                        PopoverKind::MergeAbortConfirm { repo_id },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "continue-rebase" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::RebaseContinue { repo_id });
+                }
+            }
+            "hide" => cx.defer(|cx| cx.hide()),
+            "hide-others" => cx.defer(|cx| cx.hide_other_apps()),
+            "install-desktop-integration" => {
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                self.install_linux_desktop_integration(cx);
+            }
             "toggle-sidebar" => {
                 self.set_sidebar_collapsed(!self.sidebar_collapsed, cx);
             }
@@ -348,22 +526,70 @@ impl GitCometView {
                 // TODO: Open remote branch picker
             }
             "pull" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::Pull {
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                match pull_request(repo) {
+                    PullRequest::Pull => self.store.dispatch(Msg::Pull {
                         repo_id,
                         mode: PullMode::Default,
-                    });
+                    }),
+                    PullRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot pull: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PullRequest::NotReady => {}
                 }
             }
             "push" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::Push { repo_id });
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                match push_request(repo) {
+                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
+                    PushRequest::SetUpstream { remote } => {
+                        if let Some(window) = window {
+                            self.open_popover_centered(
+                                PopoverKind::PushSetUpstreamPrompt {
+                                    repo_id,
+                                    remote,
+                                    configure_only_for: None,
+                                },
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    PushRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PushRequest::NotReady => {}
                 }
             }
             "force-push" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(window) = window
-                {
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                if !head_branch_has_live_upstream(repo) {
+                    let reason = if head_is_detached(repo) {
+                        "HEAD is detached"
+                    } else {
+                        "current branch has no remote upstream"
+                    };
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Cannot force push: {reason}"),
+                        cx,
+                    );
+                    return;
+                }
+                if let Some(window) = window {
                     self.open_popover_centered(
                         PopoverKind::ForcePushConfirm { repo_id },
                         window,
@@ -826,6 +1052,8 @@ impl GitCometView {
             }
         };
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
+        crate::appearance::initialize(&ui_session, cx);
+        ui_preferences.appearance.metrics = crate::appearance::current(cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         // The application-wide scale may already have been initialized by
         // another window. Keep the shared runtime preferences aligned with the
@@ -851,11 +1079,14 @@ impl GitCometView {
         let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
-        let initial_theme = theme_mode.resolve_theme(window.appearance());
+        let initial_theme = theme_mode
+            .resolve_theme(window.appearance())
+            .with_appearance(crate::appearance::current(cx));
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
+        let file_list_layout = ui_preferences.file_lists.layout;
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
@@ -866,15 +1097,29 @@ impl GitCometView {
         let diff_word_wrap = ui_preferences.diff.word_wrap;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
+        let remote_url_policy = ui_preferences.security.remote_url_policy;
+        let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let history_show_tags = ui_preferences.history.show_tags;
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
+        let remote_settings = RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: ui_preferences
+                .remotes
+                .prune_deleted_remote_branches_on_fetch,
+        };
+        store.dispatch(Msg::SetRemoteUrlPolicy(remote_url_policy));
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
+            verify_commit_signatures: ui_preferences.history.verify_commit_signatures,
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
+        store.dispatch(Msg::SetRemoteSettings(remote_settings));
+        store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
+            follow_selected_commit: ui_preferences.history.files_follow_selected_commit,
+        }));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
@@ -1072,6 +1317,7 @@ impl GitCometView {
                 DetailsPaneInit {
                     theme: initial_theme,
                     root_view: weak_view.clone(),
+                    main_pane: main_pane.downgrade(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
                 window,
@@ -1122,6 +1368,17 @@ impl GitCometView {
             )
         });
 
+        let reveal_commit_dialog = cx.new(|cx| {
+            reveal_commit::RevealCommitView::new(
+                initial_theme,
+                initial_state.active_repo,
+                weak_view.clone(),
+                Arc::clone(&store),
+                window,
+                cx,
+            )
+        });
+
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             let now = Instant::now();
             if !window.is_window_active() {
@@ -1148,27 +1405,24 @@ impl GitCometView {
             crate::window_groups::mark_window_active(cx, this.window_handle.window_id());
             let self_initiated_grab =
                 consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
-            let runtime = refresh_git_runtime();
-            if runtime != this.state.git_runtime {
-                this.store
-                    .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
+            if self_initiated_grab {
+                return;
+            }
+            let git_available = this.state.git_runtime.is_available();
+            if !git_available {
+                runtime_probe::request(cx, false);
             }
             // Suppressed activations skip `repo_activation_msg` entirely, so its
             // throttle map is not stamped and a genuine alt-tab immediately after
             // a drag still refreshes.
-            if !runtime.is_available() || self_initiated_grab {
+            if !git_available {
                 return;
             }
             if let Some(msg) =
                 repo_activation_msg(&this.state, &mut this.last_repo_activation_dispatch_at, now)
             {
-                // Other worktrees have no watcher of their own — the repo
-                // monitor only flushes for the active repo — so coming back to
-                // the window is the moment their uncommitted-change counts get
-                // reconciled. Rides the same throttle as the activation refresh.
-                if let Some(repo_id) = this.state.active_repo {
-                    this.store.dispatch(Msg::LoadWorktreeDirty { repo_id });
-                }
+                // The full refresh already requests the other worktrees' scan.
+                // Requesting it here too schedules a redundant trailing scan.
                 this.store.dispatch(msg);
             }
         });
@@ -1375,6 +1629,8 @@ impl GitCometView {
             popover_host,
             command_palette,
             command_palette_open: false,
+            reveal_commit_dialog,
+            reveal_commit_open: false,
             pre_palette_focus: None,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
@@ -1382,19 +1638,24 @@ impl GitCometView {
             pending_repo_open_reservations,
             pending_repo_open_active,
             startup_repo_bootstrap_pending,
-            splash_backdrop_image: splash::load_splash_backdrop_image(),
+            splash_backdrop_image: splash::load_splash_backdrop_image(initial_theme.is_dark),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
+            synced_repo_paths: std::sync::Arc::from(Vec::new()),
             ui_settings_persist_seq: 0,
             window_group_persist_seq: 0,
             #[cfg(test)]
             ui_settings_persist_requests_for_test: 0,
             last_repo_activation_dispatch_at: FxHashMap::default(),
             window_grab_activation_suppressed_at: None,
+            signing_tools_probe_seq: 0,
+            signing_tools_probe_in_flight: false,
+            signing_tools_probe_cancellation: Default::default(),
             date_time_format,
             timezone,
             show_timezone,
             change_tracking_view,
+            file_list_layout,
             terminal_preferences,
             terminal_sessions: FxHashMap::default(),
             terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
@@ -1417,6 +1678,11 @@ impl GitCometView {
             diff_word_wrap,
             diff_show_line_numbers,
             auto_save_file_edits,
+            remote_markdown_image_policy,
+            remote_url_policy,
+            check_for_updates_on_startup,
+            update_check_in_flight: false,
+            update_check_manual_feedback_requested: false,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1448,6 +1714,7 @@ impl GitCometView {
             pending_unsaved_file_edits_flush: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
+            pending_branch_exists_prompt: initial_state.branch_exists_prompt.clone(),
             pending_force_delete_branch_prompt: None,
             pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
@@ -1475,6 +1742,8 @@ impl GitCometView {
 
         view.drive_focused_mergetool_bootstrap();
         view.drive_submodule_diff_bootstrap();
+        runtime_probe::request(cx, false);
+        view.refresh_signing_tools(false, cx);
 
         view.sync_window_group_and_registry(cx);
 
@@ -1489,6 +1758,8 @@ impl GitCometView {
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        let theme = theme.with_appearance(crate::appearance::current(cx));
+        self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
@@ -1525,6 +1796,8 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.command_palette
             .update(cx, |palette, cx| palette.set_theme(theme, cx));
+        self.reveal_commit_dialog
+            .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input
@@ -1537,6 +1810,17 @@ impl GitCometView {
     }
 
     pub(super) fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        let metrics = crate::appearance::current(cx);
+        self.set_theme(self.theme.with_appearance(metrics), cx);
+        self.update_ui_preferences(cx, move |prefs| prefs.appearance.metrics = metrics);
+        self.details_pane
+            .update(cx, |pane, _| pane.appearance_metrics = metrics);
+        self.main_pane.update(cx, |pane, cx| {
+            pane.history_view.update(cx, |history, cx| {
+                history.appearance_metrics = metrics;
+                cx.notify();
+            });
+        });
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
                 instance.viewport.update(cx, |viewport, cx| {
@@ -1981,6 +2265,7 @@ impl GitCometView {
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     match handle {
                         PaneResizeHandle::Sidebar => {
                             this.sidebar_width_anim_seq =
@@ -2356,6 +2641,73 @@ impl GitCometView {
         self.open_path_in_external_code_editor(workdir, cx);
     }
 
+    /// Open the active repository's remote in the browser, or let the user pick
+    /// one when several remotes have a web page. Pressing it again with the
+    /// picker up closes the picker.
+    pub(crate) fn open_remote_in_browser(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_remote_in_browser_with(window, cx, |url| platform_open::open_url_blocking(&url));
+    }
+
+    pub(super) fn open_remote_in_browser_with(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+        open_url: impl FnOnce(String) -> Result<(), std::io::Error> + Send + 'static,
+    ) {
+        if !command_palette_available(self.view_mode) {
+            return;
+        }
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let picker = PopoverKind::remote(repo.id, RemotePopoverKind::OpenInBrowserMenu);
+        let request = remote_web_request(repo);
+        if self.popover_host.read(cx).is_kind_open(&picker) {
+            self.popover_host.update(cx, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+            return;
+        }
+        match request {
+            RemoteWebRequest::Open(page) => {
+                platform_open::spawn_launch(
+                    cx,
+                    move || open_url(page.url),
+                    |this, result, cx| {
+                        if let Err(err) = result {
+                            this.push_toast(
+                                components::ToastKind::Error,
+                                format!("Failed to open link: {err}"),
+                                cx,
+                            );
+                            // The banner an Error becomes never touches `cx`.
+                            cx.notify();
+                        }
+                    },
+                );
+            }
+            RemoteWebRequest::Choose(_) => {
+                // Never stack the picker's scrim on another modal's.
+                if self.command_palette_open {
+                    self.close_command_palette(window, cx);
+                }
+                if self.reveal_commit_open {
+                    self.close_reveal_commit(window, cx);
+                }
+                self.open_popover_centered(picker, window, cx);
+            }
+            unavailable => {
+                if let Some(message) = unavailable.unavailable_message() {
+                    self.push_toast(components::ToastKind::Warning, message.to_owned(), cx);
+                }
+            }
+        }
+    }
+
     pub(in crate::view) fn open_path_in_external_code_editor(
         &mut self,
         path: std::path::PathBuf,
@@ -2561,6 +2913,62 @@ impl GitCometView {
     #[cfg(test)]
     pub(in crate::view) fn terminal_preferences_for_test(&self) -> &TerminalPreferences {
         &self.terminal_preferences
+    }
+
+    pub(super) fn cancel_signing_tools_probe(&mut self) {
+        self.signing_tools_probe_cancellation.cancel();
+        self.signing_tools_probe_seq = self.signing_tools_probe_seq.wrapping_add(1);
+        self.signing_tools_probe_in_flight = false;
+    }
+
+    /// Discovery runs only after explicit opt-in, startup, or diagnostics.
+    pub(super) fn refresh_signing_tools(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        if cfg!(test)
+            || !self
+                .ui_model
+                .read(cx)
+                .preferences
+                .history
+                .verify_commit_signatures
+            || !current_git_runtime().is_available()
+        {
+            return;
+        }
+        if !force && self.signing_tools_probe_in_flight {
+            return;
+        }
+        self.cancel_signing_tools_probe();
+        self.signing_tools_probe_cancellation = Default::default();
+        let cancellation = self.signing_tools_probe_cancellation.clone();
+        let seq = self.signing_tools_probe_seq;
+        let runtime = current_git_runtime();
+        self.signing_tools_probe_in_flight = true;
+        // Explicit diagnostics may follow changes to trust/config files without
+        // changing a verifier's name or version. Retire the old trust context.
+        self.store
+            .dispatch(Msg::SetSigningToolsState(Default::default()));
+        let detection = cx.background_spawn(async move {
+            gitcomet_core::signing_tools::detect_signing_tools_cancellable(&cancellation)
+        });
+        cx.spawn(async move |view, cx| {
+            let tools = detection.await;
+            let _ = view.update(cx, |this, cx| {
+                if this.signing_tools_probe_seq != seq
+                    || current_git_runtime() != runtime
+                    || !this
+                        .ui_model
+                        .read(cx)
+                        .preferences
+                        .history
+                        .verify_commit_signatures
+                {
+                    return;
+                }
+                this.signing_tools_probe_in_flight = false;
+                this.store.dispatch(Msg::SetSigningToolsState(tools));
+            });
+        })
+        .detach();
     }
 
     pub(super) fn resume_after_git_runtime_recovery(&mut self) {

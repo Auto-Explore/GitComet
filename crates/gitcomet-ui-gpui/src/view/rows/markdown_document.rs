@@ -22,6 +22,7 @@ use super::history::{
 };
 use super::markdown_flow_text::MarkdownFlowText;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::view::markdown_preview::{
     MAX_FLOWING_PREVIEW_ROWS, MarkdownBlock, MarkdownInlineImage, MarkdownInlineStyle,
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
@@ -39,6 +40,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) editor_font_family: SharedString,
     /// Directory relative image sources resolve against.
     pub(in crate::view) image_base_dir: Option<Arc<std::path::Path>>,
+    pub(in crate::view) remote_image_access: crate::view::rows::MarkdownRemoteImageAccess,
     /// Sizes read from picture headers, so a picture that has not decoded yet
     /// still holds the box it is going to fill.
     pub(in crate::view) picture_sizes: crate::view::rows::MarkdownPreviewPictureSizes,
@@ -71,6 +73,13 @@ const TABLE_CELL_PAD_Y_PX: f32 = 4.0;
 
 /// Width of the gutter marking a wholly added or removed file.
 const MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
+
+/// Keep flowing fenced blocks on the same neutral surface as fixed-row
+/// markdown previews. Accent-backed selection colors happen to look neutral in
+/// GitComet Dark, but become amber in Amber Dark and are not a code surface.
+fn markdown_document_code_background(theme: AppTheme) -> gpui::Rgba {
+    super::history::markdown_preview_code_background(theme)
+}
 
 /// Blocks the flowing renderer last grouped, and the document they describe.
 ///
@@ -217,12 +226,13 @@ fn render_block_gap(
                     next_source_visible_ix,
                     region,
                     event.position,
+                    window,
                     cx,
                 );
                 cx.notify();
             });
         })
-        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
             crate::press_gesture::claim_press(cx);
             cx.stop_propagation();
             let focus = right_view.read(cx).diff_panel_focus_handle.clone();
@@ -456,27 +466,35 @@ fn row_shell(
                 let click_count = event.click_count;
                 let position = event.position;
                 view.update(cx, |this, cx| {
-                    if !this.handle_markdown_preview_link_click(
+                    this.handle_markdown_preview_row_mouse_down(
                         row_ix,
                         text_region,
                         position,
                         click_count,
                         window,
                         cx,
-                    ) {
-                        this.handle_markdown_preview_row_mouse_down(
-                            row_ix,
-                            text_region,
-                            position,
-                            click_count,
-                            cx,
-                        );
-                    }
+                    );
                     cx.notify();
                 });
             }
         })
-        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(gpui::MouseButton::Left, {
+            let view = view.clone();
+            move |event, window, cx| {
+                view.update(cx, |this, cx| {
+                    this.handle_markdown_preview_link_click(
+                        row_ix,
+                        text_region,
+                        event.position,
+                        event.click_count,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            }
+        })
+        .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
             view.update(cx, |this, cx| {
                 this.open_diff_editor_context_menu(row_ix, text_region, event.position, window, cx);
                 cx.notify();
@@ -539,12 +557,20 @@ fn render_inline_image(
             context.ui_scale_percent,
             context.image_base_dir.as_deref(),
             &context.picture_sizes,
+            &context.remote_image_access,
         ));
 
     // A picture wrapped in a link opens the same menu its text would.
     let (Some(view), Some(url)) = (context.view.clone(), inline.link_url.clone()) else {
         return image.into_any_element();
     };
+    let load_remote_image_url =
+        if context.remote_image_access.policy == RemoteMarkdownImagePolicy::AskBeforeLoading {
+            crate::view::rows::markdown_preview_remote_image_url(inline.image.source.as_ref())
+                .filter(|image_url| !context.remote_image_access.permits(image_url))
+        } else {
+            None
+        };
     // The menu hangs off the picture's box, which only paint knows. Prepaint of
     // this frame runs before it can dispatch a click, so the handler always
     // reads a box from the frame it fired on.
@@ -560,16 +586,25 @@ fn render_inline_image(
         .child(
             image
                 .id(("markdown_preview_inline_image_link", inline.source_byte))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .cursor(gpui::CursorStyle::PointingHand)
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                .on_pointer_click(gpui::MouseButton::Left, move |event, window, cx| {
                     // The row underneath would otherwise also treat this as a
                     // click on its text and arm a drag-selection behind the menu.
                     cx.stop_propagation();
                     let url = url.clone();
+                    let load_remote_image_url = load_remote_image_url.clone();
                     let bounds = painted_bounds.get();
                     let position = event.position;
                     view.update(cx, |this, cx| {
-                        this.open_markdown_preview_link_menu(url, bounds, position, window, cx);
+                        this.open_markdown_preview_link_menu(
+                            url,
+                            load_remote_image_url,
+                            bounds,
+                            position,
+                            window,
+                            cx,
+                        );
                         cx.notify();
                     });
                 }),
@@ -783,10 +818,7 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
             block
                 .debug_selector(move || format!("markdown_preview_code_shell_{first_row_ix}"))
                 .px(scaled(MARKDOWN_PREVIEW_SHELL_PAD_X_PX, context))
-                .bg(with_alpha(
-                    context.theme.colors.interaction.selected_background,
-                    if context.theme.is_dark { 0.55 } else { 0.45 },
-                ))
+                .bg(markdown_document_code_background(context.theme))
                 .border_1()
                 .border_color(with_alpha(
                     context.theme.colors.stroke.default,
@@ -838,12 +870,13 @@ fn render_code_padding(
                     text_region,
                     event.position,
                     event.click_count,
+                    window,
                     cx,
                 );
                 cx.notify();
             });
         })
-        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
             crate::press_gesture::claim_press(cx);
             cx.stop_propagation();
             let focus = view.read(cx).diff_panel_focus_handle.clone();
@@ -993,6 +1026,30 @@ fn scrolling_block(
         .into_any_element()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amber_fenced_code_blocks_follow_gitcomet_darks_neutral_surface_rule() {
+        let amber = AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+            .expect("Amber Dark theme should load");
+        let gitcomet_dark = AppTheme::gitcomet_dark();
+
+        for theme in [amber, gitcomet_dark] {
+            assert_eq!(
+                markdown_document_code_background(theme),
+                with_alpha(theme.colors.surface.raised, 0.88)
+            );
+        }
+        assert_ne!(
+            markdown_document_code_background(amber),
+            with_alpha(amber.colors.interaction.selected_background, 0.55),
+            "Amber's accent-backed selection color must not tint fenced code blocks"
+        );
+    }
+}
+
 fn render_image(
     row_ix: usize,
     row: &MarkdownPreviewRow,
@@ -1005,9 +1062,10 @@ fn render_image(
         context.ui_scale_percent,
         context.image_base_dir.as_deref(),
         &context.picture_sizes,
+        &context.remote_image_access,
     )
 }
 
 fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
-    crate::ui_scale::design_px_from_percent(value, context.ui_scale_percent)
+    context.theme.markdown_px(value, context.ui_scale_percent)
 }

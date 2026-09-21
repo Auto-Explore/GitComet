@@ -99,6 +99,8 @@ impl MainPaneView {
         conflict_kind: FileConflictKind,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let spec = keep_delete_conflict_spec(conflict_kind);
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
@@ -181,17 +183,22 @@ impl MainPaneView {
                 }),
             )
             .when(show_external_mergetool_actions(self.view_mode), |d| {
-                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.stroke.default))
-                    .child(
-                        components::Button::new("keep_delete_mergetool", "External Mergetool")
-                            .style(components::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, _cx| {
-                                this.store.dispatch(Msg::LaunchMergetool {
-                                    repo_id,
-                                    path: mergetool_path.clone(),
-                                });
-                            }),
-                    )
+                d.child(
+                    div()
+                        .w(px(1.0))
+                        .h(scaled_px(16.0))
+                        .bg(theme.colors.stroke.default),
+                )
+                .child(
+                    components::Button::new("keep_delete_mergetool", "External Mergetool")
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, move |this, _e, _w, _cx| {
+                            this.store.dispatch(Msg::LaunchMergetool {
+                                repo_id,
+                                path: mergetool_path.clone(),
+                            });
+                        }),
+                )
             });
 
         div()
@@ -209,7 +216,7 @@ impl MainPaneView {
             .child(
                 div().flex().items_center().gap_2().child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.colors.foreground.primary)
                         .child(title),
@@ -246,14 +253,14 @@ impl MainPaneView {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_size(theme.ui_text(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme.colors.status.warning.foreground)
                                             .child(spec.header_label),
                                     )
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_size(theme.ui_text(14.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .child(spec.description),
                                     ),
@@ -269,7 +276,7 @@ impl MainPaneView {
                                 .border_color(theme.colors.stroke.default)
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.status.warning.foreground)
                                         .child(
                                             "The keep side is unavailable in conflict stages; only deletion can be applied.",
@@ -286,19 +293,19 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .px_3()
                             .py_2()
-                            .child(div().text_sm().text_color(theme.colors.foreground.secondary).child(
+                            .child(div().text_size(theme.ui_text(14.0)).text_color(theme.colors.foreground.secondary).child(
                                 format!("Deleted side ({}):", spec.deleted_side_label),
                             ))
                             .child(
                                 div()
                                     .mt_1()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .font_family(editor_font_family.clone())
                                     .text_color(theme.colors.foreground.secondary)
                                     .whitespace_nowrap()
                                     .child("(file deleted)"),
                             )
-                            .child(div().mt_2().text_sm().text_color(theme.colors.foreground.secondary).child(
+                            .child(div().mt_2().text_size(theme.ui_text(14.0)).text_color(theme.colors.foreground.secondary).child(
                                 format!(
                                     "Surviving side ({}) ({} line{}):",
                                     spec.surviving_side_label,
@@ -309,7 +316,7 @@ impl MainPaneView {
                             .child(
                                 div()
                                     .mt_1()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .font_family(editor_font_family)
                                     .text_color(theme.colors.foreground.primary)
                                     .whitespace_nowrap()

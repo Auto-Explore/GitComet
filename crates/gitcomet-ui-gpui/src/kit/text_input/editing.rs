@@ -3,6 +3,7 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
+use crate::kit::interaction::ControlInteractionExt as _;
 
 /// The single replaced span between two texts, as `(old_range, new_range)`.
 ///
@@ -75,6 +76,9 @@ impl TextInput {
 
     pub(super) fn from_options(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
+            this.clear_selection_on_ownership_loss(cx);
+        });
         Self {
             focus_handle,
             content: TextModel::new(),
@@ -83,6 +87,7 @@ impl TextInput {
             multiline: options.multiline,
             read_only: options.read_only,
             chromeless: options.chromeless,
+            display_text: false,
             soft_wrap: options.soft_wrap,
             min_lines: options.min_lines,
             display_truncation: None,
@@ -90,6 +95,9 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             line_height_override: None,
+            appearance_metrics: crate::appearance::current(cx),
+            editor_font: false,
+            editor_line_height: px(20.0),
             vertical_padding_override: None,
             highlight: HighlightState::new(),
             layout: LayoutState::new(),
@@ -98,7 +106,29 @@ impl TextInput {
             selection: SelectionState::new(),
             interaction: InteractionState::new(),
             protected_ranges: Arc::from([]),
+            selection_owner: Default::default(),
+            _selection_owner_observer: selection_owner_observer,
         }
+    }
+
+    /// Collapses the selection once another surface has taken the window's.
+    /// Caret, focus, scroll, content and undo stacks are left alone.
+    fn clear_selection_on_ownership_loss(&mut self, cx: &mut Context<Self>) {
+        if !self.selection_owner.is_stale(cx) || self.selection.range.is_empty() {
+            return;
+        }
+        // Mid-composition the marked range *is* the highlight.
+        if self.selection.marked_range.is_some() {
+            return;
+        }
+        // Not `move_to`: it forces the caret visible, blinking a background input.
+        let cursor = self.cursor_offset();
+        self.selection.range = cursor..cursor;
+        self.selection.reversed = false;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        cx.notify();
     }
 
     pub fn text(&self) -> &str {
@@ -121,7 +151,6 @@ impl TextInput {
     pub(super) fn clear_wrap_recompute_state(&mut self) {
         self.wrap.pending_job = None;
         self.wrap.dirty_ranges.clear();
-        self.wrap.interpolated_patches.clear();
         self.wrap.recompute_requested = false;
     }
 
@@ -130,7 +159,9 @@ impl TextInput {
         self.layout.last = None;
         self.layout.line_starts = None;
         self.wrap.row_counts.clear();
+        self.wrap.row_counts_current.clear();
         self.wrap.row_counts_width = None;
+        self.wrap.row_counts_font = None;
         self.clear_wrap_recompute_state();
         self.wrap.last_rows = None;
         self.clear_shaped_row_caches();
@@ -161,14 +192,13 @@ impl TextInput {
         self.invalidate_layout_caches_preserving_wrap_rows();
     }
 
-    pub(super) fn invalidate_highlights(&mut self, preserve_wrap_rows: bool) {
+    pub(super) fn invalidate_highlights(&mut self) {
         self.highlight.provider_cache = None;
         self.highlight.epoch = self.highlight.epoch.wrapping_add(1).max(1);
-        if preserve_wrap_rows {
-            self.bump_shape_style_epoch_preserving_wrap_rows();
-        } else {
-            self.bump_shape_style_epoch();
-        }
+        // Highlight providers are rebound on keystrokes and caret movement.
+        // Dropping the document height here clamps the outer scroll handle to
+        // the unwrapped height before the next shaping pass can restore it.
+        self.bump_shape_style_epoch_preserving_wrap_rows();
     }
 
     /// Background syntax chunks landed for the text the provider already
@@ -177,7 +207,7 @@ impl TextInput {
     /// every highlight to coordinates the buffer left behind.
     pub(super) fn note_provider_highlights_changed(&mut self) {
         self.highlight.interpolated_cache = None;
-        self.invalidate_highlights(true);
+        self.invalidate_highlights();
     }
 
     /// Record a text edit against the highlights currently on screen.
@@ -420,26 +450,62 @@ impl TextInput {
         self.style.text
     }
 
+    #[cfg(test)]
+    pub(crate) fn debug_displayed_single_line(&self) -> Option<&str> {
+        match self.layout.last.as_ref()? {
+            TextInputLayout::TruncatedSingleLine(line) => Some(line.display_text.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Opt into label typography without changing the defaults for form inputs.
+    pub(crate) fn set_display_text(&mut self, cx: &mut Context<Self>) {
+        assert!(self.read_only && self.chromeless);
+        self.display_text = true;
+        cx.notify();
+    }
+
+    pub(crate) fn has_selection_or_drag(&self) -> bool {
+        !self.selection.range.is_empty() || self.interaction.is_selecting
+    }
+
+    /// A live read-only log may append while a user is selecting earlier text.
+    /// Replacements (including front truncation) deliberately reset selection.
+    pub(crate) fn set_text_preserving_selection_on_append(
+        &mut self,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        assert!(self.read_only);
+        self.update_text(text.into(), true, cx);
+    }
+
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        let text = text.into();
+        self.update_text(text.into(), false, cx);
+    }
+
+    fn update_text(&mut self, text: SharedString, preserve_append: bool, cx: &mut Context<Self>) {
         if self.content.as_ref() == text.as_ref() {
             return;
         }
+        let preserve_selection = preserve_append && text.starts_with(self.content.as_ref());
         // Computed before the overwrite so highlights already on screen can ride
         // along; the equality check above keeps this O(n) scan off the hot path.
         let text_edit_delta = utf8_edit_delta_between_texts(self.content.as_ref(), text.as_ref());
         self.content.set_text(text.as_ref());
         self.protected_ranges = Arc::from([]);
         self.rebuild_content_width_cache_if_present();
-        self.selection.range = self.content.len()..self.content.len();
-        self.selection.reversed = false;
+        if !preserve_selection {
+            self.selection.range = self.content.len()..self.content.len();
+            self.selection.reversed = false;
+            self.interaction.is_selecting = false;
+            self.interaction.mouse_selection_anchor = None;
+            self.interaction.pending_mouse_selection_anchor = None;
+            self.layout.scroll_x = px(0.0);
+        }
         self.selection.undo_stack.clear();
         self.selection.redo_stack.clear();
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
         self.interaction.cursor_blink_visible = true;
-        self.layout.scroll_x = px(0.0);
         self.invalidate_layout_caches();
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
@@ -468,7 +534,7 @@ impl TextInput {
             // though the vector itself is unchanged.
             if !self.highlight.interpolation.is_exact() {
                 self.reset_highlight_interpolation();
-                self.invalidate_highlights(false);
+                self.invalidate_highlights();
                 cx.notify();
             }
             return;
@@ -483,15 +549,26 @@ impl TextInput {
         self.highlight.superseded = None;
         // A fresh highlight source describes the buffer as it stands now.
         self.reset_highlight_interpolation();
-        self.invalidate_highlights(false);
+        self.invalidate_highlights();
         cx.notify();
     }
 
+    /// Collapses the selection to a caret at `offset`.
+    ///
+    /// Needs no window, unlike [`Self::set_selected_range`]: a caret paints no
+    /// highlight, so it never takes the window's selection.
+    pub fn set_caret(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_to(offset, cx);
+    }
+
+    /// Installs a selection programmatically. Takes the window because a
+    /// non-empty range is a real highlight and must own the window's selection.
     #[allow(dead_code)]
     pub fn set_selected_range(
         &mut self,
         range: Range<usize>,
         autoscroll: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) {
         let start = self.clamp_to_char_boundary(range.start.min(range.end));
@@ -502,6 +579,10 @@ impl TextInput {
                 self.queue_cursor_autoscroll();
             }
             return;
+        }
+        // A programmatic highlight is still a highlight.
+        if !next.is_empty() {
+            self.selection_owner.adopt(window, cx);
         }
 
         self.selection.range = next;
@@ -550,7 +631,7 @@ impl TextInput {
         // Only past the early return: an unchanged binding key means the same
         // closure over the same text, so its anchor must survive.
         self.reset_highlight_interpolation();
-        self.invalidate_highlights(false);
+        self.invalidate_highlights();
         cx.notify();
     }
 
@@ -590,9 +671,25 @@ impl TextInput {
         cx.notify();
     }
 
+    pub(crate) fn set_editor_font(&mut self, cx: &mut Context<Self>) {
+        self.editor_font = true;
+        cx.notify();
+    }
+
     pub(super) fn effective_line_height(&self, window: &Window) -> Pixels {
-        self.line_height_override
-            .unwrap_or_else(|| window.line_height())
+        if self.display_text {
+            return window.line_height();
+        }
+        if self.editor_font {
+            return self.editor_line_height;
+        }
+        let line_height = self
+            .line_height_override
+            .unwrap_or_else(|| window.line_height());
+        line_height.max(crate::ui_scale::design_px_from_window(
+            self.appearance_metrics.ui_text(20.0),
+            window,
+        ))
     }
 
     /// The explicit line height set by `set_line_height`, if any. Tests use it to
@@ -614,9 +711,30 @@ impl TextInput {
         self.interaction.enter_pressed = false;
         self.interaction.escape_pressed = false;
         self.interaction.arrow_up_pressed = false;
+        self.interaction.document_home_pressed = false;
+        self.interaction.document_end_pressed = false;
+        self.interaction.page_up_pressed = false;
+        self.interaction.page_down_pressed = false;
+
         self.interaction.arrow_down_pressed = false;
         self.interaction.tab_pressed = false;
         self.interaction.shift_tab_pressed = false;
+    }
+
+    pub fn take_document_home_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.document_home_pressed)
+    }
+
+    pub fn take_document_end_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.document_end_pressed)
+    }
+
+    pub fn take_page_up_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.page_up_pressed)
+    }
+
+    pub fn take_page_down_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.page_down_pressed)
     }
 
     pub fn take_arrow_up_pressed(&mut self) -> bool {
@@ -785,10 +903,7 @@ impl TextInput {
         line.len().max(line_display_columns(&line))
     }
 
-    fn content_width_affected_lines(
-        content: &TextModelSnapshot,
-        byte_range: Range<usize>,
-    ) -> Range<usize> {
+    fn affected_lines(content: &TextModelSnapshot, byte_range: Range<usize>) -> Range<usize> {
         let line_count = content.line_count().max(1);
         let start = content.row_for_offset(byte_range.start);
         let end = content.row_for_offset(byte_range.end);
@@ -817,17 +932,20 @@ impl TextInput {
     fn replace_content_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
         // Snapshotting is an `Arc` bump, and it is the only way to read the
         // pre-edit row layout after `replace_range` has already moved on.
-        let old_affected = self
-            .content_width_cache
-            .as_ref()
-            .map(|_| Self::content_width_affected_lines(&self.content.snapshot(), range.clone()));
+        let track_lines = self.content_width_cache.is_some() || (self.multiline && self.soft_wrap);
+        let old_affected =
+            track_lines.then(|| Self::affected_lines(&self.content.snapshot(), range.clone()));
         let inserted = self.content.replace_range(range, new_text);
         let Some(old_affected) = old_affected else {
             return inserted;
         };
 
         let content = self.content.snapshot();
-        let new_affected = Self::content_width_affected_lines(&content, inserted.clone());
+        let new_affected = Self::affected_lines(&content, inserted.clone());
+        self.mark_wrap_dirty_from_edit(old_affected.clone(), new_affected.clone());
+        if self.content_width_cache.is_none() {
+            return inserted;
+        }
         let replacement_units = new_affected
             .clone()
             .map(|line_ix| Self::content_width_line_units(&content, line_ix))
@@ -867,7 +985,9 @@ impl TextInput {
 
     pub(super) fn queue_cursor_autoscroll(&mut self) {
         self.interaction.pending_cursor_autoscroll = true;
-        self.interaction.cursor_autoscroll_retry_exhausted = false;
+        self.interaction.cursor_autoscroll_retries_remaining = TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
+        self.interaction.cursor_autoscroll_layout_waits_remaining =
+            TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
     }
 
     pub(super) fn resolve_provider_highlights(
@@ -1047,29 +1167,46 @@ impl TextInput {
 
     pub(super) fn mark_wrap_dirty_from_edit(
         &mut self,
-        old_range: Range<usize>,
-        new_range: Range<usize>,
+        old_lines: Range<usize>,
+        new_lines: Range<usize>,
     ) {
-        if !(self.multiline && self.soft_wrap) {
+        if !(self.multiline && self.soft_wrap) || self.wrap.row_counts.is_empty() {
             return;
         }
-
-        let text = self.content.as_ref();
-        let line_starts = self.content.line_starts();
-        let line_count = line_starts.len().max(1);
-        if self.wrap.row_counts.len() != line_count {
-            self.wrap.row_counts.resize(line_count, 1);
-            self.wrap.recompute_requested = true;
-            self.wrap.pending_job = None;
-            self.wrap.interpolated_patches.clear();
-            return;
+        debug_assert_eq!(old_lines.start, new_lines.start);
+        // Keep the previous height provisionally for the edited lines, and
+        // splice at the edit so all unchanged lines retain their measurements.
+        let previous = &self.wrap.row_counts[old_lines.clone()];
+        let replacement = (0..new_lines.len())
+            .map(|ix| previous.get(ix).copied().unwrap_or(1))
+            .collect::<Vec<_>>();
+        self.wrap.row_counts.splice(old_lines.clone(), replacement);
+        self.wrap.row_counts_current.splice(
+            old_lines.clone(),
+            std::iter::repeat_n(true, new_lines.len()),
+        );
+        if old_lines.len() != new_lines.len() {
+            // A background snapshot still addresses the old line indices.
+            if self.wrap.pending_job.take().is_some() {
+                self.request_wrap_recompute();
+            }
+            for dirty in &mut self.wrap.dirty_ranges {
+                dirty.start = if dirty.start >= old_lines.end {
+                    dirty.start - old_lines.end + new_lines.end
+                } else {
+                    dirty.start.min(old_lines.start)
+                };
+                dirty.end = if dirty.end >= old_lines.end {
+                    dirty.end - old_lines.end + new_lines.end
+                } else if dirty.end > old_lines.start {
+                    new_lines.end
+                } else {
+                    dirty.end
+                };
+            }
         }
-
-        let dirty_range =
-            expanded_dirty_wrap_line_range_for_edit(text, line_starts, &old_range, &new_range);
-        if dirty_range.start < dirty_range.end {
-            self.wrap.dirty_ranges.push(dirty_range);
-        }
+        self.wrap.dirty_ranges.push(new_lines);
+        self.wrap.last_rows = Some(total_wrap_rows(&self.wrap.row_counts));
     }
 
     pub(super) fn take_normalized_wrap_dirty_ranges(
@@ -1100,96 +1237,13 @@ impl TextInput {
         merged
     }
 
-    pub(super) fn push_interpolated_wrap_patch(
-        &mut self,
-        width_key: i32,
-        line_ix: usize,
-        old_rows: usize,
-        new_rows: usize,
-    ) {
-        if old_rows == new_rows {
-            return;
-        }
-
-        if let Some(last) = self.wrap.interpolated_patches.last_mut()
-            && last.width_key == width_key
-            && last.line_start + last.old_rows.len() == line_ix
-        {
-            last.old_rows.push(old_rows);
-            last.new_rows.push(new_rows);
-            return;
-        }
-
-        if reset_interpolated_wrap_patches_on_overflow(
-            &mut self.wrap.interpolated_patches,
-            &mut self.wrap.recompute_requested,
-        ) {
-            return;
-        }
-        self.wrap.interpolated_patches.push(InterpolatedWrapPatch {
-            width_key,
-            line_start: line_ix,
-            old_rows: vec![old_rows],
-            new_rows: vec![new_rows],
-        });
-    }
-
-    pub(super) fn apply_pending_dirty_wrap_updates(
-        &mut self,
-        display_text: &str,
-        line_starts: &[usize],
-        rounded_wrap_width: Pixels,
-        font_size: Pixels,
-        allow_interpolated_patches: bool,
-    ) -> bool {
-        if self.wrap.dirty_ranges.is_empty() {
-            return false;
-        }
-
-        let line_count = line_starts.len().max(1);
-        if line_count == 0 {
-            self.wrap.dirty_ranges.clear();
-            return false;
-        }
-
-        let mut ranges = self.take_normalized_wrap_dirty_ranges(line_count);
-        let dirty_line_count = ranges
-            .iter()
-            .map(|range| range.end.saturating_sub(range.start))
-            .sum::<usize>();
-        if dirty_line_count > TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
-            self.request_wrap_recompute();
-            return false;
-        }
-
-        let width_key = wrap_width_cache_key(rounded_wrap_width);
-        let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
-        let job_accepts_interpolation = pending_wrap_job_accepts_interpolated_patch(
-            self.wrap.pending_job.as_ref(),
-            width_key,
-            line_count,
-            allow_interpolated_patches,
-        );
-        let mut changed = false;
-        for range in ranges.drain(..) {
-            for line_ix in range {
-                // Dirty wrap patches only need updated row counts here; the
-                // visible-row pass below shapes whichever lines enter view.
-                let new_rows = estimate_wrap_rows_for_line(
-                    line_text_for_index(display_text, line_starts, line_ix),
-                    wrap_columns,
-                )
-                .max(1);
-                let old_rows = self.wrap.row_counts[line_ix].max(1);
-                if old_rows != new_rows {
-                    self.wrap.row_counts[line_ix] = new_rows;
-                    changed = true;
-                    if job_accepts_interpolation {
-                        self.push_interpolated_wrap_patch(width_key, line_ix, old_rows, new_rows);
-                    }
-                }
-            }
-        }
+    pub(super) fn set_measured_wrap_rows(&mut self, line_ix: usize, rows: usize) -> bool {
+        let rows = rows.max(1);
+        let changed = self.wrap.row_counts[line_ix] != rows;
+        self.wrap.row_counts[line_ix] = rows;
+        // Protect even an unchanged count: a late estimator may disagree with
+        // shaping, including on the very frame that launched its job.
+        self.wrap.row_counts_current[line_ix] = true;
         changed
     }
 
@@ -1201,46 +1255,31 @@ impl TextInput {
         font_size: Pixels,
         line_count: usize,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) {
+        if !self.wrap.recompute_requested {
+            return;
+        }
         let width_key = wrap_width_cache_key(rounded_wrap_width);
         let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
-        if line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD {
-            self.wrap.pending_job = None;
-            self.wrap.interpolated_patches.clear();
-            estimate_wrap_rows_with_line_starts(
-                display_text,
-                line_starts,
-                wrap_columns,
-                &mut self.wrap.row_counts,
-            );
-            self.wrap.recompute_requested = false;
-            return false;
-        }
-
-        let has_compatible_job = self
-            .wrap
-            .pending_job
-            .map(|job| job.width_key == width_key && job.line_count == line_count)
-            .unwrap_or(false);
-        if has_compatible_job && !self.wrap.recompute_requested {
-            return false;
-        }
-        if !self.wrap.recompute_requested {
-            return false;
-        }
-
-        let mut budget_rows = std::mem::take(&mut self.wrap.row_counts);
-        budget_rows.resize(line_count, 1);
+        let synchronous = line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD;
         estimate_wrap_rows_budgeted(
             display_text,
             line_starts,
             wrap_columns,
-            &mut budget_rows,
-            Duration::from_millis(TEXT_INPUT_WRAP_FOREGROUND_BUDGET_MS),
+            &mut self.wrap.row_counts,
+            &self.wrap.row_counts_current,
+            if synchronous {
+                Duration::MAX
+            } else {
+                Duration::from_millis(TEXT_INPUT_WRAP_FOREGROUND_BUDGET_MS)
+            },
         );
-        self.wrap.row_counts = budget_rows;
         self.wrap.row_counts_width = Some(rounded_wrap_width);
         self.wrap.recompute_requested = false;
+        self.wrap.pending_job = None;
+        if synchronous {
+            return;
+        }
 
         let sequence = self.wrap.recompute_sequence.wrapping_add(1).max(1);
         self.wrap.recompute_sequence = sequence;
@@ -1250,21 +1289,20 @@ impl TextInput {
             line_count,
             wrap_columns,
         });
-        self.wrap.interpolated_patches.clear();
 
         let snapshot = display_text.to_string();
+        let estimate = cx
+            .background_executor()
+            .spawn(async move { estimate_wrap_rows_for_text(&snapshot, wrap_columns) });
         cx.spawn(
             async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
-                let rows =
-                    smol::unblock(move || estimate_wrap_rows_for_text(&snapshot, wrap_columns))
-                        .await;
+                let rows = estimate.await;
                 let _ = input.update(cx, |input, cx| {
                     input.complete_wrap_recompute_job(sequence, width_key, line_count, rows, cx);
                 });
             },
         )
         .detach();
-        true
     }
 
     pub(super) fn complete_wrap_recompute_job(
@@ -1286,15 +1324,14 @@ impl TextInput {
         for rows_per_line in &mut rows {
             *rows_per_line = (*rows_per_line).max(1);
         }
-        for patch in &self.wrap.interpolated_patches {
-            if patch.width_key == width_key {
-                apply_interpolated_wrap_patch_delta(rows.as_mut_slice(), patch);
+        for (ix, rows) in rows.into_iter().enumerate() {
+            if !self.wrap.row_counts_current[ix] {
+                self.wrap.row_counts[ix] = rows;
             }
         }
-        self.wrap.interpolated_patches.clear();
-        self.wrap.row_counts = rows;
         self.wrap.pending_job = None;
         self.wrap.last_rows = Some(total_wrap_rows(self.wrap.row_counts.as_slice()));
+        self.wrap.cache = None;
         cx.notify();
     }
 
@@ -1310,9 +1347,9 @@ impl TextInput {
         self.selection.range.clone()
     }
 
-    pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
+    pub fn select_all_text(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.select_to(self.content.len(), window, cx);
     }
 
     /// Whether the buffer is currently wrapping long lines.
@@ -1337,6 +1374,15 @@ impl TextInput {
     }
 
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
+        if soft_wrap {
+            self.layout.scroll_x = px(0.0);
+            if let Some(handle) = &self.interaction.vertical_scroll_handle {
+                let offset = handle.offset();
+                if offset.x != px(0.0) {
+                    handle.set_offset(point(px(0.0), offset.y));
+                }
+            }
+        }
         if self.soft_wrap == soft_wrap {
             return;
         }
@@ -1429,33 +1475,43 @@ impl TextInput {
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+    pub(super) fn select_left(
+        &mut self,
+        _: &SelectLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.previous_boundary(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
+    pub(super) fn select_right(
+        &mut self,
+        _: &SelectRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.next_boundary(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
     pub(super) fn select_word_left(
         &mut self,
         _: &SelectWordLeft,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(self.previous_word_start(self.cursor_offset()), cx);
+        self.select_to(self.previous_word_start(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
     pub(super) fn select_word_right(
         &mut self,
         _: &SelectWordRight,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(self.next_word_end(self.cursor_offset()), cx);
+        self.select_to(self.next_word_end(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
@@ -1489,7 +1545,7 @@ impl TextInput {
         }
     }
 
-    pub(super) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
         let Some((target, preferred_x)) = self.vertical_move_target(
             self.cursor_offset(),
             -1.0,
@@ -1497,12 +1553,17 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_down(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some((target, preferred_x)) = self.vertical_move_target(
             self.cursor_offset(),
             1.0,
@@ -1510,13 +1571,18 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_all_text(cx);
+    pub(super) fn select_all(
+        &mut self,
+        _: &SelectAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_all_text(window, cx);
     }
 
     pub(super) fn row_start(&self, offset: usize) -> usize {
@@ -1604,13 +1670,37 @@ impl TextInput {
         )
     }
 
+    pub(super) fn document_home(
+        &mut self,
+        _: &DocumentHome,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.interaction.document_home_pressed = true;
+        self.move_to(0, cx);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    pub(super) fn document_end(&mut self, _: &DocumentEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.document_end_pressed = true;
+        self.move_to(self.content.len(), cx);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
     pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
         self.move_to(self.row_start(self.cursor_offset()), cx);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_start(self.cursor_offset()), cx);
+    pub(super) fn select_home(
+        &mut self,
+        _: &SelectHome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.row_start(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
@@ -1619,8 +1709,13 @@ impl TextInput {
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_end(self.cursor_offset()), cx);
+    pub(super) fn select_end(
+        &mut self,
+        _: &SelectEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.row_end(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
@@ -1776,7 +1871,18 @@ impl TextInput {
         if viewport_height <= px(0.0) {
             return;
         }
-        let caret_margin = px(10.0);
+        // Wrapping is measured during prepaint, after the parent's scroll
+        // extent was laid out. Wait for that height instead of scrolling
+        // against a temporary, shorter document and correcting it next frame.
+        let waiting_for_layout = self.multiline
+            && self.soft_wrap
+            && self.wrap.cache.is_some_and(|cache| {
+                (self.layout.line_height * cache.rows as f32 - text_bounds.size.height).abs()
+                    > px(1.0)
+            })
+            && self.interaction.cursor_autoscroll_layout_waits_remaining > 0;
+        let caret_margin =
+            px(10.0).min(((viewport_height - self.layout.line_height) / 2.0).max(px(0.0)));
 
         let Some((cursor_top, cursor_bottom)) = self.cursor_vertical_span(self.cursor_offset())
         else {
@@ -1789,69 +1895,53 @@ impl TextInput {
         let text_origin_in_child = text_bounds.top() - child_top;
         let cursor_top = text_origin_in_child + cursor_top;
         let cursor_bottom = text_origin_in_child + cursor_bottom;
-        let negative_axis = current.y < px(0.0);
-        let mut scroll_y = if negative_axis { -current.y } else { current.y };
-
         let max_offset = handle.max_offset().y.max(px(0.0));
-        if max_offset <= px(0.0) {
-            let cursor_out_of_view = cursor_top < scroll_y + caret_margin
-                || cursor_bottom > scroll_y + viewport_height - caret_margin;
-            if self.cursor_offset() == self.content.len() {
-                handle.scroll_to_bottom();
-                cx.notify();
-                self.interaction.pending_cursor_autoscroll = true;
-            } else if cursor_out_of_view {
-                cx.notify();
-                self.interaction.pending_cursor_autoscroll = true;
-            } else {
-                self.interaction.pending_cursor_autoscroll = false;
-            }
-            return;
-        }
-
-        scroll_y = scroll_y.max(px(0.0)).min(max_offset);
-
-        let target_scroll = if self.cursor_offset() == self.content.len() {
-            max_offset
+        let scroll_y = (-current.y).clamp(px(0.0), max_offset);
+        let target_scroll = if waiting_for_layout {
+            scroll_y
         } else if cursor_top < scroll_y + caret_margin {
             cursor_top - caret_margin
         } else if cursor_bottom > scroll_y + viewport_height - caret_margin {
             cursor_bottom - viewport_height + caret_margin
         } else {
-            self.interaction.pending_cursor_autoscroll = false;
-            return;
+            scroll_y
         }
         .max(px(0.0))
         .min(max_offset);
 
-        if target_scroll == scroll_y {
-            self.interaction.pending_cursor_autoscroll = false;
-            return;
+        let moved = current.y != -target_scroll;
+        if moved {
+            handle.set_offset(point(current.x, -target_scroll));
+            self.interaction.cursor_autoscroll_layout_waits_remaining =
+                TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
         }
-
-        let next_y = if negative_axis {
-            -target_scroll
-        } else {
-            target_scroll
-        };
-        handle.set_offset(point(current.x, next_y));
-        // max_offset is one frame stale when content just grew. If the cursor isn't
-        // actually in view at target_scroll, allow one retry so the next frame can use
-        // the updated max_offset. After that single retry we always stop: when the cursor
-        // is at end-of-document cursor_bottom equals the content height, which is always
-        // outside the caret_margin zone, so without a retry cap this would loop forever.
-        let cursor_will_be_visible = cursor_top >= target_scroll + caret_margin
-            && cursor_bottom <= target_scroll + viewport_height - caret_margin;
-        if !cursor_will_be_visible && !self.interaction.cursor_autoscroll_retry_exhausted {
+        // Scrolling reveals lines that may still have estimated wrap counts.
+        // Keep the reveal alive through their shaping and the following layout,
+        // even if the estimated caret position fits now (notably Ctrl+End).
+        // A fixed retry budget prevents notifications from continuing forever.
+        let cursor_will_be_visible =
+            cursor_top >= target_scroll && cursor_bottom <= target_scroll + viewport_height;
+        if waiting_for_layout {
+            // Waiting for the parent consumes a separate allowance: otherwise
+            // a slow layout can use every attempt before we reach the target.
+            self.interaction.cursor_autoscroll_layout_waits_remaining -= 1;
             self.interaction.pending_cursor_autoscroll = true;
-            self.interaction.cursor_autoscroll_retry_exhausted = true;
+        } else if ((self.soft_wrap && moved) || !cursor_will_be_visible)
+            && self.interaction.cursor_autoscroll_retries_remaining > 0
+        {
+            self.interaction.pending_cursor_autoscroll = true;
+            self.interaction.cursor_autoscroll_retries_remaining -= 1;
         } else {
             self.interaction.pending_cursor_autoscroll = false;
         }
-        cx.notify();
+        if moved || self.interaction.pending_cursor_autoscroll {
+            cx.notify();
+        }
     }
 
     pub(super) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.page_up_pressed = true;
+        cx.notify();
         let Some((target, preferred_x)) = self.page_move_target(
             self.cursor_offset(),
             -1.0,
@@ -1867,7 +1957,7 @@ impl TextInput {
     pub(super) fn select_page_up(
         &mut self,
         _: &SelectPageUp,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some((target, preferred_x)) = self.page_move_target(
@@ -1877,12 +1967,14 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
 
     pub(super) fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.page_down_pressed = true;
+        cx.notify();
         let Some((target, preferred_x)) = self.page_move_target(
             self.cursor_offset(),
             1.0,
@@ -1898,7 +1990,7 @@ impl TextInput {
     pub(super) fn select_page_down(
         &mut self,
         _: &SelectPageDown,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some((target, preferred_x)) = self.page_move_target(
@@ -1908,7 +2000,7 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
@@ -1918,7 +2010,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx)
+            self.extend_selection_to(self.previous_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -1928,7 +2020,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx)
+            self.extend_selection_to(self.next_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -1943,7 +2035,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.previous_word_start(self.cursor_offset()), cx)
+            self.extend_selection_to(self.previous_word_start(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -1958,7 +2050,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.next_word_end(self.cursor_offset()), cx)
+            self.extend_selection_to(self.next_word_end(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -2039,7 +2131,7 @@ impl TextInput {
         }
     }
 
-    pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
@@ -2047,10 +2139,10 @@ impl TextInput {
             return;
         };
         self.push_redo_snapshot(self.current_undo_snapshot());
-        self.restore_undo_snapshot(snapshot, cx);
+        self.restore_undo_snapshot(snapshot, window, cx);
     }
 
-    pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
@@ -2058,7 +2150,7 @@ impl TextInput {
             return;
         };
         self.push_undo_snapshot(self.current_undo_snapshot());
-        self.restore_undo_snapshot(snapshot, cx);
+        self.restore_undo_snapshot(snapshot, window, cx);
     }
 
     pub fn cursor_offset(&self) -> usize {
@@ -2130,7 +2222,6 @@ impl TextInput {
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
         let cursor = inserted.end;
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         if preserve_view {
             let start = self.clamp_to_char_boundary(
                 Self::shift_offset_across_edit(previous_selection.start, &range, &inserted)
@@ -2285,7 +2376,21 @@ impl TextInput {
         cx.notify();
     }
 
-    pub(super) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    /// Extends the selection and takes the window's, for gestures that leave a
+    /// highlight behind. See [`Self::extend_selection_to`] for the bare move.
+    pub(super) fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
+        self.extend_selection_to(offset, cx);
+        // Only a real highlight takes the window's selection: Ctrl+F select-alls
+        // an empty search box, and that must not wipe a diff-text selection.
+        if !self.selection.range.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
+    }
+
+    /// Moves the selection head without taking the window's selection. What the
+    /// delete helpers want: they build a range only to feed
+    /// `replace_text_in_range`, and paint no highlight.
+    pub(super) fn extend_selection_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = self.clamp_to_char_boundary(offset);
         if self.selection.reversed {
             self.selection.range.start = offset;
@@ -2354,10 +2459,24 @@ impl TextInput {
         stack.push(snapshot);
     }
 
-    pub(super) fn restore_undo_snapshot(&mut self, snapshot: UndoSnapshot, cx: &mut Context<Self>) {
+    pub(super) fn restore_undo_snapshot(
+        &mut self,
+        snapshot: UndoSnapshot,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let text_edit_delta =
             utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
+        let old_lines = text_edit_delta
+            .as_ref()
+            .map(|(old, _)| Self::affected_lines(&self.content.snapshot(), old.clone()));
         self.content = snapshot.content.into();
+        if let Some(old_lines) = old_lines
+            && let Some((_, new)) = &text_edit_delta
+        {
+            let new_lines = Self::affected_lines(&self.content.snapshot(), new.clone());
+            self.mark_wrap_dirty_from_edit(old_lines, new_lines);
+        }
         // The spans described the buffer this snapshot just replaced; the owner
         // republishes them for the restored one.
         self.protected_ranges = Arc::from([]);
@@ -2365,15 +2484,15 @@ impl TextInput {
         self.selection.range = snapshot.selected_range;
         self.selection.reversed = snapshot.selection_reversed;
         self.selection.marked_range = None;
+        if !self.selection.range.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.interaction.is_selecting = false;
         self.interaction.mouse_selection_anchor = None;
         self.interaction.pending_mouse_selection_anchor = None;
-        self.invalidate_layout_caches();
-        if self.multiline && self.soft_wrap {
-            self.request_wrap_recompute();
-        }
+        self.invalidate_layout_caches_preserving_wrap_rows();
         if let Some(delta) = text_edit_delta {
             self.note_text_edit_for_highlights(&delta.0, &delta.1);
             self.selection.pending_text_edit_deltas.push(delta);
@@ -2658,6 +2777,9 @@ impl TextInput {
         // as a click. Claimed unconditionally, because a double-click that
         // turns into a drag never sets `is_selecting`.
         crate::press_gesture::claim_press(cx);
+        // Unconditional, for the same reason as the claim above.
+        self.selection_owner.adopt(window, cx);
+        self.interaction.took_press = true;
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
@@ -2780,6 +2902,11 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Before the suppression guard: when an ancestor renders this input's
+        // menu (the conflict resolver's output pane) the press is still ours.
+        // Adopt rather than preserve -- the menu belongs to this input.
+        self.selection_owner.adopt(window, cx);
+        self.interaction.took_press = true;
         if self.interaction.suppress_right_click {
             return;
         }
@@ -2801,6 +2928,18 @@ impl TextInput {
             self.move_to(index, cx);
         }
 
+        cx.notify();
+    }
+
+    pub(super) fn on_right_click(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.interaction.suppress_right_click {
+            return;
+        }
         self.interaction.context_menu = Some(TextInputContextMenuState {
             can_paste: crate::clipboard::read_text(cx).is_some(),
             anchor: event.position,
@@ -2813,44 +2952,26 @@ impl TextInput {
         label: &'static str,
         shortcut: SharedString,
         disabled: bool,
+        cx: &mut App,
     ) -> gpui::Stateful<Div> {
-        let mut row = div()
-            // The label is unique among the menu's rows, and the id is what
-            // makes the hover fill below actually repaint. Taken straight from
-            // the `'static` label -- ids are scoped to the input's own stateful
-            // root, and building one per render with `format!` would allocate a
-            // string that never changes.
-            .id(ElementId::from(label))
-            .h(px(24.0))
-            .w_full()
-            .px_2()
-            .rounded(px(2.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .text_sm()
-            .child(label)
-            .child(
-                div()
-                    .text_xs()
-                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                    .text_color(self.style.placeholder)
-                    .child(shortcut),
-            );
-
-        if disabled {
-            row = row
-                .text_color(self.style.placeholder)
-                .cursor(CursorStyle::Arrow);
-        } else {
-            let hover = self.style.selection;
-            row = row
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(hover));
-        }
-
-        row
+        let mut menu_theme = self.style.menu_theme;
+        menu_theme.metrics = self.appearance_metrics;
+        crate::kit::menu::menu_item(
+            label,
+            menu_theme,
+            crate::ui_scale::UiScale::current(cx),
+            false,
+            disabled,
+        )
+        .w_full()
+        .child(label)
+        .child(
+            div()
+                .text_size(gpui::rems(self.appearance_metrics.ui_text(12.0) / 16.0))
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_color(self.style.menu_theme.colors.foreground.secondary)
+                .child(shortcut),
+        )
     }
 
     pub(super) fn render_context_menu(
@@ -2868,119 +2989,88 @@ impl TextInput {
         let delete_disabled = self.read_only || self.selection.range.is_empty();
         let select_all_disabled = self.content.is_empty();
 
-        let mut undo_row =
-            self.context_menu_entry_row("Undo", format!("{primary}+Z").into(), undo_disabled);
-        if !undo_disabled {
-            undo_row = undo_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.undo(&Undo, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut redo_row =
-            self.context_menu_entry_row("Redo", format!("{primary}+Shift+Z").into(), redo_disabled);
-        if !redo_disabled {
-            redo_row = redo_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.redo(&Redo, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut cut_row =
-            self.context_menu_entry_row("Cut", format!("{primary}+X").into(), cut_disabled);
-        if !cut_disabled {
-            cut_row = cut_row
-                .debug_selector(|| "text_input_context_cut".to_string())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
+        // Closing, focus preservation and release activation are common to
+        // every entry. Each action supplies only its operation.
+        let item = |label: &'static str,
+                    shortcut: SharedString,
+                    disabled: bool,
+                    action: fn(&mut Self, &mut Window, &mut Context<Self>),
+                    cx: &mut Context<Self>| {
+            self.context_menu_entry_row(label, shortcut, disabled, cx)
+                .on_menu_activate(
+                    disabled,
+                    cx.listener(move |this, _, window, cx| {
                         this.interaction.context_menu = None;
-                        this.cut_with_source(
-                            crate::clipboard::CopySource::TextInputContextMenu,
-                            window,
-                            cx,
-                        );
+                        action(this, window, cx);
                         cx.notify();
                     }),
-                );
-        } else {
-            cut_row = cut_row.debug_selector(|| "text_input_context_cut".to_string());
-        }
-
-        let mut copy_row = self
-            .context_menu_entry_row("Copy", format!("{primary}+C").into(), copy_disabled)
-            .debug_selector(|| "text_input_context_copy".to_string());
-        if !copy_disabled {
-            copy_row = copy_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.copy_with_source(crate::clipboard::CopySource::TextInputContextMenu, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut paste_row = self
-            .context_menu_entry_row("Paste", format!("{primary}+V").into(), paste_disabled)
-            .debug_selector(|| "text_input_context_paste".to_string());
-        if !paste_disabled {
-            paste_row = paste_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.paste(&Paste, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut delete_row = self.context_menu_entry_row("Delete", "Del".into(), delete_disabled);
-        if !delete_disabled {
-            delete_row = delete_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    if !this.selection.range.is_empty() && !this.read_only {
-                        this.replace_text_in_range(None, "", window, cx);
-                    }
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut select_all_row = self
-            .context_menu_entry_row(
-                "Select all",
-                format!("{primary}+A").into(),
-                select_all_disabled,
-            )
-            .debug_selector(|| "text_input_context_select_all".to_string());
-        if !select_all_disabled {
-            select_all_row = select_all_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.select_all(&SelectAll, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
+                )
+        };
+        let undo_row = item(
+            "Undo",
+            format!("{primary}+Z").into(),
+            undo_disabled,
+            |this, window, cx| this.undo(&Undo, window, cx),
+            cx,
+        );
+        let redo_row = item(
+            "Redo",
+            format!("{primary}+Shift+Z").into(),
+            redo_disabled,
+            |this, window, cx| this.redo(&Redo, window, cx),
+            cx,
+        );
+        let cut_row = item(
+            "Cut",
+            format!("{primary}+X").into(),
+            cut_disabled,
+            |this, window, cx| {
+                this.cut_with_source(
+                    crate::clipboard::CopySource::TextInputContextMenu,
+                    window,
+                    cx,
+                )
+            },
+            cx,
+        )
+        .debug_selector(|| "text_input_context_cut".to_string());
+        let copy_row = item(
+            "Copy",
+            format!("{primary}+C").into(),
+            copy_disabled,
+            |this, _, cx| {
+                this.copy_with_source(crate::clipboard::CopySource::TextInputContextMenu, cx)
+            },
+            cx,
+        )
+        .debug_selector(|| "text_input_context_copy".to_string());
+        let paste_row = item(
+            "Paste",
+            format!("{primary}+V").into(),
+            paste_disabled,
+            |this, window, cx| this.paste(&Paste, window, cx),
+            cx,
+        )
+        .debug_selector(|| "text_input_context_paste".to_string());
+        let delete_row = item(
+            "Delete",
+            "Del".into(),
+            delete_disabled,
+            |this, window, cx| {
+                if !this.selection.range.is_empty() && !this.read_only {
+                    this.replace_text_in_range(None, "", window, cx);
+                }
+            },
+            cx,
+        );
+        let select_all_row = item(
+            "Select all",
+            format!("{primary}+A").into(),
+            select_all_disabled,
+            |this, window, cx| this.select_all(&SelectAll, window, cx),
+            cx,
+        )
+        .debug_selector(|| "text_input_context_select_all".to_string());
 
         div()
             .w(crate::ui_scale::design_px_from_percent(
@@ -2991,10 +3081,10 @@ impl TextInput {
             .flex()
             .flex_col()
             .gap_0p5()
-            .bg(with_alpha(self.style.background, 0.98))
+            .bg(self.style.menu_theme.colors.surface.raised)
             .border_1()
-            .border_color(self.style.hover_border)
-            .rounded(px(10.0))
+            .border_color(self.style.menu_theme.colors.stroke.default)
+            .rounded(px(self.style.menu_theme.radii.popover))
             .shadow_lg()
             .on_mouse_down(
                 MouseButton::Left,
@@ -3222,7 +3312,11 @@ impl TextInput {
     }
 
     pub(super) fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
+        // Normalize at the platform boundary, before row caches, highlight
+        // deltas and the text model can interpret the same IME edit differently.
+        self.normalized_utf8_range(
+            self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end),
+        )
     }
 }
 
@@ -3262,8 +3356,11 @@ impl EntityInputHandler for TextInput {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection.marked_range = None;
+        // The observer skips composing inputs and only re-runs on the next
+        // global write, so a selection that went stale mid-IME would stay lit.
+        self.clear_selection_on_ownership_loss(cx);
     }
 
     fn replace_text_in_range(
@@ -3295,7 +3392,6 @@ impl EntityInputHandler for TextInput {
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
         self.selection.range = inserted.end..inserted.end;
         self.selection.reversed = false;
@@ -3338,7 +3434,6 @@ impl EntityInputHandler for TextInput {
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
         if !new_text.is_empty() {
             self.selection.marked_range = Some(inserted.clone());
@@ -3354,6 +3449,9 @@ impl EntityInputHandler for TextInput {
 
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
+        // Like `unmark_text`: this can end the composition leaving a highlight.
+        // Self-guards on `marked_range`, so a composing input is left alone.
+        self.clear_selection_on_ownership_loss(cx);
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
         self.queue_cursor_autoscroll();

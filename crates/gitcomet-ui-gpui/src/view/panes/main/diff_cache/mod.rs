@@ -948,6 +948,7 @@ impl MainPaneView {
     }
 }
 
+mod change_blocks;
 mod collapsed_projection;
 use markdown_preview_docs::*;
 use patch_visual::*;

@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn set_active_repo_sync_uses_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo1 = RepoState::new_opening(
             RepoId(1),
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn reorder_repo_tabs_sync_uses_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo1 = RepoState::new_opening(
             RepoId(1),
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn select_diff_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn stage_path_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn stage_paths_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn unstage_path_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn unstage_paths_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
 
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn conflict_set_region_choice_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let path = add_conflict_repo(&mut state, &[ConflictRegionResolution::Unresolved]);
         let before_rev = state.repos[0].conflict_state.conflict_rev;
 
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn conflict_reset_resolutions_sync_uses_inline_reducer_path() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let path = add_conflict_repo(
             &mut state,
             &[

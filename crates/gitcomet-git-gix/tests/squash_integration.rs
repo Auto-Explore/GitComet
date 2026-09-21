@@ -722,6 +722,7 @@ fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
 }
 
 /// Runs git allowing a non-zero exit (a rebase pausing at a conflict).
+#[cfg(unix)]
 fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
     let mut cmd = Command::new("git");
     test_git_env::apply(&mut cmd);

@@ -283,7 +283,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
     }
 }
 
-fn utf8_tail(text: &str, max_bytes: usize) -> String {
+pub(super) fn utf8_tail(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_string();
     }

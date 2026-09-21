@@ -107,6 +107,12 @@ impl GitCometView {
             .clone()
             .or_else(|| self.persisted_group_active_repository.clone());
 
+        // Share the effective membership, including pending opens and saved
+        // bootstrap paths, until that membership actually changes.
+        if self.synced_repo_paths.as_ref() != synchronized_repo_paths.as_slice() {
+            self.synced_repo_paths = synchronized_repo_paths.into();
+        }
+
         self.window_group_id = crate::app::sync_gitcomet_window_state(
             cx,
             self.window_handle,
@@ -114,7 +120,7 @@ impl GitCometView {
             self.main_pane.downgrade(),
             self.view_mode,
             self.window_group_id,
-            synchronized_repo_paths,
+            Arc::clone(&self.synced_repo_paths),
             synchronized_active_repository,
         );
         if let Some(placement) = self.window_placement.clone() {
@@ -151,6 +157,7 @@ impl GitCometView {
         let prev_had_repos = !self.state.repos.is_empty();
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
+        let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
         let next_banner_error = next.banner_error.clone();
@@ -317,7 +324,7 @@ impl GitCometView {
                         return false;
                     }
 
-                    let stderr = entry.stderr.as_str();
+                    let stderr: &str = &entry.stderr;
                     stderr.contains("Need to specify how to reconcile divergent branches")
                         || stderr.contains(
                             "divergent branches and need to specify how to reconcile them",
@@ -355,6 +362,7 @@ impl GitCometView {
             .retain(|chain| active_hook_chains.contains(chain));
         self.minimized_hook_activity_repos
             .retain(|repo_id| next.repos.iter().any(|repo| repo.id == *repo_id));
+        self.sync_minimized_hook_activity_indicator(cx);
 
         let newly_started_hook_chains = next_hook_progress
             .iter()
@@ -420,8 +428,35 @@ impl GitCometView {
         }
 
         self.state = next;
-        self.command_palette.update(cx, |palette, cx| {
-            palette.set_has_active_repo(self.state.active_repo.is_some(), cx);
+        if self.state.git_log_settings.verify_commit_signatures
+            && matches!(
+                self.state.signing_tools.gpg.availability,
+                gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
+            )
+            && !self.signing_tools_probe_in_flight
+        {
+            self.refresh_signing_tools(false, cx);
+        }
+        // Only an open palette shows enablement; `open` takes a fresh context.
+        if self.command_palette_open {
+            let context = self.command_palette_context(cx);
+            self.command_palette.update(cx, |palette, cx| {
+                palette.set_context(context, cx);
+            });
+        }
+        let active_repo_id = self.state.active_repo;
+        // The lookup only feeds the dialog's result row, and the dialog clears
+        // its query when it opens — so copying it on every snapshot while the
+        // dialog is closed would buy nothing.
+        let commit_lookup = self
+            .reveal_commit_open
+            .then(|| {
+                self.active_repo()
+                    .map(|repo| repo.history_state.commit_lookup.clone())
+            })
+            .flatten();
+        self.reveal_commit_dialog.update(cx, |dialog, cx| {
+            dialog.sync_from_state(active_repo_id, commit_lookup.as_ref(), cx);
         });
         match (self.sidebar_collapsed_before_merge_view, merge_view_active) {
             (None, true) => {
@@ -447,6 +482,9 @@ impl GitCometView {
         }
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
+        }
+        if prev_branch_exists_prompt != self.state.branch_exists_prompt {
+            self.pending_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
@@ -477,6 +515,7 @@ impl GitCometView {
         git_runtime_changed
             || prev_banner_error != next_banner_error
             || prev_auth_prompt != self.state.auth_prompt
+            || prev_branch_exists_prompt != self.state.branch_exists_prompt
     }
 }
 
@@ -681,7 +720,7 @@ mod tests {
                 repo_with_open_state(RepoId(1), "/tmp/repo-a", false),
                 repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
             ],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let next = AppState {
             repos: vec![
@@ -689,7 +728,7 @@ mod tests {
                 repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
                 repo_with_open_state(RepoId(3), "/tmp/repo-c", false),
             ],
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         assert_eq!(
@@ -701,13 +740,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn newly_opened_repo_paths_includes_brand_new_ready_repos_and_ignores_loading_ones() {
-        let prev = AppState::default();
+        let prev = AppState::test_default();
         let next = AppState {
             repos: vec![
                 repo_with_open_state(RepoId(10), "/tmp/repo-new", true),
                 repo_with_open_state(RepoId(11), "/tmp/repo-loading", false),
             ],
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         assert_eq!(

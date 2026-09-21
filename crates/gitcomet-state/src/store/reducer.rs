@@ -4,18 +4,26 @@ mod diff_selection;
 mod effects;
 mod external_and_history;
 mod git_hook_activity;
+mod history_authors;
+mod indexed_history;
+#[cfg(test)]
+mod line_stats_tests;
 mod repo_management;
 mod util;
 
 use crate::model::{
-    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
-    SubmoduleAddProgressState, SubmoduleTrustCheckOperation, SubmoduleTrustCheckState,
-    SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
+    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptOperation,
+    Loadable, PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
+use crate::msg::{
+    BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList,
+};
 use crate::store::repo_load_trace;
 use gitcomet_core::auth::StagedGitAuth;
-use gitcomet_core::services::{GitRepository, SafePushAfterCommitContext};
+use gitcomet_core::services::{
+    CheckoutRemoteBranchMode, GitRepository, SafePushAfterCommitContext,
+};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -138,6 +146,58 @@ fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
+/// The repo of a command that writes sequencer state or moves HEAD. Counted
+/// from the effect that schedules it, and released by the matching
+/// [`crate::msg::RepoCommandKind`] in `repo_command_finished`.
+fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
+    match effect {
+        Effect::MergeRef { repo_id, .. }
+        | Effect::SquashRef { repo_id, .. }
+        | Effect::SquashCommits { repo_id, .. }
+        | Effect::Reset { repo_id, .. }
+        | Effect::Rebase { repo_id, .. }
+        | Effect::RebaseContinue { repo_id, .. }
+        | Effect::RebaseAbort { repo_id }
+        | Effect::InteractiveRebase { repo_id, .. }
+        | Effect::InteractiveCherryPick { repo_id, .. }
+        | Effect::CherryPickCommit { repo_id, .. }
+        | Effect::RevertCommit { repo_id, .. }
+        | Effect::MergeAbort { repo_id } => Some(*repo_id),
+        _ => None,
+    }
+}
+
+fn track_sequencer_effects(state: &mut AppState, effects: &[Effect]) {
+    for repo_id in effects.iter().filter_map(sequencer_effect_repo) {
+        if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            repo_state.sequencer_actions_in_flight =
+                repo_state.sequencer_actions_in_flight.saturating_add(1);
+            repo_state.bump_ops_rev();
+        }
+    }
+}
+
+/// Continue and Abort act on sequencer state another command may still be
+/// writing: a revert shows REVERT_HEAD while its commit step waits on a slow
+/// signer, and an Abort then would reset under the commit. Only such commands
+/// count — a merge tool or a submodule clone can run for minutes without
+/// touching it.
+fn sequencer_step_blocked(state: &mut AppState, repo_id: RepoId) -> bool {
+    let busy = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.sequencer_actions_in_flight > 0);
+    if busy {
+        util::push_notification(
+            state,
+            crate::model::AppNotificationKind::Warning,
+            "Wait for the running Git operation to finish, then continue or abort.".to_string(),
+        );
+    }
+    busy
+}
+
 fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
@@ -192,7 +252,9 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadConflictFile { .. }
             | Msg::LoadReflog { .. }
             | Msg::LoadRecentCommitMessages { .. }
+            | Msg::PreviewTagPush { .. }
             | Msg::LoadHoverCommitMessage { .. }
+            | Msg::ResolveCommitLookup { .. }
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
@@ -208,6 +270,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::OpenFileEditor { .. }
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::OpenFileAtCommit { .. }
+            | Msg::ShowFileChangesAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::RevealCommit { .. }
             | Msg::ResetBrowseToLive { .. }
@@ -257,6 +320,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::PullBranch { .. }
             | Msg::MergeRef { .. }
             | Msg::SquashRef { .. }
+            | Msg::PushWithTags { .. }
             | Msg::Push { .. }
             | Msg::PushAfterCommit { .. }
             | Msg::ForcePush { .. }
@@ -443,6 +507,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::MergeRef { reference } => Msg::MergeRef { repo_id, reference },
         RepoCommandKind::SquashRef { reference } => Msg::SquashRef { repo_id, reference },
         RepoCommandKind::Push => Msg::Push { repo_id },
+        RepoCommandKind::PushWithTags { request } => Msg::PushWithTags { repo_id, request },
         RepoCommandKind::PushAfterCommit {
             target,
             set_upstream,
@@ -522,6 +587,21 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
                 }
             }
         }
+        // Replayed whole: the auth may be for the `--no-commit` step (a
+        // promisor fetch), and a revert stopped at its commit step resumes
+        // there with the same hooks skipped, which `revert --continue` would not.
+        RepoCommandKind::Revert {
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => Msg::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
             name,
@@ -648,6 +728,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::FetchAll { auth: slot, .. }
         | Effect::Pull { auth: slot, .. }
         | Effect::PullBranch { auth: slot, .. }
+        | Effect::PushWithTags { auth: slot, .. }
         | Effect::Push { auth: slot, .. }
         | Effect::PushAfterCommit { auth: slot, .. }
         | Effect::ForcePush { auth: slot, .. }
@@ -657,7 +738,8 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::DeleteRemoteBranches { auth: slot, .. }
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
-        | Effect::RebaseContinue { auth: slot, .. } => {
+        | Effect::RebaseContinue { auth: slot, .. }
+        | Effect::RevertCommit { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}
@@ -677,6 +759,7 @@ pub(crate) fn fill_set_active_repo_inline(
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
     repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
+    effects::follow_history_selection(state, effects);
     finalize_reduced_state(state, Some(false));
 }
 
@@ -832,7 +915,9 @@ pub(super) fn reduce(
         reconcile_active_nav_history(state, false);
     }
 
-    let effects = reduce_inner(repos, id_alloc, state, msg);
+    let mut effects = reduce_inner(repos, id_alloc, state, msg);
+    track_sequencer_effects(state, &effects);
+    effects::follow_history_selection(state, &mut effects);
 
     finalize_reduced_state(state, reconcile.then_some(push));
 
@@ -848,6 +933,9 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     // Enforced here rather than at each of the places a worktree selection can
     // end; see the helper.
     effects::retire_orphaned_worktree_diffs(state);
+    for repo in &mut state.repos {
+        repo.prepare_history_squash_plan();
+    }
 
     if let Some(push) = nav_push {
         reconcile_active_nav_history(state, push);
@@ -876,6 +964,7 @@ fn is_view_navigation(msg: &Msg) -> bool {
             // the editor rather than skipping past it to whatever preceded it.
             | Msg::ExitDiffEditMode { .. }
             | Msg::OpenFileAtCommit { .. }
+            | Msg::ShowFileChangesAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             // A reveal moves the main view when its reference resolves, not
             // when it is asked for.
@@ -977,16 +1066,60 @@ fn reduce_inner(
             Vec::new()
         }
         Msg::SetGitRuntimeState(runtime) => {
+            if state.git_runtime == runtime {
+                return Vec::new();
+            }
             state.git_runtime = runtime;
+            state.signing_tools = Default::default();
+            if state.git_log_settings.verify_commit_signatures {
+                util::reverify_all_commit_signatures_effects(state)
+            } else {
+                Vec::new()
+            }
+        }
+        Msg::SetCommitSignatureTargets {
+            repo_id,
+            epoch,
+            commit_ids,
+        } => util::set_commit_signature_targets(state, repo_id, epoch, commit_ids),
+        Msg::SetSigningToolsState(tools) => {
+            if state.signing_tools == tools {
+                return Vec::new();
+            }
+            state.signing_tools = tools;
+            if !state.git_log_settings.verify_commit_signatures {
+                return Vec::new();
+            }
+            // A verifier was installed or went missing: badges must follow it.
+            util::reverify_all_commit_signatures_effects(state)
+        }
+        Msg::SetRemoteUrlPolicy(policy) => {
+            state.remote_url_policy = policy;
             Vec::new()
         }
         Msg::SetGitLogSettings {
             show_history_tags,
             tag_fetch_mode,
+            verify_commit_signatures,
         } => {
             state.git_log_settings.show_history_tags = show_history_tags;
             state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
+            let verification_toggled =
+                state.git_log_settings.verify_commit_signatures != verify_commit_signatures;
+            state.git_log_settings.verify_commit_signatures = verify_commit_signatures;
+            if !verification_toggled {
+                return Vec::new();
+            }
+            // A fresh opt-in waits for discovery before starting any verifier.
+            state.signing_tools = Default::default();
+            util::reverify_all_commit_signatures_effects(state)
+        }
+        Msg::SetRemoteSettings(settings) => {
+            state.remote_settings = settings;
             Vec::new()
+        }
+        Msg::SetFileBrowserSettings(settings) => {
+            effects::set_file_browser_settings(state, settings)
         }
         Msg::SetDefaultTagType(tag_type) => {
             state.default_tag_type = tag_type;
@@ -1054,6 +1187,7 @@ fn reduce_inner(
                 && matches!(
                     message.as_ref(),
                     crate::msg::InternalMsg::RepoActionFinished { .. }
+                        | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
                 );
             let previous_diagnostic_len = suppress_nested_diagnostics
                 .then(|| {
@@ -1078,8 +1212,15 @@ fn reduce_inner(
                 }
                 git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
             }
-            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled {
-                effects.extend(external_and_history::reload_repo(repos, state, repo_id));
+            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled
+                && !effects.iter().any(|effect| matches!(effect, Effect::LoadLog { repo_id: id, .. } if *id == repo_id))
+            {
+                // Cancellation may leave partial Git changes, so refresh the
+                // retained panes. Explicit Reload would discard history and
+                // selection after the nested action already refreshed them.
+                effects.extend(external_and_history::repo_externally_changed(
+                    repos, state, repo_id, crate::msg::RepoExternalChange::all(),
+                ));
             }
             effects
         }
@@ -1103,17 +1244,18 @@ fn reduce_inner(
         }
         Msg::RepoWatchDegraded { repo_id: _, reason } => {
             let message = match reason {
+                crate::msg::RepoWatchDegradedReason::IgnorePolicyFailed =>
+                    "Live file watching is limited because repository ignore rules could not be read. Changes refresh when the window regains focus; watching will retry automatically.".into(),
                 crate::msg::RepoWatchDegradedReason::TooManyFolders { dir_count } => format!(
-                    "This repository has {dir_count} folders — live file watching is disabled to \
-                     stay within system limits. Changes refresh when the window regains focus. Add \
-                     build/output dirs to .gitignore or raise fs.inotify.max_user_watches to \
-                     re-enable."
+                    "This repository has at least {dir_count} folders outside its ignore rules. \
+                     Live watching of subfolders is limited. Add generated folders to .gitignore \
+                     to reduce coverage. Changes also refresh when the window regains focus."
                 ),
                 crate::msg::RepoWatchDegradedReason::WatchLimitReached { unwatched_dirs } => {
                     format!(
-                        "Live file watching is partial: {unwatched_dirs} folders could not be watched \
-                     (the system inotify limit was reached). Changes in them refresh when the window \
-                     regains focus. Raise fs.inotify.max_user_watches to watch everything."
+                        "Live file watching is partial: {unwatched_dirs} locations could not be watched \
+                     because a native watch could not be registered. Changes in them refresh when the window \
+                     regains focus. Watching will retry automatically."
                     )
                 }
             };
@@ -1125,11 +1267,6 @@ fn reduce_inner(
         }
         Msg::SetHistoryAuthorFilter { repo_id, author } => {
             external_and_history::set_history_author_filter(state, repo_id, author)
-        }
-        Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
-            repo_management::set_fetch_prune_deleted_remote_tracking_branches(
-                state, repo_id, enabled,
-            )
         }
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
         Msg::SelectCommit { repo_id, commit_id } => {
@@ -1304,15 +1441,31 @@ fn reduce_inner(
             repo_id,
             commit_id,
             path,
+            content_preview: true,
+        }],
+        Msg::ShowFileChangesAtCommit {
+            repo_id,
+            commit_id,
+            path,
+        } => vec![Effect::OpenFileAtCommit {
+            repo_id,
+            commit_id,
+            path,
+            content_preview: false,
         }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
-            effects::browse_repository_at_commit(repos, state, repo_id, commit_id)
+            effects::browse_repository_at_commit(state, repo_id, commit_id)
         }
         Msg::RevealCommit { repo_id, reference } => {
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
-        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(repos, state, repo_id),
+        Msg::ResolveCommitLookup {
+            repo_id,
+            reference,
+            purpose,
+        } => effects::resolve_commit_lookup(state, repo_id, reference, purpose),
+        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
         }
@@ -1354,12 +1507,19 @@ fn reduce_inner(
             remote,
             branch,
             local_branch,
+            mode,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::checkout_remote_branch(repo_id, remote, branch, local_branch)
+            actions_emit_effects::checkout_remote_branch(
+                repo_id,
+                remote,
+                branch,
+                local_branch,
+                mode,
+            )
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -1378,9 +1538,15 @@ fn reduce_inner(
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, mainline, summary)
         }
-        Msg::RevertCommit { repo_id, commit_id } => {
+        Msg::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => {
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::revert_commit(repo_id, commit_id)
+            actions_emit_effects::revert_commit(repo_id, commit_id, commit, mainline, summary)
         }
         Msg::CreateBranch {
             repo_id,
@@ -1394,20 +1560,94 @@ fn reduce_inner(
             repo_id,
             name,
             target,
+            force,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
+            actions_emit_effects::create_branch_and_checkout(repo_id, name, target, force)
+        }
+        Msg::ResolveBranchExistsPrompt { prompt, choice } => {
+            if state.branch_exists_prompt.as_ref() != Some(&prompt) {
+                return Vec::new();
+            }
+            state.branch_exists_prompt = None;
+
+            match choice {
+                BranchExistsChoice::Cancel => Vec::new(),
+                BranchExistsChoice::CheckoutExisting => {
+                    if let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == prompt.repo_id)
+                    {
+                        repo_state.set_detached_head_commit(None);
+                    }
+                    begin_head_changing_local_action(state, prompt.repo_id);
+                    actions_emit_effects::checkout_branch(prompt.repo_id, prompt.name)
+                }
+                BranchExistsChoice::OverwriteAndCheckout => {
+                    if let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == prompt.repo_id)
+                    {
+                        repo_state.set_detached_head_commit(None);
+                    }
+                    begin_head_changing_local_action(state, prompt.repo_id);
+                    match prompt.operation {
+                        BranchExistsPromptOperation::CreateBranch => {
+                            actions_emit_effects::create_branch_and_checkout(
+                                prompt.repo_id,
+                                prompt.name,
+                                prompt.target,
+                                true,
+                            )
+                        }
+                        BranchExistsPromptOperation::CheckoutRemoteBranch { remote, branch } => {
+                            actions_emit_effects::checkout_remote_branch(
+                                prompt.repo_id,
+                                remote,
+                                branch,
+                                prompt.name,
+                                CheckoutRemoteBranchMode::Overwrite,
+                            )
+                        }
+                        BranchExistsPromptOperation::RenameBranch { old_name } => {
+                            actions_emit_effects::rename_branch(
+                                prompt.repo_id,
+                                old_name,
+                                prompt.name,
+                                true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Msg::ShowBranchExistsPrompt { prompt } => {
+            if state.repos.iter().any(|repo| repo.id == prompt.repo_id) {
+                state.branch_exists_prompt = Some(prompt);
+            }
+            Vec::new()
         }
         Msg::RenameBranch {
             repo_id,
             old_name,
             new_name,
+            force,
         } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::rename_branch(repo_id, old_name, new_name)
+            if force {
+                // Replacing the checked-out branch moves HEAD's commit.
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    repo_state.set_detached_head_commit(None);
+                }
+                begin_head_changing_local_action(state, repo_id);
+            } else {
+                begin_local_action(state, repo_id);
+            }
+            actions_emit_effects::rename_branch(repo_id, old_name, new_name, force)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -1509,6 +1749,7 @@ fn reduce_inner(
                 branch,
                 name,
                 force,
+                remote_url_policy: state.remote_url_policy,
             }]
         }
         Msg::AddSubmoduleTrusted {
@@ -1530,6 +1771,7 @@ fn reduce_inner(
                 name,
                 force,
                 approved_sources,
+                state.remote_url_policy,
             )
         }
         Msg::UpdateSubmodules { repo_id } => {
@@ -1538,14 +1780,21 @@ fn reduce_inner(
                 repo_id,
                 operation: SubmoduleTrustCheckOperation::Update,
             });
-            vec![Effect::CheckSubmoduleUpdateTrust { repo_id }]
+            vec![Effect::CheckSubmoduleUpdateTrust {
+                repo_id,
+                remote_url_policy: state.remote_url_policy,
+            }]
         }
         Msg::UpdateSubmodulesTrusted {
             repo_id,
             approved_sources,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::update_submodules(repo_id, approved_sources)
+            actions_emit_effects::update_submodules(
+                repo_id,
+                approved_sources,
+                state.remote_url_policy,
+            )
         }
         Msg::LoadSubmodule { repo_id, path } => {
             state.submodule_trust_prompt = None;
@@ -1553,7 +1802,11 @@ fn reduce_inner(
                 repo_id,
                 operation: SubmoduleTrustCheckOperation::Load,
             });
-            vec![Effect::CheckSubmoduleLoadTrust { repo_id, path }]
+            vec![Effect::CheckSubmoduleLoadTrust {
+                repo_id,
+                path,
+                remote_url_policy: state.remote_url_policy,
+            }]
         }
         Msg::LoadSubmoduleTrusted {
             repo_id,
@@ -1561,7 +1814,12 @@ fn reduce_inner(
             approved_sources,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::load_submodule(repo_id, path, approved_sources)
+            actions_emit_effects::load_submodule(
+                repo_id,
+                path,
+                approved_sources,
+                state.remote_url_policy,
+            )
         }
         Msg::ConfirmSubmoduleTrustPrompt => {
             let Some(prompt) = state.submodule_trust_prompt.take() else {
@@ -1585,15 +1843,25 @@ fn reduce_inner(
                         name,
                         force,
                         prompt.sources,
+                        state.remote_url_policy,
                     )
                 }
                 SubmoduleTrustPromptOperation::Update => {
                     begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::update_submodules(prompt.repo_id, prompt.sources)
+                    actions_emit_effects::update_submodules(
+                        prompt.repo_id,
+                        prompt.sources,
+                        state.remote_url_policy,
+                    )
                 }
                 SubmoduleTrustPromptOperation::Load { path } => {
                     begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::load_submodule(prompt.repo_id, path, prompt.sources)
+                    actions_emit_effects::load_submodule(
+                        prompt.repo_id,
+                        path,
+                        prompt.sources,
+                        state.remote_url_policy,
+                    )
                 }
             }
         }
@@ -1704,6 +1972,56 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::squash_ref(repo_id, reference)
         }
+        Msg::PushWithTags { repo_id, request } => {
+            actions_emit_effects::push_with_tags(repos, state, repo_id, request)
+        }
+        Msg::PreviewTagPush {
+            repo_id,
+            request,
+            cancellation,
+        } => {
+            let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+                return vec![];
+            };
+            let slot = &mut repo.tag_push_previews[request.mode.index()];
+            let generation = slot.as_ref().map_or(1, |previous| {
+                previous.cancellation.cancel();
+                previous.generation.wrapping_add(1)
+            });
+            *slot = Some(crate::model::TagPushPreviewState {
+                request: request.clone(),
+                generation,
+                cancellation: cancellation.clone(),
+                result: Loadable::Loading,
+            });
+            vec![Effect::PreviewTagPush {
+                repo_id,
+                request,
+                generation,
+                cancellation,
+            }]
+        }
+        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+            repo_id,
+            mode,
+            generation,
+            result,
+        }) => {
+            if let Some(slot) = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.tag_push_previews[mode.index()].as_mut())
+                && slot.generation == generation
+                && !slot.cancellation.is_cancelled()
+            {
+                slot.result = match result {
+                    Ok(preview) => Loadable::Ready(Arc::new(preview)),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+            }
+            vec![]
+        }
         Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
         Msg::PushAfterCommit {
             repo_id,
@@ -1774,10 +2092,16 @@ fn reduce_inner(
             actions_emit_effects::rebase(repo_id, onto)
         }
         Msg::RebaseContinue { repo_id } => {
+            if sequencer_step_blocked(state, repo_id) {
+                return Vec::new();
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase_continue(repo_id)
         }
         Msg::RebaseAbort { repo_id } => {
+            if sequencer_step_blocked(state, repo_id) {
+                return Vec::new();
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase_abort(repo_id)
         }
@@ -1816,6 +2140,7 @@ fn reduce_inner(
         Msg::CancelInteractiveCherryPickSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_cherry_pick_setup(state, repo_id)
         }
+        Msg::MergeAbort { repo_id } if sequencer_step_blocked(state, repo_id) => Vec::new(),
         Msg::MergeAbort { repo_id } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_abort(repo_id)
@@ -1846,7 +2171,7 @@ fn reduce_inner(
         } => actions_emit_effects::delete_remote_tag(repos, state, repo_id, remote, name),
         Msg::AddRemote { repo_id, name, url } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::add_remote(repo_id, name, url)
+            actions_emit_effects::add_remote(repo_id, name, url, state.remote_url_policy)
         }
         Msg::RemoveRemote { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -1859,7 +2184,7 @@ fn reduce_inner(
             kind,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::set_remote_url(repo_id, name, url, kind)
+            actions_emit_effects::set_remote_url(repo_id, name, url, kind, state.remote_url_policy)
         }
         Msg::CheckoutConflictSide {
             repo_id,
@@ -2113,6 +2438,11 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
             effects::staged_status_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+            repo_id,
+            generation,
+            result,
+        }) => effects::uncommitted_line_stats_loaded(state, repo_id, generation, result),
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
@@ -2122,6 +2452,8 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
             effects::upstream_divergence_loaded(state, repo_id, result)
         }
+        Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
+        Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             seq,
@@ -2165,6 +2497,12 @@ fn reduce_inner(
             requested_ids,
             result,
         ),
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { repo_id, message }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo_state.set_suggested_commit_message(Some(message));
+            }
+            Vec::new()
+        }
         Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
             external_and_history::merge_commit_message_loaded(state, repo_id, result)
         }
@@ -2176,8 +2514,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
             repo_id,
             path,
+            cursor,
             result,
-        }) => effects::file_history_loaded(state, repo_id, path, result),
+        }) => effects::file_history_loaded(state, repo_id, path, cursor, result),
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,
@@ -2206,7 +2545,7 @@ fn reduce_inner(
             repo_id,
             source,
             result,
-        }) => effects::file_browser_loaded(state, repo_id, source, result),
+        }) => effects::file_browser_loaded(repos, state, repo_id, source, result),
         Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
             repo_id,
             url,
@@ -2229,6 +2568,7 @@ fn reduce_inner(
                         name,
                         force,
                         Vec::new(),
+                        state.remote_url_policy,
                     )
                 }
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
@@ -2259,7 +2599,11 @@ fn reduce_inner(
             match result {
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
                     begin_local_action(state, repo_id);
-                    actions_emit_effects::update_submodules(repo_id, Vec::new())
+                    actions_emit_effects::update_submodules(
+                        repo_id,
+                        Vec::new(),
+                        state.remote_url_policy,
+                    )
                 }
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
                     state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
@@ -2287,7 +2631,12 @@ fn reduce_inner(
             match result {
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
                     begin_local_action(state, repo_id);
-                    actions_emit_effects::load_submodule(repo_id, path, Vec::new())
+                    actions_emit_effects::load_submodule(
+                        repo_id,
+                        path,
+                        Vec::new(),
+                        state.remote_url_policy,
+                    )
                 }
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
                     state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
@@ -2311,11 +2660,24 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id,
+            epoch,
+            batch,
+            result,
+        }) => effects::commit_signatures_verified(state, repo_id, epoch, batch, result),
         Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
             repo_id,
             reference,
             result,
         }) => effects::commit_reveal_resolved(state, repo_id, reference, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id,
+            reference,
+            request,
+            purpose,
+            result,
+        }) => effects::commit_lookup_resolved(state, repo_id, reference, request, purpose, result),
         Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,
@@ -2409,6 +2771,27 @@ fn reduce_inner(
             action,
             result,
         }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
+            external_and_history::branch_already_exists(repos, state, action, prompt)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id,
+            action,
+            worktree_path,
+            result,
+        }) => {
+            // Open first so the origin tab is inactive when its action finishes and
+            // only refreshes its primary state instead of reloading everything.
+            let mut effects = if result.is_ok() {
+                repo_management::open_repo(repos, id_alloc, state, worktree_path)
+            } else {
+                Vec::new()
+            };
+            effects.extend(external_and_history::repo_action_finished(
+                repos, state, repo_id, action, result,
+            ));
+            effects
+        }
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             let pending_commit = state
                 .repos
@@ -2530,6 +2913,16 @@ fn reduce_inner(
                 (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
                 _ => None,
             };
+            // Their start cleared the HEAD gitlink cache; reclassify the
+            // retained selection before the completion reloads it.
+            if matches!(
+                &command,
+                RepoCommandKind::CherryPick { .. }
+                    | RepoCommandKind::InteractiveCherryPick { .. }
+                    | RepoCommandKind::Revert { .. }
+            ) {
+                refresh_selected_head_gitlink(repos, state, repo_id);
+            }
 
             let effects =
                 actions_emit_effects::repo_command_finished(state, repo_id, command, result);
@@ -2567,12 +2960,14 @@ mod nav_history_tests {
     use std::sync::atomic::AtomicU64;
 
     fn available_state_with_repo(repo_id: RepoId) -> AppState {
-        let mut state = AppState::default();
-        state.git_runtime = GitRuntimeState {
-            preference: GitExecutablePreference::SystemPath,
-            availability: GitExecutableAvailability::Available {
-                version_output: "git version 2.0.0".to_string(),
+        let mut state = AppState {
+            git_runtime: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.0.0".to_string(),
+                },
             },
+            ..Default::default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,
@@ -2834,7 +3229,7 @@ mod nav_history_tests {
             repo_id: RepoId(1),
             submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
             parent_submodule_path: std::path::PathBuf::from("sub"),
-            entries: vec![],
+            entries: vec![].into(),
             selected_ix: 0,
         }));
     }
@@ -2873,7 +3268,7 @@ mod nav_history_tests {
                 repo_id,
                 submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
                 parent_submodule_path: std::path::PathBuf::from("vendor/first"),
-                entries: vec![],
+                entries: vec![].into(),
                 selected_ix: 0,
             },
         );
@@ -3135,12 +3530,14 @@ mod comparison_tests {
     /// simply older than the loaded page — so the merged-diff base is a real
     /// parent rather than the root-commit fallback.
     fn state_with_log(repo_id: RepoId) -> AppState {
-        let mut state = AppState::default();
-        state.git_runtime = GitRuntimeState {
-            preference: GitExecutablePreference::SystemPath,
-            availability: GitExecutableAvailability::Available {
-                version_output: "git version 2.0.0".to_string(),
+        let mut state = AppState {
+            git_runtime: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.0.0".to_string(),
+                },
             },
+            ..Default::default()
         };
         let mut repo_state = RepoState::new_opening(
             repo_id,

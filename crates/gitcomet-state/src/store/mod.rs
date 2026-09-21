@@ -167,6 +167,7 @@ struct WorkerLoopContext<'a> {
     executor: &'a TaskExecutor,
     repo_load_executor: &'a TaskExecutor,
     metadata_executor: &'a TaskExecutor,
+    signature_executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
 }
@@ -286,6 +287,7 @@ impl WorkerLoopContext<'_> {
                     repo_load_executor: self.repo_load_executor,
                     session_persist_executor: self.session_persist_executor,
                     metadata_executor: self.metadata_executor,
+                    signature_executor: self.signature_executor,
                 },
                 self.thread_state,
                 self.backend,
@@ -336,7 +338,19 @@ impl AppStore {
     }
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
+        Self::with_initial_state(backend, AppState::default())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_test(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        Self::with_initial_state(backend, AppState::test_default())
+    }
+
+    fn with_initial_state(
+        backend: Arc<dyn GitBackend>,
+        initial: AppState,
+    ) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        let state = Arc::new(RwLock::new(Arc::new(initial)));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
         let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -370,6 +384,11 @@ impl AppStore {
                 )
             } else {
                 TaskExecutor::new(metadata_worker_threads())
+            };
+            let signature_executor = if share_executor_pools {
+                TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1)
+            } else {
+                TaskExecutor::new(1)
             };
             let session_persist_executor = if share_executor_pools {
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1)
@@ -493,6 +512,7 @@ impl AppStore {
                     executor: &executor,
                     repo_load_executor: &repo_load_executor,
                     metadata_executor: &metadata_executor,
+                    signature_executor: &signature_executor,
                     session_persist_executor: &session_persist_executor,
                     backend: &backend,
                 };
@@ -591,6 +611,7 @@ impl AppStore {
                         // that case. A full refresh keeps every view correct regardless of whether,
                         // or how reliably, the watcher is delivering events; activation is throttled
                         // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
+                        worker_ctx.repo_monitors.revalidate(repo_id);
                         let change = RepoExternalChange::all();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
@@ -618,6 +639,9 @@ impl AppStore {
             for token in repo_task_tokens.values() {
                 token.cancel();
             }
+            for repo in &thread_state.read().unwrap_or_else(|e| e.into_inner()).repos {
+                repo.history_state.commit_signatures_cancellation.cancel();
+            }
             repo_monitors.stop_all();
         });
 
@@ -638,6 +662,19 @@ impl AppStore {
     pub fn snapshot(&self) -> Arc<AppState> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&state)
+    }
+
+    /// [`Self::snapshot`] without blocking: `None` while the reducer holds
+    /// the write lock, so a UI thread can take the common uncontended case
+    /// inline and fall back to a background hop only when it would wait.
+    pub fn try_snapshot(&self) -> Option<Arc<AppState>> {
+        match self.state.try_read() {
+            Ok(state) => Some(Arc::clone(&state)),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                Some(Arc::clone(&poisoned.into_inner()))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]

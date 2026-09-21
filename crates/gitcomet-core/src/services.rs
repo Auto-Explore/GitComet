@@ -1,6 +1,7 @@
 use crate::conflict_session::ConflictSession;
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
+use crate::remote_url::RemoteUrlPolicy;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    parent: Option<Arc<CancellationToken>>,
 }
 
 impl CancellationToken {
@@ -24,6 +26,17 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
+    }
+
+    /// Also stop when the repository closes without cancelling other requests
+    /// when this request is superseded.
+    pub fn with_parent(mut self, parent: CancellationToken) -> Self {
+        self.parent = Some(Arc::new(parent));
+        self
     }
 
     pub fn check_cancelled(&self) -> Result<()> {
@@ -44,6 +57,94 @@ impl CancellationToken {
 pub struct LogChunk {
     pub commits: Vec<crate::domain::Commit>,
     pub scanned: u64,
+}
+
+/// Opaque identity of the exact inputs used to traverse history. It is scoped to
+/// a repository and query, shared by all its pages, and never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistorySnapshot(pub Arc<str>);
+
+#[derive(Clone, Debug)]
+pub enum HistoryReadRequest {
+    Page {
+        limit: usize,
+        cursor: Option<LogCursor>,
+        snapshot: Option<HistorySnapshot>,
+    },
+    Refresh {
+        previous: Arc<LogPage>,
+        snapshot: Option<HistorySnapshot>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HistoryReadResult {
+    Page {
+        page: Arc<LogPage>,
+        snapshot: Option<HistorySnapshot>,
+    },
+    Unchanged,
+    /// The continuation belongs to a different history. Refresh the retained
+    /// page before allowing another append.
+    Invalidated,
+}
+
+impl From<LogPage> for HistoryReadResult {
+    fn from(page: LogPage) -> Self {
+        Arc::new(page).into()
+    }
+}
+
+impl From<Arc<LogPage>> for HistoryReadResult {
+    fn from(page: Arc<LogPage>) -> Self {
+        Self::Page {
+            page,
+            snapshot: None,
+        }
+    }
+}
+
+/// Rebuild a loaded extent without losing commits merely because new commits
+/// pushed them beyond a numeric page limit. A removed commit requires walking
+/// to EOF to establish its absence. Partial results stay private to the caller.
+pub fn refresh_history_page(
+    previous: &LogPage,
+    cancellation: &CancellationToken,
+    mut read: impl FnMut(usize, Option<&LogCursor>) -> Result<Arc<LogPage>>,
+) -> Result<Arc<LogPage>> {
+    let complete = previous.next_cursor.is_none();
+    let mut remaining: rustc_hash::FxHashSet<_> =
+        previous.commits.iter().map(|commit| &commit.id).collect();
+    cancellation.check_cancelled()?;
+    let mut page = read(previous.commits.len().max(200), None)?;
+    for commit in &page.commits {
+        remaining.remove(&commit.id);
+    }
+    loop {
+        cancellation.check_cancelled()?;
+        if page.next_cursor.is_none() || (!complete && remaining.is_empty()) {
+            return Ok(page);
+        }
+        let cursor = page.next_cursor.as_ref().expect("checked continuation");
+        let next = read(200, Some(cursor))?;
+        if next
+            .next_cursor
+            .as_ref()
+            .is_some_and(|next| next.last_seen == cursor.last_seen)
+        {
+            return Err(Error::new(ErrorKind::Backend(
+                "history cursor did not advance".into(),
+            )));
+        }
+        // Only inspect the newly read commits on subsequent iterations.
+        for commit in &next.commits {
+            remaining.remove(&commit.id);
+        }
+        let mut next = Arc::unwrap_or_clone(next);
+        let page = Arc::make_mut(&mut page);
+        page.commits.append(&mut next.commits);
+        page.next_cursor = next.next_cursor;
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -147,6 +248,12 @@ pub enum ResetMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckoutRemoteBranchMode {
+    Create,
+    Overwrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteUrlKind {
     Fetch,
     Push,
@@ -193,7 +300,21 @@ pub enum SequencerState {
     None,
     RebaseOrApply,
     CherryPick,
+    /// A revert stopped at a conflict or a failed commit step, or a revert
+    /// sequence still pending.
+    Revert,
 }
+
+/// Marker a revert puts in its command output when git applied nothing because
+/// the branch no longer has the reverted changes, so no commit was created.
+pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
+
+/// Command label of a Continue that skipped a revert its resolution left empty.
+pub const REVERT_SKIP_COMMAND: &str = "git revert --skip";
+
+/// Marker an abort puts in its output when git cleared a leftover sequence but
+/// refused to rewind HEAD, so the summary cannot claim the previous state back.
+pub const REVERT_ABORT_KEPT_HEAD_SENTINEL: &str = "GITCOMET_REVERT_ABORT_KEPT_HEAD";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
@@ -300,12 +421,116 @@ pub enum SafePushAfterCommitDecision {
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
+    /// Distinct author names across the complete, unfiltered history scope.
+    /// Called on demand, independently of the visible commit metadata cache.
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        let mut authors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = None;
+        loop {
+            cancellation.check_cancelled()?;
+            let page =
+                self.log_history_mode_page_cancellable(mode, 256, cursor.as_ref(), cancellation)?;
+            for commit in &page.commits {
+                if seen.insert(commit.author.clone()) {
+                    authors.push(commit.author.clone());
+                }
+            }
+            cursor = page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(authors.into())
+    }
+
+    /// Optional indexed access to history. `None` keeps older backends on the
+    /// paged reader. Construction is background work; range reads never walk
+    /// from the branch tip to the requested offset.
+    fn build_history_index(
+        &self,
+        _mode: HistoryMode,
+        _author: Option<&str>,
+        cancellation: &CancellationToken,
+        _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
+    ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
+        cancellation.check_cancelled()?;
+        Ok(None)
+    }
+
+    fn read_history_range(
+        &self,
+        _index: &crate::history_index::HistoryIndexHandle,
+        _range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::history_index::HistoryRange> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Backend(
+            "indexed history is unavailable".into(),
+        )))
+    }
+
+    /// Read or refresh a history snapshot. Backends without snapshot support
+    /// conservatively rebuild and never claim an unchanged result.
+    fn read_history(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        request: &HistoryReadRequest,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(LogChunk),
+    ) -> Result<HistoryReadResult> {
+        let page = match request {
+            HistoryReadRequest::Page {
+                limit,
+                cursor: None,
+                ..
+            } => self.log_history_mode_page_streaming(
+                mode,
+                author,
+                *limit,
+                None,
+                cancellation,
+                on_chunk,
+            )?,
+            HistoryReadRequest::Page { limit, cursor, .. } => self
+                .log_history_mode_page_filtered_cancellable(
+                    mode,
+                    author,
+                    *limit,
+                    cursor.as_ref(),
+                    cancellation,
+                )?,
+            HistoryReadRequest::Refresh { previous, .. } => {
+                refresh_history_page(previous, cancellation, |limit, cursor| {
+                    self.log_history_mode_page_filtered_cancellable(
+                        mode,
+                        author,
+                        limit,
+                        cursor,
+                        cancellation,
+                    )
+                })?
+            }
+        };
+        cancellation.check_cancelled()?;
+        Ok(HistoryReadResult::Page {
+            page,
+            snapshot: None,
+        })
+    }
+
     fn log_history_mode_page(
         &self,
         mode: HistoryMode,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         match mode {
             HistoryMode::AllBranches => self.log_all_branches_page(limit, cursor),
             HistoryMode::FullReachable
@@ -320,7 +545,7 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
         let page = self.log_history_mode_page(mode, limit, cursor)?;
         cancellation.check_cancelled()?;
@@ -351,12 +576,25 @@ pub trait GitRepository: Send + Sync {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _ = (author, on_chunk);
         cancellation.check_cancelled()?;
         let page = self.log_history_mode_page(mode, limit, cursor)?;
         cancellation.check_cancelled()?;
         Ok(page)
+    }
+
+    /// A filtered, cancellable page without progress snapshots. Backends can
+    /// override this to avoid constructing chunks that the caller will discard.
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        self.log_history_mode_page_streaming(mode, author, limit, cursor, cancellation, &mut |_| {})
     }
 
     /// [`Self::log_history_mode_page_streaming`] for callers with nothing to
@@ -367,30 +605,37 @@ pub trait GitRepository: Send + Sync {
         author: Option<&str>,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
-        self.log_history_mode_page_streaming(
+    ) -> Result<std::sync::Arc<LogPage>> {
+        self.log_history_mode_page_filtered_cancellable(
             mode,
             author,
             limit,
             cursor,
             &CancellationToken::new(),
-            &mut |_| {},
         )
     }
 
-    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>>;
     fn log_head_page_cancellable(
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
         let page = self.log_head_page(limit, cursor)?;
         cancellation.check_cancelled()?;
         Ok(page)
     }
-    fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_all_branches_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "all-branches history is not implemented for this backend",
         )))
@@ -400,7 +645,7 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
         let page = self.log_all_branches_page(limit, cursor)?;
         cancellation.check_cancelled()?;
@@ -411,12 +656,56 @@ pub trait GitRepository: Send + Sync {
         _path: &Path,
         _limit: usize,
         _cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "file history is not implemented for this backend",
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Verifies the signatures of `ids`, returning an entry only for commits
+    /// that earn a badge. Unsigned commits, and signatures that cannot be
+    /// checked because the key is missing, are simply omitted.
+    ///
+    /// Batched on purpose: verification shells out to `git`, and one process per
+    /// commit costs roughly ten times a single batched call.
+    fn verify_commit_signatures(
+        &self,
+        _ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "signature verification is not implemented for this backend",
+        )))
+    }
+    /// Like [`Self::verify_commit_signatures`], restricted to signatures in
+    /// `formats`: other formats get no badge and should cost no verifier run.
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        formats: crate::domain::SignatureFormats,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        cancellation.check_cancelled()?;
+        if formats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut result = self.verify_commit_signatures(ids)?;
+        result.retain(|(_, signature)| formats.contains(signature.format));
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
+    /// Resolve a possibly abbreviated reference — or any revspec git accepts,
+    /// such as a branch, tag, or `HEAD~3` — to the commit it names.
+    ///
+    /// Deliberately lighter than [`GitRepository::commit_details`], which also
+    /// diffs the commit against its parent: this is meant to run per keystroke
+    /// behind the Reveal Commit dialog. The returned [`Commit::id`] is the full
+    /// oid, *not* the spec that was passed in, so callers can hand it straight
+    /// to code that compares against loaded log rows.
+    fn resolve_commit(&self, _reference: &CommitId) -> Result<Commit> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "commit reference resolution is not implemented for this backend",
+        )))
+    }
     /// Files that differ between two points (`from` → `to`), for the
     /// compare-selected-commits feature. `from` is the base/older side, so the
     /// result reads as "what `to` adds/removes relative to `from`". `to = None`
@@ -431,6 +720,38 @@ pub trait GitRepository: Send + Sync {
             "range file listing is not implemented for this backend",
         )))
     }
+    /// Added/removed line counts for every uncommitted change, both lanes.
+    ///
+    /// Separate from `status`, which decides most entries from stat data alone
+    /// when possible; stale stat data can require content reads and clean
+    /// filters. Counting reads both sides of changed files. Callers that have
+    /// just loaded status should reuse it through the supplied-status method.
+    fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "uncommitted line stats are not implemented for this backend",
+        )))
+    }
+    /// Cancellable [`Self::uncommitted_line_stats`]. It reads every changed
+    /// file, so on a large dirty tree it is the load most worth interrupting.
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        cancellation.check_cancelled()?;
+        let stats = self.uncommitted_line_stats()?;
+        cancellation.check_cancelled()?;
+        Ok(stats)
+    }
+    /// Count the files from a status snapshot the caller just collected, avoiding
+    /// another worktree traversal. Contents are read at call time, as with status.
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        _status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        self.uncommitted_line_stats_cancellable(cancellation)
+    }
+
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`
@@ -516,7 +837,8 @@ pub trait GitRepository: Send + Sync {
         Ok(branches)
     }
     fn worktree_status(&self) -> Result<Vec<FileStatus>> {
-        self.status().map(|status| status.unstaged)
+        self.status()
+            .map(|status| std::sync::Arc::unwrap_or_clone(status.unstaged))
     }
     fn worktree_status_cancellable(
         &self,
@@ -528,7 +850,8 @@ pub trait GitRepository: Send + Sync {
         Ok(status)
     }
     fn staged_status(&self) -> Result<Vec<FileStatus>> {
-        self.status().map(|status| status.staged)
+        self.status()
+            .map(|status| std::sync::Arc::unwrap_or_clone(status.staged))
     }
     fn staged_status_cancellable(
         &self,
@@ -653,10 +976,36 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
+    /// Create the local branch `name` at `target`, or reset it there when a
+    /// branch with that name already exists, and check it out. The git
+    /// equivalent is `git checkout --no-track -B <name> <target>`; like a fresh
+    /// branch the result tracks nothing, so an existing upstream is cleared.
+    fn create_branch_force_and_checkout(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "force branch creation and checkout is not implemented for this backend",
+        )))
+    }
     fn rename_branch(&self, _old_name: &str, _new_name: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "branch renaming is not implemented for this backend",
         )))
+    }
+    /// `git branch -M <old> <new>`. When `new_name` is HEAD here (git refuses
+    /// `-M` then) the branch is reset to `old_name`'s commit with a safe
+    /// checkout and `old_name` is deleted, detaching any worktree still on it.
+    /// Fails like git when `new_name` is checked out in another worktree; find
+    /// it with `branch_checked_out_in_other_worktree` and rename from there.
+    fn rename_branch_force(&self, _old_name: &str, _new_name: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "forced branch renaming is not implemented for this backend",
+        )))
+    }
+    /// Canonical, validated path of the other worktree whose HEAD is `name`.
+    /// Defaults to `Ok(None)` (like `head_path_is_gitlink`) so backends without
+    /// worktrees fall through to a plain checkout. Implementations must not
+    /// return a path that is outside this repository.
+    fn branch_checked_out_in_other_worktree(&self, _name: &str) -> Result<Option<PathBuf>> {
+        Ok(None)
     }
     fn delete_branch(&self, name: &str) -> Result<()>;
     fn delete_branch_force(&self, _name: &str) -> Result<()> {
@@ -670,6 +1019,7 @@ pub trait GitRepository: Send + Sync {
         _remote: &str,
         _branch: &str,
         _local_branch: &str,
+        _mode: CheckoutRemoteBranchMode,
     ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "remote branch checkout is not implemented for this backend",
@@ -689,7 +1039,23 @@ pub trait GitRepository: Send + Sync {
             "git cherry-pick is not implemented for this backend",
         )))
     }
-    fn revert(&self, id: &CommitId) -> Result<()>;
+    /// The message git left for the next commit (MERGE_MSG), if any. Unlike
+    /// [`Self::merge_commit_message`] this does not require a merge.
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// Reverts a single commit. `commit: false` only stages the inverse;
+    /// `mainline` follows [`Self::cherry_pick_with_output`].
+    fn revert_with_output(
+        &self,
+        _id: &CommitId,
+        _commit: bool,
+        _mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git revert is not implemented for this backend",
+        )))
+    }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
@@ -845,6 +1211,14 @@ pub trait GitRepository: Send + Sync {
             "git remote add is not implemented for this backend",
         )))
     }
+    fn add_remote_with_output_and_policy(
+        &self,
+        name: &str,
+        url: &str,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.add_remote_with_output(name, url)
+    }
     fn remove_remote_with_output(&self, _name: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git remote remove is not implemented for this backend",
@@ -860,10 +1234,36 @@ pub trait GitRepository: Send + Sync {
             "git remote set-url is not implemented for this backend",
         )))
     }
+    fn set_remote_url_with_output_and_policy(
+        &self,
+        name: &str,
+        url: &str,
+        kind: RemoteUrlKind,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.set_remote_url_with_output(name, url, kind)
+    }
 
     fn fetch_all(&self) -> Result<()>;
     fn pull(&self, mode: PullMode) -> Result<()>;
     fn push(&self) -> Result<()>;
+
+    fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing with tags is not implemented for this backend",
+        )))
+    }
+
+    fn preview_tag_push(
+        &self,
+        _request: &crate::tag_push::TagPushRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::tag_push::TagPushPreview> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tag push preview is not implemented for this backend",
+        )))
+    }
+
     fn push_force(&self) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "force push is not implemented for this backend",
@@ -887,6 +1287,10 @@ pub trait GitRepository: Send + Sync {
     fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
         self.pull(mode)?;
         Ok(CommandOutput::empty_success("git pull"))
+    }
+
+    fn pull_with_output_prune(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput> {
+        self.pull_with_output(mode)
     }
 
     fn push_with_output(&self) -> Result<CommandOutput> {
@@ -938,10 +1342,13 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Set an exact upstream target. The remote and remote branch stay
+    /// separate because either name may contain slashes. The target may be a
+    /// new remote branch that has not been fetched or pushed yet.
     fn set_upstream_branch_with_output(
         &self,
         _branch: &str,
-        _upstream: &str,
+        _upstream: &Upstream,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "setting a branch upstream is not implemented for this backend",
@@ -991,6 +1398,15 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "pulling a specific remote branch is not implemented for this backend",
         )))
+    }
+
+    fn pull_branch_with_output_prune(
+        &self,
+        remote: &str,
+        branch: &str,
+        _prune: bool,
+    ) -> Result<CommandOutput> {
+        self.pull_branch_with_output(remote, branch)
     }
 
     fn merge_ref_with_output(&self, _reference: &str) -> Result<CommandOutput> {
@@ -1158,7 +1574,7 @@ pub trait GitRepository: Send + Sync {
     /// as `(short refname, metadata)` pairs. Purely decorative — callers render
     /// name-only rows when this is unavailable, so backends may leave it
     /// unimplemented.
-    fn list_ref_metadata(&self) -> Result<Vec<(String, RefMetadata)>> {
+    fn list_ref_metadata(&self) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         Err(Error::new(ErrorKind::Unsupported(
             "ref metadata listing is not implemented for this backend",
         )))
@@ -1166,7 +1582,7 @@ pub trait GitRepository: Send + Sync {
     fn list_ref_metadata_cancellable(
         &self,
         cancellation: &CancellationToken,
-    ) -> Result<Vec<(String, RefMetadata)>> {
+    ) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         cancellation.check_cancelled()?;
         let metadata = self.list_ref_metadata()?;
         cancellation.check_cancelled()?;
@@ -1251,17 +1667,38 @@ pub trait GitRepository: Send + Sync {
             "submodule trust checks are not implemented for this backend",
         )))
     }
+    fn check_submodule_add_trust_with_policy(
+        &self,
+        url: &str,
+        path: &Path,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_add_trust(url, path)
+    }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
     }
+    fn check_submodule_update_trust_with_policy(
+        &self,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_update_trust()
+    }
 
     fn check_submodule_load_trust(&self, _path: &Path) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
+    }
+    fn check_submodule_load_trust_with_policy(
+        &self,
+        path: &Path,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_load_trust(path)
     }
 
     fn add_submodule_with_output(
@@ -1277,6 +1714,18 @@ pub trait GitRepository: Send + Sync {
             "submodule add is not implemented for this backend",
         )))
     }
+    fn add_submodule_with_output_and_policy(
+        &self,
+        url: &str,
+        path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
+        approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.add_submodule_with_output(url, path, branch, name, force, approved_sources)
+    }
 
     fn update_submodules_with_output(
         &self,
@@ -1285,6 +1734,13 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))
+    }
+    fn update_submodules_with_output_and_policy(
+        &self,
+        approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.update_submodules_with_output(approved_sources)
     }
 
     fn load_submodule_with_output(
@@ -1295,6 +1751,14 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))
+    }
+    fn load_submodule_with_output_and_policy(
+        &self,
+        path: &Path,
+        approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.load_submodule_with_output(path, approved_sources)
     }
 
     fn change_submodule_pointer_with_output(
@@ -1371,8 +1835,30 @@ pub trait WorktreeIgnoreMatcher: Send {
     fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool>;
 }
 
+/// Filesystem inputs for monitoring one repository, including linked worktrees.
+/// Paths may name files which do not exist yet (for example `info/exclude`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryWatchInfo {
+    pub git_dirs: Vec<PathBuf>,
+    /// Additional private cache directories, including the LFS-owned folders
+    /// in configured storage. These can be absent until the first filter run.
+    pub cache_dirs: Vec<PathBuf>,
+    pub ignore_inputs: Vec<PathBuf>,
+    /// Initialized checkouts that can supply ignore matchers. Administrative
+    /// repositories retained after submodule deinit belong only in `git_dirs`.
+    /// Includes indexed gitlinks even when they have no `.gitmodules` entry.
+    pub worktrees: Vec<PathBuf>,
+    /// Discovery hit a filesystem error or its bounded administrative walk.
+    pub discovery_incomplete: bool,
+}
+
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    /// Resolve metadata and ignore/configuration sources without running status or filters.
+    fn repository_watch_info(&self, _workdir: &Path) -> Result<Option<RepositoryWatchInfo>> {
+        Ok(None)
+    }
 
     /// Build a worktree ignore matcher when the backend supports one.
     ///
@@ -1414,13 +1900,13 @@ impl GitBackend for UnavailableGitBackend {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlameLine, CommandOutput, ConflictSide, GitBackend, GitRepository, PullMode, RemoteUrlKind,
-        ResetMode, SafePushAfterCommitTarget, UnavailableGitBackend, decode_utf8_optional,
-        validate_conflict_resolution_text,
+        BlameLine, CheckoutRemoteBranchMode, CommandOutput, ConflictSide, GitBackend,
+        GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+        UnavailableGitBackend, decode_utf8_optional, validate_conflict_resolution_text,
     };
     use crate::domain::{
         Branch, CommitDetails, CommitId, DiffArea, DiffTarget, HistoryMode, LogCursor, LogPage,
-        ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
+        ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry, Upstream,
     };
     use crate::error::{Error, ErrorKind};
     use crate::test_support::UnconfiguredRepository;
@@ -1482,10 +1968,17 @@ mod tests {
         assert_unsupported(repo.conflict_file_stages(path));
         assert_unsupported(repo.conflict_session(path));
         assert_unsupported(repo.delete_branch_force("feature"));
-        assert_unsupported(repo.checkout_remote_branch("origin", "main", "feature"));
+        assert_unsupported(repo.rename_branch_force("feature", "main"));
+        assert_unsupported(repo.checkout_remote_branch(
+            "origin",
+            "main",
+            "feature",
+            CheckoutRemoteBranchMode::Create,
+        ));
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
+        assert_unsupported(repo.revert_with_output(&commit, true, None));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());
@@ -1513,7 +2006,13 @@ mod tests {
         assert_unsupported(repo.push_force_with_output());
         assert_unsupported(repo.push_set_upstream("origin", "main"));
         assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
-        assert_unsupported(repo.set_upstream_branch_with_output("main", "origin/main"));
+        assert_unsupported(repo.set_upstream_branch_with_output(
+            "main",
+            &Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            },
+        ));
         assert_unsupported(repo.unset_upstream_branch_with_output("main"));
         assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
         assert_unsupported(repo.commit_amend_with_output("message"));
@@ -1601,24 +2100,24 @@ mod tests {
             &self,
             limit: usize,
             cursor: Option<&LogCursor>,
-        ) -> super::Result<LogPage> {
+        ) -> super::Result<std::sync::Arc<LogPage>> {
             self.record("head", limit, cursor);
-            Ok(LogPage {
+            Ok(std::sync::Arc::new(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            })
+            }))
         }
 
         fn log_all_branches_page(
             &self,
             limit: usize,
             cursor: Option<&LogCursor>,
-        ) -> super::Result<LogPage> {
+        ) -> super::Result<std::sync::Arc<LogPage>> {
             self.record("all", limit, cursor);
-            Ok(LogPage {
+            Ok(std::sync::Arc::new(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            })
+            }))
         }
 
         fn commit_details(&self, _id: &CommitId) -> super::Result<CommitDetails> {
@@ -1670,10 +2169,6 @@ mod tests {
         }
 
         fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn revert(&self, _id: &CommitId) -> super::Result<()> {
             unsupported()
         }
 

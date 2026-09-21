@@ -3,6 +3,7 @@ use crate::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation, PendingC
 use gitcomet_core::auth::{
     GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth, take_staged_git_auth,
 };
+use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::{ConflictSide, RemoteUrlKind, ResetMode};
 
 fn auth_error(message: &str) -> Error {
@@ -16,7 +17,7 @@ fn setup_open_repo(
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     repos.insert(repo_id, Arc::new(DummyRepo::new(workdir)));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -38,6 +39,7 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         | Effect::FetchAll { auth, .. }
         | Effect::Pull { auth, .. }
         | Effect::PullBranch { auth, .. }
+        | Effect::PushWithTags { auth, .. }
         | Effect::Push { auth, .. }
         | Effect::PushAfterCommit { auth, .. }
         | Effect::ForcePush { auth, .. }
@@ -341,7 +343,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "https://example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/private-repo");
 
@@ -374,7 +376,7 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
 fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "git@github.com:private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/private-repo");
 
@@ -688,7 +690,7 @@ fn submit_auth_prompt_replays_clone_operation() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
     state.banner_error = Some(crate::model::BannerErrorState {
@@ -784,7 +786,7 @@ fn submit_auth_prompt_preserves_non_clone_banner_when_replaying_clone() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
     let banner_message = "Fetch failed".to_string();
@@ -863,7 +865,6 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
         effects.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: _,
             ..
         }]
     ));
@@ -1002,7 +1003,6 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         fetch_effects.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: _,
             ..
         }]
     ));
@@ -1072,7 +1072,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
 
     let set_upstream_effects = replay_case(RepoCommandKind::SetUpstreamBranch {
         branch: "feature/current".to_string(),
-        upstream: "origin/feature/current".to_string(),
+        upstream: Upstream {
+            remote: "origin".to_string(),
+            branch: "feature/current".to_string(),
+        },
     });
     assert!(matches!(
         set_upstream_effects.as_slice(),
@@ -1080,7 +1083,9 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current" && upstream == "origin/feature/current"
+        }] if branch == "feature/current"
+            && upstream.remote == "origin"
+            && upstream.branch == "feature/current"
     ));
 
     let reset_effects = replay_case(RepoCommandKind::Reset {
@@ -1108,6 +1113,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             name,
             url,
             kind: RemoteUrlKind::Push,
+            ..
         }] if name == "origin" && url == "https://example.com/repo.git"
     ));
 
@@ -1135,6 +1141,199 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         }] if path == &PathBuf::from("vendor/lib")
     ));
 
+    // A revert is replayed whole with the staged auth: the backend resumes one
+    // stopped at its commit step, and a `--no-commit` fetch failure reruns.
+    for commit in [true, false] {
+        let revert_effects = replay_case(RepoCommandKind::Revert {
+            commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            commit,
+            mainline: Some(1),
+            summary: "revert me".to_string(),
+        });
+        assert!(
+            matches!(
+                revert_effects.as_slice(),
+                [Effect::RevertCommit {
+                    repo_id: RepoId(1),
+                    commit: replayed,
+                    mainline: Some(1),
+                    auth: Some(_),
+                    ..
+                }] if *replayed == commit
+            ),
+            "commit={commit}: {revert_effects:?}"
+        );
+    }
+
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());
+}
+
+#[test]
+fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let command = RepoCommandKind::Revert {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        commit: true,
+        mainline: None,
+        summary: "revert me".to_string(),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: command.clone(),
+            result: Err(auth_error(
+                "git commit --no-verify -F MERGE_MSG failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::RepoCommand { repo_id, command }
+    );
+}
+
+#[test]
+fn tag_push_auth_retry_preserves_mode_destination_and_upstream_choice() {
+    use gitcomet_core::tag_push::{TagPushMode, TagPushRequest};
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    for mode in TagPushMode::ALL {
+        let repo_id = RepoId(1);
+        let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/tag-push-auth");
+        let request = TagPushRequest {
+            mode,
+            remote: "publish".into(),
+            branch: "releases/stable".into(),
+            local_branch: "main".into(),
+            head: gitcomet_core::domain::CommitId("1234567".into()),
+            set_upstream: true,
+        };
+        state.auth_prompt = Some(AuthPromptState {
+            kind: AuthPromptKind::UsernamePassword,
+            reason: "auth required".into(),
+            operation: AuthRetryOperation::RepoCommand {
+                repo_id,
+                command: RepoCommandKind::PushWithTags {
+                    request: request.clone(),
+                },
+            },
+        });
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(1),
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                username: Some("alice".into()),
+                secret: "test-token".into(),
+            },
+        );
+        assert!(
+            matches!(effects.as_slice(), [Effect::PushWithTags { request: retry, .. }] if retry == &request)
+        );
+        assert_eq!(effect_git_auth(&effects[0]).unwrap().secret, "test-token");
+        assert_eq!(state.repos[0].push_in_flight, 1);
+        assert!(state.auth_prompt.is_none());
+    }
+    clear_staged_git_auth();
+}
+
+#[test]
+fn tag_push_preview_discards_stale_results_and_does_not_start_auth_or_mark_push_in_flight() {
+    use gitcomet_core::services::CancellationToken;
+    use gitcomet_core::tag_push::{TagPushMode, TagPushPreview, TagPushRequest};
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/tag-preview");
+    let id_alloc = AtomicU64::new(1);
+    let mut request = TagPushRequest {
+        mode: TagPushMode::All,
+        remote: "origin".into(),
+        branch: "main".into(),
+        local_branch: "main".into(),
+        head: gitcomet_core::domain::CommitId("1234567".into()),
+        set_upstream: true,
+    };
+    let old_token = CancellationToken::new();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PreviewTagPush {
+            repo_id,
+            request: request.clone(),
+            cancellation: old_token.clone(),
+        },
+    );
+    let [
+        Effect::PreviewTagPush {
+            generation: old_generation,
+            ..
+        },
+    ] = effects.as_slice()
+    else {
+        panic!("preview expected")
+    };
+    let old_generation = *old_generation;
+    request.remote = "publish".into();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PreviewTagPush {
+            repo_id,
+            request,
+            cancellation: CancellationToken::new(),
+        },
+    );
+    assert!(old_token.is_cancelled());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+            repo_id,
+            mode: TagPushMode::All,
+            generation: old_generation,
+            result: Ok(TagPushPreview::default()),
+        }),
+    );
+    assert!(
+        state.repos[0].tag_push_previews[1]
+            .as_ref()
+            .unwrap()
+            .result
+            .is_loading()
+    );
+    let generation = state.repos[0].tag_push_previews[1]
+        .as_ref()
+        .unwrap()
+        .generation;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+            repo_id,
+            mode: TagPushMode::All,
+            generation,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("authentication required".into()),
+            )),
+        }),
+    );
+    assert!(matches!(
+        &state.repos[0].tag_push_previews[1].as_ref().unwrap().result,
+        crate::model::Loadable::Error(_)
+    ));
+    assert!(state.auth_prompt.is_none());
+    assert_eq!(state.repos[0].push_in_flight, 0);
 }

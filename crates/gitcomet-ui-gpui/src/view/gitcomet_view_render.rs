@@ -24,10 +24,45 @@ impl Render for GitCometView {
             self.view_mode,
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
         ));
-        self.last_window_size = window.viewport_size();
+        let next_window_size = window.viewport_size();
+        let previous_window_width = self.last_window_size.width;
+        let window_width_changed = previous_window_width != next_window_size.width;
+        self.last_window_size = next_window_size;
+        if window_width_changed
+            && action_bar_density(previous_window_width, self.ui_scale_percent)
+                != action_bar_density(next_window_size.width, self.ui_scale_percent)
+        {
+            // The action bar chooses compact labels at narrow widths. It is
+            // normally mounted through a cached view, so explicitly invalidate
+            // that child when resizing crosses a breakpoint.
+            self.action_bar.update(cx, |_bar, cx| cx.notify());
+        }
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
+        }
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
+
+        if self
+            .pending_branch_exists_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+        {
+            let prompt = self
+                .pending_branch_exists_prompt
+                .take()
+                .expect("branch-exists prompt checked above");
+            self.open_popover_centered(
+                PopoverKind::BranchExistsPrompt {
+                    repo_id: prompt.repo_id,
+                    name: prompt.name,
+                    target: prompt.target,
+                    operation: prompt.operation,
+                },
+                window,
+                cx,
+            );
         }
 
         if let Some(repo_id) = self.pending_pull_reconcile_prompt.take()
@@ -145,7 +180,10 @@ impl Render for GitCometView {
                 self.set_hook_activity_dialog_repo(None, cx);
             } else if self.hook_activity_workflow_is_open(cx) {
                 // A manual open won the race with the queued automatic open.
-            } else if self.is_overlay_open(cx) || self.command_palette_open {
+            } else if self.is_overlay_open(cx)
+                || self.command_palette_open
+                || self.reveal_commit_open
+            {
                 self.minimize_hook_activity_chains([(repo_id, operation_id)], cx);
             } else {
                 self.open_popover_centered(
@@ -175,7 +213,8 @@ impl Render for GitCometView {
             .unwrap_or(CursorStyle::Arrow);
 
         let center_content = self.center_content(window, cx);
-        let font_features = crate::font_preferences::current_font_features(cx);
+        let font_features =
+            crate::font_preferences::applied_font_features(font_preferences.use_font_ligatures);
         let show_custom_window_chrome =
             crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
                 decorations,
@@ -185,6 +224,7 @@ impl Render for GitCometView {
             .flex()
             .flex_col()
             .size_full()
+            .text_size(theme.ui_text(16.0))
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(
                     &font_preferences.ui_font_family,
@@ -210,7 +250,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                chrome::title_bar_height(self.ui_scale_percent),
+                chrome::TITLE_BAR_HEIGHT,
             ));
         }
 
@@ -272,13 +312,13 @@ impl Render for GitCometView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .font_weight(FontWeight::BOLD)
                                     .child("GitComet recovered from program crash"),
                             )
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Would you like to contribute by reporting issue to GitComet GitHub repository?",
@@ -286,7 +326,7 @@ impl Render for GitCometView {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(format!("Summary: {summary}")),
                             )
@@ -354,10 +394,15 @@ impl Render for GitCometView {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(subtitle),
                 )
@@ -368,7 +413,7 @@ impl Render for GitCometView {
                 .when(is_host_verification, |this| {
                     this.child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child("Use Cancel if you do not trust this host."),
                     )
@@ -378,12 +423,12 @@ impl Render for GitCometView {
                         restrict_scroll_to_vertical_axis(
                             div()
                                 .id("auth_prompt_reason_scroll")
-                                .max_h(px(96.0))
+                                .max_h(scaled_px(96.0))
                                 .overflow_y_scroll(),
                         )
                         .child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(prompt.reason.clone()),
                         ),
@@ -465,7 +510,7 @@ impl Render for GitCometView {
                     .relative()
                     .px_2()
                     .py_1()
-                    .pr(px(40.0))
+                    .pr(scaled_px(40.0))
                     .bg(if theme.is_dark {
                         with_alpha(theme.colors.status.danger.foreground, 0.15)
                     } else {
@@ -482,7 +527,7 @@ impl Render for GitCometView {
                         restrict_scroll_to_vertical_axis(
                             div()
                                 .id("repo_error_banner_scroll")
-                                .max_h(px(140.0))
+                                .max_h(scaled_px(140.0))
                                 .overflow_y_scroll(),
                         )
                         .child(
@@ -500,12 +545,18 @@ impl Render for GitCometView {
                         this.child(
                             div()
                                 .mt_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("Scroll for full output"),
                         )
                     })
-                    .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),
+                    .child(
+                        div()
+                            .absolute()
+                            .top(scaled_px(6.0))
+                            .right(scaled_px(6.0))
+                            .child(dismiss),
+                    ),
             );
         }
 
@@ -539,8 +590,20 @@ impl Render for GitCometView {
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(|this, _: &ToggleRevealCommit, window, cx| {
+                // The availability gate lives in `toggle_reveal_commit`, which
+                // the app-level handler reaches too. Claiming the action either
+                // way keeps the chord from falling through to that handler and
+                // toggling the dialog a second time.
+                this.toggle_reveal_commit(window, cx);
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(|this, _: &LocateFileInExplorer, _window, cx| {
                 this.locate_open_file_in_explorer(cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &OpenRemoteInBrowser, window, cx| {
+                this.open_remote_in_browser(window, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &CommandPaletteDismiss, window, cx| {
@@ -718,6 +781,7 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.command_palette.clone())
+            .child(stable_overlay_view(self.reveal_commit_dialog.clone()))
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))

@@ -37,7 +37,7 @@ fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str
 /// navigation skips them.
 #[gpui::test]
 fn view_mode_segments_render_and_switch_the_resolver_view(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -77,7 +77,7 @@ fn view_mode_segments_render_and_switch_the_resolver_view(cx: &mut gpui::TestApp
 /// are not offered, so the menu carries no row for it even with a live column.
 #[gpui::test]
 fn the_minimap_has_no_row_in_the_settings_menu(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {

@@ -30,17 +30,18 @@ gitcomet-core = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
-gpui = { workspace = true }
+# `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
+gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
 image = { workspace = true }
 jiff = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
-mimalloc = { workspace = true }
 palette = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+rustfs-mimalloc = { workspace = true }
 resvg = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -150,9 +151,11 @@ gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 raw-window-handle = { workspace = true }
 
 [dev-dependencies]
+# Activate the optional backend for history activation tests with real Git data.
+gitcomet-git-gix = { workspace = true }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.
-gitcomet-core = { workspace = true, features = ["test-support"] }
+gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 gitcomet-state = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }

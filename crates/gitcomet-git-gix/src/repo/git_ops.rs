@@ -1,8 +1,14 @@
-use super::{BranchTrackingConfigCacheEntry, GixRepo, oid_to_arc_str, repo_file_stamp};
+use super::remotes::{
+    configured_upstream_is_pending, configured_upstream_of, tracking_refs_for_remote_branch,
+};
+use super::{
+    BranchTrackingConfigCacheEntry, DIVERGENCE_CACHE_LIMIT, DivergenceCache, GixRepo,
+    oid_to_arc_str, repo_file_stamp, with_object_cache,
+};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
 use gitcomet_core::domain::{Branch, CommitId, RefMetadata, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::Result;
+use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
 use std::fs::File;
@@ -14,6 +20,8 @@ const LOCAL_BRANCH_PREFIX: &[u8] = b"refs/heads/";
 
 pub(super) fn head_upstream_divergence(
     repo: &gix::Repository,
+    cache: &DivergenceCache,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Option<UpstreamDivergence>> {
     let head = repo
         .head()
@@ -27,7 +35,8 @@ pub(super) fn head_upstream_divergence(
         Err(_) => return Ok(None),
     };
 
-    let (_upstream, divergence) = branch_upstream_and_divergence(repo, &branch_ref, local_tip)?;
+    let (_upstream, divergence) =
+        branch_upstream_and_divergence(repo, cache, &branch_ref, local_tip, cancellation)?;
     Ok(divergence)
 }
 
@@ -43,7 +52,7 @@ impl GixRepo {
     }
 
     fn branch_tracking_config_present(&self) -> Result<bool> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let local_config = repo_file_stamp(repo.common_dir().join("config").as_path());
         let worktree_config = repo_file_stamp(repo.git_dir().join("config.worktree").as_path());
 
@@ -84,7 +93,7 @@ impl GixRepo {
                 Ok(branches) => Ok(branches),
                 Err(cli_err) => {
                     let repo = self.reopen_repo()?;
-                    collect_local_branches(&repo, true).map_err(|gix_err| {
+                    collect_local_branches(&repo, &self.divergence_cache, true).map_err(|gix_err| {
                         Error::new(ErrorKind::Backend(format!(
                             "list branches: git fallback failed ({cli_err}); gix fallback failed ({gix_err})"
                         )))
@@ -93,15 +102,15 @@ impl GixRepo {
             };
         }
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         if let Some(branches) = try_collect_loose_local_branches_fast(&repo)? {
             return Ok(branches);
         }
-        collect_local_branches(&repo, false)
+        collect_local_branches(&repo, &self.divergence_cache, false)
     }
 
     fn current_branch_gix(&self) -> Result<String> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let head = repo
             .head()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
@@ -148,17 +157,90 @@ impl GixRepo {
 
     fn list_branches_cli_with_tracking(&self) -> Result<Vec<Branch>> {
         let mut cmd = self.git_workdir_cmd();
+        // `%(upstream:track)` contains words such as "ahead", "behind", and
+        // "gone". Keep this machine-parsed command independent of the user's
+        // Git locale.
+        cmd.env("LC_ALL", "C");
         cmd.arg("for-each-ref")
-            .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)")
+            .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:remotename)\t%(upstream:remoteref)")
             .arg("refs/heads");
         let output = run_git_capture(
             cmd,
-            "git for-each-ref --format=%(refname:short)\\t%(objectname)\\t%(upstream:short)\\t%(upstream:track) refs/heads",
+            "git for-each-ref --format=%(refname:short)\\t%(objectname)\\t%(upstream:short)\\t%(upstream:track)\\t%(upstream:remotename)\\t%(upstream:remoteref) refs/heads",
         )?;
-        parse_local_branches_for_each_ref(&output)
+        let mut branches = parse_local_branches_for_each_ref(&output)?;
+        let repo = self.reopen_repo()?;
+        for branch in &mut branches {
+            let ref_name = format!("refs/heads/{}", branch.name);
+            let Some(branch_ref) = repo.try_find_reference(ref_name.as_str()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+            })?
+            else {
+                continue;
+            };
+            let configured = configured_upstream_of(&branch_ref);
+            let pending = configured.is_some() && configured_upstream_is_pending(&branch_ref);
+            if branch.upstream.is_some() {
+                branch.upstream = configured;
+                if branch.upstream.is_none() {
+                    branch.divergence = None;
+                }
+                continue;
+            }
+
+            if pending {
+                branch.upstream = configured;
+                branch.divergence = None;
+                continue;
+            }
+
+            // If Git's formatted tracking fields cannot resolve a configured
+            // target, the exact remote still gives us one authoritative
+            // refspec to try. Recover liveness and divergence through it.
+            if configured.is_some() {
+                let Some(local_tip) = branch_ref.try_id().map(|id| id.detach()) else {
+                    continue;
+                };
+                let (upstream, divergence) = branch_upstream_and_divergence_best_effort(
+                    &repo,
+                    &self.divergence_cache,
+                    &branch_ref,
+                    local_tip,
+                )?;
+                branch.upstream = upstream;
+                branch.divergence = divergence;
+            }
+        }
+        Ok(branches)
     }
 
-    pub(super) fn list_ref_metadata_impl(&self) -> Result<Vec<(String, RefMetadata)>> {
+    pub(super) fn list_ref_metadata_impl(
+        &self,
+    ) -> Result<std::sync::Arc<FxHashMap<String, RefMetadata>>> {
+        // Metadata is a function of the refs and their (immutable) commits, so
+        // the namespace fingerprint is an exact cache key.
+        let repo = self.repo();
+        let fingerprint = ref_namespace_fingerprint(&repo)?;
+        if let Some(hit) = self
+            .ref_metadata_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|(cached, _)| *cached == fingerprint)
+        {
+            return Ok(std::sync::Arc::clone(&hit.1));
+        }
+        let metadata =
+            std::sync::Arc::new(self.list_ref_metadata_uncached()?.into_iter().collect());
+        *self
+            .ref_metadata_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((fingerprint, std::sync::Arc::clone(&metadata)));
+        Ok(metadata)
+    }
+
+    fn list_ref_metadata_uncached(&self) -> Result<Vec<(String, RefMetadata)>> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("for-each-ref")
             .arg(
@@ -174,8 +256,53 @@ impl GixRepo {
     }
 }
 
+/// Hashes a reference's identity: its name and raw target, plus the object a
+/// symbolic chain ends at. Ref lookups only, no object lookups. The resolved
+/// id matters because the chain may end in a namespace the caller skips (a
+/// tag, say): moving that ref changes what this one resolves to.
+pub(super) fn hash_reference_identity(
+    hasher: &mut rustc_hash::FxHasher,
+    reference: &mut gix::Reference<'_>,
+) {
+    use gix::bstr::ByteSlice as _;
+    use std::hash::Hash as _;
+    reference.name().as_bstr().as_bytes().hash(hasher);
+    match reference.target() {
+        gix::refs::TargetRef::Object(id) => id.as_bytes().hash(hasher),
+        gix::refs::TargetRef::Symbolic(name) => {
+            name.as_bstr().as_bytes().hash(hasher);
+            let resolved = reference.follow_to_object().ok().map(|id| id.detach());
+            resolved.hash(hasher);
+        }
+    }
+}
+
+/// Fingerprint of every branch and remote-tracking ref (tags excluded, as
+/// `for-each-ref refs/heads refs/remotes` excludes them).
+fn ref_namespace_fingerprint(repo: &gix::Repository) -> Result<u64> {
+    use std::hash::Hasher as _;
+    let refs = repo
+        .references()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+    let mut hasher = rustc_hash::FxHasher::default();
+    for iter in [
+        refs.local_branches()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?,
+        refs.remote_branches()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?,
+    ] {
+        for reference in iter {
+            let mut reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            hash_reference_identity(&mut hasher, &mut reference);
+        }
+    }
+    Ok(hasher.finish())
+}
+
 fn collect_local_branches(
     repo: &gix::Repository,
+    divergence_cache: &DivergenceCache,
     has_branch_tracking: bool,
 ) -> Result<Vec<Branch>> {
     let refs = repo
@@ -197,7 +324,12 @@ fn collect_local_branches(
         let target = cached_commit_id(&mut target_ids, &mut last_target, target_id);
 
         let (upstream, divergence) = if has_branch_tracking {
-            branch_upstream_and_divergence_best_effort(repo, &reference, target_id)?
+            branch_upstream_and_divergence_best_effort(
+                repo,
+                divergence_cache,
+                &reference,
+                target_id,
+            )?
         } else {
             (None, None)
         };
@@ -244,7 +376,7 @@ fn try_collect_loose_local_branches_fast(repo: &gix::Repository) -> Result<Optio
 /// records. Malformed lines are skipped rather than failing the call: this data
 /// is decorative, and losing one row is better than losing the whole picker.
 fn parse_ref_metadata_for_each_ref(output: &str) -> Vec<(String, RefMetadata)> {
-    let mut entries = Vec::new();
+    let mut entries = Vec::with_capacity(memchr::memchr_iter(b'\n', output.as_bytes()).count());
 
     for line in output.lines() {
         if line.is_empty() {
@@ -292,6 +424,8 @@ fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
         let target_hex = fields.next().unwrap_or_default();
         let upstream_short = fields.next().unwrap_or_default();
         let upstream_track = fields.next().unwrap_or_default();
+        let upstream_remote = fields.next().unwrap_or_default();
+        let upstream_remote_ref = fields.next().unwrap_or_default();
         if fields.next().is_some() || name.is_empty() || target_hex.is_empty() {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "git for-each-ref branches line {} malformed: {line}",
@@ -305,7 +439,15 @@ fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
                 target_hex
             )))
         })?;
-        let upstream = parse_upstream_short(upstream_short);
+        // Git keeps branch.<name>.remote/merge after fetch --prune removes the
+        // corresponding remote-tracking ref and reports that configuration as
+        // `[gone]`.  The domain model's upstream is operational: callers use
+        // `Some` to decide whether Pull and Push can target a real tracking
+        // branch.  Do not expose a configured-but-missing ref as live.
+        let upstream_gone = matches!(upstream_track.trim(), "[gone]" | "gone");
+        let upstream = (!upstream_gone && !upstream_short.trim().is_empty())
+            .then(|| parse_upstream_identity(upstream_remote, upstream_remote_ref))
+            .flatten();
         let divergence = upstream.as_ref().and_then(|_| {
             if upstream_track.trim().is_empty() {
                 Some(UpstreamDivergence {
@@ -433,12 +575,12 @@ fn probe_failure_reason(label: &str, output: &Output) -> String {
     }
 }
 
-fn parse_upstream_short(s: &str) -> Option<Upstream> {
-    let s = s.trim();
-    if s.is_empty() {
+fn parse_upstream_identity(remote: &str, remote_ref: &str) -> Option<Upstream> {
+    let remote = remote.trim();
+    let branch = remote_ref.trim().strip_prefix("refs/heads/")?;
+    if remote.is_empty() || branch.is_empty() {
         return None;
     }
-    let (remote, branch) = s.split_once('/')?;
     Some(Upstream {
         remote: remote.to_string(),
         branch: branch.to_string(),
@@ -528,10 +670,14 @@ fn parse_upstream_track_divergence(raw: &str) -> Option<UpstreamDivergence> {
     saw_count.then_some(UpstreamDivergence { ahead, behind })
 }
 
+/// Commits reachable from `tip` but not from `hidden_tip`, saturating at
+/// [`DIVERGENCE_COUNT_CAP`]: past that the exact figure is not worth walking
+/// the rest of an unrelated or enormous history for.
 fn count_unique_commits(
     repo: &gix::Repository,
     tip: gix::ObjectId,
     hidden_tip: gix::ObjectId,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<usize> {
     let walk = repo
         .rev_walk([tip])
@@ -541,38 +687,76 @@ fn count_unique_commits(
 
     let mut count = 0usize;
     for info in walk {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk item: {e}"))))?;
-        count = count.saturating_add(1);
+        count += 1;
+        if count >= DIVERGENCE_COUNT_CAP {
+            break;
+        }
     }
     Ok(count)
 }
 
+const DIVERGENCE_COUNT_CAP: usize = 100_000;
+
 fn divergence_between(
     repo: &gix::Repository,
+    cache: &DivergenceCache,
     local_tip: gix::ObjectId,
     upstream_tip: gix::ObjectId,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<UpstreamDivergence> {
-    let ahead = count_unique_commits(repo, local_tip, upstream_tip)?;
-    let behind = count_unique_commits(repo, upstream_tip, local_tip)?;
-    Ok(UpstreamDivergence { ahead, behind })
+    if local_tip == upstream_tip {
+        return Ok(UpstreamDivergence::default());
+    }
+    let key = (local_tip, upstream_tip, super::log::shallow_snapshot(repo)?);
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+    {
+        return Ok(*hit);
+    }
+
+    // Both walks visit the commits between the tips, so the second one reads
+    // them out of the cache.
+    let repo = with_object_cache(repo);
+    let ahead = count_unique_commits(&repo, local_tip, upstream_tip, cancellation)?;
+    let behind = count_unique_commits(&repo, upstream_tip, local_tip, cancellation)?;
+    let divergence = UpstreamDivergence { ahead, behind };
+
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= DIVERGENCE_CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(key, divergence);
+    Ok(divergence)
 }
 
 fn branch_upstream_and_divergence(
     repo: &gix::Repository,
+    cache: &DivergenceCache,
     branch_ref: &gix::Reference<'_>,
     local_tip: gix::ObjectId,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(Option<Upstream>, Option<UpstreamDivergence>)> {
     let Some((upstream, upstream_tip)) = branch_upstream_target(repo, branch_ref)? else {
         return Ok((None, None));
     };
 
-    let divergence = divergence_between(repo, local_tip, upstream_tip).map(Some)?;
+    let divergence =
+        divergence_between(repo, cache, local_tip, upstream_tip, cancellation).map(Some)?;
 
     Ok((Some(upstream), divergence))
 }
 
 fn branch_upstream_and_divergence_best_effort(
     repo: &gix::Repository,
+    cache: &DivergenceCache,
     branch_ref: &gix::Reference<'_>,
     local_tip: gix::ObjectId,
 ) -> Result<(Option<Upstream>, Option<UpstreamDivergence>)> {
@@ -580,7 +764,7 @@ fn branch_upstream_and_divergence_best_effort(
         return Ok((None, None));
     };
 
-    let divergence = divergence_between(repo, local_tip, upstream_tip).ok();
+    let divergence = divergence_between(repo, cache, local_tip, upstream_tip, None).ok();
     Ok((Some(upstream), divergence))
 }
 
@@ -588,19 +772,16 @@ fn branch_upstream_target(
     repo: &gix::Repository,
     branch_ref: &gix::Reference<'_>,
 ) -> Result<Option<(Upstream, gix::ObjectId)>> {
-    let tracking_ref_name = match branch_ref.remote_tracking_ref_name(gix::remote::Direction::Fetch)
-    {
-        Some(Ok(name)) => name,
-        Some(Err(_)) | None => return Ok(None),
+    let Some(upstream) = configured_upstream_of(branch_ref) else {
+        return Ok(None);
     };
-
-    let upstream_short = tracking_ref_name.shorten().to_str_lossy().into_owned();
-    let Some(upstream) = parse_upstream_short(&upstream_short) else {
+    let tracking_refs = tracking_refs_for_remote_branch(repo, &upstream)?;
+    let [tracking_ref_name] = tracking_refs.as_slice() else {
         return Ok(None);
     };
 
     let Some(mut tracking_ref) = repo
-        .try_find_reference(tracking_ref_name.as_ref())
+        .try_find_reference(tracking_ref_name.as_str())
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
     else {
         return Ok(None);
@@ -621,29 +802,31 @@ fn branch_upstream_target(
 mod tests {
     use super::{
         LOCAL_BRANCH_PREFIX, cached_commit_id, local_branch_name,
-        parse_local_branches_for_each_ref, parse_ref_metadata_for_each_ref, parse_upstream_short,
-        parse_upstream_track_divergence,
+        parse_local_branches_for_each_ref, parse_ref_metadata_for_each_ref,
+        parse_upstream_identity, parse_upstream_track_divergence,
     };
     use gitcomet_core::domain::UpstreamDivergence;
     use rustc_hash::FxHashMap;
     use std::sync::Arc;
 
     #[test]
-    fn parse_upstream_short_requires_remote_and_branch() {
-        assert!(parse_upstream_short("").is_none());
-        assert!(parse_upstream_short("origin").is_none());
+    fn parse_upstream_identity_requires_an_exact_remote_and_head_ref() {
+        assert!(parse_upstream_identity("", "refs/heads/main").is_none());
+        assert!(parse_upstream_identity("origin", "").is_none());
+        assert!(parse_upstream_identity("origin", "refs/tags/v1").is_none());
         assert_eq!(
-            parse_upstream_short("origin/main").map(|upstream| (upstream.remote, upstream.branch)),
+            parse_upstream_identity("origin", "refs/heads/main")
+                .map(|upstream| (upstream.remote, upstream.branch)),
             Some(("origin".to_string(), "main".to_string()))
         );
     }
 
     #[test]
-    fn parse_upstream_short_preserves_nested_branch_names() {
+    fn parse_upstream_identity_preserves_slashes_on_both_sides() {
         assert_eq!(
-            parse_upstream_short("origin/feature/topic")
+            parse_upstream_identity("forks/alice", "refs/heads/feature/topic")
                 .map(|upstream| (upstream.remote, upstream.branch)),
-            Some(("origin".to_string(), "feature/topic".to_string()))
+            Some(("forks/alice".to_string(), "feature/topic".to_string()))
         );
     }
 
@@ -747,7 +930,7 @@ mod tests {
     #[test]
     fn parse_local_branches_for_each_ref_parses_upstream_metadata() {
         let branches = parse_local_branches_for_each_ref(
-            "feature\t0123456789abcdef0123456789abcdef01234567\torigin/feature\t[ahead 1, behind 2]\nmain\t89abcdef0123456789abcdef0123456789abcdef\t\t\n",
+            "feature\t0123456789abcdef0123456789abcdef01234567\torigin/feature\t[ahead 1, behind 2]\torigin\trefs/heads/feature\nmain\t89abcdef0123456789abcdef0123456789abcdef\t\t\t\t\n",
         )
         .expect("parse branch output");
 
@@ -775,7 +958,7 @@ mod tests {
     #[test]
     fn parse_local_branches_for_each_ref_treats_empty_track_as_in_sync() {
         let branches = parse_local_branches_for_each_ref(
-            "main\t0123456789abcdef0123456789abcdef01234567\torigin/main\t\n",
+            "main\t0123456789abcdef0123456789abcdef01234567\torigin/main\t\torigin\trefs/heads/main\n",
         )
         .expect("parse branch output");
 
@@ -786,5 +969,16 @@ mod tests {
                 behind: 0,
             })
         );
+    }
+
+    #[test]
+    fn parse_local_branches_for_each_ref_treats_gone_upstream_as_untracked() {
+        let branches = parse_local_branches_for_each_ref(
+            "feature\t0123456789abcdef0123456789abcdef01234567\torigin/feature\t[gone]\torigin\trefs/heads/feature\n",
+        )
+        .expect("parse branch output");
+
+        assert_eq!(branches[0].upstream, None);
+        assert_eq!(branches[0].divergence, None);
     }
 }

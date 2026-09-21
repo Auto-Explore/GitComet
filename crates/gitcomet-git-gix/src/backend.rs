@@ -45,6 +45,13 @@ impl GixBackend {
 }
 
 impl GitBackend for GixBackend {
+    fn repository_watch_info(
+        &self,
+        workdir: &Path,
+    ) -> Result<Option<gitcomet_core::services::RepositoryWatchInfo>> {
+        crate::ignore::repository_watch_info(workdir).map(Some)
+    }
+
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
         self.open_impl(workdir, None)
     }

@@ -36,6 +36,7 @@ pub(crate) struct ConflictResolverJoinTarget {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TerminalMenuContext {
     pub(crate) has_session: bool,
+    pub(crate) has_buffer: bool,
     pub(crate) has_selection: bool,
     pub(crate) connected: bool,
 }
@@ -85,6 +86,12 @@ pub(crate) enum PopoverKind {
     RepoPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,
+    },
+    /// Selects or clears the live remote-tracking branch for the captured
+    /// checked-out local branch.
+    UpstreamPicker {
+        repo_id: RepoId,
+        branch: String,
     },
     CreateBranchFromRefPrompt {
         repo_id: RepoId,
@@ -158,11 +165,18 @@ pub(crate) enum PopoverKind {
     PushSetUpstreamPrompt {
         repo_id: RepoId,
         remote: String,
+        /// `Some` configures this local branch without pushing. `None` is the
+        /// first-push flow that creates the remote branch immediately.
+        configure_only_for: Option<String>,
     },
     ForcePushConfirm {
         repo_id: RepoId,
     },
     CherryPickCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    RevertCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
     },
@@ -172,6 +186,15 @@ pub(crate) enum PopoverKind {
     },
     MergeAbortConfirm {
         repo_id: RepoId,
+    },
+    /// Shown when a branch-creation checkout names a branch that already exists
+    /// locally. Asks whether to check out the existing branch, overwrite it
+    /// with the target commit and check it out, or cancel.
+    BranchExistsPrompt {
+        repo_id: RepoId,
+        name: String,
+        target: String,
+        operation: BranchExistsPromptOperation,
     },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,
@@ -219,6 +242,9 @@ pub(crate) enum PopoverKind {
     CommitOptionsMenu {
         repo_id: RepoId,
     },
+    CommitFileSortMenu {
+        list: crate::view::rows::FileListId,
+    },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
@@ -231,6 +257,7 @@ pub(crate) enum PopoverKind {
     UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
     TerminalMenu {
         repo_id: RepoId,
+        session_seq: u64,
         context: TerminalMenuContext,
     },
     DiffActionMenu,
@@ -243,6 +270,10 @@ pub(crate) enum PopoverKind {
     /// commit message.
     WebLinkMenu {
         url: SharedString,
+        /// Exact remote image URL represented by a linked image, but only
+        /// while Ask mode is waiting for approval. Ordinary text links and
+        /// images under either other policy leave this empty.
+        load_remote_image_url: Option<SharedString>,
     },
     /// Actions for a commit id clicked in a commit message or a SHA field.
     CommitShaLinkMenu {
@@ -314,8 +345,7 @@ pub(crate) enum PopoverKind {
     },
     BranchMenu {
         repo_id: RepoId,
-        section: BranchSection,
-        name: String,
+        target: BranchMenuTarget,
     },
     BranchSectionMenu {
         repo_id: RepoId,
@@ -371,11 +401,6 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
-    TagRefMenu {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        name: String,
-    },
     HistoryBranchFilter {
         repo_id: RepoId,
     },
@@ -408,6 +433,8 @@ pub(crate) enum RepoPopoverKind {
     Submodule(SubmodulePopoverKind),
 }
 
+/// `OpenInBrowserMenu` picks which remote's web page to open when several
+/// remotes have one; its rows are rebuilt from the remotes on every render.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RemotePopoverKind {
     AddPrompt,
@@ -415,6 +442,7 @@ pub(crate) enum RemotePopoverKind {
     RemoveConfirm { name: String },
     Menu { name: String },
     DeleteBranchConfirm { remote: String, branch: String },
+    OpenInBrowserMenu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -824,6 +852,10 @@ pub(crate) struct TerminalViewportView {
     pub(crate) selection_drag_moved: bool,
     /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
     pub(crate) selection_autoscroll_seq: u64,
+    /// Which window's text selection this viewport owns, if any.
+    /// See [`crate::text_selection_owner`].
+    pub(crate) selection_owner: crate::text_selection_owner::SelectionOwnerToken,
+    pub(crate) _selection_owner_observer: gpui::Subscription,
     pub(crate) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
 }
 
@@ -1148,6 +1180,57 @@ impl ThemeMode {
 
     pub(crate) const fn is_automatic(&self) -> bool {
         matches!(self, Self::Automatic)
+    }
+}
+
+/// Whether a changed-file list groups by directory. The global default is a
+/// persisted preference; each list may override it transiently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum FileListLayout {
+    #[default]
+    Flat,
+    Tree,
+}
+
+impl FileListLayout {
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Tree => "tree",
+        }
+    }
+
+    pub(crate) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "flat" => Some(Self::Flat),
+            "tree" => Some(Self::Tree),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Flat => "Flat list",
+            Self::Tree => "Tree",
+        }
+    }
+
+    pub(crate) const fn settings_label(self) -> &'static str {
+        self.label()
+    }
+
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::Flat => "icons/menu.svg",
+            Self::Tree => "icons/list_tree.svg",
+        }
+    }
+
+    pub(crate) const fn toggled(self) -> Self {
+        match self {
+            Self::Flat => Self::Tree,
+            Self::Tree => Self::Flat,
+        }
     }
 }
 

@@ -15,12 +15,6 @@ const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 /// Design units, not device pixels: read it through [`conflict_line_no_width`].
 pub(in crate::view) const CONFLICT_DIFF_LINE_NO_WIDTH_PX: f32 = 38.0;
 
-/// Design height of one conflict source/output row. The resolver's text is
-/// shaped from `window.rem_size()`, which UI scale changes, so the row box has
-/// to follow it -- a flat 20px row holds a 41px line box at 200% and the text
-/// spills into the row below. Mirrors `diff_canvas::DIFF_ROW_HEIGHT_PX`.
-pub(in crate::view) const CONFLICT_ROW_HEIGHT_PX: f32 = 20.0;
-
 /// Design width of the accent/marker bar a conflict row paints at its left edge
 /// to flag the active conflict. Mirrors `diff_canvas::DIFF_CHANGE_BAR_WIDTH_PX`.
 pub(in crate::view) const CONFLICT_ROW_ACCENT_BAR_WIDTH_PX: f32 = 3.0;
@@ -37,13 +31,13 @@ pub(in crate::view) fn conflict_scaled_px(value: f32, ui_scale_percent: u32) -> 
 }
 
 #[inline]
-pub(in crate::view) fn conflict_row_height(ui_scale_percent: u32) -> Pixels {
-    conflict_scaled_px(CONFLICT_ROW_HEIGHT_PX, ui_scale_percent)
-}
-
-#[inline]
-pub(in crate::view) fn conflict_line_no_width(ui_scale_percent: u32) -> Pixels {
-    conflict_scaled_px(CONFLICT_DIFF_LINE_NO_WIDTH_PX, ui_scale_percent)
+pub(in crate::view) fn conflict_line_no_width(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
+    conflict_scaled_px(
+        CONFLICT_DIFF_LINE_NO_WIDTH_PX * scale.appearance.editor_font_size_px as f32 / 13.0,
+        ui_scale_percent,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -202,6 +196,378 @@ impl<K: Eq> LruTouchQueue<K> {
 pub(in crate::view) struct CommitFileRowPresentation {
     pub(in crate::view) label: SharedString,
     pub(in crate::view) visuals: CommitFileKindVisuals,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(in crate::view) enum CommitFileSort {
+    #[default]
+    PathAscending,
+    PathDescending,
+    FileTypeAscending,
+    FileTypeDescending,
+    EditSizeAscending,
+    EditSizeDescending,
+}
+
+impl CommitFileSort {
+    pub(in crate::view) const ALL: [Self; 6] = [
+        Self::PathAscending,
+        Self::PathDescending,
+        Self::FileTypeAscending,
+        Self::FileTypeDescending,
+        Self::EditSizeAscending,
+        Self::EditSizeDescending,
+    ];
+
+    /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file
+    /// type by extension A→Z -- so the direction word is the same everywhere and
+    /// the noun in front says what is being ordered. Edit size keeps
+    /// Smallest/Largest, which names the ends of that scale better than a
+    /// direction word does.
+    pub(in crate::view) const fn label(self) -> &'static str {
+        match self {
+            Self::PathAscending => "Path: Ascending",
+            Self::PathDescending => "Path: Descending",
+            Self::FileTypeAscending => "File type: Ascending",
+            Self::FileTypeDescending => "File type: Descending",
+            Self::EditSizeAscending => "Edit size: Smallest",
+            Self::EditSizeDescending => "Edit size: Largest",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(in crate::view) enum CommitFileFilter {
+    #[default]
+    All,
+    Modified,
+    Removed,
+    Added,
+    Renamed,
+}
+
+impl CommitFileFilter {
+    pub(in crate::view) const ALL: [Self; 5] = [
+        Self::All,
+        Self::Modified,
+        Self::Removed,
+        Self::Added,
+        Self::Renamed,
+    ];
+
+    pub(in crate::view) const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Modified => "Modified",
+            Self::Removed => "Deleted",
+            Self::Added => "Added",
+            Self::Renamed => "Renamed",
+        }
+    }
+
+    pub(in crate::view) const fn icon(self) -> &'static str {
+        match self {
+            Self::All => "icons/file.svg",
+            Self::Modified => "icons/pencil.svg",
+            Self::Removed => "icons/minus.svg",
+            Self::Added => "icons/plus.svg",
+            Self::Renamed => "icons/swap.svg",
+        }
+    }
+
+    /// `scope` names what the counts belong to — "this commit", "this worktree",
+    /// "this comparison" — so the same tabs read correctly above every list.
+    pub(in crate::view) fn tooltip_in(self, scope: &str, count: usize) -> String {
+        match self {
+            Self::All => format!("Show every file changed by {scope} ({count})"),
+            Self::Modified => format!("Show files modified by {scope} ({count})"),
+            Self::Removed => format!("Show files deleted by {scope} ({count})"),
+            Self::Added => format!("Show files added by {scope} ({count})"),
+            Self::Renamed => format!("Show files renamed by {scope} ({count})"),
+        }
+    }
+
+    fn matches(self, kind: FileStatusKind) -> bool {
+        match self {
+            Self::All => true,
+            Self::Modified => {
+                matches!(kind, FileStatusKind::Modified | FileStatusKind::Conflicted)
+            }
+            Self::Removed => kind == FileStatusKind::Deleted,
+            Self::Added => matches!(kind, FileStatusKind::Added | FileStatusKind::Untracked),
+            Self::Renamed => kind == FileStatusKind::Renamed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct CommitFileKindCounts {
+    pub(in crate::view) all: usize,
+    pub(in crate::view) modified: usize,
+    pub(in crate::view) removed: usize,
+    pub(in crate::view) added: usize,
+    pub(in crate::view) renamed: usize,
+}
+
+impl CommitFileKindCounts {
+    pub(in crate::view) const fn for_filter(self, filter: CommitFileFilter) -> usize {
+        match filter {
+            CommitFileFilter::All => self.all,
+            CommitFileFilter::Modified => self.modified,
+            CommitFileFilter::Removed => self.removed,
+            CommitFileFilter::Added => self.added,
+            CommitFileFilter::Renamed => self.renamed,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CommitFileProjection {
+    pub(in crate::view) source_indices: Arc<[usize]>,
+    pub(in crate::view) counts: CommitFileKindCounts,
+}
+
+#[derive(Clone, Debug)]
+struct CommitFileProjectionCacheEntry<K: Eq + Clone> {
+    key: K,
+    projection: Arc<CommitFileProjection>,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct CommitFileProjectionCache<K: Eq + Clone> {
+    cached: Option<CommitFileProjectionCacheEntry<K>>,
+}
+
+impl<K: Eq + Clone> Default for CommitFileProjectionCache<K> {
+    fn default() -> Self {
+        Self { cached: None }
+    }
+}
+
+fn commit_file_edit_size(file: &gitcomet_core::domain::CommitFileChange) -> Option<u64> {
+    Some(u64::from(file.additions?) + u64::from(file.deletions?))
+}
+
+fn commit_file_path_sort_key(path: &std::path::Path) -> String {
+    super::path_display::path_display_string(path).to_lowercase()
+}
+
+/// Groups a file with others of its kind. The extension alone, lowercased, so
+/// `.RS` and `.rs` land together; a file without one (Makefile, LICENSE) gets
+/// the empty key and they collect at the top. Path order breaks the ties inside
+/// a group, which is what keeps a group readable once you are in it.
+fn commit_file_type_sort_key(path: &std::path::Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default()
+}
+
+fn compare_commit_file_paths(
+    left: &(usize, String, String),
+    right: &(usize, String, String),
+    files: &[gitcomet_core::domain::CommitFileChange],
+) -> std::cmp::Ordering {
+    left.1
+        .cmp(&right.1)
+        .then_with(|| {
+            files[left.0]
+                .path
+                .as_os_str()
+                .cmp(files[right.0].path.as_os_str())
+        })
+        .then_with(|| left.0.cmp(&right.0))
+}
+
+/// Display order for one status section. Edit-size sorts use the lane's stats,
+/// placing unknown counts last and breaking ties by path.
+pub(in crate::view) fn status_section_sorted_indexes(
+    entries: &[gitcomet_core::domain::FileStatus],
+    indexes: &[usize],
+    sort: CommitFileSort,
+    stats: Option<&rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>>,
+) -> std::sync::Arc<[usize]> {
+    let mut sortable: Vec<(usize, String, String)> = indexes
+        .iter()
+        .filter_map(|ix| {
+            entries.get(*ix).map(|entry| {
+                (
+                    *ix,
+                    commit_file_path_sort_key(&entry.path),
+                    matches!(
+                        sort,
+                        CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending
+                    )
+                    .then(|| commit_file_type_sort_key(&entry.path))
+                    .unwrap_or_default(),
+                )
+            })
+        })
+        .collect();
+
+    // Same shape as `build_commit_file_projection`: files with unknown sizes
+    // sort last, and path order breaks every tie so the result is stable.
+    let edit_size = |ix: usize| -> Option<u64> {
+        let entry = entries.get(ix)?;
+        let stats = stats?.get(&entry.path)?;
+        Some(u64::from(stats.additions?) + u64::from(stats.deletions?))
+    };
+    let by_path = |left: &(usize, String, String), right: &(usize, String, String)| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| {
+                entries[left.0]
+                    .path
+                    .as_os_str()
+                    .cmp(entries[right.0].path.as_os_str())
+            })
+            .then_with(|| left.0.cmp(&right.0))
+    };
+
+    sortable.sort_by(|left, right| match sort {
+        CommitFileSort::PathAscending => by_path(left, right),
+        CommitFileSort::PathDescending => by_path(left, right).reverse(),
+        CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending => {
+            let left_type = &left.2;
+            let right_type = &right.2;
+            // Only the group order flips; inside a group the path stays A→Z, the
+            // same way a descending edit-size sort still falls back to path order.
+            let type_order = if sort == CommitFileSort::FileTypeAscending {
+                left_type.cmp(right_type)
+            } else {
+                right_type.cmp(left_type)
+            };
+            type_order.then_with(|| by_path(left, right))
+        }
+        CommitFileSort::EditSizeAscending | CommitFileSort::EditSizeDescending => {
+            match (edit_size(left.0), edit_size(right.0)) {
+                (Some(left_size), Some(right_size)) => {
+                    let order = if sort == CommitFileSort::EditSizeAscending {
+                        left_size.cmp(&right_size)
+                    } else {
+                        right_size.cmp(&left_size)
+                    };
+                    order.then_with(|| by_path(left, right))
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => by_path(left, right),
+            }
+        }
+    });
+    sortable
+        .into_iter()
+        .map(|(ix, _, _)| ix)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn build_commit_file_projection(
+    files: &[gitcomet_core::domain::CommitFileChange],
+    sort: CommitFileSort,
+    filter: CommitFileFilter,
+) -> CommitFileProjection {
+    let mut counts = CommitFileKindCounts {
+        all: files.len(),
+        ..Default::default()
+    };
+    for file in files {
+        match file.kind {
+            FileStatusKind::Untracked | FileStatusKind::Added => counts.added += 1,
+            FileStatusKind::Modified | FileStatusKind::Conflicted => counts.modified += 1,
+            FileStatusKind::Deleted => counts.removed += 1,
+            FileStatusKind::Renamed => counts.renamed += 1,
+        }
+    }
+
+    let mut sortable: Vec<(usize, String, String)> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| filter.matches(file.kind))
+        .map(|(source_ix, file)| {
+            (
+                source_ix,
+                commit_file_path_sort_key(&file.path),
+                matches!(
+                    sort,
+                    CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending
+                )
+                .then(|| commit_file_type_sort_key(&file.path))
+                .unwrap_or_default(),
+            )
+        })
+        .collect();
+
+    sortable.sort_by(|left, right| match sort {
+        CommitFileSort::PathAscending => compare_commit_file_paths(left, right, files),
+        CommitFileSort::PathDescending => compare_commit_file_paths(left, right, files).reverse(),
+        CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending => {
+            let left_type = &left.2;
+            let right_type = &right.2;
+            // Only the group order flips; inside a group the path stays A→Z, the
+            // same way a descending edit-size sort still falls back to path order.
+            let type_order = if sort == CommitFileSort::FileTypeAscending {
+                left_type.cmp(right_type)
+            } else {
+                right_type.cmp(left_type)
+            };
+            type_order.then_with(|| compare_commit_file_paths(left, right, files))
+        }
+        CommitFileSort::EditSizeAscending | CommitFileSort::EditSizeDescending => {
+            let left_size = commit_file_edit_size(&files[left.0]);
+            let right_size = commit_file_edit_size(&files[right.0]);
+            match (left_size, right_size) {
+                (Some(left_size), Some(right_size)) => {
+                    let size_order = if sort == CommitFileSort::EditSizeAscending {
+                        left_size.cmp(&right_size)
+                    } else {
+                        right_size.cmp(&left_size)
+                    };
+                    size_order.then_with(|| compare_commit_file_paths(left, right, files))
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => compare_commit_file_paths(left, right, files),
+            }
+        }
+    });
+
+    CommitFileProjection {
+        source_indices: sortable
+            .into_iter()
+            .map(|(source_ix, _, _)| source_ix)
+            .collect::<Vec<_>>()
+            .into(),
+        counts,
+    }
+}
+
+impl<K: Eq + Clone> CommitFileProjectionCache<K> {
+    pub(in crate::view) fn projection_for(
+        &mut self,
+        key: &K,
+        files: &[gitcomet_core::domain::CommitFileChange],
+        sort: CommitFileSort,
+        filter: CommitFileFilter,
+    ) -> Arc<CommitFileProjection> {
+        if let Some(entry) = self.cached.as_ref()
+            && entry.key == *key
+        {
+            return Arc::clone(&entry.projection);
+        }
+
+        let projection = Arc::new(build_commit_file_projection(files, sort, filter));
+        self.cached = Some(CommitFileProjectionCacheEntry {
+            key: key.clone(),
+            projection: Arc::clone(&projection),
+        });
+        projection
+    }
+
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn clear(&mut self) {
+        self.cached = None;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -405,6 +771,260 @@ pub(in crate::view) const fn commit_file_kind_visuals(
     COMMIT_FILE_KIND_VISUALS[kind as usize]
 }
 
+/// Row wash strength. Dark surfaces need a touch more of it than light ones to
+/// read at all. These four are the only knobs the tint has -- turn them here.
+const ROW_TINT_ALPHA_DARK: f32 = 0.13;
+const ROW_TINT_ALPHA_LIGHT: f32 = 0.11;
+const CONFLICT_ROW_TINT_ALPHA_DARK: f32 = 0.20;
+const CONFLICT_ROW_TINT_ALPHA_LIGHT: f32 = 0.16;
+
+/// Background wash marking a file row's change kind, or `None` for a kind that
+/// keeps the plain surface. Modified is that untinted default: in an unstaged
+/// list nearly every row is one, so tinting it would drown the add/delete
+/// signal the wash exists for.
+///
+/// Always translucent, and that is load-bearing -- [`tinted_row_bg`] folds this
+/// into the hover, selection and pressed fills too, and an opaque tint would
+/// flatten all three into one colour.
+pub(in crate::view) fn file_kind_row_tint(
+    kind: FileStatusKind,
+    theme: &AppTheme,
+) -> Option<gpui::Rgba> {
+    let (color, alpha) = match kind {
+        FileStatusKind::Modified => return None,
+        FileStatusKind::Untracked | FileStatusKind::Added => (
+            theme.colors.status.success.foreground,
+            row_tint_alpha(theme.is_dark),
+        ),
+        FileStatusKind::Deleted => (
+            theme.colors.status.danger.foreground,
+            row_tint_alpha(theme.is_dark),
+        ),
+        FileStatusKind::Renamed => (
+            theme.colors.accent.foreground,
+            row_tint_alpha(theme.is_dark),
+        ),
+        // Louder than the rest: a conflict is the one kind that blocks you.
+        FileStatusKind::Conflicted => (
+            theme.colors.status.danger.foreground,
+            if theme.is_dark {
+                CONFLICT_ROW_TINT_ALPHA_DARK
+            } else {
+                CONFLICT_ROW_TINT_ALPHA_LIGHT
+            },
+        ),
+    };
+    Some(with_alpha(color, alpha))
+}
+
+#[inline]
+fn row_tint_alpha(is_dark: bool) -> f32 {
+    if is_dark {
+        ROW_TINT_ALPHA_DARK
+    } else {
+        ROW_TINT_ALPHA_LIGHT
+    }
+}
+
+/// Fold a row tint into whatever background the row would otherwise wear, so a
+/// tinted row still answers hover, selection and press.
+#[inline]
+pub(in crate::view) fn tinted_row_bg(base: gpui::Rgba, tint: Option<gpui::Rgba>) -> gpui::Rgba {
+    tint.map_or(base, |tint| composite_over(base, tint))
+}
+
+/// Leading glyph for a file row: the file-type icon in its brand tint. A
+/// conflict keeps its warning glyph instead -- the row wash cannot say "this
+/// one needs your hands", and the file type is the least useful thing to know
+/// about a row you have to go fix.
+pub(in crate::view) fn file_row_icon(
+    path: &std::path::Path,
+    kind: FileStatusKind,
+    theme: &AppTheme,
+) -> (&'static str, gpui::Rgba) {
+    if kind == FileStatusKind::Conflicted {
+        return ("icons/warning.svg", theme.colors.status.danger.foreground);
+    }
+    let icon = crate::view::file_icons::file_icon_for_path(path);
+    let color = crate::view::file_icons::file_icon_color(icon, theme.is_dark)
+        .unwrap_or(theme.colors.foreground.secondary);
+    (icon, color)
+}
+
+/// Design size of the kind badge riding on a file row's type icon, and of the
+/// disc it sits on. The glyphs are drawn for a 16px box, so below ~10 the
+/// pencil turns to mush and the minus reads as nothing at all; the disc is what
+/// buys back the contrast the shrink costs.
+const FILE_ROW_BADGE_PX: f32 = 10.0;
+const FILE_ROW_BADGE_DISC_PX: f32 = 12.0;
+
+/// The change-kind glyph a file row wears on the corner of its type icon, or
+/// `None` for the two kinds that go bare.
+///
+/// Modified is the untouched default throughout -- no wash, and no badge
+/// either: the pencil is the badge you would see most and the one that reads
+/// worst at this size, and a list where almost every row wears it says nothing.
+/// A conflict's own glyph is already the warning triangle, so a second badge on
+/// top of it adds nothing.
+pub(in crate::view) fn file_row_kind_badge(
+    kind: FileStatusKind,
+    theme: &AppTheme,
+) -> Option<(&'static str, gpui::Rgba)> {
+    let visuals = commit_file_kind_visuals(kind);
+    match kind {
+        FileStatusKind::Modified | FileStatusKind::Conflicted => None,
+        _ => Some((visuals.icon, visuals.color(theme))),
+    }
+}
+
+/// A file row's leading icon slot: the file-type glyph, with the change kind
+/// badged on its top-right corner.
+pub(in crate::view) fn file_row_icon_slot(
+    icon: &'static str,
+    color: gpui::Rgba,
+    badge: Option<(&'static str, gpui::Rgba)>,
+    disc: FileRowBadgeDisc,
+    icon_px: f32,
+    slot_px: f32,
+    ui_scale_percent: u32,
+) -> gpui::Div {
+    let scaled = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+    div()
+        .w(scaled(slot_px))
+        .h(scaled(slot_px))
+        .flex_none()
+        // Anchors the badge; the row is `items_center`, so without it the badge
+        // would hang off the row box rather than the icon.
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(svg_icon(icon, color, scaled(icon_px)))
+        .when_some(badge, |slot, (badge_icon, badge_color)| {
+            slot.child(
+                div()
+                    .id("file_row_kind_badge")
+                    .absolute()
+                    // Out past the slot's corner: the type glyphs fill their
+                    // box, so a badge tucked inside would sit on top of one.
+                    .top(scaled(-3.0))
+                    .right(scaled(-4.0))
+                    .size(scaled(FILE_ROW_BADGE_DISC_PX))
+                    .rounded_full()
+                    .bg(disc.resting)
+                    .when_some(disc.hover, |badge, (group, hovered)| {
+                        badge.group_hover(group, |badge| badge.bg(hovered))
+                    })
+                    .when_some(disc.pressed, |badge, (group, pressed)| {
+                        badge.group_active(group, |badge| badge.bg(pressed))
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(svg_icon(badge_icon, badge_color, scaled(FILE_ROW_BADGE_PX))),
+            )
+        })
+}
+
+/// The fills the badge disc wears. It borrows the row's own background so the
+/// glyph reads against the type icon underneath -- which means it has to track
+/// the row through hover too, or a lit row shows a stale circle under the
+/// pointer.
+#[derive(Clone)]
+pub(in crate::view) struct FileRowBadgeDisc {
+    pub(in crate::view) resting: gpui::Rgba,
+    /// The row's hover group and the fill it takes inside it. `None` on lists
+    /// whose rows carry no group.
+    pub(in crate::view) hover: Option<(SharedString, gpui::Rgba)>,
+    pressed: Option<(SharedString, gpui::Rgba)>,
+}
+
+/// One state/color calculation for file rows and the opaque discs laid over
+/// their icons. Change-kind tints remain visible in every interaction state.
+pub(in crate::view) struct FileRowInteraction {
+    style: crate::kit::interaction::InteractionStyle,
+    state: crate::kit::interaction::InteractionState,
+    surface: gpui::Rgba,
+}
+
+impl FileRowInteraction {
+    pub(in crate::view) fn new(
+        theme: AppTheme,
+        tint: Option<gpui::Rgba>,
+        selected: bool,
+        open: bool,
+    ) -> Self {
+        let mut canvas = theme.colors.surface.canvas;
+        if canvas.alpha < 1.0 {
+            // Custom themes may have translucent canvases. The row and its icon
+            // mask need a shared opaque backing to flatten interaction fills.
+            let appearance = if theme.is_dark {
+                gpui::WindowAppearance::Dark
+            } else {
+                gpui::WindowAppearance::Light
+            };
+            let backing = AppTheme::default_for_window_appearance(appearance);
+            canvas = composite_over(backing.colors.surface.canvas, canvas);
+        }
+        let surface = tinted_row_bg(canvas, tint);
+        Self {
+            style: crate::kit::interaction::InteractionStyle::new(theme).on_surface(surface),
+            state: crate::kit::interaction::InteractionState::default()
+                .selected(
+                    selected,
+                    crate::theme::composite_over(
+                        surface,
+                        crate::theme::with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                    ),
+                )
+                .open(open),
+            surface,
+        }
+    }
+
+    pub(in crate::view) fn disabled(mut self, disabled: bool) -> Self {
+        self.state = self.state.disabled(disabled);
+        self
+    }
+
+    pub(in crate::view) fn badge_disc(&self, group: SharedString) -> FileRowBadgeDisc {
+        use crate::kit::interaction::InteractionFeedback;
+        FileRowBadgeDisc {
+            pressed: Some((
+                group.clone(),
+                self.style.resolved_background(
+                    self.surface,
+                    self.state,
+                    InteractionFeedback::Pressed,
+                ),
+            )),
+            resting: self.style.resolved_background(
+                self.surface,
+                self.state,
+                InteractionFeedback::Resting,
+            ),
+            hover: Some((
+                group.clone(),
+                self.style.resolved_background(
+                    self.surface,
+                    self.state,
+                    InteractionFeedback::Hovered,
+                ),
+            )),
+        }
+    }
+
+    pub(in crate::view) fn apply(
+        self,
+        row: gpui::Stateful<gpui::Div>,
+    ) -> gpui::Stateful<gpui::Div> {
+        self.style.apply(row, self.state)
+    }
+}
+
 #[inline]
 fn commit_file_visuals(file: &gitcomet_core::domain::CommitFileChange) -> CommitFileKindVisuals {
     let base = commit_file_kind_visuals(file.kind);
@@ -453,9 +1073,64 @@ mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
+pub(in crate::view) use diff::BlameLabelCache;
+
+/// A comparison/multi-selection card's per-commit strings, prepared once.
+pub(in crate::view) struct CommitCard {
+    pub(in crate::view) short_sha: gpui::SharedString,
+    pub(in crate::view) summary: gpui::SharedString,
+    pub(in crate::view) author: gpui::SharedString,
+    pub(in crate::view) unix_secs: Option<i64>,
+}
+
+impl CommitCard {
+    pub(in crate::view) fn new(commit: gitcomet_core::domain::Commit) -> Self {
+        let short_sha: gpui::SharedString = commit
+            .id
+            .as_ref()
+            .get(0..8)
+            .unwrap_or(commit.id.as_ref())
+            .to_string()
+            .into();
+        let unix_secs = commit
+            .time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Self {
+            short_sha,
+            summary: gpui::SharedString::from(std::sync::Arc::clone(&commit.summary)),
+            author: gpui::SharedString::from(std::sync::Arc::clone(&commit.author)),
+            unix_secs: Some(unix_secs),
+        }
+    }
+
+    pub(in crate::view) fn unloaded(id: &gitcomet_core::domain::CommitId) -> Self {
+        Self {
+            short_sha: id
+                .as_ref()
+                .get(..8)
+                .unwrap_or(id.as_ref())
+                .to_owned()
+                .into(),
+            summary: "Commit details not loaded".into(),
+            author: "".into(),
+            unix_secs: None,
+        }
+    }
+}
+
 mod diff_canvas;
+mod file_list;
+pub(in crate::view) use file_list::{
+    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListPlan,
+    FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row,
+    directory_row_detail_for_width, file_list_projection_key, file_list_projection_key_scoped,
+    file_row_indent_px,
+};
 mod diff_text;
 mod history;
+pub(in crate::view) use history::history_row_height;
 mod history_canvas;
 pub(in crate::view) mod history_graph_paint;
 mod markdown_document;
@@ -473,9 +1148,10 @@ pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 pub(in crate::view) use self::history::{
     MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
-    MarkdownPreviewRevealRequest, markdown_preview_alert_bar_color, markdown_preview_alert_label,
-    markdown_preview_flow_image, markdown_preview_highlighted_text, markdown_preview_image_source,
-    markdown_preview_inline_image, markdown_preview_marker_label, markdown_preview_reveal_offset_y,
+    MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
+    markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
+    markdown_preview_image_source, markdown_preview_inline_image, markdown_preview_marker_label,
+    markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
     markdown_preview_row_background, markdown_preview_row_extent,
     markdown_preview_styled_row_with_query, worktree_markdown_preview_bar_color,
 };
@@ -535,7 +1211,9 @@ pub(in crate::view) use self::diff_canvas::{
 };
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{
-    DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,
+    DiffPaintRecord, FocusedChangeBlockPaint, clear_diff_paint_log_for_tests,
+    clear_focused_change_block_paint_log_for_tests, diff_paint_log_for_tests,
+    focused_change_block_paint_log_for_tests,
 };
 
 #[cfg(test)]
@@ -548,8 +1226,242 @@ pub(in crate::view) use diff_text::{
 mod tests {
     use super::*;
     use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
+
+    /// The five bundled themes, so a tint invariant is proved against every
+    /// palette that ships rather than the default dark one alone.
+    fn bundled_themes() -> Vec<AppTheme> {
+        [
+            "gitcomet_dark",
+            "gitcomet_light",
+            "tokyo_night",
+            "amber_dark",
+            "sunset_veil",
+        ]
+        .into_iter()
+        .map(|key| AppTheme::from_key(key).unwrap_or_else(|| panic!("bundled theme `{key}`")))
+        .collect()
+    }
+
+    #[test]
+    fn file_row_icon_names_the_file_type() {
+        let theme = AppTheme::from_key("gitcomet_dark").expect("bundled theme");
+
+        let (icon, color) =
+            file_row_icon(Path::new("src/main.rs"), FileStatusKind::Modified, &theme);
+        assert_eq!(icon, "icons/file_icons/rust.svg");
+        assert_ne!(
+            color, theme.colors.foreground.secondary,
+            "a known type should carry its brand tint, not the neutral fallback",
+        );
+
+        // Same file, every non-conflict kind: the glyph is the type, not the change.
+        for kind in [
+            FileStatusKind::Untracked,
+            FileStatusKind::Added,
+            FileStatusKind::Deleted,
+            FileStatusKind::Renamed,
+        ] {
+            assert_eq!(
+                file_row_icon(Path::new("src/main.rs"), kind, &theme).0,
+                "icons/file_icons/rust.svg",
+            );
+        }
+
+        let (icon, _) = file_row_icon(Path::new("nope.wat-is-this"), FileStatusKind::Added, &theme);
+        assert_eq!(icon, "icons/file_icons/file.svg", "unknown types fall back");
+    }
+
+    #[test]
+    fn conflicts_keep_their_warning_glyph() {
+        let theme = AppTheme::from_key("gitcomet_dark").expect("bundled theme");
+        let (icon, color) =
+            file_row_icon(Path::new("src/main.rs"), FileStatusKind::Conflicted, &theme);
+
+        assert_eq!(icon, "icons/warning.svg");
+        assert_eq!(color, theme.colors.status.danger.foreground);
+    }
+
+    #[test]
+    fn only_added_deleted_and_renamed_wear_a_badge() {
+        let theme = AppTheme::from_key("gitcomet_dark").expect("bundled theme");
+
+        for bare in [FileStatusKind::Modified, FileStatusKind::Conflicted] {
+            assert_eq!(
+                file_row_kind_badge(bare, &theme),
+                None,
+                "{bare:?} goes bare: the pencil reads worst at badge size and a \
+                 conflict already shows a warning triangle",
+            );
+        }
+        for kind in [
+            FileStatusKind::Untracked,
+            FileStatusKind::Added,
+            FileStatusKind::Deleted,
+            FileStatusKind::Renamed,
+        ] {
+            let (icon, color) = file_row_kind_badge(kind, &theme).expect("badged kind");
+            let visuals = commit_file_kind_visuals(kind);
+            assert_eq!(icon, visuals.icon, "{kind:?} badge reuses the kind glyph");
+            assert_eq!(color, visuals.color(&theme));
+        }
+    }
+
+    /// The badge disc is punched out of the row, so its resting fill has to be
+    /// the row's resting fill and its hover fill the row's hover fill -- a disc
+    /// that does not move leaves a stale circle under the pointer.
+    #[test]
+    fn badge_disc_tracks_the_row_it_sits_on() {
+        for theme in bundled_themes() {
+            for kind in [FileStatusKind::Modified, FileStatusKind::Deleted] {
+                let tint = file_kind_row_tint(kind, &theme);
+                let resting = tinted_row_bg(theme.colors.surface.canvas, tint);
+                let hovered = tinted_row_bg(theme.colors.interaction.hover_background, tint);
+                assert_ne!(
+                    resting, hovered,
+                    "{kind:?} disc must have somewhere to move to",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_modified_rows_go_untinted() {
+        for theme in bundled_themes() {
+            assert_eq!(
+                file_kind_row_tint(FileStatusKind::Modified, &theme),
+                None,
+                "modified is the untinted default",
+            );
+            for kind in [
+                FileStatusKind::Untracked,
+                FileStatusKind::Added,
+                FileStatusKind::Deleted,
+                FileStatusKind::Renamed,
+                FileStatusKind::Conflicted,
+            ] {
+                assert!(
+                    file_kind_row_tint(kind, &theme).is_some(),
+                    "{kind:?} should be tinted",
+                );
+            }
+        }
+    }
+
+    /// The invariant the whole treatment rests on: `.bg()` replaces rather than
+    /// layers, so an opaque tint would flatten resting, hover and press into one
+    /// colour and the row would stop answering the mouse.
+    #[test]
+    fn every_tint_is_translucent_and_leaves_hover_visible() {
+        for theme in bundled_themes() {
+            for kind in [
+                FileStatusKind::Untracked,
+                FileStatusKind::Added,
+                FileStatusKind::Deleted,
+                FileStatusKind::Renamed,
+                FileStatusKind::Conflicted,
+            ] {
+                let tint = file_kind_row_tint(kind, &theme).expect("tinted kind");
+                assert!(tint.alpha < 1.0, "{kind:?} tint must stay translucent");
+
+                let resting = tinted_row_bg(theme.colors.surface.canvas, Some(tint));
+                let hovered = tinted_row_bg(theme.colors.interaction.hover_background, Some(tint));
+                let pressed =
+                    tinted_row_bg(theme.colors.interaction.pressed_background, Some(tint));
+
+                assert_ne!(resting, hovered, "{kind:?} row must still answer hover");
+                assert_ne!(hovered, pressed, "{kind:?} row must still answer press");
+                assert_ne!(
+                    resting, theme.colors.surface.canvas,
+                    "{kind:?} tint must actually shift the surface",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn file_row_interactions_support_translucent_canvases() {
+        use crate::kit::interaction::InteractionFeedback;
+
+        for base_theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            for alpha in [0.0, 0.5, 1.0] {
+                let mut theme = base_theme;
+                theme.colors.surface.canvas = gpui::Rgba::new(0.2, 0.4, 0.6, alpha);
+                let canvas = composite_over(
+                    base_theme.colors.surface.canvas,
+                    theme.colors.surface.canvas,
+                );
+                for kind in [FileStatusKind::Modified, FileStatusKind::Deleted] {
+                    let tint = file_kind_row_tint(kind, &theme);
+                    let surface = tinted_row_bg(canvas, tint);
+                    for (selected, open) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let interaction = FileRowInteraction::new(theme, tint, selected, open);
+                        let disc = interaction.badge_disc("row".into());
+                        for (feedback, actual) in [
+                            (InteractionFeedback::Resting, disc.resting),
+                            (InteractionFeedback::Hovered, disc.hover.unwrap().1),
+                            (InteractionFeedback::Pressed, disc.pressed.unwrap().1),
+                        ] {
+                            let overlay = if open {
+                                Some(theme.active_overlay())
+                            } else if selected {
+                                Some(with_alpha(
+                                    theme.colors.accent.foreground,
+                                    if theme.is_dark { 0.16 } else { 0.10 },
+                                ))
+                            } else {
+                                match feedback {
+                                    InteractionFeedback::Resting => None,
+                                    InteractionFeedback::Hovered => Some(theme.hover_overlay()),
+                                    InteractionFeedback::Pressed => Some(theme.active_overlay()),
+                                }
+                            };
+                            let expected =
+                                overlay.map_or(surface, |color| composite_over(surface, color));
+                            assert_eq!(actual.alpha, 1.0);
+                            for (actual, expected) in [
+                                (actual.red, expected.red),
+                                (actual.green, expected.green),
+                                (actual.blue, expected.blue),
+                            ] {
+                                assert!(
+                                    (actual - expected).abs() < 1e-6,
+                                    "alpha={alpha}, kind={kind:?}, selected={selected}, open={open}, feedback={feedback:?}"
+                                );
+                            }
+                        }
+                        // Both status and commit-file rows apply this same style.
+                        interaction.apply(div().id("translucent_file_row"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_row_badges_preserve_selection_and_tint_through_hover_and_press() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let tint = file_kind_row_tint(FileStatusKind::Deleted, &theme).expect("tinted kind");
+            let selected =
+                FileRowInteraction::new(theme, Some(tint), true, false).badge_disc("row".into());
+            let plain = FileRowInteraction::new(theme, None, true, false).badge_disc("row".into());
+            assert_eq!(selected.resting.alpha, 1.0);
+            assert_ne!(
+                selected.resting, plain.resting,
+                "change-kind tint survives selection"
+            );
+            assert_eq!(selected.resting, selected.hover.unwrap().1);
+            assert_eq!(selected.resting, selected.pressed.unwrap().1);
+            let open =
+                FileRowInteraction::new(theme, Some(tint), true, true).badge_disc("row".into());
+            assert_ne!(open.resting, selected.resting);
+            assert_eq!(open.resting, open.hover.unwrap().1);
+            assert_eq!(open.resting, open.pressed.unwrap().1);
+        }
+    }
 
     fn reset_line_number_string_cache() {
         LINE_NUMBER_STRINGS.with(|cache| {
@@ -760,6 +1672,216 @@ mod tests {
         );
     }
 
+    fn commit_file(
+        path: &str,
+        kind: FileStatusKind,
+        additions: Option<u32>,
+        deletions: Option<u32>,
+    ) -> CommitFileChange {
+        CommitFileChange {
+            path: PathBuf::from(path),
+            kind,
+            is_submodule: false,
+            additions,
+            deletions,
+        }
+    }
+
+    #[test]
+    fn commit_file_projection_counts_the_whole_commit_and_filters_by_kind() {
+        let files = vec![
+            commit_file("modified.rs", FileStatusKind::Modified, Some(1), Some(2)),
+            commit_file("conflicted.rs", FileStatusKind::Conflicted, None, None),
+            commit_file("removed.rs", FileStatusKind::Deleted, Some(0), Some(3)),
+            commit_file("added.rs", FileStatusKind::Added, Some(4), Some(0)),
+            commit_file("untracked.rs", FileStatusKind::Untracked, None, None),
+            commit_file("renamed.rs", FileStatusKind::Renamed, Some(0), Some(0)),
+        ];
+
+        let projection = build_commit_file_projection(
+            &files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::Modified,
+        );
+
+        assert_eq!(projection.source_indices.as_ref(), &[1, 0]);
+        assert_eq!(
+            projection.counts,
+            CommitFileKindCounts {
+                all: 6,
+                modified: 2,
+                removed: 1,
+                added: 2,
+                renamed: 1,
+            }
+        );
+        assert_eq!(
+            CommitFileFilter::ALL.map(|filter| projection.counts.for_filter(filter)),
+            [6, 2, 1, 2, 1]
+        );
+        assert_eq!(
+            CommitFileFilter::ALL.map(CommitFileFilter::label),
+            ["All", "Modified", "Deleted", "Added", "Renamed"]
+        );
+        assert_eq!(
+            CommitFileFilter::Removed.tooltip_in("this commit", 1),
+            "Show files deleted by this commit (1)"
+        );
+        assert_eq!(
+            CommitFileFilter::Removed.tooltip_in("this worktree", 2),
+            "Show files deleted by this worktree (2)"
+        );
+    }
+
+    #[test]
+    fn commit_file_projection_sorts_paths_case_insensitively_with_stable_ties() {
+        let files = vec![
+            commit_file("src/zeta.rs", FileStatusKind::Modified, None, None),
+            commit_file("src/Alpha.rs", FileStatusKind::Modified, None, None),
+            commit_file("src/alpha.rs", FileStatusKind::Modified, None, None),
+            commit_file("src/Alpha.rs", FileStatusKind::Modified, None, None),
+        ];
+
+        let ascending = build_commit_file_projection(
+            &files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+        );
+        let descending = build_commit_file_projection(
+            &files,
+            CommitFileSort::PathDescending,
+            CommitFileFilter::All,
+        );
+
+        assert_eq!(ascending.source_indices.as_ref(), &[1, 3, 2, 0]);
+        assert_eq!(descending.source_indices.as_ref(), &[0, 2, 3, 1]);
+    }
+
+    #[test]
+    fn commit_file_projection_sorts_edit_size_with_unknown_stats_last() {
+        let files = vec![
+            commit_file("z-large.rs", FileStatusKind::Modified, Some(7), Some(3)),
+            commit_file("b-small.rs", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("unknown.rs", FileStatusKind::Modified, None, None),
+            commit_file("a-small.rs", FileStatusKind::Modified, Some(0), Some(2)),
+        ];
+
+        let ascending = build_commit_file_projection(
+            &files,
+            CommitFileSort::EditSizeAscending,
+            CommitFileFilter::All,
+        );
+        let descending = build_commit_file_projection(
+            &files,
+            CommitFileSort::EditSizeDescending,
+            CommitFileFilter::All,
+        );
+
+        assert_eq!(ascending.source_indices.as_ref(), &[3, 1, 0, 2]);
+        assert_eq!(descending.source_indices.as_ref(), &[0, 3, 1, 2]);
+    }
+
+    #[test]
+    fn file_type_sort_groups_by_extension_then_path() {
+        let files = vec![
+            commit_file("src/ui/view.ts", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("Makefile", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("src/main.rs", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("Cargo.toml", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("src/ui/app.ts", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file(
+                "src/core/lib.RS",
+                FileStatusKind::Modified,
+                Some(1),
+                Some(1),
+            ),
+        ];
+
+        let ascending = build_commit_file_projection(
+            &files,
+            CommitFileSort::FileTypeAscending,
+            CommitFileFilter::All,
+        );
+
+        // "" (Makefile) < rs < toml < ts, and `.RS` groups with `.rs`.
+        assert_eq!(ascending.source_indices.as_ref(), &[1, 5, 2, 3, 4, 0]);
+    }
+
+    #[test]
+    fn file_type_descending_flips_the_groups_but_not_the_paths_inside_them() {
+        let files = vec![
+            commit_file("b.rs", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("a.ts", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("a.rs", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("b.ts", FileStatusKind::Modified, Some(1), Some(1)),
+        ];
+
+        let descending = build_commit_file_projection(
+            &files,
+            CommitFileSort::FileTypeDescending,
+            CommitFileFilter::All,
+        );
+
+        // ts before rs, but a.* before b.* within each -- reading a group is
+        // still alphabetical, only the group order reverses.
+        assert_eq!(descending.source_indices.as_ref(), &[1, 3, 2, 0]);
+    }
+
+    /// The direction word is the same across options; only the noun changes.
+    #[test]
+    fn sort_labels_name_what_is_ordered_and_which_way() {
+        assert_eq!(CommitFileSort::PathAscending.label(), "Path: Ascending");
+        assert_eq!(CommitFileSort::PathDescending.label(), "Path: Descending");
+        assert_eq!(
+            CommitFileSort::FileTypeAscending.label(),
+            "File type: Ascending"
+        );
+        assert_eq!(
+            CommitFileSort::FileTypeDescending.label(),
+            "File type: Descending"
+        );
+
+        for sort in CommitFileSort::ALL {
+            assert!(
+                !sort.label().contains('–'),
+                "{sort:?} still reads as an A–Z range",
+            );
+        }
+    }
+
+    #[test]
+    fn commit_file_projection_cache_reuses_a_key_and_invalidates_on_change() {
+        let files = vec![commit_file(
+            "src/lib.rs",
+            FileStatusKind::Modified,
+            Some(1),
+            Some(2),
+        )];
+        let mut cache = CommitFileProjectionCache::<u64>::default();
+
+        let first = cache.projection_for(
+            &1,
+            &files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+        );
+        let reused = cache.projection_for(
+            &1,
+            &[],
+            CommitFileSort::PathDescending,
+            CommitFileFilter::Removed,
+        );
+        let replacement = cache.projection_for(
+            &2,
+            &files,
+            CommitFileSort::PathDescending,
+            CommitFileFilter::All,
+        );
+
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert!(!Arc::ptr_eq(&first, &replacement));
+    }
+
     /// A linked worktree's file list contains untracked files, which commit and
     /// range lists never do. The table slot for them used to hold a
     /// "shouldn't happen" question mark, which is what those rows rendered.
@@ -895,17 +2017,20 @@ mod tests {
     fn conflict_row_geometry_scales_with_ui_scale() {
         for percent in [80, 100, 150, 200] {
             let factor = percent as f32 / 100.0;
-            let height: f32 = conflict_row_height(percent).into();
+            let height: f32 = AppTheme::gitcomet_dark().editor_row_height(percent).into();
             let line_no: f32 = conflict_line_no_width(percent).into();
+            let base = crate::appearance::Appearance::default().editor_line_height();
             assert!(
-                (height - CONFLICT_ROW_HEIGHT_PX * factor).abs() < 0.01,
+                (height - base * factor).abs() < 0.01,
                 "row height at {percent}% should be {}, got {height}",
-                CONFLICT_ROW_HEIGHT_PX * factor,
+                base * factor,
             );
+            // Also measured at the editor font, so anchor it at 100%.
+            let line_no_base: f32 = conflict_line_no_width(100).into();
             assert!(
-                (line_no - CONFLICT_DIFF_LINE_NO_WIDTH_PX * factor).abs() < 0.01,
+                (line_no - line_no_base * factor).abs() < 0.01,
                 "line-number width at {percent}% should be {}, got {line_no}",
-                CONFLICT_DIFF_LINE_NO_WIDTH_PX * factor,
+                line_no_base * factor,
             );
         }
 
@@ -913,7 +2038,7 @@ mod tests {
         // onto the same geometry.
         let heights = crate::ui_scale::UI_SCALE_PRESETS
             .iter()
-            .map(|percent| f32::from(conflict_row_height(*percent)))
+            .map(|percent| f32::from(AppTheme::gitcomet_dark().editor_row_height(*percent)))
             .collect::<Vec<_>>();
         assert!(
             heights.windows(2).all(|pair| pair[0] < pair[1]),
@@ -928,8 +2053,8 @@ mod tests {
     fn conflict_row_height_matches_the_diff_row_height() {
         for percent in crate::ui_scale::UI_SCALE_PRESETS.iter().copied() {
             assert_eq!(
-                conflict_row_height(percent),
-                crate::view::panes::main::diff_row_height_for_ui_scale(percent),
+                AppTheme::gitcomet_dark().editor_row_height(percent),
+                AppTheme::gitcomet_dark().editor_row_height(percent),
                 "conflict and diff rows disagree at {percent}%"
             );
         }

@@ -2,7 +2,7 @@ use super::*;
 
 #[gpui::test]
 fn add_repo_menu_keyboard_navigation_opens_clone_prompt(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

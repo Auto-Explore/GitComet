@@ -1,8 +1,16 @@
 use super::*;
 
+impl Drop for SettingsWindowView {
+    fn drop(&mut self) {
+        self.signing_tools_cancellation.cancel();
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SettingsRuntimeInfo {
     pub(super) git: GitRuntimeInfo,
+    /// `None` until the background probe finishes.
+    pub(super) signing_tools: Option<SigningToolsState>,
     pub(super) app_version_display: SharedString,
     pub(super) operating_system: SharedString,
 }
@@ -21,6 +29,7 @@ pub(super) enum GitCompatibility {
     TooOld,
     Unknown,
     Unavailable,
+    Checking,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,9 +83,14 @@ impl SettingsWindowView {
             }
         }
 
+        let signing_tools = self.runtime_info.signing_tools.take();
         self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime.clone());
+        self.runtime_info.signing_tools = signing_tools;
+        // A different Git resolves gpg and ssh-keygen with a different PATH.
+        self.cancel_signing_tools_probe();
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, _cx| {
+            view.cancel_signing_tools_probe();
             view.store
                 .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
         });
@@ -84,8 +98,9 @@ impl SettingsWindowView {
     }
 
     pub(super) fn apply_git_executable_settings(&mut self, cx: &mut gpui::Context<Self>) {
-        let runtime = install_git_executable_path(self.selected_git_executable_path());
+        let runtime = select_git_executable_path(self.selected_git_executable_path());
         self.sync_git_runtime_state(runtime, cx);
+        super::super::runtime_probe::request(cx, true);
     }
 
     pub(super) fn set_git_executable_mode(
@@ -102,14 +117,60 @@ impl SettingsWindowView {
     }
 }
 
+impl SettingsWindowView {
+    pub(in crate::view) fn apply_probed_runtime(
+        &mut self,
+        runtime: GitRuntimeState,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime);
+        self.refresh_signing_tools(cx);
+        cx.notify();
+    }
+
+    pub(super) fn cancel_signing_tools_probe(&mut self) {
+        self.signing_tools_cancellation.cancel();
+        self.signing_tools_probe = None;
+        self.runtime_info.signing_tools = Some(SigningToolsState::default());
+    }
+
+    pub(super) fn refresh_signing_tools(&mut self, cx: &mut gpui::Context<Self>) {
+        self.cancel_signing_tools_probe();
+        if cfg!(test)
+            || !self.history_verify_commit_signatures
+            || !current_git_runtime().is_available()
+        {
+            return;
+        }
+        self.signing_tools_cancellation = Default::default();
+        let cancellation = self.signing_tools_cancellation.clone();
+        let runtime = current_git_runtime();
+        self.runtime_info.signing_tools = None;
+        let detection = cx.background_spawn(async move {
+            gitcomet_core::signing_tools::detect_signing_tools_cancellable(&cancellation)
+        });
+        self.signing_tools_probe = Some(cx.spawn(async move |view, cx| {
+            let tools = detection.await;
+            let _ = view.update(cx, |this, cx| {
+                if !this.history_verify_commit_signatures || current_git_runtime() != runtime {
+                    return;
+                }
+                this.runtime_info.signing_tools = Some(tools);
+                cx.notify();
+            });
+        }));
+    }
+}
+
 impl SettingsRuntimeInfo {
     pub(super) fn detect() -> Self {
-        Self::from_runtime(refresh_git_runtime())
+        Self::from_runtime(current_git_runtime())
     }
 
     pub(super) fn from_runtime(runtime: GitRuntimeState) -> Self {
         Self {
             git: git_runtime_info_from_state(runtime),
+            signing_tools: Some(SigningToolsState::default()),
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
                 "{} ({})",
@@ -136,7 +197,12 @@ pub(super) fn os_display_name(os: &str) -> &str {
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
     let compatibility_message =
         format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
-    let compatibility = if !runtime.is_available() {
+    let compatibility = if matches!(
+        runtime.availability,
+        gitcomet_core::process::GitExecutableAvailability::Checking
+    ) {
+        GitCompatibility::Checking
+    } else if !runtime.is_available() {
         GitCompatibility::Unavailable
     } else {
         match runtime.version_output().and_then(parse_git_version) {
@@ -148,12 +214,16 @@ pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntim
 
     let version_display = runtime
         .version_output()
-        .unwrap_or("Unavailable")
+        .unwrap_or(if compatibility == GitCompatibility::Checking {
+            "Checking..."
+        } else {
+            "Unavailable"
+        })
         .to_string()
         .into();
 
     let detail = match compatibility {
-        GitCompatibility::Supported => None,
+        GitCompatibility::Supported | GitCompatibility::Checking => None,
         GitCompatibility::TooOld | GitCompatibility::Unknown => Some(compatibility_message.into()),
         GitCompatibility::Unavailable => runtime
             .unavailable_detail()
@@ -193,4 +263,88 @@ pub(super) fn parse_u32_prefix(part: &str) -> Option<u32> {
 pub(super) fn is_supported_git_version(version: GitVersion) -> bool {
     version.major > MIN_GIT_MAJOR
         || (version.major == MIN_GIT_MAJOR && version.minor >= MIN_GIT_MINOR)
+}
+
+pub(super) const GPG_DESCRIPTION: &str =
+    "Verifies GPG and X.509 commit signatures, such as commits made on GitHub.";
+pub(super) const SSH_KEYGEN_DESCRIPTION: &str = "Verifies SSH commit signatures.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SigningToolStatus {
+    Detecting,
+    NotChecked,
+    Found,
+    NotFound,
+    Unknown,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SigningToolInfo {
+    pub(super) status: SigningToolStatus,
+    pub(super) version_display: SharedString,
+    pub(super) detail: Option<SharedString>,
+}
+
+pub(super) fn gpg_info(tools: Option<&SigningToolsState>) -> SigningToolInfo {
+    signing_tool_info(
+        tools.map(|tools| &tools.gpg),
+        DEFAULT_GPG_PROGRAM,
+        "gpg.program",
+        "GPG and X.509 commit signatures",
+    )
+}
+
+pub(super) fn ssh_keygen_info(tools: Option<&SigningToolsState>) -> SigningToolInfo {
+    signing_tool_info(
+        tools.map(|tools| &tools.ssh_keygen),
+        DEFAULT_SSH_KEYGEN_PROGRAM,
+        "gpg.ssh.program",
+        "SSH commit signatures",
+    )
+}
+
+fn signing_tool_info(
+    tool: Option<&SigningTool>,
+    default_program: &str,
+    config_key: &str,
+    signatures: &str,
+) -> SigningToolInfo {
+    let Some(tool) = tool else {
+        return SigningToolInfo {
+            status: SigningToolStatus::Detecting,
+            version_display: SharedString::default(),
+            detail: None,
+        };
+    };
+    let program = tool.program.as_str();
+    match &tool.availability {
+        SigningToolAvailability::NotChecked => SigningToolInfo {
+            status: SigningToolStatus::NotChecked, version_display: "Not checked".into(),
+            detail: Some("Enable commit signature verification in History settings to check signing tools.".into()),
+        },
+        SigningToolAvailability::Available { version } => SigningToolInfo {
+            status: SigningToolStatus::Found,
+            version_display: version.as_deref().unwrap_or(program).to_string().into(),
+            detail: (!tool.is_default_program(default_program))
+                .then(|| format!("Configured with `{config_key}`: {program}").into()),
+        },
+        SigningToolAvailability::NotFound { detail } => SigningToolInfo {
+            status: SigningToolStatus::NotFound,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!(
+                    "{detail} {signatures} are not verified. Install it, or set `{config_key}` to its full path."
+                )
+                .into(),
+            ),
+        },
+        SigningToolAvailability::Unknown => SigningToolInfo {
+            status: SigningToolStatus::Unknown,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!("Could not check `{program}`. Git still tries to verify {signatures}.")
+                    .into(),
+            ),
+        },
+    }
 }

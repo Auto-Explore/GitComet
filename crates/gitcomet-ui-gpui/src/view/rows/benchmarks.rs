@@ -101,3 +101,5 @@ pub use crate::view::perf::{FrameTimingCapture, FrameTimingStats};
 
 #[cfg(test)]
 mod tests;
+
+pub use crate::view::panes::history::indexed_graph::IndexedHistoryFixture;

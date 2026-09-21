@@ -10,7 +10,7 @@ use super::GixRepo;
 
 impl GixRepo {
     pub(super) fn list_worktree_files_impl(&self) -> Result<Vec<FileEntry>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let index = repo
             .index_or_empty()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
@@ -48,7 +48,7 @@ impl GixRepo {
         &self,
         commit_id: &CommitId,
     ) -> Result<Vec<FileEntry>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let oid = gix::ObjectId::from_hex(commit_id.0.as_bytes())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("invalid commit id: {e}"))))?;
         let commit = repo
@@ -106,6 +106,7 @@ struct WorktreeDir {
 /// or expansion state and reveal-by-path stop matching when switching between the
 /// live tree and a commit's tree.
 fn flatten_worktree_paths(paths: Vec<(String, bool)>) -> Vec<FileEntry> {
+    let path_count = paths.len();
     let mut root = WorktreeDir::default();
 
     for (path, is_directory) in paths {
@@ -120,14 +121,14 @@ fn flatten_worktree_paths(paths: Vec<(String, bool)>) -> Vec<FileEntry> {
         }
     }
 
-    let mut out = Vec::new();
-    flatten_worktree_dir(&root, String::new(), 0, &mut out);
+    let mut out = Vec::with_capacity(path_count);
+    flatten_worktree_dir(&root, "", 0, &mut out);
     out
 }
 
 fn flatten_worktree_dir(
     dir: &WorktreeDir,
-    parent_path: String,
+    parent_path: &str,
     depth: usize,
     out: &mut Vec<FileEntry>,
 ) {
@@ -140,14 +141,22 @@ fn flatten_worktree_dir(
     };
 
     for (name, child) in &dir.dirs {
+        // `PathBuf::from(String)` reuses the buffer: one allocation per entry
+        // for the Arc rather than String + PathBuf + Arc.
         let path = join(name);
+        let child_path = Arc::new(PathBuf::from(path));
         out.push(FileEntry {
             name: name.clone(),
-            path: Arc::new(PathBuf::from(&path)),
+            path: Arc::clone(&child_path),
             kind: FileEntryKind::Directory,
             depth,
         });
-        flatten_worktree_dir(child, path, depth + 1, out);
+        flatten_worktree_dir(
+            child,
+            child_path.to_str().unwrap_or_default(),
+            depth + 1,
+            out,
+        );
     }
 
     for name in &dir.files {
@@ -172,18 +181,19 @@ fn list_tree_files_at_oid(
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel_to_tree: {e}"))))?;
 
     let mut entries = Vec::new();
-    collect_tree_entries(repo, &tree, String::new(), &mut entries, 0)?;
+    collect_tree_entries(repo, &tree, "", &mut entries, 0)?;
     Ok(entries)
 }
 
 fn collect_tree_entries(
     repo: &gix::Repository,
     tree: &gix::Tree<'_>,
-    parent_path: String,
+    parent_path: &str,
     out: &mut Vec<FileEntry>,
     depth: usize,
 ) -> Result<()> {
-    let mut child_entries: Vec<(String, gix::objs::tree::EntryMode, gix::ObjectId)> = Vec::new();
+    let mut child_entries: Vec<(String, gix::objs::tree::EntryMode, gix::ObjectId)> =
+        Vec::with_capacity(tree.iter().count());
 
     for entry in tree.iter() {
         let entry =
@@ -194,7 +204,7 @@ fn collect_tree_entries(
         child_entries.push((name, mode, oid));
     }
 
-    child_entries.sort_by(|(a_name, a_mode, _), (b_name, b_mode, _)| {
+    child_entries.sort_unstable_by(|(a_name, a_mode, _), (b_name, b_mode, _)| {
         let a_is_dir = a_mode.is_tree();
         let b_is_dir = b_mode.is_tree();
         match (a_is_dir, b_is_dir) {
@@ -212,9 +222,10 @@ fn collect_tree_entries(
         };
 
         if mode.is_tree() {
+            let child_path = Arc::new(PathBuf::from(path));
             out.push(FileEntry {
                 name,
-                path: Arc::new(PathBuf::from(&path)),
+                path: Arc::clone(&child_path),
                 kind: FileEntryKind::Directory,
                 depth,
             });
@@ -225,11 +236,17 @@ fn collect_tree_entries(
             let child_tree = child_object
                 .peel_to_tree()
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel_to_tree: {e}"))))?;
-            collect_tree_entries(repo, &child_tree, path, out, depth + 1)?;
+            collect_tree_entries(
+                repo,
+                &child_tree,
+                child_path.to_str().unwrap_or_default(),
+                out,
+                depth + 1,
+            )?;
         } else if mode.is_blob() || mode.is_link() {
             out.push(FileEntry {
                 name,
-                path: Arc::new(PathBuf::from(&path)),
+                path: Arc::new(PathBuf::from(path)),
                 kind: FileEntryKind::File,
                 depth,
             });

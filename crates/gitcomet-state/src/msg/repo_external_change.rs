@@ -4,6 +4,9 @@ pub struct RepoExternalChange {
     pub index: bool,
     pub git_state: bool,
     pub tags: bool,
+    /// Configuration/watch-policy inputs changed. A routine full refresh does
+    /// not imply a changed verification context.
+    pub verification_context: bool,
 }
 
 impl RepoExternalChange {
@@ -22,6 +25,7 @@ impl RepoExternalChange {
             index: false,
             git_state: false,
             tags: false,
+            verification_context: false,
         }
     }
 
@@ -31,6 +35,7 @@ impl RepoExternalChange {
             index: true,
             git_state: false,
             tags: false,
+            verification_context: false,
         }
     }
 
@@ -40,6 +45,7 @@ impl RepoExternalChange {
             index: false,
             git_state: true,
             tags: false,
+            verification_context: false,
         }
     }
 
@@ -49,10 +55,11 @@ impl RepoExternalChange {
             index: true,
             git_state: true,
             tags: true,
+            verification_context: false,
         }
     }
 
     pub const fn is_empty(self) -> bool {
-        !self.worktree && !self.index && !self.git_state && !self.tags
+        !self.worktree && !self.index && !self.git_state && !self.tags && !self.verification_context
     }
 }

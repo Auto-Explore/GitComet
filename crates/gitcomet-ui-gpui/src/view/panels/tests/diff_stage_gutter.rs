@@ -1,7 +1,8 @@
 use super::*;
 
-use super::shortcuts::{app_state_with_active_repo, apply_state, wait_until};
+use super::shortcuts::{app_state_with_active_repo, apply_state};
 use crate::view::rows::{DiffStageHover, DiffStageSlot};
+use crate::view::test_support::{drain_store_worker, repo_ops_rev};
 use gitcomet_core::domain::DiffLineKind;
 
 const STAGE_GUTTER_PATH: &str = "src/lib.rs";
@@ -93,7 +94,7 @@ fn open_stage_gutter_view(
     gpui::Entity<super::super::GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -504,6 +505,7 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     draw_and_drain_test_window(cx);
 
     let (_, cell) = stage_gutter_cell(cx, &view, "+new one", DiffStageSlot::Inline);
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, RepoId(70910));
     simulate_counted_click(cx, cell.center(), 1);
     draw_and_drain_test_window(cx);
 
@@ -513,17 +515,13 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
         "clicking the gutter button must not move the diff row selection"
     );
 
-    // The reducer marks a local action in flight as soon as it accepts the patch
+    // The reducer bumps the repo's ops revision as soon as it accepts the patch
     // message, which is as far as this backend-less harness can follow it.
-    wait_until(cx, "the store to accept the staging command", |cx| {
-        cx.update(|_window, app| {
-            let snapshot = view.read(app).store.snapshot();
-            snapshot
-                .repos
-                .first()
-                .is_some_and(|repo| repo.local_actions_in_flight > 0)
-        })
-    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, RepoId(70910)) > ops_rev_before,
+        "the store must accept the staging command"
+    );
 }
 
 #[gpui::test]
@@ -626,4 +624,55 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
         Some(sentinel),
         "a release that belongs to the gutter button must not select a row"
     );
+}
+
+#[gpui::test]
+fn stage_gutter_cancels_presses_released_on_another_button(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+            let (view, cx) = open_stage_gutter_view(cx, worktree_target(area), mode);
+            let slot = if mode == DiffViewMode::Inline {
+                DiffStageSlot::Inline
+            } else {
+                DiffStageSlot::SplitRight
+            };
+            let (_, first) = stage_gutter_cell(cx, &view, "+new one", slot);
+            let (_, second) = stage_gutter_cell(cx, &view, "+new two", slot);
+            // This backend can finish an action before the next snapshot. Check
+            // the persistent revision after draining the worker, so even a
+            // completed accidental action fails the cancellation assertions.
+            let repo_id = RepoId(70910);
+            drain_store_worker(&view, cx);
+            let ops_rev_before = repo_ops_rev(&view, cx, repo_id);
+            cx.simulate_mouse_down(first.center(), MouseButton::Left, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            drain_store_worker(&view, cx);
+            assert_eq!(
+                repo_ops_rev(&view, cx, repo_id),
+                ops_rev_before,
+                "pressing a gutter must not stage yet ({area:?}, {mode:?})"
+            );
+            cx.simulate_mouse_move(
+                second.center(),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            cx.simulate_mouse_up(second.center(), MouseButton::Left, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            drain_store_worker(&view, cx);
+            assert_eq!(
+                repo_ops_rev(&view, cx, repo_id),
+                ops_rev_before,
+                "releasing on another gutter must activate neither ({area:?}, {mode:?})"
+            );
+            simulate_counted_click(cx, second.center(), 1);
+            draw_and_drain_test_window(cx);
+            drain_store_worker(&view, cx);
+            assert!(
+                repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+                "a completed gutter click must dispatch an action ({area:?}, {mode:?})"
+            );
+        }
+    }
 }

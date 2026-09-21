@@ -1183,6 +1183,7 @@ impl SidebarResizeDragSustainedFixture {
 pub struct RapidCommitSelectionFixture {
     commits: Vec<CommitDetails>,
     prewarmed_file_rows: CommitFileRowPresentationCache<CommitId>,
+    prewarmed_file_projection: CommitFileProjectionCache<CommitId>,
     frame_budget_ns: u64,
 }
 
@@ -1205,13 +1206,21 @@ impl RapidCommitSelectionFixture {
             })
             .collect();
         let mut prewarmed_file_rows = CommitFileRowPresentationCache::default();
+        let mut prewarmed_file_projection = CommitFileProjectionCache::default();
         if let Some(first) = commits.first() {
             let _ = prewarmed_file_rows.rows_for(&first.id, &first.files);
+            let _ = prewarmed_file_projection.projection_for(
+                &first.id,
+                &first.files,
+                CommitFileSort::PathAscending,
+                CommitFileFilter::All,
+            );
         }
 
         Self {
             commits,
             prewarmed_file_rows,
+            prewarmed_file_projection,
             frame_budget_ns: frame_budget_ns.max(1),
         }
     }
@@ -1240,6 +1249,7 @@ impl RapidCommitSelectionFixture {
         let mut hash = 0u64;
         let count = self.commits.len();
         let mut file_rows = self.prewarmed_file_rows.clone();
+        let mut file_projection = self.prewarmed_file_projection.clone();
 
         // Start from an already-rendered first commit, then cycle through the
         // remaining selections. This mirrors the warm replacement path the
@@ -1248,10 +1258,20 @@ impl RapidCommitSelectionFixture {
             let current = &self.commits[(ix + 1) % count];
             if let Some(capture) = capture.as_deref_mut() {
                 let frame_started = std::time::Instant::now();
-                hash ^= commit_details_cached_row_hash(current, None, &mut file_rows);
+                hash ^= commit_details_cached_row_hash(
+                    current,
+                    None,
+                    &mut file_rows,
+                    &mut file_projection,
+                );
                 capture.record_frame(frame_started.elapsed());
             } else {
-                hash ^= commit_details_cached_row_hash(current, None, &mut file_rows);
+                hash ^= commit_details_cached_row_hash(
+                    current,
+                    None,
+                    &mut file_rows,
+                    &mut file_projection,
+                );
             }
         }
 

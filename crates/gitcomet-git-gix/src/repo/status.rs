@@ -14,6 +14,8 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+mod worker_limit;
+
 impl GixRepo {
     fn may_have_gitlink_status_supplement(
         &self,
@@ -72,7 +74,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         cancellation.check_cancelled()?;
@@ -103,14 +105,19 @@ impl GixRepo {
             // Fast path: HEAD and index unchanged — skip Tree→Index comparison and
             // collect Index→Worktree changes directly without the generic iterator's
             // extra thread/channel hop.
-            let direct =
-                collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+            let direct = collect_index_worktree_status_direct(
+                &repo,
+                &mut unstaged,
+                may_have_gitlinks,
+                cancellation,
+            )?;
             cancellation.check_cancelled()?;
             has_conflicted_unstaged = direct.has_conflicted_unstaged;
             (cached_staged, direct.index_stamp_after_write)
         } else {
             // Full path: run both Tree→Index and Index→Worktree comparisons.
             cancellation.check_cancelled()?;
+            let thread_limit = worker_limit::for_repo(&repo, cancellation)?;
             let platform = repo
                 .status(gix::progress::Discard)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status platform: {e}"))))?
@@ -118,6 +125,9 @@ impl GixRepo {
                 // `git status` parity, so skip gix's default submodule probing on the
                 // common no-submodule path.
                 .index_worktree_submodules(None)
+                .index_worktree_options_mut(|options| {
+                    options.thread_limit = thread_limit;
+                })
                 .untracked_files(gix::status::UntrackedFiles::Files);
             let mut staged = Vec::new();
             let mut iter = platform
@@ -195,11 +205,16 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+        let direct = collect_index_worktree_status_direct(
+            &repo,
+            &mut unstaged,
+            may_have_gitlinks,
+            cancellation,
+        )?;
         cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
@@ -232,7 +247,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
         let index_stamp = repo_index_stamp(&repo);
         cancellation.check_cancelled()?;
@@ -244,7 +259,7 @@ impl GixRepo {
         let Some(head_oid) = head_oid else {
             return self
                 .status_cancellable_impl(cancellation)
-                .map(|status| status.staged);
+                .map(|status| std::sync::Arc::unwrap_or_clone(status.staged));
         };
 
         // `tree_index_status()` diffs a tree against the index, so resolve HEAD to HEAD^{tree}
@@ -279,13 +294,13 @@ impl GixRepo {
     ///
     /// Conflicted paths are excluded, as they are from `staged_status_impl`.
     pub(super) fn staged_index_paths_impl(&self) -> Result<Vec<PathBuf>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let Some(head_oid) = super::history::gix_head_id_or_none(&repo)? else {
             return Ok(self
                 .status_impl()?
                 .staged
-                .into_iter()
-                .map(|entry| entry.path)
+                .iter()
+                .map(|entry| entry.path.clone())
                 .collect());
         };
 
@@ -310,10 +325,11 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Option<UpstreamDivergence>> {
         cancellation.check_cancelled()?;
+        // A fresh open so upstream config written since this repo was opened
+        // (`branch.<name>.remote`/`merge`) is honoured; the walk itself is
+        // memoized by tip pair, which is where the time went.
         let repo = self.reopen_repo()?;
-        let divergence = head_upstream_divergence(&repo)?;
-        cancellation.check_cancelled()?;
-        Ok(divergence)
+        head_upstream_divergence(&repo, &self.divergence_cache, Some(cancellation))
     }
 
     fn cached_staged_status(
@@ -388,7 +404,10 @@ fn finalize_status(
             .map(|entry| entry.path.clone()),
     );
 
-    Ok(RepoStatus { staged, unstaged })
+    Ok(RepoStatus {
+        staged: std::sync::Arc::new(staged),
+        unstaged: std::sync::Arc::new(unstaged),
+    })
 }
 
 fn apply_unmerged_conflicts(repo: &gix::Repository, unstaged: &mut Vec<FileStatus>) -> Result<()> {
@@ -407,7 +426,10 @@ fn apply_unmerged_conflicts(repo: &gix::Repository, unstaged: &mut Vec<FileStatu
     Ok(())
 }
 
-fn tree_id_for_commit(repo: &gix::Repository, commit_id: &gix::ObjectId) -> Result<gix::ObjectId> {
+pub(super) fn tree_id_for_commit(
+    repo: &gix::Repository,
+    commit_id: &gix::ObjectId,
+) -> Result<gix::ObjectId> {
     repo.find_commit(*commit_id)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit lookup: {e}"))))?
         .tree_id()
@@ -743,11 +765,18 @@ fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
+    cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
-    collect_index_worktree_status_direct_from_index(repo, &index, unstaged, may_have_gitlinks)
+    collect_index_worktree_status_direct_from_index(
+        repo,
+        &index,
+        unstaged,
+        may_have_gitlinks,
+        cancellation,
+    )
 }
 
 fn collect_index_worktree_status_direct_from_index(
@@ -755,6 +784,7 @@ fn collect_index_worktree_status_direct_from_index(
     index: &gix::worktree::Index,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
+    cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let dirwalk_options = repo
         .dirwalk_options()
@@ -779,6 +809,7 @@ fn collect_index_worktree_status_direct_from_index(
             dirwalk_options,
             unstaged,
             submodule,
+            cancellation,
         )?
     } else {
         collect_index_worktree_status_direct_with_submodule(
@@ -787,6 +818,7 @@ fn collect_index_worktree_status_direct_from_index(
             dirwalk_options,
             unstaged,
             NoopSubmoduleStatus,
+            cancellation,
         )?
     };
     let index_stamp_after_write =
@@ -819,6 +851,7 @@ fn collect_index_worktree_status_direct_with_submodule<S, E>(
     dirwalk_options: gix::dirwalk::Options,
     unstaged: &mut Vec<FileStatus>,
     submodule: S,
+    cancellation: &CancellationToken,
 ) -> Result<StatusEntryCollection>
 where
     S: gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus<
@@ -911,7 +944,7 @@ where
             fscache: false,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
-                thread_limit: None,
+                thread_limit: worker_limit::for_index(repo, index, cancellation)?,
                 fscache: false,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
@@ -1322,7 +1355,7 @@ fn supplement_gitlink_status_from_porcelain(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use rustc_hash::FxHashMap;
 
     use super::{
@@ -1406,7 +1439,7 @@ mod tests {
             .expect("spawn git")
     }
 
-    fn git_success(workdir: &Path, args: &[&str]) {
+    pub(crate) fn git_success(workdir: &Path, args: &[&str]) {
         let output = git_output(workdir, args);
         assert!(
             output.status.success(),
@@ -1429,7 +1462,7 @@ mod tests {
         output
     }
 
-    fn init_test_repo(workdir: &Path) {
+    pub(crate) fn init_test_repo(workdir: &Path) {
         let _ = ensure_isolated_git_test_env();
         git_success(workdir, &["init"]);
         for args in [
@@ -1446,7 +1479,7 @@ mod tests {
         }
     }
 
-    fn write_file(workdir: &Path, relative: &str, contents: &str) {
+    pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
         let path = workdir.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent directories");
@@ -1454,7 +1487,7 @@ mod tests {
         fs::write(path, contents).expect("write file");
     }
 
-    fn open_repo(workdir: &Path) -> super::super::GixRepo {
+    pub(crate) fn open_repo(workdir: &Path) -> super::super::GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         super::super::GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
@@ -1945,8 +1978,8 @@ mod tests {
         let staged = gix_repo.staged_status_impl().expect("staged status");
         let unstaged = gix_repo.worktree_status_impl().expect("worktree status");
 
-        assert_eq!(combined.staged, staged);
-        assert_eq!(combined.unstaged, unstaged);
+        assert_eq!(*combined.staged, staged);
+        assert_eq!(*combined.unstaged, unstaged);
         assert_eq!(
             staged,
             vec![file_status("staged.txt", FileStatusKind::Modified)]
@@ -1982,23 +2015,23 @@ mod tests {
         let gix_repo = open_repo(workdir);
         let status = gix_repo.status_impl().expect("combined status");
         assert_eq!(
-            status.staged,
+            *status.staged,
             vec![file_status("foo.txt", FileStatusKind::Modified)],
             "a staged-and-re-edited file must appear in the staged lane"
         );
         assert_eq!(
-            status.unstaged,
+            *status.unstaged,
             vec![file_status("foo.txt", FileStatusKind::Modified)],
             "the further worktree edit must also appear in the unstaged lane"
         );
         // The per-lane entry points must agree with the combined status.
         assert_eq!(
             gix_repo.staged_status_impl().expect("staged lane"),
-            status.staged
+            *status.staged
         );
         assert_eq!(
             gix_repo.worktree_status_impl().expect("worktree lane"),
-            status.unstaged
+            *status.unstaged
         );
     }
 
@@ -2015,7 +2048,7 @@ mod tests {
         let combined = gix_repo.status_impl().expect("combined status");
         let staged = gix_repo.staged_status_impl().expect("staged status");
 
-        assert_eq!(combined.staged, staged);
+        assert_eq!(*combined.staged, staged);
         assert_eq!(staged, vec![file_status("new.txt", FileStatusKind::Added)]);
         assert!(combined.unstaged.is_empty());
     }
@@ -2033,7 +2066,7 @@ mod tests {
 
         assert!(combined.staged.is_empty());
         assert!(staged.is_empty());
-        assert_eq!(combined.unstaged, worktree);
+        assert_eq!(*combined.unstaged, worktree);
         assert_eq!(
             worktree,
             vec![conflicted_file_status(
@@ -2334,7 +2367,7 @@ mod tests {
         write_file(workdir, "foo.txt", "v1\n");
         git_success(workdir, &["add", "foo.txt"]);
         let status = gix_repo.status_impl().expect("status after staging");
-        assert_eq!(status.staged, modified(FileStatusKind::Modified));
+        assert_eq!(*status.staged, modified(FileStatusKind::Modified));
         assert!(status.unstaged.is_empty());
 
         // Edit the worktree again WITHOUT staging: foo is now in BOTH lanes. The index is unchanged,
@@ -2342,12 +2375,12 @@ mod tests {
         write_file(workdir, "foo.txt", "v2\n");
         let status = gix_repo.status_impl().expect("status with worktree edit");
         assert_eq!(
-            status.staged,
+            *status.staged,
             modified(FileStatusKind::Modified),
             "an unstaged worktree edit must not disturb the staged lane (served from cache)"
         );
         assert_eq!(
-            status.unstaged,
+            *status.unstaged,
             modified(FileStatusKind::Modified),
             "the new worktree edit must appear in the unstaged lane"
         );
@@ -2356,7 +2389,7 @@ mod tests {
         // staged. The index changed, so the cached staged result must be invalidated and recomputed.
         git_success(workdir, &["add", "foo.txt"]);
         let status = gix_repo.status_impl().expect("status after restaging");
-        assert_eq!(status.staged, modified(FileStatusKind::Modified));
+        assert_eq!(*status.staged, modified(FileStatusKind::Modified));
         assert!(
             status.unstaged.is_empty(),
             "staging the worktree edit must clear the unstaged lane (cache must invalidate)"
@@ -2371,7 +2404,7 @@ mod tests {
             "unstaging must remove foo from the staged lane (stale cache would keep it)"
         );
         assert_eq!(
-            status.unstaged,
+            *status.unstaged,
             modified(FileStatusKind::Modified),
             "the unstaged file must appear in the unstaged lane"
         );
@@ -2379,11 +2412,111 @@ mod tests {
         // The per-lane entry points must agree with the combined status after all the churn.
         assert_eq!(
             gix_repo.staged_status_impl().expect("staged lane"),
-            status.staged
+            *status.staged
         );
         assert_eq!(
             gix_repo.worktree_status_impl().expect("worktree lane"),
-            status.unstaged
+            *status.unstaged
         );
+    }
+
+    /// The in-process pass has to beat two `git diff --numstat` spawns without
+    /// moving the status walk. Reports timings rather than asserting; run with
+    /// `-- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe"]
+    fn perf_uncommitted_line_stats_baseline() {
+        // ~10 KB per file. The `status_dirty_500_files` fixture writes ~30
+        // bytes, so it measures lstat throughput, not content I/O.
+        fn body(seed: usize, marker: &str) -> String {
+            let mut out = String::with_capacity(10_240);
+            for line in 0..200 {
+                out.push_str(&format!(
+                    "{marker} {seed:05} line {line:03} some representative source text here\n"
+                ));
+            }
+            out
+        }
+
+        for (tracked, dirty, staged) in [(500usize, 25usize, 25usize), (500, 250, 0)] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let workdir = tmp.path();
+            init_test_repo(workdir);
+
+            for index in 0..tracked {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                    &body(index, "base"),
+                );
+            }
+            git_success(workdir, &["add", "."]);
+            git_success(workdir, &["commit", "-q", "-m", "seed"]);
+
+            for index in 0..dirty {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                    &body(index, "edit"),
+                );
+            }
+            for index in dirty..dirty + staged {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                    &body(index, "edit"),
+                );
+            }
+            if staged > 0 {
+                git_success(workdir, &["add", "src"]);
+                for index in 0..dirty {
+                    write_file(
+                        workdir,
+                        &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                        &body(index, "again"),
+                    );
+                }
+            }
+
+            let gix_repo = open_repo(workdir);
+            // Warm the caches so the numbers compare work, not first touch.
+            let _ = gix_repo.status_impl().expect("warmup status");
+            let _ = git_output(workdir, &["diff", "--numstat", "-z"]);
+
+            let _ = gix_repo
+                .uncommitted_line_stats_impl(&gitcomet_core::services::CancellationToken::new())
+                .expect("warmup line stats");
+
+            let mut status_ms = u128::MAX;
+            let mut spawn_ms = u128::MAX;
+            let mut in_process_ms = u128::MAX;
+            for _ in 0..5 {
+                let start = std::time::Instant::now();
+                let status = gix_repo.status_impl().expect("status");
+                status_ms = status_ms.min(start.elapsed().as_millis());
+                std::hint::black_box(status);
+
+                let start = std::time::Instant::now();
+                let a = git_output(workdir, &["diff", "--numstat", "-z", "--no-renames"]);
+                let b = git_output(
+                    workdir,
+                    &["diff", "--cached", "--numstat", "-z", "--no-renames"],
+                );
+                spawn_ms = spawn_ms.min(start.elapsed().as_millis());
+                std::hint::black_box((a, b));
+
+                let start = std::time::Instant::now();
+                let stats = gix_repo
+                    .uncommitted_line_stats_impl(&gitcomet_core::services::CancellationToken::new())
+                    .expect("line stats");
+                in_process_ms = in_process_ms.min(start.elapsed().as_millis());
+                std::hint::black_box(stats);
+            }
+
+            println!(
+                "tracked={tracked} dirty={dirty} staged={staged}: gix status {status_ms} ms | \
+                 two numstat spawns {spawn_ms} ms | in-process pass {in_process_ms} ms (best of 5)"
+            );
+        }
     }
 }

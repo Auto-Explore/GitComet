@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale;
 use crate::view::components::InteractiveRowExt as _;
 use gitcomet_core::domain::LogScope;
@@ -7,6 +9,38 @@ use palette::IntoColor;
 use std::num::NonZeroU32;
 
 pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+
+/// Row height of every continuous list in the sidebar. The tabs swap lists in
+/// place, so a differing rhythm would make the rows jump.
+const SIDEBAR_TREE_ROW_HEIGHT_PX: f32 = 24.0;
+const SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX: f32 = 32.0;
+
+/// Unscaled row height, for the callers that place rows themselves — the
+/// collapsed-rail popover's prefix sum works in design units, then scales once.
+/// Whole pixels on purpose: layout snaps every row to the pixel grid, so a
+/// fractional height off the density ramp (Spacious lands on 36.8) would leave
+/// the popover's prefix sum a fifth of a pixel short per row, accumulating over
+/// a long list until the window it places no longer matches what is drawn.
+pub(in crate::view) fn sidebar_list_row_height_px(theme: AppTheme) -> f32 {
+    theme
+        .metrics
+        .row_height(
+            SIDEBAR_TREE_ROW_HEIGHT_PX,
+            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+        )
+        .round()
+}
+
+pub(in crate::view) fn sidebar_list_row_height(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> gpui::Pixels {
+    ui_scale::design_px_from_percent(sidebar_list_row_height_px(theme), ui_scale_percent)
+}
+
+/// Height of the spacer rows the collapsed-rail popover also needs, to size the
+/// scroll spacers it places around its virtualized window.
+pub(in crate::view) const BRANCH_TREE_SPACER_HEIGHT_PX: f32 = 8.0;
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
@@ -52,6 +86,9 @@ pub(in crate::view) struct WorktreeBadgePalette {
     open_border: gpui::Rgba,
     open_hover_border: gpui::Rgba,
     active_border: gpui::Rgba,
+    pub(in crate::view) icon: gpui::Rgba,
+    open_icon: gpui::Rgba,
+    active_icon: gpui::Rgba,
     pub(in crate::view) text: gpui::Rgba,
     pub(in crate::view) hover_text: gpui::Rgba,
     open_text: gpui::Rgba,
@@ -60,22 +97,28 @@ pub(in crate::view) struct WorktreeBadgePalette {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WorktreeBadgeColors {
+    bg: gpui::Rgba,
     border: gpui::Rgba,
     hover_border: gpui::Rgba,
+    icon: gpui::Rgba,
     text: gpui::Rgba,
-    hover_text: gpui::Rgba,
 }
 
 /// Shared chip palette for the sidebar badges (workspace/worktree/upstream),
-/// matching the history table's ref chips: an elevated pill with a quiet
-/// border at rest, accent-tinted when the badge refers to an open workspace.
+/// with a transparent body and a quiet border at rest. Badges that refer to an
+/// open workspace use the main canvas surface on light themes and a lighter,
+/// raised surface on dark themes. Their text stays high-contrast and the icon
+/// retains the workspace state color.
 pub(in crate::view) fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
+    let transparent = gpui::rgba(0x00000000);
+    let text = theme.colors.foreground.emphasis;
     WorktreeBadgePalette {
-        bg: theme.colors.surface.raised,
-        active_bg: with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.16 } else { 0.10 },
-        ),
+        bg: transparent,
+        active_bg: if theme.is_dark {
+            theme.colors.surface.raised
+        } else {
+            theme.colors.surface.canvas
+        },
         border: with_alpha(theme.colors.stroke.default, 0.90),
         hover_border: with_alpha(
             theme.colors.foreground.secondary,
@@ -93,10 +136,13 @@ pub(in crate::view) fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgeP
             theme.colors.accent.foreground,
             if theme.is_dark { 0.84 } else { 0.68 },
         ),
-        text: theme.colors.foreground.secondary,
-        hover_text: theme.colors.foreground.primary,
-        open_text: theme.colors.accent.foreground,
-        active_text: theme.colors.accent.foreground,
+        icon: theme.colors.foreground.secondary,
+        open_icon: theme.colors.accent.foreground,
+        active_icon: theme.colors.accent.foreground,
+        text,
+        hover_text: text,
+        open_text: text,
+        active_text: text,
     }
 }
 
@@ -106,6 +152,11 @@ fn worktree_badge_colors(
     menu_active: bool,
 ) -> WorktreeBadgeColors {
     WorktreeBadgeColors {
+        bg: if is_open {
+            palette.active_bg
+        } else {
+            palette.bg
+        },
         border: if menu_active {
             palette.active_border
         } else if is_open {
@@ -118,6 +169,13 @@ fn worktree_badge_colors(
         } else {
             palette.hover_border
         },
+        icon: if menu_active {
+            palette.active_icon
+        } else if is_open {
+            palette.open_icon
+        } else {
+            palette.icon
+        },
         text: if menu_active {
             palette.active_text
         } else if is_open {
@@ -125,12 +183,13 @@ fn worktree_badge_colors(
         } else {
             palette.text
         },
-        hover_text: if is_open {
-            palette.open_text
-        } else {
-            palette.hover_text
-        },
     }
+}
+
+/// A configured upstream is the active remote relationship, so its status chip
+/// uses the same colors as a worktree badge whose workspace is open.
+fn upstream_badge_colors(palette: WorktreeBadgePalette) -> WorktreeBadgeColors {
+    worktree_badge_colors(palette, true, false)
 }
 
 pub(super) fn worktree_branch_badge_label(
@@ -181,22 +240,37 @@ pub(in crate::view) fn worktree_origin_label(
     }
 }
 
-/// The chip that marks content as belonging to another worktree. Shown on the
-/// history row, and again in the details and diff headers so it is never unclear
-/// whose changes are on screen.
-///
-/// Deliberately style-only: callers add the id, cursor, hover and click when the
-/// chip is an affordance rather than a label.
+/// Height of a worktree badge. Comfortable lifts it with the rows and title
+/// bars it sits in.
+const WORKTREE_BADGE_HEIGHT_PX: f32 = 18.0;
+const WORKTREE_BADGE_COMFORTABLE_HEIGHT_PX: f32 = 24.0;
+
+pub(in crate::view) fn worktree_badge_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    scale.into().row_height(
+        WORKTREE_BADGE_HEIGHT_PX,
+        WORKTREE_BADGE_COMFORTABLE_HEIGHT_PX,
+    )
+}
+
+/// Marks content belonging to another worktree in history, details and diff
+/// headers. Worktree chips share their interaction profile; callers supply the
+/// action.
 pub(in crate::view) fn worktree_origin_chip(
+    id: impl Into<gpui::ElementId>,
     theme: AppTheme,
     label: SharedString,
     icon_size: Pixels,
     height: Pixels,
     max_width: Pixels,
     pad_x: Pixels,
-) -> gpui::Div {
+) -> gpui::Stateful<gpui::Div> {
     let palette = worktree_badge_palette(theme);
     div()
+        .id(id)
+        .control_interaction(
+            worktree_badge_interaction(theme),
+            controls::InteractionState::default(),
+        )
         .flex()
         .items_center()
         .gap_1()
@@ -208,15 +282,33 @@ pub(in crate::view) fn worktree_origin_chip(
         .border_1()
         .border_color(palette.border)
         .bg(palette.bg)
-        .child(svg_icon(WORKTREE_ICON_PATH, palette.text, icon_size))
+        .child(svg_icon(WORKTREE_ICON_PATH, palette.icon, icon_size))
         .child(
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(palette.text)
                 .line_clamp(1)
                 .whitespace_nowrap()
                 .child(label),
         )
+}
+
+pub(in crate::view) fn worktree_badge_interaction(theme: AppTheme) -> controls::InteractionStyle {
+    let palette = worktree_badge_palette(theme);
+    controls::InteractionStyle::accent(theme)
+        .hover(
+            gpui::StyleRefinement::default()
+                .bg(theme.hover_overlay())
+                .border_color(palette.hover_border)
+                .text_color(palette.hover_text),
+        )
+        .pressed(
+            gpui::StyleRefinement::default()
+                .bg(theme.active_overlay())
+                .border_color(palette.hover_border)
+                .text_color(palette.hover_text),
+        )
+        .resting_background(palette.bg)
 }
 
 /// Render a sidebar label, bold-accent highlighting the first case-insensitive
@@ -248,9 +340,8 @@ fn filtered_label_element<V: 'static>(
             font_weight: Some(FontWeight::BOLD),
             ..Default::default()
         };
-        components::TruncatedText::new(label)
+        components::TruncatedText::new(label, text_size)
             .text_color(text_color)
-            .text_size(text_size)
             .font_weight(font_weight)
             .highlights([(range, highlight)])
             .render(cx)
@@ -268,12 +359,17 @@ pub(in crate::view) fn active_workspace_paths_by_branch(
         return FxHashMap::default();
     };
 
+    // Preserve the first open repository for a path, as the former linear
+    // lookup did, while avoiding a worktrees × open-repositories scan.
+    let mut open_by_path = FxHashMap::default();
+    for open_repo in open_repos {
+        open_by_path
+            .entry(&open_repo.spec.workdir)
+            .or_insert(open_repo);
+    }
     let mut active_workspaces = FxHashMap::default();
     for worktree in worktrees.iter() {
-        let Some(open_repo) = open_repos
-            .iter()
-            .find(|open_repo| open_repo.spec.workdir == worktree.path)
-        else {
+        let Some(open_repo) = open_by_path.get(&worktree.path) else {
             continue;
         };
 
@@ -324,37 +420,33 @@ struct BranchHistoryRevealTarget {
     fallback_scope: Option<LogScope>,
 }
 
-fn branch_commit_id(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
-    match section {
-        BranchSection::Local => match &repo.branches {
+fn branch_commit_id(repo: &RepoState, target: &BranchMenuTarget) -> Option<CommitId> {
+    match target {
+        BranchMenuTarget::Local { name } => match &repo.branches {
             Loadable::Ready(branches) => branches
                 .iter()
-                .find(|branch| branch.name == name)
+                .find(|branch| branch.name == *name)
                 .map(|branch| branch.target.clone()),
             _ => None,
         },
-        BranchSection::Remote => {
-            let (remote, branch_name) = name.split_once('/')?;
-            match &repo.remote_branches {
-                Loadable::Ready(branches) => branches
-                    .iter()
-                    .find(|branch| branch.remote == remote && branch.name == branch_name)
-                    .map(|branch| branch.target.clone()),
-                _ => None,
-            }
-        }
+        BranchMenuTarget::Remote { remote, branch } => match &repo.remote_branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|candidate| candidate.remote == *remote && candidate.name == *branch)
+                .map(|candidate| candidate.target.clone()),
+            _ => None,
+        },
     }
 }
 
 fn branch_click_history_reveal_target(
     repo: &RepoState,
-    section: BranchSection,
-    name: &str,
+    target: &BranchMenuTarget,
     is_head: bool,
 ) -> Option<BranchHistoryRevealTarget> {
-    let commit_id = branch_commit_id(repo, section, name)?;
+    let commit_id = branch_commit_id(repo, target)?;
 
-    let fallback_scope = match section {
+    let fallback_scope = match target.section() {
         BranchSection::Local if is_head => Some(LogScope::FullReachable),
         BranchSection::Local | BranchSection::Remote => Some(LogScope::AllBranches),
     };
@@ -368,15 +460,13 @@ fn branch_click_history_reveal_target(
 fn branch_row_is_selected(
     selected_branch: Option<&SelectedBranch>,
     repo_id: RepoId,
-    section: BranchSection,
-    name: &str,
+    target: &BranchMenuTarget,
     selected_commit: Option<&CommitId>,
     selected_branch_commit_id: Option<&CommitId>,
 ) -> bool {
     selected_branch.is_some_and(|selected_branch| {
         selected_branch.repo_id == repo_id
-            && selected_branch.section == section
-            && selected_branch.name == name
+            && selected_branch.target == *target
             && selected_branch_commit_id.is_some_and(|commit_id| selected_commit == Some(commit_id))
     })
 }
@@ -388,11 +478,15 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        const BRANCH_TREE_BASE_PAD_PX: f32 = 6.0;
-        const BRANCH_TREE_DEPTH_STEP_PX: f32 = 8.0;
-        const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 12.0;
+        #[cfg(test)]
+        {
+            this.rendered_rows += range.len();
+        }
+        const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
+        const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
+        const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 14.0;
         const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
-        const BRANCH_TREE_GAP_PX: f32 = 4.0;
+        const BRANCH_TREE_GAP_PX: f32 = 6.0;
         const BRANCH_BADGE_GAP_PX: f32 = 3.0;
         /// Widest a branch row's worktree pill may grow before its label starts
         /// truncating. Wide enough for the folder names worktrees usually carry,
@@ -408,7 +502,7 @@ impl SidebarPaneView {
         /// over the badge.
         const BRANCH_ROW_TRAILING_PAD_PX: f32 = 4.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
@@ -437,10 +531,11 @@ impl SidebarPaneView {
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
         let theme = this.theme;
         let worktree_badge_palette = worktree_badge_palette(theme);
-        let icon_primary = theme.colors.accent.foreground;
+        let icon_primary = theme.colors.foreground.secondary;
+        let icon_current = theme.colors.accent.foreground;
         let icon_muted = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.72 } else { 0.82 },
+            theme.colors.foreground.secondary,
+            if theme.is_dark { 0.70 } else { 0.78 },
         );
         let selected_branch = this.selected_branch().cloned();
         let (selected_commit, selected_branch_commit_id) =
@@ -449,9 +544,7 @@ impl SidebarPaneView {
                 let selected_branch_commit_id = selected_branch
                     .as_ref()
                     .filter(|selected| selected.repo_id == repo_id)
-                    .and_then(|selected| {
-                        branch_commit_id(repo, selected.section, selected.name.as_str())
-                    });
+                    .and_then(|selected| branch_commit_id(repo, &selected.target));
                 (selected_commit, selected_branch_commit_id)
             });
 
@@ -469,7 +562,7 @@ impl SidebarPaneView {
                     "icons/chevron_down.svg"
                 },
                 icon_muted,
-                10.0,
+                12.0,
             )
         };
         let tree_toggle_slot = |collapsed: Option<bool>| {
@@ -509,24 +602,14 @@ impl SidebarPaneView {
         } else {
             theme.colors.surface.chrome
         };
-        let row_style = components::InteractiveRowStyle::new(theme, row_surface);
-
-        let top_divider = |color: gpui::Rgba| {
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .right_0()
-                .h(scaled_px(1.0))
-                .bg(color)
-        };
+        let row_style = components::InteractiveRowStyle::new(theme, row_surface).flat();
 
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
                 BranchSidebarRow::PinnedHeader {
                     section,
-                    top_border,
+                    top_border: _,
                     collapsed,
                     collapse_key,
                 } => {
@@ -545,7 +628,7 @@ impl SidebarPaneView {
                         .id(("pinned_section", ix))
                         .debug_selector(move || format!("pinned_section_{selector_suffix}"))
                         .relative()
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -556,39 +639,38 @@ impl SidebarPaneView {
                             row_style,
                             components::InteractiveRowState::default().open(context_menu_active),
                         )
-                        .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.stroke.subtle))
-                        })
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/pin.svg", icon_primary, 13.0))
+                        .child(tree_icon_slot("icons/pin.svg", icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.primary)
                                 .child(label.clone()),
                         )
                         .gitcomet_tooltip(theme, label)
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    menu_kind_for_right_click.clone(),
+                                    menu_kind_for_right_click
+                                        .clone()
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -599,7 +681,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SectionHeader {
                     section,
-                    top_border,
+                    top_border: _,
                     collapsed,
                     collapse_key,
                 } => {
@@ -623,7 +705,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_section", ix))
                         .relative()
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -631,39 +713,37 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.stroke.subtle))
-                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(icon_path, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.primary)
                                 .child(label),
                         )
                         .gitcomet_tooltip(theme, tooltip.clone())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::BranchSectionMenu { repo_id, section },
+                                    (PopoverKind::BranchSectionMenu { repo_id, section })
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -686,7 +766,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_filter_group", ix))
                         .debug_selector(move || format!("branch_filter_group_{selector_suffix}"))
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -699,10 +779,10 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(label),
                         )
@@ -710,11 +790,11 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", ix))
-                    .h(scaled_px(10.0))
+                    .h(scaled_px(BRANCH_TREE_SPACER_HEIGHT_PX))
                     .w_full()
                     .into_any_element(),
                 BranchSidebarRow::StashHeader {
-                    top_border,
+                    top_border: _,
                     collapsed,
                     collapse_key,
                 } => {
@@ -734,7 +814,7 @@ impl SidebarPaneView {
                         .id(("stash_section", ix))
                         .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -742,19 +822,16 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.stroke.subtle))
-                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.primary)
                                 .child("Stash"),
                         )
@@ -770,22 +847,23 @@ impl SidebarPaneView {
                             )
                         })
                         .gitcomet_tooltip(theme, "Stashes (Right-click for actions)".into())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::StashPrompt,
+                                    PopoverKind::StashPrompt
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -796,10 +874,10 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
                     .id(("stash_placeholder", ix))
-                    .h(scaled_px(22.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -824,6 +902,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("stash_sidebar_row", index))
+                        .debug_selector(move || format!("stash_sidebar_row_{index}"))
                         .relative()
                         .group(row_group.clone())
                         .flex()
@@ -831,14 +910,14 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 12.0))
+                        .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             components::FadingText::new(
-                                div().text_sm().child(message.clone()),
+                                div().text_size(theme.ui_text(14.0)).child(message.clone()),
                                 row_style.resolved_background(row_state),
                             )
                             .hover_bg(
@@ -848,27 +927,28 @@ impl SidebarPaneView {
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
-                                return;
-                            }
-                            this.store.dispatch(Msg::ApplyStash { repo_id, index });
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() < 2 {
+                                    return;
+                                }
+                                this.store.dispatch(Msg::ApplyStash { repo_id, index });
+                                cx.notify();
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::StashMenu {
+                                    (PopoverKind::StashMenu {
                                         repo_id,
                                         index,
                                         message: stash_message_for_right_click.clone(),
-                                    },
+                                    })
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -883,15 +963,15 @@ impl SidebarPaneView {
                     message,
                 } => div()
                     .id(("branch_placeholder", ix))
-                    .h(scaled_px(22.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
                 BranchSidebarRow::WorktreesHeader {
-                    top_border,
+                    top_border: _,
                     collapsed,
                     collapse_key,
                 } => {
@@ -912,7 +992,7 @@ impl SidebarPaneView {
                         .id(("worktrees_section", ix))
                         .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -920,19 +1000,16 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.stroke.subtle))
-                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.primary)
                                 .child("Worktrees"),
                         )
@@ -950,25 +1027,26 @@ impl SidebarPaneView {
                             )
                         })
                         .gitcomet_tooltip(theme, "Worktrees (Add / Refresh / Open / Remove)".into())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::worktree(
+                                    (PopoverKind::worktree(
                                         repo_id,
                                         WorktreePopoverKind::SectionMenu,
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -979,10 +1057,10 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
                     .id(("worktree_placeholder", ix))
-                    .h(scaled_px(22.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -1026,7 +1104,7 @@ impl SidebarPaneView {
                         .id(("worktree_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(scaled_px(22.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1035,12 +1113,12 @@ impl SidebarPaneView {
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 12.0))
+                        .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .flex()
                                 .items_center()
                                 .overflow_hidden()
@@ -1052,17 +1130,19 @@ impl SidebarPaneView {
                                         .min_w(px(0.0))
                                         .overflow_hidden()
                                         .child(
-                                            components::TruncatedText::path(path_label.clone())
-                                                .id(("worktree_path_text", ix))
-                                                .text_sm()
-                                                // Set the color explicitly: TruncatedText
-                                                // resolves an unset color from the ambient text
-                                                // style inside a deferred measure closure, which
-                                                // doesn't see ancestor `text_color` — so in the
-                                                // collapsed popover it would render near-black.
-                                                .text_color(theme.colors.foreground.primary)
-                                                .full_text_tooltip(this.tooltip_host.clone())
-                                                .render(cx),
+                                            components::TruncatedText::path(
+                                                path_label.clone(),
+                                                theme.ui_text(14.0),
+                                            )
+                                            .id(("worktree_path_text", ix))
+                                            // Set the color explicitly: TruncatedText
+                                            // resolves an unset color from the ambient text
+                                            // style inside a deferred measure closure, which
+                                            // doesn't see ancestor `text_color` — so in the
+                                            // collapsed popover it would render near-black.
+                                            .text_color(theme.colors.foreground.primary)
+                                            .full_text_tooltip(this.tooltip_host.clone())
+                                            .render(cx),
                                         ),
                                 )
                                 .when_some(branch_badge_label.clone(), |row, badge_label| {
@@ -1072,18 +1152,18 @@ impl SidebarPaneView {
                                             .items_center()
                                             .gap(scaled_px(3.0))
                                             .px(scaled_px(6.0))
+                                            .h(worktree_badge_height(
+                                                ui_scale::UiScale::from_percent(ui_scale_percent)
+                                                    .with_appearance(theme.metrics),
+                                            ))
                                             // Same control radius as the branch
                                             // rows' worktree badge; the two are
                                             // the same chip in two lists.
                                             .rounded(px(theme.radii.control))
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
-                                            .bg(if worktree_tab_open {
-                                                worktree_badge_palette.active_bg
-                                            } else {
-                                                worktree_badge_palette.bg
-                                            })
-                                            .text_size(scaled_px(11.0))
+                                            .bg(branch_badge_colors.bg)
+                                            .text_size(theme.ui_text(11.0))
                                             .text_color(branch_badge_colors.text)
                                             .id(("worktree_branch_badge", ix))
                                             .debug_selector(move || {
@@ -1094,7 +1174,7 @@ impl SidebarPaneView {
                                             .overflow_hidden()
                                             .child(svg_icon(
                                                 "icons/git_branch.svg",
-                                                branch_badge_colors.text,
+                                                branch_badge_colors.icon,
                                                 9.0,
                                             ))
                                             .child(
@@ -1107,9 +1187,9 @@ impl SidebarPaneView {
                                                     .child(
                                                         components::TruncatedText::new(
                                                             badge_label.clone(),
+                                                            theme.ui_text(11.0),
                                                         )
                                                         .id(("worktree_branch_badge_text", ix))
-                                                        .text_size(scaled_px(11.0))
                                                         // Explicit color: TruncatedText resolves an
                                                         // unset color from the ambient text style in
                                                         // a deferred measure closure that misses the
@@ -1125,42 +1205,43 @@ impl SidebarPaneView {
                                     )
                                 }),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() {
-                                return;
-                            }
-                            if e.click_count() >= 2 {
-                                this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                if e.click_count() >= 2 {
+                                    this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                                    cx.notify();
+                                    return;
+                                }
+                                // Single click mirrors a branch row: scroll the log
+                                // to this worktree and select its row, without
+                                // leaving the tab.
+                                this.reveal_worktree_in_history(
+                                    repo_id,
+                                    path_for_open.clone(),
+                                    is_active,
+                                    cx,
+                                );
                                 cx.notify();
-                                return;
-                            }
-                            // Single click mirrors a branch row: scroll the log
-                            // to this worktree and select its row, without
-                            // leaving the tab.
-                            this.reveal_worktree_in_history(
-                                repo_id,
-                                path_for_open.clone(),
-                                is_active,
-                                cx,
-                            );
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::worktree(
+                                    (PopoverKind::worktree(
                                         repo_id,
                                         WorktreePopoverKind::Menu {
                                             path: path_for_menu.clone(),
                                             branch: branch_for_menu.clone(),
                                         },
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1170,7 +1251,7 @@ impl SidebarPaneView {
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulesHeader {
-                    top_border,
+                    top_border: _,
                     collapsed,
                     collapse_key,
                 } => {
@@ -1189,7 +1270,7 @@ impl SidebarPaneView {
                         .id(("submodules_section", ix))
                         .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1197,19 +1278,16 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.stroke.subtle))
-                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.primary)
                                 .child("Submodules"),
                         )
@@ -1227,25 +1305,26 @@ impl SidebarPaneView {
                             )
                         })
                         .gitcomet_tooltip(theme, "Submodules (Add / Update / Open / Remove)".into())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::submodule(
+                                    (PopoverKind::submodule(
                                         repo_id,
                                         SubmodulePopoverKind::SectionMenu,
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1256,14 +1335,14 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
                     .id(("submodule_placeholder", ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .pl_2()
                     .pr_1()
                     .flex()
                     .items_center()
                     .gap(scaled_px(6.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(
                         div()
@@ -1290,72 +1369,55 @@ impl SidebarPaneView {
                         )
                     })
                     .into_any_element(),
-                BranchSidebarRow::SubmoduleItem { path } => {
+                BranchSidebarRow::SubmoduleItem {
+                    path,
+                    status,
+                    recorded_head,
+                    checked_out_head,
+                } => {
                     let path_for_open = path.clone();
                     let path_for_menu = path.clone();
                     let repo_workdir_for_open = repo_workdir.clone();
                     let path_label = this.cached_path_display(&path);
-                    let submodule_info =
-                        this.active_repo().and_then(|repo| match &repo.submodules {
-                            Loadable::Ready(submodules) => submodules
-                                .iter()
-                                .find(|submodule| submodule.path == path)
-                                .map(|submodule| {
-                                    (
-                                        submodule.status,
-                                        submodule.recorded_head.clone(),
-                                        submodule.checked_out_head.clone(),
-                                    )
-                                }),
-                            _ => None,
-                        });
-                    let (icon_color, badge_label, can_open, tooltip) =
-                        if let Some((status, recorded_head, checked_out_head)) = submodule_info {
-                            let badge_label = match status {
-                                SubmoduleStatus::NotInitialized => Some("Not loaded"),
-                                SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
-                                SubmoduleStatus::MergeConflict => Some("Conflict"),
-                                SubmoduleStatus::MissingMapping => Some("Missing mapping"),
-                                SubmoduleStatus::Unknown(_) => Some("Unknown"),
-                                SubmoduleStatus::UpToDate => None,
-                            };
-                            let icon_color = match status {
-                                SubmoduleStatus::NotInitialized => with_alpha(
-                                    theme.colors.foreground.secondary,
-                                    if theme.is_dark { 0.78 } else { 0.92 },
-                                ),
-                                SubmoduleStatus::HeadMismatch => {
-                                    theme.colors.status.warning.foreground
-                                }
-                                SubmoduleStatus::MergeConflict
-                                | SubmoduleStatus::MissingMapping => {
-                                    theme.colors.status.danger.foreground
-                                }
-                                SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => {
-                                    icon_primary
-                                }
-                            };
-                            let can_open = !matches!(
-                                status,
-                                SubmoduleStatus::NotInitialized
-                                    | SubmoduleStatus::MergeConflict
-                                    | SubmoduleStatus::MissingMapping
-                            );
-                            let checked_out = checked_out_head
-                                .as_ref()
-                                .map(|head| head.as_ref())
-                                .unwrap_or("not loaded");
-                            let tooltip: SharedString = format!(
-                                "{}\nRecorded: {}\nChecked out: {}",
-                                path.display(),
-                                recorded_head.as_ref(),
-                                checked_out,
-                            )
-                            .into();
-                            (icon_color, badge_label, can_open, tooltip)
-                        } else {
-                            (icon_primary, None, true, path_label.clone())
+                    let (icon_color, badge_label, can_open, tooltip) = {
+                        let badge_label = match status {
+                            SubmoduleStatus::NotInitialized => Some("Not loaded"),
+                            SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
+                            SubmoduleStatus::MergeConflict => Some("Conflict"),
+                            SubmoduleStatus::MissingMapping => Some("Missing mapping"),
+                            SubmoduleStatus::Unknown(_) => Some("Unknown"),
+                            SubmoduleStatus::UpToDate => None,
                         };
+                        let icon_color = match status {
+                            SubmoduleStatus::NotInitialized => with_alpha(
+                                theme.colors.foreground.secondary,
+                                if theme.is_dark { 0.78 } else { 0.92 },
+                            ),
+                            SubmoduleStatus::HeadMismatch => theme.colors.status.warning.foreground,
+                            SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping => {
+                                theme.colors.status.danger.foreground
+                            }
+                            SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => icon_primary,
+                        };
+                        let can_open = !matches!(
+                            status,
+                            SubmoduleStatus::NotInitialized
+                                | SubmoduleStatus::MergeConflict
+                                | SubmoduleStatus::MissingMapping
+                        );
+                        let checked_out = checked_out_head
+                            .as_ref()
+                            .map(|head| head.as_ref())
+                            .unwrap_or("not loaded");
+                        let tooltip: SharedString = format!(
+                            "{}\nRecorded: {}\nChecked out: {}",
+                            path.display(),
+                            recorded_head.as_ref(),
+                            checked_out,
+                        )
+                        .into();
+                        (icon_color, badge_label, can_open, tooltip)
+                    };
                     let context_menu_invoker: SharedString =
                         format!("submodule_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -1367,7 +1429,7 @@ impl SidebarPaneView {
                     div()
                         .id(("submodule_item", ix))
                         .relative()
-                        .h(scaled_px(22.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1376,12 +1438,12 @@ impl SidebarPaneView {
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/box.svg", icon_color, 12.0))
+                        .child(tree_icon_slot("icons/box.svg", icon_color, 14.0))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .debug_selector(move || format!("submodule_label_{ix}"))
@@ -1409,40 +1471,41 @@ impl SidebarPaneView {
                                         theme.colors.surface.panel,
                                         if theme.is_dark { 0.9 } else { 0.7 },
                                     ))
-                                    .text_size(scaled_px(11.0))
+                                    .text_size(theme.ui_text(11.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(badge_label),
                             )
                         })
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
-                                return;
-                            }
-                            if !can_open {
-                                return;
-                            }
-                            let Some(base) = repo_workdir_for_open.clone() else {
-                                return;
-                            };
-                            this.store
-                                .dispatch(Msg::OpenRepo(base.join(&path_for_open)));
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() < 2 {
+                                    return;
+                                }
+                                if !can_open {
+                                    return;
+                                }
+                                let Some(base) = repo_workdir_for_open.clone() else {
+                                    return;
+                                };
+                                this.store
+                                    .dispatch(Msg::OpenRepo(base.join(&path_for_open)));
+                                cx.notify();
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::submodule(
+                                    (PopoverKind::submodule(
                                         repo_id,
                                         SubmodulePopoverKind::Menu {
                                             path: path_for_menu.clone(),
                                         },
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1473,7 +1536,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_remote", ix))
                         .relative()
-                        .h(scaled_px(24.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1482,8 +1545,8 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
+                        .text_size(theme.ui_text(14.0))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(remote_color)
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(
@@ -1503,27 +1566,28 @@ impl SidebarPaneView {
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::remote(
+                                    (PopoverKind::remote(
                                         repo_id,
                                         RemotePopoverKind::Menu {
                                             name: remote_name_for_right_click.clone(),
                                         },
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1541,10 +1605,6 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
-                    let group_icon_color = match section {
-                        BranchSection::Local => icon_primary,
-                        BranchSection::Remote => theme.colors.foreground.secondary,
-                    };
                     let row_group: SharedString =
                         format!("branch_group_row_{}_{}", repo_id.0, ix).into();
                     let section_key = match section {
@@ -1575,7 +1635,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_group", ix))
                         .debug_selector(move || format!("branch_group_{ix}"))
-                        .h(scaled_px(22.0))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1584,13 +1644,13 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(theme.ui_text(12.0))
+                        .font_weight(FontWeight::NORMAL)
                         .text_color(theme.colors.foreground.secondary)
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(
                             super::super::file_icons::folder_icon(!collapsed),
-                            group_icon_color,
+                            icon_primary,
                             14.0,
                         ))
                         .child(
@@ -1601,7 +1661,7 @@ impl SidebarPaneView {
                                     theme.colors.foreground.secondary,
                                     theme.colors.accent.foreground,
                                     gpui::rems(0.75).into(),
-                                    FontWeight::SEMIBOLD,
+                                    FontWeight::NORMAL,
                                     cx,
                                 ),
                                 row_style.resolved_background(row_state),
@@ -1613,22 +1673,24 @@ impl SidebarPaneView {
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    menu_kind_for_right_click.clone(),
+                                    menu_kind_for_right_click
+                                        .clone()
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1639,6 +1701,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::Branch {
                     name,
+                    target,
                     section,
                     depth,
                     muted,
@@ -1648,9 +1711,11 @@ impl SidebarPaneView {
                     is_upstream,
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
-                    let full_name_for_reveal: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
+                    let target_for_reveal = target.clone();
+                    let target_for_checkout = target.clone();
+                    let target_for_menu = target.clone();
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
@@ -1682,8 +1747,7 @@ impl SidebarPaneView {
                     let branch_selected = branch_row_is_selected(
                         selected_branch.as_ref(),
                         repo_id,
-                        section,
-                        full_name_for_reveal.as_ref(),
+                        &target,
                         selected_commit.as_ref(),
                         selected_branch_commit_id.as_ref(),
                     );
@@ -1711,15 +1775,12 @@ impl SidebarPaneView {
                     } else {
                         branch_text_color
                     };
-                    let branch_icon_color = match section {
-                        BranchSection::Local => {
-                            if muted {
-                                icon_muted
-                            } else {
-                                icon_primary
-                            }
-                        }
-                        BranchSection::Remote => theme.colors.foreground.secondary,
+                    let branch_icon_color = if is_head {
+                        icon_current
+                    } else if muted {
+                        icon_muted
+                    } else {
+                        icon_primary
                     };
                     let badge_gap_px = scaled_px(BRANCH_BADGE_GAP_PX);
                     let divergence_badge =
@@ -1731,8 +1792,8 @@ impl SidebarPaneView {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
+                                .text_size(theme.ui_text(12.0))
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(color)
                                 .child(svg_icon(icon_path, color, 11.0))
                                 .child(
@@ -1746,16 +1807,23 @@ impl SidebarPaneView {
                             badge
                         };
                     let upstream_badge = |debug_selector: Option<String>| {
-                        // Accent-tinted variant of the shared badge chip, in
-                        // line with the history table's tag chips.
+                        // The active upstream is a ref relationship, but it
+                        // uses the same compact control-shaped chip as the
+                        // worktree badge so the sidebar's status badges read as
+                        // one family.
+                        let colors = upstream_badge_colors(worktree_badge_palette);
                         let mut badge = div()
+                            .flex()
+                            .items_center()
+                            .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
-                            .rounded(px(theme.radii.pill))
-                            .text_size(scaled_px(11.0))
-                            .text_color(theme.colors.accent.foreground)
-                            .bg(with_alpha(theme.colors.accent.foreground, 0.12))
+                            .rounded(px(theme.radii.control))
+                            .text_size(theme.ui_text(11.0))
+                            .text_color(colors.text)
+                            .bg(colors.bg)
                             .border_1()
-                            .border_color(with_alpha(theme.colors.accent.foreground, 0.35))
+                            .border_color(colors.border)
+                            .child(svg_icon("icons/cloud.svg", colors.icon, 9.0))
                             .child("Upstream");
                         if let Some(debug_selector) = debug_selector {
                             badge = badge.debug_selector(move || debug_selector.clone());
@@ -1767,19 +1835,21 @@ impl SidebarPaneView {
                         if theme.is_dark { 0.18 } else { 0.12 },
                     );
                     let row_state = components::InteractiveRowState::default()
-                        .selected(is_head, head_highlight)
-                        .selected(branch_selected, branch_selected_bg)
+                        .selected(
+                            is_head || branch_selected,
+                            if branch_selected {
+                                branch_selected_bg
+                            } else {
+                                head_highlight
+                            },
+                        )
                         .open(context_menu_active);
 
                     let mut row = div()
                         .id(("branch_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(if section == BranchSection::Local {
-                            scaled_px(24.0)
-                        } else {
-                            scaled_px(22.0)
-                        })
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .group(row_group.clone())
                         .flex()
@@ -1793,14 +1863,14 @@ impl SidebarPaneView {
                         .child(tree_icon_slot(
                             "icons/git_branch.svg",
                             branch_icon_color,
-                            12.0,
+                            14.0,
                         ))
                         .child(
                             // Long branch names run into the trailing badges;
                             // fade them into the row instead of slicing a glyph.
                             components::FadingText::new(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(branch_selected_label_color)
                                     .child(filtered_label_element(
                                         label,
@@ -1886,19 +1956,18 @@ impl SidebarPaneView {
                             .items_center()
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
+                            .h(worktree_badge_height(
+                                ui_scale::UiScale::from_percent(ui_scale_percent)
+                                    .with_appearance(theme.metrics),
+                            ))
                             // Squared off on the control radius the buttons and
-                            // tabs use, rather than the fully-round `pill` the
-                            // decorative chips (upstream, submodule) keep: this
-                            // badge is a click target, so it reads as one.
+                            // tabs use, matching the upstream status chip rather
+                            // than the fully-round decorative pills.
                             .rounded(px(theme.radii.control))
                             .border_1()
                             .border_color(badge_colors.border)
-                            .bg(if has_active_workspace {
-                                worktree_badge_palette.active_bg
-                            } else {
-                                worktree_badge_palette.bg
-                            })
-                            .text_size(scaled_px(11.0))
+                            .bg(badge_colors.bg)
+                            .text_size(theme.ui_text(11.0))
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
                             // A worktree folder can outrun the pane. Cap and
@@ -1909,64 +1978,67 @@ impl SidebarPaneView {
                             // itself sized by this pill.
                             .max_w(scaled_px(BRANCH_WORKTREE_BADGE_MAX_W_PX))
                             .overflow_hidden()
-                            .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.text, 9.0))
+                            .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.icon, 9.0))
                             .child(
                                 div().min_w(px(0.0)).overflow_hidden().child(
-                                    components::TruncatedText::new(workspace_badge_label)
-                                        .id(("branch_workspace_badge_text", ix))
-                                        .text_size(scaled_px(11.0))
-                                        // Explicit color: TruncatedText resolves an
-                                        // unset one from the ambient text style in a
-                                        // deferred measure closure that never sees the
-                                        // pill's `.text_color`.
-                                        .text_color(badge_colors.text)
-                                        .render(cx),
+                                    components::TruncatedText::new(
+                                        workspace_badge_label,
+                                        theme.ui_text(11.0),
+                                    )
+                                    .id(("branch_workspace_badge_text", ix))
+                                    // Explicit color: TruncatedText resolves an
+                                    // unset one from the ambient text style in a
+                                    // deferred measure closure that never sees the
+                                    // pill's `.text_color`.
+                                    .text_color(badge_colors.text)
+                                    .render(cx),
                                 ),
                             )
-                            .hover(move |s| {
-                                if workspace_menu_active {
-                                    s.bg(worktree_badge_palette.active_bg)
-                                        .border_color(worktree_badge_palette.active_border)
-                                        .text_color(worktree_badge_palette.active_text)
-                                } else {
-                                    s.bg(if has_active_workspace {
-                                        worktree_badge_palette.active_bg
-                                    } else {
-                                        worktree_badge_palette.bg
-                                    })
-                                    .border_color(badge_colors.hover_border)
-                                    .text_color(badge_colors.hover_text)
-                                }
-                            })
-                            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                                if !e.standard_click() {
-                                    return;
-                                }
-                                cx.stop_propagation();
-                                if e.click_count() >= 2 {
-                                    this.store
-                                        .dispatch(Msg::OpenRepo(workspace_path_for_open.clone()));
-                                    cx.notify();
-                                    return;
-                                }
-                                let Some(invoker) = workspace_menu_invoker_for_click.clone() else {
-                                    return;
-                                };
-                                this.activate_context_menu_invoker(invoker, cx);
-                                this.open_popover_at(
-                                    PopoverKind::worktree(
-                                        repo_id,
-                                        WorktreePopoverKind::Menu {
-                                            path: workspace_path_for_menu.clone(),
-                                            branch: Some(branch_name_for_click.clone()),
-                                        },
-                                    ),
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .on_mouse_down(
+                            .control_interaction(
+                                worktree_badge_interaction(theme),
+                                controls::InteractionState::default()
+                                    .selected(
+                                        has_active_workspace,
+                                        worktree_badge_palette.active_bg,
+                                    )
+                                    .open(workspace_menu_active),
+                            )
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Nested,
+                                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    if e.click_count() >= 2 {
+                                        this.store.dispatch(Msg::OpenRepo(
+                                            workspace_path_for_open.clone(),
+                                        ));
+                                        cx.notify();
+                                        return;
+                                    }
+                                    let Some(invoker) = workspace_menu_invoker_for_click.clone()
+                                    else {
+                                        return;
+                                    };
+
+                                    this.open_popover_at(
+                                        (PopoverKind::worktree(
+                                            repo_id,
+                                            WorktreePopoverKind::Menu {
+                                                path: workspace_path_for_menu.clone(),
+                                                branch: Some(branch_name_for_click.clone()),
+                                            },
+                                        ))
+                                        .invoked_by(invoker),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .on_pointer_click(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
@@ -1975,15 +2047,16 @@ impl SidebarPaneView {
                                     else {
                                         return;
                                     };
-                                    this.activate_context_menu_invoker(invoker, cx);
+
                                     this.open_popover_at(
-                                        PopoverKind::worktree(
+                                        (PopoverKind::worktree(
                                             repo_id,
                                             WorktreePopoverKind::Menu {
                                                 path: workspace_path_for_right_click.clone(),
                                                 branch: Some(branch_name_for_right_click.clone()),
                                             },
-                                        ),
+                                        ))
+                                        .invoked_by(invoker),
                                         e.position,
                                         window,
                                         cx,
@@ -1999,92 +2072,89 @@ impl SidebarPaneView {
                     }
 
                     row = row
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            if !e.standard_click() {
-                                return;
-                            }
-                            if e.click_count() == 1 {
-                                let Some(target) = this.active_repo().and_then(|repo| {
-                                    branch_click_history_reveal_target(
-                                        repo,
-                                        section,
-                                        full_name_for_reveal.as_ref(),
-                                        is_head,
-                                    )
-                                }) else {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                if !e.standard_click() {
                                     return;
-                                };
-                                this.set_selected_branch(
-                                    repo_id,
-                                    section,
-                                    full_name_for_reveal.as_ref(),
-                                    cx,
-                                );
-                                this.reveal_branch_commit_in_history(
-                                    repo_id,
-                                    section,
-                                    full_name_for_reveal.as_ref(),
-                                    target.commit_id,
-                                    target.fallback_scope,
-                                    cx,
-                                );
-                                cx.notify();
-                                return;
-                            }
-                            if e.click_count() < 2 {
-                                return;
-                            }
-                            match section {
-                                BranchSection::Local => {
-                                    match local_branch_double_click_action(
-                                        full_name_for_checkout.as_ref(),
-                                        workspace_path.as_deref(),
-                                    ) {
-                                        LocalBranchDoubleClickAction::CheckoutBranch { name } => {
-                                            this.store
-                                                .dispatch(Msg::CheckoutBranch { repo_id, name });
-                                            this.rebuild_diff_cache(cx);
-                                            cx.notify();
+                                }
+                                if e.click_count() == 1 {
+                                    let Some(target) = this.active_repo().and_then(|repo| {
+                                        branch_click_history_reveal_target(
+                                            repo,
+                                            &target_for_reveal,
+                                            is_head,
+                                        )
+                                    }) else {
+                                        return;
+                                    };
+                                    this.select_branch_and_reveal_tip(
+                                        repo_id,
+                                        target_for_reveal.clone(),
+                                        target.commit_id,
+                                        target.fallback_scope,
+                                        cx,
+                                    );
+                                    return;
+                                }
+                                if e.click_count() < 2 {
+                                    return;
+                                }
+                                match section {
+                                    BranchSection::Local => {
+                                        match local_branch_double_click_action(
+                                            full_name_for_checkout.as_ref(),
+                                            workspace_path.as_deref(),
+                                        ) {
+                                            LocalBranchDoubleClickAction::CheckoutBranch {
+                                                name,
+                                            } => {
+                                                this.store.dispatch(Msg::CheckoutBranch {
+                                                    repo_id,
+                                                    name,
+                                                });
+                                                this.rebuild_diff_cache(cx);
+                                                cx.notify();
+                                            }
+                                            LocalBranchDoubleClickAction::OpenWorkspace {
+                                                path,
+                                            } => {
+                                                this.store.dispatch(Msg::OpenRepo(path));
+                                                cx.notify();
+                                            }
                                         }
-                                        LocalBranchDoubleClickAction::OpenWorkspace { path } => {
-                                            this.store.dispatch(Msg::OpenRepo(path));
+                                    }
+                                    BranchSection::Remote => {
+                                        if let Some((remote, branch)) =
+                                            target_for_checkout.remote_parts()
+                                        {
+                                            this.open_popover_at(
+                                                PopoverKind::CheckoutRemoteBranchPrompt {
+                                                    repo_id,
+                                                    remote: remote.to_string(),
+                                                    branch: branch.to_string(),
+                                                },
+                                                e.position(),
+                                                window,
+                                                cx,
+                                            );
                                             cx.notify();
                                         }
                                     }
                                 }
-                                BranchSection::Remote => {
-                                    if let Some((remote, branch)) =
-                                        full_name_for_checkout.as_ref().split_once('/')
-                                    {
-                                        this.open_popover_at(
-                                            PopoverKind::CheckoutRemoteBranchPrompt {
-                                                repo_id,
-                                                remote: remote.to_string(),
-                                                branch: branch.to_string(),
-                                            },
-                                            e.position(),
-                                            window,
-                                            cx,
-                                        );
-                                        cx.notify();
-                                    }
-                                }
-                            }
-                        }))
-                        .on_mouse_down(
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::BranchMenu {
+                                    (PopoverKind::BranchMenu {
                                         repo_id,
-                                        section,
-                                        name: full_name_for_menu.as_ref().to_owned(),
-                                    },
+                                        target: target_for_menu.clone(),
+                                    })
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -2122,8 +2192,7 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
         let has_active_menu = this.active_context_menu_invoker.is_some();
         let file_rows = this.cached_commit_file_rows(
@@ -2131,28 +2200,118 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
+        let projection = this.cached_commit_file_projection(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &details.files,
+        );
+        let plan = this.cached_commit_file_plan(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &details.files,
+        );
+        let is_tree = plan.is_tree();
         let visible_signature = this.commit_files_visible_signature(
             repo_id,
             repo.history_state.commit_details_rev,
             &range,
-            details.files.len(),
+            projection.source_indices.len(),
         );
-        let path_alignment_group = this
-            .commit_files_path_alignment_group
-            .visible_rows(visible_signature);
+        // A tree shows leaf names, which have no shared prefix to align, and a
+        // row that reported into the group would anchor it on the shortest one.
+        let path_alignment_group = (!is_tree).then(|| {
+            this.commit_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
 
-        range
-            .filter_map(|ix| {
-                details
-                    .files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, f, path_label, visuals)| {
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree: _,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("commit_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    additions,
+                                    deletions,
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
+                                },
+                            )
+                            .debug_selector(move || format!("commit_file_dir_{}_{}", repo_id.0, ix))
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    this.toggle_file_list_dir(
+                                        repo_id,
+                                        crate::view::rows::FileListId::CommitFiles,
+                                        Arc::clone(&key),
+                                        Arc::clone(&chain),
+                                        collapsed,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) =
+                    details.files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
                 let commit_id = details.id.clone();
-                let icon = Some(visuals.icon);
-                let color = visuals.color(&theme);
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
 
                 let context_menu_active = has_active_menu && {
                     let invoker: SharedString = format!(
@@ -2175,55 +2334,70 @@ impl DetailsPaneView {
                         } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
+                let row_group: SharedString = format!("commit_file_row_{ix}").into();
+                let interaction = crate::view::rows::FileRowInteraction::new(
+                    theme,
+                    tint,
+                    selected,
+                    context_menu_active,
+                );
+                let badge_disc = interaction.badge_disc(row_group.clone());
+
                 let commit_id_for_click = commit_id.clone();
-                let path_for_click = f.path.clone();
                 let commit_id_for_menu = commit_id.clone();
-                let path_for_menu = f.path.clone();
+                // One owned copy shared by both handlers instead of one each.
+                let path_for_click: Arc<std::path::PathBuf> = Arc::new(f.path.clone());
+                let path_for_menu = Arc::clone(&path_for_click);
                 let tooltip = path_label.clone();
 
-                let mut row = div()
+                let row = div()
                     .id(("commit_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("commit_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
-                    .w_full()
-                    .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| {
-                        if context_menu_active {
-                            s.bg(theme.colors.interaction.pressed_background)
-                        } else {
-                            s.bg(theme.colors.interaction.hover_background)
-                        }
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
                     })
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, scaled_px(14.0)))
-                            }),
-                    )
+                    .pr(scaled_px(8.0))
+                    .w_full()
+                    .map(|row| interaction.apply(row))
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
-                                .text_sm()
+                                match path_alignment_group.clone() {
+                                    Some(group) => components::TruncatedText::aligned_path(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                        group,
+                                    ),
+                                    // A tree row's label is a bare file name, so
+                                    // there is no path to align against.
+                                    None => components::TruncatedText::new(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                    ),
+                                }
                                 .render(cx),
                             ),
                     )
@@ -2235,29 +2409,33 @@ impl DetailsPaneView {
                             f.deletions.unwrap_or(0) as usize,
                         )))
                     })
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        let target = DiffTarget::Commit {
-                            commit_id: commit_id_for_click.clone(),
-                            path: Some(path_for_click.clone()),
-                        };
-                        let selected = this.active_repo().is_some_and(|repo| {
-                            repo.id == repo_id
-                                && repo.diff_state.diff_target.as_ref() == Some(&target)
-                        });
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Composite,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            let target = DiffTarget::Commit {
+                                commit_id: commit_id_for_click.clone(),
+                                path: Some((*path_for_click).clone()),
+                            };
+                            let selected = this.active_repo().is_some_and(|repo| {
+                                repo.id == repo_id
+                                    && repo.diff_state.diff_target.as_ref() == Some(&target)
+                            });
 
-                        if selected {
-                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                        } else {
-                            this.focus_diff_panel(window, cx);
-                            this.store.dispatch(Msg::SelectDiff { repo_id, target });
-                        }
-                        cx.notify();
-                    }))
+                            if selected {
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                            } else {
+                                this.focus_diff_panel(window, cx);
+                                this.store.dispatch(Msg::SelectDiff { repo_id, target });
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .gitcomet_tooltip(theme, tooltip.clone());
-                row = row.on_mouse_down(
+                let row = row.on_pointer_click(
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
@@ -2268,13 +2446,13 @@ impl DetailsPaneView {
                             path_for_menu.display()
                         )
                         .into();
-                        this.activate_context_menu_invoker(invoker, cx);
                         this.open_popover_at(
-                            PopoverKind::CommitFileMenu {
+                            (PopoverKind::CommitFileMenu {
                                 repo_id,
                                 commit_id: commit_id_for_menu.clone(),
-                                path: path_for_menu.clone(),
-                            },
+                                path: (*path_for_menu).clone(),
+                            })
+                            .invoked_by(invoker),
                             e.position,
                             window,
                             cx,
@@ -2283,17 +2461,7 @@ impl DetailsPaneView {
                     }),
                 );
 
-                if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
-                    ));
-                }
-                if context_menu_active {
-                    row = row.bg(theme.colors.interaction.pressed_background);
-                }
-
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2328,10 +2496,14 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let file_rows =
             this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, files);
+        let projection =
+            this.cached_worktree_file_projection(repo_id, worktree_dirty_rev, &summary.path, files);
+        let plan =
+            this.cached_worktree_file_plan(repo_id, worktree_dirty_rev, &summary.path, files);
+        let is_tree = plan.is_tree();
         let selected_ix_now = repo
             .diff_state
             .inline_submodule_diff
@@ -2345,93 +2517,192 @@ impl DetailsPaneView {
             &range,
             files.len(),
         );
-        let path_alignment_group = this
-            .worktree_files_path_alignment_group
-            .visible_rows(visible_signature);
+        let path_alignment_group = (!is_tree).then(|| {
+            this.worktree_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
         let worktree_path = summary.path.clone();
         let origin = gitcomet_state::model::ForeignDiffOrigin::Worktree {
             branch: summary.branch.clone(),
             detached: summary.detached,
         };
 
-        range
-            .filter_map(|ix| {
-                files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f.clone(), row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, _f, path_label, visuals)| {
-                let color = visuals.color(&theme);
-                let selected = selected_ix_now == Some(ix);
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree: _,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("worktree_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    additions,
+                                    deletions,
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
+                                },
+                            )
+                            .debug_selector(move || {
+                                format!("worktree_file_dir_{}_{}", repo_id.0, ix)
+                            })
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    this.toggle_file_list_dir(
+                                        repo_id,
+                                        crate::view::rows::FileListId::WorktreeFiles,
+                                        Arc::clone(&key),
+                                        Arc::clone(&chain),
+                                        collapsed,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                // `source_ix` indexes `inputs.entries`, which the reducer
+                // re-derives independently. Sorting the display must not change
+                // the index a click sends.
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
+                let selected = selected_ix_now == Some(source_ix);
                 let tooltip = path_label.clone();
+                let ix_for_click = source_ix;
                 let inputs_for_click = Arc::clone(&inputs);
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
 
-                let mut row = div()
+                let row_group: SharedString = format!("worktree_file_row_{ix}").into();
+                let interaction =
+                    crate::view::rows::FileRowInteraction::new(theme, tint, selected, false);
+                let badge_disc = interaction.badge_disc(row_group.clone());
+
+                let row = div()
                     .id(("worktree_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("worktree_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
-                    .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(svg_icon(visuals.icon, color, scaled_px(14.0))),
-                    )
+                    .map(|row| interaction.apply(row))
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
-                                .text_sm()
+                                match path_alignment_group.clone() {
+                                    Some(group) => components::TruncatedText::aligned_path(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                        group,
+                                    ),
+                                    // A tree row's label is a bare file name, so
+                                    // there is no path to align against.
+                                    None => components::TruncatedText::new(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                    ),
+                                }
                                 .render(cx),
                             ),
                     )
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        this.focus_diff_panel(window, cx);
-                        this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
-                            repo_id,
-                            origin: origin_for_click.clone(),
-                            submodule_repo_path: worktree_path_for_click.clone(),
-                            parent_submodule_path: worktree_path_for_click.clone(),
-                            entries: inputs_for_click.entries.clone(),
-                            selected_ix: ix,
-                        });
-                        cx.notify();
-                    }))
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Composite,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            this.focus_diff_panel(window, cx);
+                            this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+                                repo_id,
+                                origin: origin_for_click.clone(),
+                                submodule_repo_path: worktree_path_for_click.clone(),
+                                parent_submodule_path: worktree_path_for_click.clone(),
+                                entries: Arc::clone(&inputs_for_click.entries),
+                                selected_ix: ix_for_click,
+                            });
+                            cx.notify();
+                        }),
+                    )
                     .gitcomet_tooltip(theme, tooltip.clone());
 
-                if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
-                    ));
-                }
-
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2455,33 +2726,113 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
         let from = range_selection.from.clone();
         let to = range_selection.to.clone();
         let file_rows =
             this.cached_range_file_rows(repo_id, repo.history_state.range_files_rev, &files);
+        let projection =
+            this.cached_range_file_projection(repo_id, repo.history_state.range_files_rev, &files);
+        let plan = this.cached_range_file_plan(repo_id, repo.history_state.range_files_rev, &files);
+        let is_tree = plan.is_tree();
         let visible_signature = this.range_files_visible_signature(
             repo_id,
             repo.history_state.range_files_rev,
             &range,
             files.len(),
         );
-        let path_alignment_group = this
-            .range_files_path_alignment_group
-            .visible_rows(visible_signature);
+        let path_alignment_group = (!is_tree).then(|| {
+            this.range_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
 
-        range
-            .filter_map(|ix| {
-                files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, f, path_label, visuals)| {
-                let icon = Some(visuals.icon);
-                let color = visuals.color(&theme);
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree: _,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("range_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    additions,
+                                    deletions,
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
+                                },
+                            )
+                            .debug_selector(move || format!("range_file_dir_{}_{}", repo_id.0, ix))
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    this.toggle_file_list_dir(
+                                        repo_id,
+                                        crate::view::rows::FileListId::RangeFiles,
+                                        Arc::clone(&key),
+                                        Arc::clone(&chain),
+                                        collapsed,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
                 let target = DiffTarget::CommitRange {
                     from_commit_id: from.clone(),
                     to_commit_id: to.clone(),
@@ -2491,43 +2842,59 @@ impl DetailsPaneView {
                 let target_for_click = target.clone();
                 let tooltip = path_label.clone();
 
-                let mut row = div()
+                let row_group: SharedString = format!("range_file_row_{ix}").into();
+                let interaction =
+                    crate::view::rows::FileRowInteraction::new(theme, tint, selected, false);
+                let badge_disc = interaction.badge_disc(row_group.clone());
+
+                let row = div()
                     .id(("range_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("range_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
-                    .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, scaled_px(14.0)))
-                            }),
-                    )
+                    .map(|row| interaction.apply(row))
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
-                                .text_sm()
+                                match path_alignment_group.clone() {
+                                    Some(group) => components::TruncatedText::aligned_path(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                        group,
+                                    ),
+                                    // A tree row's label is a bare file name, so
+                                    // there is no path to align against.
+                                    None => components::TruncatedText::new(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                    ),
+                                }
                                 .render(cx),
                             ),
                     )
@@ -2539,35 +2906,33 @@ impl DetailsPaneView {
                             f.deletions.unwrap_or(0) as usize,
                         )))
                     })
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        let selected = this.active_repo().is_some_and(|repo| {
-                            repo.id == repo_id
-                                && repo.diff_state.diff_target.as_ref() == Some(&target_for_click)
-                        });
-                        if selected {
-                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                        } else {
-                            this.focus_diff_panel(window, cx);
-                            this.store.dispatch(Msg::SelectDiff {
-                                repo_id,
-                                target: target_for_click.clone(),
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Composite,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            let selected = this.active_repo().is_some_and(|repo| {
+                                repo.id == repo_id
+                                    && repo.diff_state.diff_target.as_ref()
+                                        == Some(&target_for_click)
                             });
-                        }
-                        cx.notify();
-                    }))
+                            if selected {
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                            } else {
+                                this.focus_diff_panel(window, cx);
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: target_for_click.clone(),
+                                });
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .gitcomet_tooltip(theme, tooltip.clone());
 
-                if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
-                    ));
-                }
-
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2575,6 +2940,68 @@ impl DetailsPaneView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn badge_feedback_remains_visible_on_transparent_controls() {
+        use crate::kit::interaction::{InteractionFeedback, InteractionState};
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let style = worktree_badge_interaction(theme);
+            for feedback in [InteractionFeedback::Hovered, InteractionFeedback::Pressed] {
+                assert!(
+                    style
+                        .fill(InteractionState::default(), feedback)
+                        .unwrap()
+                        .alpha
+                        > 0.0
+                );
+            }
+            assert!(
+                style
+                    .fill(
+                        InteractionState::default().open(true),
+                        InteractionFeedback::Resting
+                    )
+                    .unwrap()
+                    .alpha
+                    > 0.0
+            );
+        }
+    }
+
+    /// Every worktree badge -- the branch row pill, the details chip, the log
+    /// row badge -- goes through one height, so they cannot drift apart.
+    #[test]
+    fn worktree_badges_grow_with_the_density() {
+        use crate::appearance::{Appearance, UiDensity};
+        let scale = |density| {
+            ui_scale::UiScale::from_percent(100).with_appearance(Appearance {
+                density,
+                ..Appearance::default()
+            })
+        };
+        let heights: Vec<_> = UiDensity::ALL.into_iter().map(scale).collect();
+        for at in &heights {
+            assert!(
+                worktree_badge_height(*at)
+                    < at.row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ),
+                "the badge must still fit the row it sits in"
+            );
+        }
+        assert!(
+            heights
+                .windows(2)
+                .all(|w| worktree_badge_height(w[1]) > worktree_badge_height(w[0])),
+            "the badge must grow at every density step"
+        );
+        let compact = scale(UiDensity::Compact);
+        assert_eq!(
+            worktree_badge_height(ui_scale::UiScale::from_percent(200)),
+            worktree_badge_height(compact) * 2.0,
+            "and follow the UI zoom"
+        );
+    }
     use super::*;
     use gitcomet_core::domain::{
         Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Upstream,
@@ -2665,17 +3092,26 @@ mod tests {
         CommitId(id.into())
     }
 
-    /// The sequence number of the log walk the store has in flight, if any. A
-    /// `LogLoaded` answering by hand has to carry it, or the reducer takes the
-    /// reply for a superseded walk's and drops it.
-    fn active_log_seq(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::LogLoadSeq {
-        store
-            .snapshot()
+    /// The blocking backend never finishes opening, so declare the initial
+    /// walk before answering it by hand. Unsolicited replies are rejected.
+    fn begin_log_for_test(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::LogLoadSeq {
+        let mut state = (*store.snapshot()).clone();
+        let repo = state
             .repos
-            .iter()
+            .iter_mut()
             .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.loads_in_flight.active_log_seq())
-            .unwrap_or_default()
+            .expect("fixture repo");
+        let seq = repo
+            .loads_in_flight
+            .request_log(gitcomet_state::model::PendingLogLoad {
+                scope: repo.history_state.history_scope,
+                author: None,
+                limit: 200,
+                cursor: None,
+            })
+            .expect("initial fixture walk");
+        store.replace_snapshot_for_test(Arc::new(state));
+        seq
     }
 
     fn commit(id: &str) -> Commit {
@@ -2689,20 +3125,38 @@ mod tests {
     }
 
     #[test]
-    fn worktree_badge_colors_follow_open_and_menu_state() {
-        let palette = worktree_badge_palette(AppTheme::gitcomet_dark());
+    fn worktree_badges_use_a_theme_surface_only_for_the_active_body() {
+        let light = AppTheme::gitcomet_light();
+        let dark = AppTheme::gitcomet_dark();
+        for (theme, expected_active_bg) in [
+            (light, light.colors.surface.canvas),
+            (dark, dark.colors.surface.raised),
+        ] {
+            let palette = worktree_badge_palette(theme);
 
-        let closed = worktree_badge_colors(palette, false, false);
-        assert_eq!(closed.border, palette.border);
-        assert_eq!(closed.text, palette.text);
+            assert_eq!(palette.bg.alpha, 0.0);
+            assert_eq!(palette.active_bg, expected_active_bg);
+            assert_eq!(palette.text, theme.colors.foreground.emphasis);
 
-        let open = worktree_badge_colors(palette, true, false);
-        assert_eq!(open.border, palette.open_border);
-        assert_eq!(open.text, palette.open_text);
+            let closed = worktree_badge_colors(palette, false, false);
+            assert_eq!(closed.bg, palette.bg);
+            assert_eq!(closed.border, palette.border);
+            assert_eq!(closed.icon, palette.icon);
+            assert_eq!(closed.text, palette.text);
 
-        let menu_active = worktree_badge_colors(palette, true, true);
-        assert_eq!(menu_active.border, palette.active_border);
-        assert_eq!(menu_active.text, palette.active_text);
+            let open = worktree_badge_colors(palette, true, false);
+            assert_eq!(open.bg, palette.active_bg);
+            assert_eq!(open.border, palette.open_border);
+            assert_eq!(open.icon, palette.open_icon);
+            assert_eq!(open.text, palette.open_text);
+
+            assert_eq!(upstream_badge_colors(palette), open);
+
+            let menu_active = worktree_badge_colors(palette, true, true);
+            assert_eq!(menu_active.border, palette.active_border);
+            assert_eq!(menu_active.icon, palette.active_icon);
+            assert_eq!(menu_active.text, palette.active_text);
+        }
     }
 
     #[test]
@@ -3278,23 +3732,22 @@ mod tests {
         let target = commit_id("shared-tip");
         let selected_branch = SelectedBranch {
             repo_id: RepoId(1),
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         };
+        let local_main = BranchMenuTarget::local("main");
+        let remote_main = BranchMenuTarget::remote("origin", "main");
 
         assert!(branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             Some(&target),
             Some(&target)
         ));
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Remote,
-            "origin/main",
+            &remote_main,
             Some(&target),
             Some(&target)
         ));
@@ -3306,23 +3759,21 @@ mod tests {
         let other = commit_id("other-tip");
         let selected_branch = SelectedBranch {
             repo_id: RepoId(1),
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         };
+        let local_main = BranchMenuTarget::local("main");
 
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             Some(&other),
             Some(&target)
         ));
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             None,
             Some(&target)
         ));
@@ -3333,15 +3784,14 @@ mod tests {
         let target = commit_id("main-tip");
         let selected_branch = SelectedBranch {
             repo_id: RepoId(1),
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         };
+        let local_main = BranchMenuTarget::local("main");
 
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             Some(&target),
             None
         ));
@@ -3365,7 +3815,7 @@ mod tests {
         }]));
 
         assert_eq!(
-            branch_click_history_reveal_target(&repo, BranchSection::Local, "main", true),
+            branch_click_history_reveal_target(&repo, &BranchMenuTarget::local("main"), true,),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
                 fallback_scope: Some(LogScope::FullReachable),
@@ -3391,7 +3841,7 @@ mod tests {
         }]));
 
         assert_eq!(
-            branch_click_history_reveal_target(&repo, BranchSection::Local, "feature", false),
+            branch_click_history_reveal_target(&repo, &BranchMenuTarget::local("feature"), false,),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
                 fallback_scope: Some(LogScope::AllBranches),
@@ -3418,12 +3868,46 @@ mod tests {
         assert_eq!(
             branch_click_history_reveal_target(
                 &repo,
-                BranchSection::Remote,
-                "origin/feature/topic",
+                &BranchMenuTarget::remote("origin", "feature/topic"),
                 false,
             ),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
+                fallback_scope: Some(LogScope::AllBranches),
+            })
+        );
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_preserves_a_slash_remote_identity() {
+        let selected_target = commit_id("team-alice-main-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            RemoteBranch {
+                remote: "team".to_string(),
+                name: "alice/main".to_string(),
+                target: commit_id("team-alice-main-as-a-branch"),
+            },
+            RemoteBranch {
+                remote: "team/alice".to_string(),
+                name: "main".to_string(),
+                target: selected_target.clone(),
+            },
+        ]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(
+                &repo,
+                &BranchMenuTarget::remote("team/alice", "main"),
+                false,
+            ),
+            Some(BranchHistoryRevealTarget {
+                commit_id: selected_target,
                 fallback_scope: Some(LogScope::AllBranches),
             })
         );
@@ -3434,14 +3918,23 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        // OpenRepo normalizes paths. Give it and the worktree list the same
+        // native absolute paths, including on Windows and symlinked temp dirs.
+        let worktrees_dir = tempfile::tempdir().expect("worktree fixture directory");
+        let worktrees_path =
+            gitcomet_core::path_utils::canonicalize_or_original(worktrees_dir.path().to_path_buf());
+        let repo_path = worktrees_path.join("repo");
+        let feature_path = worktrees_path.join("repo-feature");
+        std::fs::create_dir(&repo_path).expect("main worktree directory");
+        std::fs::create_dir(&feature_path).expect("feature worktree directory");
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
         let repo_id = RepoId(1);
         crate::view::test_support::redraw(cx);
-        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        store_for_assert.dispatch(Msg::OpenRepo(repo_path.clone()));
         wait_until(cx, "opened repo placeholder", |_cx| {
             let snapshot = store_for_assert.snapshot();
             snapshot.active_repo == Some(repo_id)
@@ -3498,13 +3991,13 @@ mod tests {
             repo_id,
             result: Ok(vec![
                 Worktree {
-                    path: PathBuf::from("/tmp/repo"),
+                    path: repo_path,
                     head: None,
                     branch: Some("main".to_string()),
                     detached: false,
                 },
                 Worktree {
-                    path: PathBuf::from("/tmp/repo-feature"),
+                    path: feature_path.clone(),
                     head: None,
                     branch: Some("feature".to_string()),
                     detached: false,
@@ -3530,6 +4023,65 @@ mod tests {
         let feature_row_selector =
             leak_selector(format!("branch_row_{}_{}", repo_id.0, feature_ix));
         let feature_badge_selector = leak_selector(format!("branch_workspace_badge_{feature_ix}"));
+        let main_ix = branch_row_index_for_name(cx, &view, BranchSection::Local, "main");
+        let main_badge = leak_selector(format!("branch_workspace_badge_{main_ix}"));
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            cx.update(|_, app| view.update(app, |this, cx| this.set_theme(theme, cx)));
+            cx.simulate_mouse_move(
+                point(px(600.0), px(400.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            crate::view::test_support::redraw(cx);
+            let main_resting = crate::test_support::painted_control_quads(cx, main_badge);
+            assert!(
+                main_resting.iter().any(|(bg, _)| bg.as_solid()
+                    == Some(palette::IntoColor::into_color(
+                        worktree_badge_palette(theme).active_bg
+                    ))),
+                "open workspace must retain its resting fill"
+            );
+            let closed_resting =
+                crate::test_support::painted_control_quads(cx, feature_badge_selector);
+            let position = cx.debug_bounds(feature_badge_selector).unwrap().center();
+            cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+            crate::view::test_support::redraw(cx);
+            assert_ne!(
+                crate::test_support::painted_control_quads(cx, feature_badge_selector),
+                closed_resting,
+                "hover must be visible"
+            );
+            cx.simulate_mouse_down(
+                position,
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            crate::view::test_support::redraw(cx);
+            assert_ne!(
+                crate::test_support::painted_control_quads(cx, feature_badge_selector),
+                closed_resting,
+                "press must be visible"
+            );
+            cx.simulate_mouse_up(
+                point(px(600.0), px(400.0)),
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_mouse_move(
+                point(px(600.0), px(400.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            crate::view::test_support::redraw(cx);
+            assert_eq!(
+                crate::test_support::painted_control_quads(cx, feature_badge_selector),
+                closed_resting
+            );
+            assert_eq!(
+                crate::test_support::painted_control_quads(cx, main_badge),
+                main_resting
+            );
+        }
         let feature_pull_badge_selector = leak_selector(format!("branch_pull_badge_{feature_ix}"));
         let feature_push_badge_selector = leak_selector(format!("branch_push_badge_{feature_ix}"));
         let feature_menu_selector = leak_selector(format!(
@@ -3614,6 +4166,12 @@ mod tests {
             gpui::MouseButton::Right,
             gpui::Modifiers::default(),
         );
+        assert!(!cx.update(|_, app| view.read(app).popover_host.read(app).is_open()));
+        cx.simulate_mouse_up(
+            feature_row_label_point,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
         crate::view::test_support::redraw(cx);
         let popover_kind = cx.update(|_window, app| {
             view.read(app)
@@ -3626,8 +4184,7 @@ mod tests {
                 popover_kind,
                 Some(PopoverKind::BranchMenu {
                     repo_id: opened_repo_id,
-                    section: BranchSection::Local,
-                    ref name,
+                    target: BranchMenuTarget::Local { ref name },
                     ..
                 }) if opened_repo_id == repo_id && name == "feature"
             ),
@@ -3675,7 +4232,7 @@ mod tests {
                         branch: Some(ref branch),
                     }),
                 }) if opened_repo_id == repo_id
-                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && path == &feature_path
                     && branch == "feature"
             ),
             "expected worktree badge click to open the worktree menu"
@@ -3690,6 +4247,11 @@ mod tests {
         cx.run_until_parked();
 
         cx.simulate_mouse_down(
+            feature_badge_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
             feature_badge_center,
             gpui::MouseButton::Right,
             gpui::Modifiers::default(),
@@ -3711,7 +4273,7 @@ mod tests {
                         branch: Some(ref branch),
                     }),
                 }) if opened_repo_id == repo_id
-                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && path == &feature_path
                     && branch == "feature"
             ),
             "expected worktree badge right-click to open the worktree menu"
@@ -3765,7 +4327,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3783,6 +4345,7 @@ mod tests {
                 && snapshot.repos.iter().any(|repo| repo.id == repo_id)
         });
 
+        let log_seq = begin_log_for_test(&store_for_assert, repo_id);
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
             result: Ok("main".to_string()),
@@ -3806,13 +4369,14 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            seq: active_log_seq(&store_for_assert, repo_id),
+            seq: log_seq,
             scope: initial_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("feature-tip"), commit("main-tip")],
                 next_cursor: None,
-            }),
+            })
+            .into()),
         }));
         wait_until(cx, "sidebar repo data", |cx| {
             sync_view_for_tests(cx, &view);
@@ -3828,8 +4392,7 @@ mod tests {
             sidebar_pane.update(app, |pane, cx| {
                 pane.reveal_branch_commit_in_history(
                     repo_id,
-                    BranchSection::Local,
-                    "feature",
+                    BranchMenuTarget::local("feature"),
                     feature_tip.clone(),
                     None,
                     cx,
@@ -3859,8 +4422,7 @@ mod tests {
         assert_eq!(
             marked,
             Some(SelectedHistoryBranch {
-                section: BranchSection::Local,
-                name: "feature".into(),
+                target: BranchMenuTarget::local("feature"),
             }),
             "the revealed row should mark the clicked branch's chip as selected"
         );
@@ -3869,7 +4431,7 @@ mod tests {
     #[gpui::test]
     fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3898,6 +4460,7 @@ mod tests {
         });
         sync_view_from_store(cx);
 
+        let log_seq = begin_log_for_test(&store_for_assert, repo_id);
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
             result: Ok("main".to_string()),
@@ -3913,13 +4476,14 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            seq: active_log_seq(&store_for_assert, repo_id),
+            seq: log_seq,
             scope: initial_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("main-tip")],
                 next_cursor: None,
-            }),
+            })
+            .into()),
         }));
         store_for_assert.dispatch(Msg::SelectDiff {
             repo_id,
@@ -3961,8 +4525,7 @@ mod tests {
             sidebar_pane.update(app, |pane, cx| {
                 pane.reveal_branch_commit_in_history(
                     repo_id,
-                    BranchSection::Local,
-                    "main",
+                    BranchMenuTarget::local("main"),
                     target.clone(),
                     None,
                     cx,
@@ -3987,7 +4550,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -4017,6 +4580,7 @@ mod tests {
         });
         sync_view_from_store(cx);
 
+        let log_seq = begin_log_for_test(&store_for_assert, repo_id);
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
             result: Ok("main".to_string()),
@@ -4032,13 +4596,14 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            seq: active_log_seq(&store_for_assert, repo_id),
+            seq: log_seq,
             scope: initial_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("main-tip")],
                 next_cursor: None,
-            }),
+            })
+            .into()),
         }));
         wait_until(cx, "sidebar repo data", |_cx| {
             let snapshot = store_for_assert.snapshot();
@@ -4097,8 +4662,7 @@ mod tests {
             sidebar_pane.update(app, |pane, cx| {
                 pane.reveal_branch_commit_in_history(
                     repo_id,
-                    BranchSection::Local,
-                    "main",
+                    BranchMenuTarget::local("main"),
                     target.clone(),
                     None,
                     cx,

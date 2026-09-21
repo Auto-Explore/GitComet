@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    RepoMap, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
+    RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
     spawn_with_repo_or_else,
 };
 
@@ -142,13 +142,6 @@ mod selected_diff_guard_tests {
             SelectedDiffLoadGuard::new(thread_state, repo_id, target("src/main.rs"), 7);
         assert!(!stale_target.is_current());
     }
-}
-
-fn missing_repo_error(repo_id: RepoId) -> Error {
-    Error::new(ErrorKind::Backend(format!(
-        "Repository handle not found for repo_id {}",
-        repo_id.0
-    )))
 }
 
 fn trace_side_stats(bytes: Option<&[u8]>, text: Option<&str>) -> MergetoolTraceSideStats {
@@ -370,6 +363,47 @@ pub(super) fn schedule_load_worktree_status(
     );
 }
 
+pub(super) fn schedule_load_uncommitted_line_stats(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    generation: crate::model::LineStatsGeneration,
+    status: std::sync::Arc<gitcomet_core::domain::RepoStatus>,
+    cancellation: CancellationToken,
+) {
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-uncommitted-line-stats",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                    repo_id,
+                    generation,
+                    // Cancellable: this reads every changed file, so a
+                    // superseded scan must not hold the repo-load worker.
+                    result: repo
+                        .uncommitted_line_stats_for_status_cancellable(&status, &cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                    repo_id,
+                    generation,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_staged_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -481,8 +515,8 @@ pub(super) fn schedule_load_log(
     seq: crate::model::LogLoadSeq,
     scope: LogScope,
     author: Option<String>,
-    limit: usize,
     cursor: Option<LogCursor>,
+    request: gitcomet_core::services::HistoryReadRequest,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
@@ -493,32 +527,24 @@ pub(super) fn schedule_load_log(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = {
-                let cursor_ref = cursor.as_ref();
-                // Report the page as it fills in. Finding one page of a rare
-                // author means walking the whole history — over ten seconds on
-                // a repository with a million commits — and the user should not
-                // be looking at the previous filter's rows for all of it.
-                let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
-                    send_or_log(
-                        &msg_tx,
-                        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
-                            repo_id,
-                            seq,
-                            commits: chunk.commits,
-                            scanned: chunk.scanned,
-                        }),
-                    );
-                };
-                repo.log_history_mode_page_streaming(
-                    scope,
-                    author.as_deref(),
-                    limit,
-                    cursor_ref,
-                    &cancellation,
-                    &mut on_chunk,
-                )
+            let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                        repo_id,
+                        seq,
+                        commits: chunk.commits,
+                        scanned: chunk.scanned,
+                    }),
+                );
             };
+            let result = repo.read_history(
+                scope,
+                author.as_deref(),
+                &request,
+                &cancellation,
+                &mut on_chunk,
+            );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
@@ -855,14 +881,17 @@ pub(super) fn schedule_load_file_history(
     repo_id: RepoId,
     path: PathBuf,
     limit: usize,
+    cursor: Option<LogCursor>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.log_file_page(&path, limit, cursor.as_ref());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
                 repo_id,
-                path: path.clone(),
-                result: repo.log_file_page(&path, limit, None),
+                path,
+                cursor,
+                result,
             }),
         );
     });
@@ -1023,7 +1052,28 @@ pub(super) fn schedule_load_worktree_dirty(
                         // Only the selected worktree's files are carried back;
                         // see `WorktreeDirtySummary`.
                         let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
-                        let summary = worktree_dirty_summary(worktree, status, keep_files);
+                        // Like the file lists, only the selected worktree pays.
+                        let line_stats = if keep_files {
+                            match handle.uncommitted_line_stats_for_status_cancellable(
+                                &status,
+                                &cancellation,
+                            ) {
+                                Ok(stats) => stats,
+                                // Like the status read above: a cancelled scan
+                                // stops the walk rather than reporting a
+                                // worktree whose counts silently went missing.
+                                Err(_) if cancellation.is_cancelled() => {
+                                    return Err(Error::new(ErrorKind::Cancelled));
+                                }
+                                // Counts are decoration; a worktree that cannot
+                                // produce them still belongs in the list.
+                                Err(_) => Default::default(),
+                            }
+                        } else {
+                            Default::default()
+                        };
+                        let summary =
+                            worktree_dirty_summary(worktree, status, keep_files, line_stats);
                         if summary.is_dirty() {
                             summaries.push(summary);
                         }
@@ -1254,11 +1304,15 @@ fn worktree_dirty_summary(
     worktree: Worktree,
     status: RepoStatus,
     keep_files: bool,
+    line_stats: gitcomet_core::domain::UncommittedLineStats,
 ) -> WorktreeDirtySummary {
     let (added, modified, deleted) = count_file_statuses(&status.unstaged);
     let (staged_added, staged_modified, staged_deleted) = count_file_statuses(&status.staged);
     let (staged, unstaged) = if keep_files {
-        (status.staged, status.unstaged)
+        (
+            Arc::unwrap_or_clone(status.staged),
+            Arc::unwrap_or_clone(status.unstaged),
+        )
     } else {
         (Vec::new(), Vec::new())
     };
@@ -1272,6 +1326,7 @@ fn worktree_dirty_summary(
         deleted: deleted + staged_deleted,
         staged,
         unstaged,
+        line_stats,
     }
 }
 
@@ -1576,6 +1631,34 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_verify_commit_signatures(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    epoch: u64,
+    batch: u64,
+    cancellation: CancellationToken,
+    commit_ids: std::sync::Arc<[gitcomet_core::domain::CommitId]>,
+    formats: gitcomet_core::domain::SignatureFormats,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+                repo_id,
+                epoch,
+                batch,
+                result: repo.verify_commit_signatures_cancellable(
+                    &commit_ids,
+                    formats,
+                    &cancellation,
+                ),
+            }),
+        );
+    });
+}
+
 /// Resolve a possibly abbreviated reference and load its details in one call.
 ///
 /// `commit_details` runs the reference through `rev-parse`, so this answers
@@ -1595,6 +1678,33 @@ pub(super) fn schedule_resolve_commit_for_reveal(
                 repo_id,
                 reference: reference.clone(),
                 result: repo.commit_details(&reference),
+            }),
+        );
+    });
+}
+
+/// Resolve a reference for the Reveal Commit dialog's preview row.
+///
+/// `resolve_commit` skips the parent diff `commit_details` pays for, because
+/// this runs while the user is still typing.
+pub(super) fn schedule_resolve_commit_lookup(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    reference: gitcomet_core::domain::CommitId,
+    purpose: crate::model::CommitLookupPurpose,
+    request: u64,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference: reference.clone(),
+                request,
+                purpose,
+                result: repo.resolve_commit(&reference),
             }),
         );
     });
@@ -1698,6 +1808,7 @@ pub(super) fn schedule_open_file_at_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
     path: std::path::PathBuf,
+    content_preview: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         // Resolve the file's name in the target commit (it may differ from the
@@ -1708,14 +1819,22 @@ pub(super) fn schedule_open_file_at_commit(
             .ok()
             .flatten()
             .unwrap_or(path);
-        send_or_log(
-            &msg_tx,
+        let message = if content_preview {
             Msg::OpenFileContent {
                 repo_id,
                 source: gitcomet_core::domain::FileSource::Commit(commit_id),
                 path: resolved,
-            },
-        );
+            }
+        } else {
+            Msg::SelectDiff {
+                repo_id,
+                target: gitcomet_core::domain::DiffTarget::Commit {
+                    commit_id,
+                    path: Some(resolved),
+                },
+            }
+        };
+        send_or_log(&msg_tx, message);
     });
 }
 
@@ -2250,14 +2369,14 @@ mod worktree_dirty_tests {
     #[test]
     fn a_summary_sums_staged_and_unstaged_into_the_three_buckets() {
         let repo_status = RepoStatus {
-            staged: vec![status("gone.txt", FileStatusKind::Deleted)],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![status("gone.txt", FileStatusKind::Deleted)]),
+            unstaged: std::sync::Arc::new(vec![
                 status("edited.txt", FileStatusKind::Modified),
                 status("new.txt", FileStatusKind::Untracked),
-            ],
+            ]),
         };
 
-        let summary = worktree_dirty_summary(worktree(), repo_status, true);
+        let summary = worktree_dirty_summary(worktree(), repo_status, true, Default::default());
         assert_eq!(
             (summary.added, summary.modified, summary.deleted),
             (1, 1, 1)
@@ -2275,7 +2394,8 @@ mod worktree_dirty_tests {
     /// cannot be relied on.
     #[test]
     fn a_summary_carries_the_worktrees_identity() {
-        let summary = worktree_dirty_summary(worktree(), RepoStatus::default(), true);
+        let summary =
+            worktree_dirty_summary(worktree(), RepoStatus::default(), true, Default::default());
         assert_eq!(summary.path, PathBuf::from("/wt/side"));
         assert_eq!(summary.head.as_ref().map(|id| id.as_ref()), Some("abc123"));
         assert_eq!(summary.branch.as_deref(), Some("side"));
@@ -2584,15 +2704,17 @@ mod worktree_dirty_files_tests {
 
     fn status(paths: &[&str]) -> RepoStatus {
         RepoStatus {
-            staged: Vec::new(),
-            unstaged: paths
-                .iter()
-                .map(|path| FileStatus {
-                    path: PathBuf::from(path),
-                    kind: FileStatusKind::Modified,
-                    conflict: None,
-                })
-                .collect(),
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(
+                paths
+                    .iter()
+                    .map(|path| FileStatus {
+                        path: PathBuf::from(path),
+                        kind: FileStatusKind::Modified,
+                        conflict: None,
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -2611,7 +2733,12 @@ mod worktree_dirty_files_tests {
     /// every row shows them.
     #[test]
     fn only_the_selected_worktree_carries_its_files() {
-        let kept = worktree_dirty_summary(worktree(), status(&["a.rs", "b.rs"]), true);
+        let kept = worktree_dirty_summary(
+            worktree(),
+            status(&["a.rs", "b.rs"]),
+            true,
+            Default::default(),
+        );
         assert_eq!((kept.added, kept.modified, kept.deleted), (0, 2, 0));
         assert_eq!(
             kept.unstaged.len(),
@@ -2619,7 +2746,12 @@ mod worktree_dirty_files_tests {
             "the selected worktree keeps its files"
         );
 
-        let counted = worktree_dirty_summary(worktree(), status(&["a.rs", "b.rs"]), false);
+        let counted = worktree_dirty_summary(
+            worktree(),
+            status(&["a.rs", "b.rs"]),
+            false,
+            Default::default(),
+        );
         assert_eq!(
             (counted.added, counted.modified, counted.deleted),
             (0, 2, 0),

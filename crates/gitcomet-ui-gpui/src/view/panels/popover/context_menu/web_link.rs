@@ -1,14 +1,30 @@
 use super::*;
 
-pub(super) fn model(url: &str) -> ContextMenuModel {
-    model_for_web_link(url)
+pub(super) fn model(url: &str, load_remote_image_url: Option<&str>) -> ContextMenuModel {
+    model_for_web_link(url, load_remote_image_url)
 }
 
-fn model_for_web_link(url: &str) -> ContextMenuModel {
-    ContextMenuModel::new(vec![
+fn model_for_web_link(url: &str, load_remote_image_url: Option<&str>) -> ContextMenuModel {
+    let mut items = vec![
         ContextMenuItem::Header("Link".into()),
         ContextMenuItem::Label(url.to_owned().into()),
         ContextMenuItem::Separator,
+    ];
+    if let Some(image_url) = load_remote_image_url {
+        items.extend([
+            ContextMenuItem::Entry {
+                label: "Load image".into(),
+                icon: Some("icons/refresh.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::LoadRemoteMarkdownImage {
+                    url: image_url.to_owned().into(),
+                }),
+            },
+            ContextMenuItem::Separator,
+        ]);
+    }
+    items.extend([
         ContextMenuItem::Entry {
             label: "Open in web browser".into(),
             icon: Some("icons/link.svg".into()),
@@ -27,7 +43,8 @@ fn model_for_web_link(url: &str) -> ContextMenuModel {
                 url: url.to_owned(),
             }),
         },
-    ])
+    ]);
+    ContextMenuModel::new(items)
 }
 
 #[cfg(test)]
@@ -47,7 +64,7 @@ mod tests {
 
     #[test]
     fn model_offers_opening_and_copying_the_link() {
-        let model = model_for_web_link("https://example.com/page");
+        let model = model_for_web_link("https://example.com/page", None);
 
         assert_eq!(
             entry_labels(&model),
@@ -62,7 +79,7 @@ mod tests {
 
     #[test]
     fn open_entry_carries_the_link_url() {
-        let model = model_for_web_link("https://example.com/page");
+        let model = model_for_web_link("https://example.com/page", None);
         let open = model
             .items
             .iter()
@@ -87,7 +104,7 @@ mod tests {
         // A link's address is never on screen — the document shows its text —
         // so the copy has to announce itself. That is what separates this from
         // the plain `CopyText` every other menu uses.
-        let model = model_for_web_link("https://example.com/page");
+        let model = model_for_web_link("https://example.com/page", None);
         let copy = model
             .items
             .iter()
@@ -104,6 +121,34 @@ mod tests {
         assert!(matches!(
             copy.as_ref(),
             ContextMenuAction::CopyLinkAddress { url } if url == "https://example.com/page"
+        ));
+    }
+
+    #[test]
+    fn linked_blocked_image_adds_an_exact_load_action() {
+        let model = model_for_web_link(
+            "https://example.com/page",
+            Some("https://images.example.com/badge.svg"),
+        );
+
+        assert_eq!(
+            entry_labels(&model),
+            vec!["Load image", "Open in web browser", "Copy link address"]
+        );
+        let load = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Load image" => {
+                    Some(action)
+                }
+                _ => None,
+            })
+            .expect("load image entry");
+        assert!(matches!(
+            load.as_ref(),
+            ContextMenuAction::LoadRemoteMarkdownImage { url }
+                if url.as_ref() == "https://images.example.com/badge.svg"
         ));
     }
 }

@@ -13,8 +13,6 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
-pub(super) const DIFF_FONT_SCALE: f32 = 0.80;
-
 pub(super) type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
 #[derive(Clone, Copy, Debug)]
@@ -29,18 +27,20 @@ pub(super) fn diff_text_style(window: &Window) -> TextStyle {
     style
 }
 
-pub(super) fn line_metrics(window: &Window) -> LineMetrics {
-    line_metrics_scaled(window, 1.0)
+pub(super) fn line_metrics(window: &Window, theme: AppTheme) -> LineMetrics {
+    line_metrics_scaled(window, theme, 1.0)
 }
 
 /// Metrics at `extra_scale` times the base diff font size (1.0 = the regular
 /// row text; the annotation "when" column uses a slightly smaller scale).
-pub(super) fn line_metrics_scaled(window: &Window, extra_scale: f32) -> LineMetrics {
-    let style = diff_text_style(window);
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE * extra_scale;
-    let line_height = style
-        .line_height
-        .to_pixels(font_size.into(), window.rem_size());
+pub(super) fn line_metrics_scaled(
+    window: &Window,
+    theme: AppTheme,
+    extra_scale: f32,
+) -> LineMetrics {
+    let percent = crate::ui_scale::UiScale::from_window(window).percent();
+    let font_size = theme.editor_font_size(percent) * extra_scale;
+    let line_height = theme.editor_row_height(percent) * extra_scale;
     LineMetrics {
         font_size,
         line_height,
@@ -55,16 +55,17 @@ pub(super) fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixe
 /// Shapes gutter text, keyed on text, metrics, family/weight, and color.
 ///
 /// The caller supplies its own cache so each canvas keeps its cache keys and
-/// capacities separate.
+/// capacities separate, and the resolved text style (`diff_text_style`),
+/// computed once per paint closure: `window.text_style()` re-merges the style
+/// stack on every call, which added up across the gutter cells of a frame.
 pub(super) fn shaped_gutter_line(
     text: &SharedString,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     cache: &RefCell<FxLruCache<u64, gpui::ShapedLine>>,
     window: &mut Window,
 ) -> gpui::ShapedLine {
-    let mut style = diff_text_style(window);
-    style.color = color.into_color();
     let key = {
         let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
@@ -80,7 +81,8 @@ pub(super) fn shaped_gutter_line(
 
     let shaped = cache.borrow_mut().get(&key).cloned();
     shaped.unwrap_or_else(|| {
-        let run = style.to_run(text.len());
+        let mut run = style.to_run(text.len());
+        run.color = color.into_color();
         let shaped = window
             .text_system()
             .shape_line(text.clone(), metrics.font_size, &[run], None);

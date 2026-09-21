@@ -385,13 +385,6 @@ pub(crate) fn detect_external_editors_with_env(
     editors
 }
 
-pub(crate) fn external_editor_options(
-    saved: Option<&ExternalCodeEditorSetting>,
-) -> Vec<ExternalEditorOption> {
-    let detected = detect_external_editors();
-    external_editor_options_from_detected(saved, detected)
-}
-
 pub(crate) fn external_editor_options_from_detected(
     saved: Option<&ExternalCodeEditorSetting>,
     detected: Vec<DetectedExternalEditor>,
@@ -1147,54 +1140,107 @@ fn detect_jetbrains_toolbox(
     editors: &mut Vec<DetectedExternalEditor>,
     seen: &mut BTreeSet<(String, PathBuf)>,
 ) {
-    for root in env
-        .jetbrains_toolbox_dirs
+    let specs: Vec<&PathEditorSpec> = PATH_EDITOR_SPECS
         .iter()
-        .chain(env.jetbrains_install_dirs.iter())
-    {
-        if !root.is_dir() {
-            continue;
+        .filter(|spec| spec.id.starts_with("jetbrains-") || spec.id == "android-studio")
+        .collect();
+
+    // Standalone installs use `<root>/<product>/bin/<launcher>`. Probe those
+    // fixed paths instead of walking the product's bundled runtime, plugins and
+    // libraries.
+    for root in &env.jetbrains_install_dirs {
+        for product_dir in child_directories(root) {
+            probe_jetbrains_launchers(&product_dir, &specs, editors, seen);
         }
-        for spec in PATH_EDITOR_SPECS
-            .iter()
-            .filter(|spec| spec.id.starts_with("jetbrains-") || spec.id == "android-studio")
-        {
-            for path in find_named_files_limited(root, spec.names, 8) {
+    }
+
+    // Toolbox installs use either `<root>/<product>/<version>` or
+    // `<root>/<product>/<channel>/<version>`, with the launcher in `bin`
+    // (Windows/Linux) or an app bundle (macOS). Stop as soon as an install
+    // directory is recognized; never descend into its runtime or plugins.
+    for root in &env.jetbrains_toolbox_dirs {
+        for product_dir in child_directories(root) {
+            for channel_or_version_dir in child_directories(&product_dir) {
+                if probe_jetbrains_toolbox_install(&channel_or_version_dir, &specs, editors, seen) {
+                    continue;
+                }
+                for version_dir in child_directories(&channel_or_version_dir) {
+                    probe_jetbrains_toolbox_install(&version_dir, &specs, editors, seen);
+                }
+            }
+        }
+    }
+}
+
+fn child_directories(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            file_type.is_dir().then(|| entry.path())
+        })
+        .collect()
+}
+
+fn probe_jetbrains_launchers(
+    product_dir: &Path,
+    specs: &[&PathEditorSpec],
+    editors: &mut Vec<DetectedExternalEditor>,
+    seen: &mut BTreeSet<(String, PathBuf)>,
+) {
+    for spec in specs {
+        for name in spec.names {
+            let path = product_dir.join("bin").join(name);
+            if path.is_file() {
                 push_detected(editors, seen, spec, path);
             }
         }
     }
 }
 
-fn find_named_files_limited(root: &Path, names: &[&str], max_depth: usize) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    find_named_files_limited_inner(root, names, max_depth, &mut found);
-    found
+/// Probe one Toolbox version directory. Returns whether its shape identifies it
+/// as an install, allowing the caller to stop before entering large subtrees.
+fn probe_jetbrains_toolbox_install(
+    install_dir: &Path,
+    specs: &[&PathEditorSpec],
+    editors: &mut Vec<DetectedExternalEditor>,
+    seen: &mut BTreeSet<(String, PathBuf)>,
+) -> bool {
+    let has_bin = install_dir.join("bin").is_dir();
+    let app_dirs: Vec<PathBuf> = child_directories(install_dir)
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+        })
+        .collect();
+    if !has_bin && app_dirs.is_empty() {
+        return false;
+    }
+
+    probe_jetbrains_launchers(install_dir, specs, editors, seen);
+    for app_dir in app_dirs {
+        probe_jetbrains_macos_bundle(&app_dir, specs, editors, seen);
+    }
+    true
 }
 
-fn find_named_files_limited_inner(
-    dir: &Path,
-    names: &[&str],
-    remaining_depth: usize,
-    found: &mut Vec<PathBuf>,
+fn probe_jetbrains_macos_bundle(
+    app_dir: &Path,
+    specs: &[&PathEditorSpec],
+    editors: &mut Vec<DetectedExternalEditor>,
+    seen: &mut BTreeSet<(String, PathBuf)>,
 ) {
-    if remaining_depth == 0 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            find_named_files_limited_inner(&path, names, remaining_depth - 1, found);
-            continue;
-        }
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if names.contains(&file_name) && !found.iter().any(|p| p == &path) {
-            found.push(path);
+    for spec in specs {
+        for name in spec.names {
+            let path = app_dir.join("Contents/MacOS").join(name);
+            if path.is_file() {
+                push_detected(editors, seen, spec, path);
+            }
         }
     }
 }
@@ -1401,6 +1447,39 @@ mod tests {
         assert!(editors.iter().any(|editor| {
             editor.id == "jetbrains-idea" && editor.label == "IntelliJ IDEA" && editor.path == idea
         }));
+    }
+
+    #[test]
+    fn detects_jetbrains_toolbox_paths_without_a_channel_directory() {
+        let root = temp_dir("toolbox-no-channel");
+        let clion = root.join("CLion/2026.1/bin/clion64.exe");
+        touch(&clion);
+        let env = ExternalEditorDetectionEnv {
+            jetbrains_toolbox_dirs: vec![root],
+            ..ExternalEditorDetectionEnv::default()
+        };
+
+        let editors = detect_external_editors_with_env(&env);
+
+        assert!(editors.iter().any(|editor| {
+            editor.id == "jetbrains-clion" && editor.label == "CLion" && editor.path == clion
+        }));
+    }
+
+    #[test]
+    fn jetbrains_probe_does_not_descend_into_install_subtrees() {
+        let root = temp_dir("toolbox-no-deep-walk");
+        let fake = root.join("IDEA-U/ch-0/251.1/plugins/fake/bin/idea.sh");
+        touch(&fake);
+        fs::create_dir_all(root.join("IDEA-U/ch-0/251.1/bin")).expect("create install bin");
+        let env = ExternalEditorDetectionEnv {
+            jetbrains_toolbox_dirs: vec![root],
+            ..ExternalEditorDetectionEnv::default()
+        };
+
+        let editors = detect_external_editors_with_env(&env);
+
+        assert!(editors.iter().all(|editor| editor.path != fake));
     }
 
     #[test]

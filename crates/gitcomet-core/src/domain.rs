@@ -1,6 +1,7 @@
 use memchr::memchr;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
+use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -120,6 +121,119 @@ pub struct CommitDetails {
     pub files: Vec<CommitFileChange>,
 }
 
+/// Verification outcome for a commit signature, from `git log %G?`.
+///
+/// `E` (key missing) and `N` (unsigned) have no variant: both mean "no badge",
+/// and are represented by the absence of a [`CommitSignature`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignatureStatus {
+    /// `G` — good signature from a certified key.
+    Good,
+    /// `U` — good signature, key not certified in the local web of trust.
+    GoodUncertified,
+    /// `X` — good signature that has expired.
+    Expired,
+    /// `Y` — good signature made by a key that has expired.
+    ExpiredKey,
+    /// `B` — signature does not match the commit.
+    Bad,
+    /// `R` — good signature made by a revoked key.
+    Revoked,
+}
+
+impl SignatureStatus {
+    /// `None` for the codes that carry no badge (`E`, `N`) and anything unknown.
+    pub fn from_git_code(code: u8) -> Option<Self> {
+        match code {
+            b'G' => Some(Self::Good),
+            b'U' => Some(Self::GoodUncertified),
+            b'X' => Some(Self::Expired),
+            b'Y' => Some(Self::ExpiredKey),
+            b'B' => Some(Self::Bad),
+            b'R' => Some(Self::Revoked),
+            _ => None,
+        }
+    }
+
+    /// Whether the signature checked out with a trusted signing identity.
+    pub fn is_verified(self) -> bool {
+        matches!(self, Self::Good)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignatureFormat {
+    OpenPgp,
+    Ssh,
+    X509,
+}
+
+impl SignatureFormat {
+    /// Reads the format off the armor header of a `gpgsig` payload.
+    pub fn from_armor(signature: &[u8]) -> Option<Self> {
+        // Git matches raw prefixes, including PGP MESSAGE armor. Leading
+        // whitespace is invalid and must not be sent to `git log` as signed.
+        [
+            (b"-----BEGIN PGP SIGNATURE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN PGP MESSAGE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN SSH SIGNATURE-----".as_slice(), Self::Ssh),
+            (b"-----BEGIN SIGNED MESSAGE-----".as_slice(), Self::X509),
+        ]
+        .into_iter()
+        .find_map(|(prefix, format)| signature.starts_with(prefix).then_some(format))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenPgp => "GPG",
+            Self::Ssh => "SSH",
+            Self::X509 => "X.509",
+        }
+    }
+}
+
+/// A set of [`SignatureFormat`]s, such as the formats whose verifier is installed.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SignatureFormats(u8);
+
+impl SignatureFormats {
+    pub const NONE: Self = Self(0);
+    pub const ALL: Self = Self(0b111);
+
+    const fn bit(format: SignatureFormat) -> u8 {
+        match format {
+            SignatureFormat::OpenPgp => 0b001,
+            SignatureFormat::Ssh => 0b010,
+            SignatureFormat::X509 => 0b100,
+        }
+    }
+
+    #[must_use]
+    pub const fn with(self, format: SignatureFormat) -> Self {
+        Self(self.0 | Self::bit(format))
+    }
+
+    pub const fn contains(self, format: SignatureFormat) -> bool {
+        self.0 & Self::bit(format) != 0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// A verified commit signature. Only built for commits that earn a badge, so
+/// "absent from the signature map" and "no badge" are the same thing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitSignature {
+    pub status: SignatureStatus,
+    pub format: SignatureFormat,
+    /// Signer identity (`%GS`); `None` when git could not name one.
+    pub signer: Option<Arc<str>>,
+    /// Key id or fingerprint (`%GK`).
+    pub key_id: Option<Arc<str>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitFileChange {
     pub path: PathBuf,
@@ -217,7 +331,7 @@ pub struct Worktree {
 /// throwaway handle at its path. Counts follow the same rules as the history
 /// pane's working-tree row: staged and unstaged are summed, so a file that is
 /// both staged and dirty counts twice.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorktreeDirtySummary {
     pub path: PathBuf,
     /// Commit this worktree has checked out. Carried here rather than looked up
@@ -242,6 +356,9 @@ pub struct WorktreeDirtySummary {
     /// selected.
     pub staged: Vec<FileStatus>,
     pub unstaged: Vec<FileStatus>,
+    /// Filled only for the selected worktree, like the lists above. Empty means
+    /// "not loaded", not "no counts".
+    pub line_stats: UncommittedLineStats,
 }
 
 impl WorktreeDirtySummary {
@@ -250,7 +367,7 @@ impl WorktreeDirtySummary {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SubmoduleStatus {
     UpToDate,
     NotInitialized,
@@ -319,6 +436,47 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
+/// `None` means unknown: binary, over the size cap, or not reported by git at
+/// all — an untracked file is in neither index lane.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LineStats {
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+impl LineStats {
+    pub const UNKNOWN: Self = Self {
+        additions: None,
+        deletions: None,
+    };
+}
+
+impl From<(Option<u32>, Option<u32>)> for LineStats {
+    fn from((additions, deletions): (Option<u32>, Option<u32>)) -> Self {
+        Self {
+            additions,
+            deletions,
+        }
+    }
+}
+
+/// Keyed the way `FileStatus` reports paths, so the join is a map lookup. An
+/// absent key means git has no counts for that file.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UncommittedLineStats {
+    pub staged: rustc_hash::FxHashMap<PathBuf, LineStats>,
+    pub unstaged: rustc_hash::FxHashMap<PathBuf, LineStats>,
+}
+
+impl UncommittedLineStats {
+    pub fn for_area(&self, area: DiffArea) -> &rustc_hash::FxHashMap<PathBuf, LineStats> {
+        match area {
+            DiffArea::Staged => &self.staged,
+            DiffArea::Unstaged => &self.unstaged,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubmoduleInnerChange {
     pub path: PathBuf,
@@ -354,6 +512,7 @@ pub struct SubmoduleDiffSummary {
     pub path: PathBuf,
     pub mode: SubmoduleDiffSummaryMode,
     pub status: Option<SubmoduleStatus>,
+    pub checkout_available: bool,
     pub commit_id: Option<CommitId>,
     pub parent_commit_id: Option<CommitId>,
     pub checked_out_head: Option<CommitId>,
@@ -364,8 +523,10 @@ pub struct SubmoduleDiffSummary {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoStatus {
-    pub staged: Vec<FileStatus>,
-    pub unstaged: Vec<FileStatus>,
+    /// Shared: the backend's staged-status cache and the app model both keep
+    /// these lists, and every refresh copied them in and out.
+    pub staged: Arc<Vec<FileStatus>>,
+    pub unstaged: Arc<Vec<FileStatus>>,
 }
 
 #[repr(u8)]
@@ -813,12 +974,17 @@ pub enum DiffLineKind {
 }
 
 impl Diff {
+    pub const MAX_UNIFIED_BYTES: u64 = 64 * 1024 * 1024;
+    pub const MAX_UNIFIED_LINES: usize = 1_000_000;
+    /// Start of the row appended when a diff was cut at a display limit.
+    pub const TRUNCATION_NOTICE_PREFIX: &'static str = "... diff truncated";
+
     fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
         if bytes.is_empty() {
             return 0;
         }
 
-        bytes.iter().filter(|&&byte| byte == b'\n').count() + usize::from(!bytes.ends_with(b"\n"))
+        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
     }
 
     fn classify_unified_line_bytes(raw: &[u8]) -> DiffLineKind {
@@ -889,13 +1055,115 @@ impl Diff {
         Self { target, lines: out }
     }
 
-    pub fn from_unified_reader<R: std::io::BufRead>(
-        target: DiffTarget,
+    /// Read a unified diff, cutting it at the display limits rather than failing.
+    fn read_unified_text_with_limits<R: std::io::Read>(
         mut reader: R,
+        max_bytes: u64,
+        max_lines: usize,
+    ) -> std::io::Result<(String, Option<String>)> {
+        let mut bytes = Vec::new();
+        (&mut reader)
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+
+        let mut notice = None;
+        if bytes.len() as u64 > max_bytes {
+            // Drain to the end so Git exits normally rather than by SIGPIPE,
+            // whose non-zero status would outrank the diff we just read. A
+            // failure here must not cost us that diff either.
+            let _ = std::io::copy(&mut reader, &mut std::io::sink());
+            bytes.truncate(Self::line_boundary_at_or_before(&bytes, max_bytes as usize));
+            notice = Some(Self::truncation_notice(&format!("{max_bytes}-byte")));
+        }
+
+        let mut text = String::from_utf8(bytes).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unified diff is not valid UTF-8: {err}"),
+            )
+        })?;
+
+        if Self::line_capacity_from_bytes(text.as_bytes()) > max_lines {
+            text.truncate(Self::line_boundary_after_lines(text.as_bytes(), max_lines));
+            notice = Some(Self::truncation_notice(&format!("{max_lines}-line")));
+        }
+        Ok((text, notice))
+    }
+
+    fn truncation_notice(limit: &str) -> String {
+        format!(
+            "{} at the {limit} display limit",
+            Self::TRUNCATION_NOTICE_PREFIX
+        )
+    }
+
+    /// Largest cut at or before `limit` on a line boundary, else a UTF-8 one.
+    fn line_boundary_at_or_before(bytes: &[u8], limit: usize) -> usize {
+        let head = &bytes[..limit.min(bytes.len())];
+        if let Some(index) = memchr::memrchr(b'\n', head) {
+            return index + 1;
+        }
+        let mut cut = head.len();
+        while cut > 0 && bytes.get(cut).is_some_and(|byte| byte & 0xC0 == 0x80) {
+            cut -= 1;
+        }
+        cut
+    }
+
+    /// The byte just past the `count`-th line.
+    fn line_boundary_after_lines(bytes: &[u8], count: usize) -> usize {
+        let mut start = 0usize;
+        for _ in 0..count {
+            match memchr(b'\n', &bytes[start..]) {
+                Some(offset) => start += offset + 1,
+                None => return bytes.len(),
+            }
+        }
+        start
+    }
+
+    /// Whether a prospective unified diff fits the display limits.
+    pub fn fits_unified_limits(byte_count: u64, line_count: usize) -> bool {
+        byte_count <= Self::MAX_UNIFIED_BYTES && line_count <= Self::MAX_UNIFIED_LINES
+    }
+
+    pub fn read_unified_text<R: std::io::Read>(
+        reader: R,
+    ) -> std::io::Result<(String, Option<String>)> {
+        Self::read_unified_text_with_limits(
+            reader,
+            Self::MAX_UNIFIED_BYTES,
+            Self::MAX_UNIFIED_LINES,
+        )
+    }
+
+    fn from_unified_reader_with_limits<R: std::io::Read>(
+        target: DiffTarget,
+        reader: R,
+        max_bytes: u64,
+        max_lines: usize,
     ) -> std::io::Result<Self> {
-        let mut text = String::new();
-        reader.read_to_string(&mut text)?;
-        Ok(Self::from_unified_owned(target, text))
+        let (text, notice) = Self::read_unified_text_with_limits(reader, max_bytes, max_lines)?;
+        let mut diff = Self::from_unified_owned(target, text);
+        if let Some(notice) = notice {
+            diff.lines.push(DiffLine {
+                kind: DiffLineKind::Header,
+                text: SharedLineText::from(notice.as_str()),
+            });
+        }
+        Ok(diff)
+    }
+
+    pub fn from_unified_reader<R: std::io::Read>(
+        target: DiffTarget,
+        reader: R,
+    ) -> std::io::Result<Self> {
+        Self::from_unified_reader_with_limits(
+            target,
+            reader,
+            Self::MAX_UNIFIED_BYTES,
+            Self::MAX_UNIFIED_LINES,
+        )
     }
 
     pub fn from_unified(target: DiffTarget, text: &str) -> Self {
@@ -1102,6 +1370,94 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
     }
 
     #[test]
+    fn unified_reader_keeps_the_limit_result_when_the_drain_fails() {
+        // A killed `git diff` leaves the pipe erroring; keep what we read.
+        struct FailsWhenDrained(Cursor<&'static [u8]>);
+        impl std::io::Read for FailsWhenDrained {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                match self.0.read(buf)? {
+                    0 => Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "child went away",
+                    )),
+                    read => Ok(read),
+                }
+            }
+        }
+
+        let (text, notice) = Diff::read_unified_text_with_limits(
+            FailsWhenDrained(Cursor::new(b"aa\nbb\ncc\n")),
+            5,
+            100,
+        )
+        .expect("a failing drain must not discard the diff");
+        assert_eq!(text, "aa\n");
+        assert!(notice.expect("notice").contains("5-byte"));
+    }
+
+    #[test]
+    fn unified_reader_drains_the_whole_reader_after_truncating() {
+        // The reader is a child Git pipe. Closing it early kills Git with
+        // SIGPIPE, and the non-zero exit outranks the diff we just parsed.
+        let mut reader = Cursor::new(vec![b'x'; 100]);
+        let (text, notice) = Diff::read_unified_text_with_limits(&mut reader, 4, 100).unwrap();
+
+        assert_eq!(text.len(), 4);
+        assert!(notice.is_some());
+        assert_eq!(
+            reader.position(),
+            100,
+            "Git must reach the end of its output and exit normally"
+        );
+    }
+
+    #[test]
+    fn unified_reader_truncates_instead_of_failing() {
+        let (text, notice) =
+            Diff::read_unified_text_with_limits(Cursor::new(b"aa\nbb\ncc\n"), 100, 2).unwrap();
+        assert_eq!(text, "aa\nbb\n");
+        assert!(notice.expect("notice").contains("2-line"));
+
+        // A single line longer than the limit is cut on a UTF-8 boundary.
+        let (text, notice) =
+            Diff::read_unified_text_with_limits(Cursor::new("aaaä".as_bytes()), 4, 100).unwrap();
+        assert_eq!(text, "aaa");
+        assert!(notice.expect("notice").contains("4-byte"));
+    }
+
+    #[test]
+    fn truncated_diffs_end_with_a_notice_row() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+        let diff =
+            Diff::from_unified_reader_with_limits(target, Cursor::new(b"aa\nbb\ncc\n"), 100, 2)
+                .unwrap();
+        let last = diff.lines.last().expect("notice row");
+        assert_eq!(last.kind, DiffLineKind::Header);
+        assert!(
+            last.text
+                .as_ref()
+                .starts_with(Diff::TRUNCATION_NOTICE_PREFIX),
+            "{:?}",
+            last.text.as_ref()
+        );
+        assert_eq!(diff.lines.len(), 3);
+    }
+
+    #[test]
+    fn unified_reader_leaves_diffs_within_the_limits_untouched() {
+        for (text, max_bytes, max_lines) in [("1234", 4, 1), ("a\nb\n", 4, 2)] {
+            let (read, notice) =
+                Diff::read_unified_text_with_limits(Cursor::new(text), max_bytes, max_lines)
+                    .unwrap();
+            assert_eq!(read, text);
+            assert_eq!(notice, None);
+        }
+    }
+
+    #[test]
     fn paged_provider_loads_pages_on_demand() {
         let target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
@@ -1295,6 +1651,7 @@ mod file_status_count_tests {
             deleted: 0,
             staged: Vec::new(),
             unstaged: Vec::new(),
+            line_stats: UncommittedLineStats::default(),
         };
         assert!(!clean.is_dirty());
         assert!(

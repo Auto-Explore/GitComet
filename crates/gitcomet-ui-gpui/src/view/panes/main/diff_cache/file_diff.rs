@@ -1075,42 +1075,27 @@ impl StreamedFileDiffSource {
         ))
     }
 
-    fn change_visible_indices_for_runs(&self, inline: bool) -> Vec<usize> {
-        let len = if inline {
-            self.plan.inline_row_count
-        } else {
-            self.plan.row_count
-        };
-        let mut out = Vec::new();
-
-        for row_ix in 0..len {
-            let is_change = if inline {
-                self.inline_visual_kind(row_ix).is_some_and(|kind| {
-                    matches!(
-                        kind,
-                        gitcomet_core::domain::DiffLineKind::Add
-                            | gitcomet_core::domain::DiffLineKind::Remove
-                    )
-                })
-            } else {
-                self.split_visual_kind(row_ix).is_some_and(|kind| {
-                    !matches!(kind, gitcomet_core::file_diff::FileDiffRowKind::Context)
-                })
-            };
-            if is_change {
-                out.push(row_ix);
-            }
-        }
-
-        out
+    // Grouped by visual kind, not by plan run: ignore-whitespace turns whole
+    // runs back into context.
+    fn split_change_blocks(&self) -> Vec<Range<usize>> {
+        let kinds = &self.split_visual_kinds;
+        crate::view::diff_navigation::change_block_ranges(kinds.len(), |row_ix| {
+            !matches!(
+                kinds[row_ix],
+                gitcomet_core::file_diff::FileDiffRowKind::Context
+            )
+        })
     }
 
-    fn split_change_visible_indices(&self) -> Vec<usize> {
-        self.change_visible_indices_for_runs(false)
-    }
-
-    fn inline_change_visible_indices(&self) -> Vec<usize> {
-        self.change_visible_indices_for_runs(true)
+    fn inline_change_blocks(&self) -> Vec<Range<usize>> {
+        let kinds = &self.inline_visual_kinds;
+        crate::view::diff_navigation::change_block_ranges(kinds.len(), |inline_ix| {
+            matches!(
+                kinds[inline_ix],
+                gitcomet_core::domain::DiffLineKind::Add
+                    | gitcomet_core::domain::DiffLineKind::Remove
+            )
+        })
     }
 
     fn split_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
@@ -1380,8 +1365,8 @@ impl PagedFileDiffRows {
         page.get(page_row_ix).cloned()
     }
 
-    pub(in crate::view) fn change_visible_indices(&self) -> Vec<usize> {
-        self.source.split_change_visible_indices()
+    pub(in crate::view) fn change_blocks(&self) -> Vec<Range<usize>> {
+        self.source.split_change_blocks()
     }
 
     pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
@@ -1504,8 +1489,8 @@ impl PagedFileDiffInlineRows {
         page.get(page_row_ix).cloned()
     }
 
-    pub(in crate::view) fn change_visible_indices(&self) -> Vec<usize> {
-        self.source.inline_change_visible_indices()
+    pub(in crate::view) fn change_blocks(&self) -> Vec<Range<usize>> {
+        self.source.inline_change_blocks()
     }
 
     pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
@@ -2158,8 +2143,8 @@ mod tests {
                 gitcomet_core::domain::DiffLineKind::Context
             ]
         );
-        assert!(split.change_visible_indices().is_empty());
-        assert!(inline.change_visible_indices().is_empty());
+        assert!(split.change_blocks().is_empty());
+        assert!(inline.change_blocks().is_empty());
         assert!(split.scrollbar_markers().is_empty());
         assert!(inline.scrollbar_markers().is_empty());
     }
@@ -2193,21 +2178,50 @@ mod tests {
                 .iter()
                 .all(|kind| *kind == gitcomet_core::domain::DiffLineKind::Context)
         );
-        assert!(split.change_visible_indices().is_empty());
-        assert!(inline.change_visible_indices().is_empty());
+        assert!(split.change_blocks().is_empty());
+        assert!(inline.change_blocks().is_empty());
     }
 
     #[test]
-    fn file_diff_change_visible_indices_include_every_changed_row() {
+    fn file_diff_change_blocks_span_each_contiguous_run() {
         let source = streamed_file_diff_source_for_test(
-            "alpha\nold one\nold two\nold three\nomega\n",
-            "alpha\nnew one\nnew two\nnew three\nomega\n",
+            "alpha\nold one\nold two\nmiddle\nold three\nomega\n",
+            "alpha\nnew one\nnew two\nmiddle\nnew three\nomega\n",
         );
         let split = PagedFileDiffRows::new(Arc::clone(&source), 1);
         let inline = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
 
-        assert_eq!(split.change_visible_indices(), vec![1, 2, 3]);
-        assert_eq!(inline.change_visible_indices(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(split.change_blocks(), vec![1..3, 4..5]);
+        // Inline interleaves each modified pair as `-`/`+`.
+        assert_eq!(inline.change_blocks(), vec![1..5, 6..8]);
+    }
+
+    #[test]
+    fn file_diff_change_blocks_drop_whitespace_only_blocks_when_ignored() {
+        let old_text = "alpha\nold one\nmiddle\n  keep\nomega\n";
+        let new_text = "alpha\nnew one\nmiddle\nkeep\nomega\n";
+
+        let shown = streamed_file_diff_source_for_test(old_text, new_text);
+        let shown_starts = PagedFileDiffRows::new(Arc::clone(&shown), 1)
+            .change_blocks()
+            .into_iter()
+            .map(|block| block.start)
+            .collect::<Vec<_>>();
+        assert_eq!(shown_starts, vec![1, 3]);
+
+        let ignored = streamed_file_diff_source_for_test_with_mode(
+            old_text,
+            new_text,
+            DiffWhitespaceMode::Ignore,
+        );
+        assert_eq!(
+            PagedFileDiffRows::new(Arc::clone(&ignored), 1).change_blocks(),
+            vec![1..2]
+        );
+        assert_eq!(
+            PagedFileDiffInlineRows::new(Arc::clone(&ignored), 1).change_blocks(),
+            vec![1..3]
+        );
     }
 
     #[test]

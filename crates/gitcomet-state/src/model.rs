@@ -7,16 +7,21 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::domain::*;
 use gitcomet_core::git_operation::{GitOperationId, GitOutputStream, HookExecutionId};
 use gitcomet_core::process::GitRuntimeState;
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
     SubmoduleTrustTarget,
 };
+use gitcomet_core::signing_tools::SigningToolsState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+mod signature_map;
+pub use signature_map::CommitSignatureMap;
 
 pub type Shared<T> = Arc<T>;
 
@@ -47,6 +52,9 @@ pub enum GitLogTagFetchMode {
 pub struct GitLogSettings {
     pub show_history_tags: bool,
     pub tag_fetch_mode: GitLogTagFetchMode,
+    /// Escape hatch: a misconfigured `gpg.program` or a wedged `gpg-agent`
+    /// would otherwise slow every history page with no way to turn it off.
+    pub verify_commit_signatures: bool,
 }
 
 impl Default for GitLogSettings {
@@ -54,6 +62,7 @@ impl Default for GitLogSettings {
         Self {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+            verify_commit_signatures: false,
         }
     }
 }
@@ -76,6 +85,33 @@ impl GitLogSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteSettings {
+    pub prune_deleted_remote_branches_on_fetch: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            prune_deleted_remote_branches_on_fetch: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileBrowserSettings {
+    /// Active file browsing follows the selected history row.
+    pub follow_selected_commit: bool,
+}
+
+impl Default for FileBrowserSettings {
+    fn default() -> Self {
+        Self {
+            follow_selected_commit: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
@@ -85,6 +121,9 @@ pub struct RepoLoadsInFlight {
     /// request superseded can be told apart from the current one.
     active_log: Option<(LogLoadSeq, PendingLogLoad)>,
     last_log_seq: LogLoadSeq,
+    line_stats_generation: LineStatsGeneration,
+    active_line_stats: Option<LineStatsGeneration>,
+    line_stats_requested: bool,
 }
 
 /// Identifies one dispatched log walk. Handed out by
@@ -96,6 +135,9 @@ pub struct RepoLoadsInFlight {
 /// first walk's reply would then be taken for the second's — clearing the
 /// bookkeeping while the walk it belongs to is still running.
 pub type LogLoadSeq = u64;
+
+/// Advances on invalidation, even when the set of changed paths is unchanged.
+pub type LineStatsGeneration = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingLogLoad {
@@ -127,6 +169,12 @@ impl RepoLoadsInFlight {
     /// Deliberately outside `PRIMARY_REFRESH_FLAGS`: the live listing is a
     /// worktree walk, far costlier than the other loads.
     pub const FILE_BROWSER: u32 = 1 << 18;
+    /// Also outside `PRIMARY_REFRESH_FLAGS`: counting reads both sides of every
+    /// changed file, which a stat-only status walk avoids. Kept separate so status
+    /// latency is unchanged and the numbers arrive after the list.
+    /// Managed by `invalidate_line_stats`/`start_line_stats`/`finish_line_stats`,
+    /// not generic `request`/`finish`: replays need a fresh status snapshot.
+    pub const UNCOMMITTED_LINE_STATS: u32 = 1 << 19;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -148,6 +196,41 @@ impl RepoLoadsInFlight {
         self.pending = 0;
         self.pending_log = None;
         self.active_log = None;
+        self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
+        self.active_line_stats = None;
+        self.line_stats_requested = false;
+    }
+
+    pub(crate) fn invalidate_line_stats(&mut self) {
+        self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
+        self.line_stats_requested = true;
+    }
+
+    /// Called only after both status lanes, including their replays, settle.
+    pub(crate) fn start_line_stats(&mut self, status_ready: bool) -> Option<LineStatsGeneration> {
+        if self.is_in_flight(Self::WORKTREE_STATUS | Self::STAGED_STATUS)
+            || self.active_line_stats.is_some()
+            || !self.line_stats_requested
+        {
+            return None;
+        }
+        self.line_stats_requested = false;
+        if !status_ready {
+            return None;
+        }
+        self.in_flight |= Self::UNCOMMITTED_LINE_STATS;
+        self.active_line_stats = Some(self.line_stats_generation);
+        Some(self.line_stats_generation)
+    }
+
+    /// Only the matching job may release the lane; invalidated results are discarded.
+    pub(crate) fn finish_line_stats(&mut self, generation: LineStatsGeneration) -> bool {
+        if self.active_line_stats != Some(generation) {
+            return false;
+        }
+        self.active_line_stats = None;
+        self.in_flight &= !Self::UNCOMMITTED_LINE_STATS;
+        generation == self.line_stats_generation
     }
 
     /// Starts the common primary-refresh batch immediately when no work is already queued or
@@ -228,9 +311,9 @@ impl RepoLoadsInFlight {
             Some(existing) if existing.scope != next.scope || existing.author != next.author => {
                 self.pending_log = Some(next);
             }
-            // Don't let a refresh request (cursor=None) clobber a pending pagination request
-            // for the same scope and author.
-            Some(existing) if existing.cursor.is_some() && next.cursor.is_none() => {}
+            // A fresh walk invalidates pagination cursors. Never let a later
+            // pagination request replace a pending refresh.
+            Some(existing) if existing.cursor.is_none() && next.cursor.is_some() => {}
             _ => {
                 self.pending_log = Some(next);
             }
@@ -243,14 +326,9 @@ impl RepoLoadsInFlight {
     /// layer cancelled). Superseded replies must be dropped without touching
     /// the in-flight bookkeeping — the walk that replaced them is still going.
     pub fn is_active_log_reply(&self, seq: LogLoadSeq) -> bool {
-        match &self.active_log {
-            Some((active, _)) => *active == seq,
-            // Nothing is being tracked, so no walk's bookkeeping can be cleared
-            // out from under it — `active_log` is set for exactly as long as the
-            // `LOG` flag is, so applying this reply finishes a load that is not
-            // running and promotes a queue that is empty.
-            None => true,
-        }
+        self.active_log
+            .as_ref()
+            .is_some_and(|(active, _)| *active == seq)
     }
 
     /// The sequence number of the walk in flight, if any. Tests that answer a
@@ -267,11 +345,16 @@ impl RepoLoadsInFlight {
     }
 
     /// Finishes the walk in flight and starts whichever request queued behind
-    /// it, returning that request and its sequence number.
-    pub fn finish_log(&mut self) -> Option<(LogLoadSeq, PendingLogLoad)> {
+    /// it, returning that request and its sequence number. `prepare` adjusts
+    /// the request before it is recorded, so the effect and bookkeeping agree.
+    pub fn finish_log(
+        &mut self,
+        prepare: impl FnOnce(&mut PendingLogLoad),
+    ) -> Option<(LogLoadSeq, PendingLogLoad)> {
         self.in_flight &= !Self::LOG;
         self.active_log = None;
-        let next = self.pending_log.take()?;
+        let mut next = self.pending_log.take()?;
+        prepare(&mut next);
         self.in_flight |= Self::LOG;
         let seq = self.start_log(next.clone());
         Some((seq, next))
@@ -367,33 +450,61 @@ pub enum ConflictFileLoadMode {
 
 // ── File browser ────────────────────────────────────────────────
 
+/// The file preview that was open when the browse point moved, to re-target
+/// once the new listing says whether the file exists there.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingFileBrowserReopen {
+    pub path: PathBuf,
+    /// `diff_target_rev` at capture time; a later change means the user moved
+    /// on and the re-open is dropped.
+    pub diff_target_rev: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct FileBrowserState {
+    /// Entered by "Start file browsing" and left by "Exit file browsing".
+    /// Selecting the working-tree row changes the source without exiting.
+    pub active: bool,
     pub source: FileSource,
     pub entries: Loadable<Arc<Vec<FileEntry>>>,
     pub expanded_dirs: FxHashSet<Arc<PathBuf>>,
     pub search_query: String,
     pub file_browser_rev: u64,
-    /// The worktree moved under a listing nobody is looking at. Deferring the
-    /// re-walk keeps the rendered rows on screen instead of flashing back to
-    /// "Loading files...".
+    /// The rows on screen are not the current truth: the worktree moved under
+    /// a listing nobody is looking at, or the browse point moved and the new
+    /// listing is still on its way. Either way the rows stay up rather than
+    /// flashing back to "Loading files...".
     pub stale: bool,
+    /// `selected_commit_rev` the browse point was last synced to. `None` forces
+    /// a sync on the next chance.
+    pub followed_selection_rev: Option<u64>,
+    pub pending_reopen: Option<PendingFileBrowserReopen>,
 }
 
 impl Default for FileBrowserState {
     fn default() -> Self {
         Self {
+            active: false,
             source: FileSource::default(),
             entries: Loadable::NotLoaded,
             expanded_dirs: FxHashSet::default(),
             search_query: String::new(),
             file_browser_rev: 0,
             stale: false,
+            followed_selection_rev: None,
+            pending_reopen: None,
         }
     }
 }
 
 impl FileBrowserState {
+    pub(crate) fn set_active(&mut self, active: bool) {
+        if self.active != active {
+            self.active = active;
+            self.bump_rev();
+        }
+    }
+
     pub fn bump_rev(&mut self) {
         self.file_browser_rev = self.file_browser_rev.wrapping_add(1);
     }
@@ -605,6 +716,7 @@ pub struct AppState {
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+    pub branch_exists_prompt: Option<BranchExistsPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
@@ -612,9 +724,55 @@ pub struct AppState {
     /// trust dialog (or a silent proceed) appears.
     pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
+    /// The signature verifiers Git can run. Formats without one are not verified.
+    pub signing_tools: SigningToolsState,
+    pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
+    pub remote_settings: RemoteSettings,
+    pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+}
+
+impl AppState {
+    /// Deterministic fixture: tests opt into an available runtime without spawning Git.
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+    pub fn test_default() -> Self {
+        Self {
+            git_runtime: GitRuntimeState {
+                preference: gitcomet_core::process::GitExecutablePreference::SystemPath,
+                availability: gitcomet_core::process::GitExecutableAvailability::Available {
+                    version_output: "git version 2.55.0 (test)".into(),
+                },
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The signature formats to verify: none when the preference is off,
+    /// otherwise those whose verifier was not found missing.
+    pub fn signature_verification_formats(&self) -> SignatureFormats {
+        if self.git_log_settings.verify_commit_signatures {
+            self.signing_tools.usable_formats()
+        } else {
+            SignatureFormats::NONE
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BranchExistsPromptOperation {
+    CreateBranch,
+    CheckoutRemoteBranch { remote: String, branch: String },
+    RenameBranch { old_name: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchExistsPromptState {
+    pub repo_id: RepoId,
+    pub name: String,
+    pub target: String,
+    pub operation: BranchExistsPromptOperation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -769,8 +927,11 @@ pub struct CommandLogEntry {
     pub ok: bool,
     pub command: String,
     pub summary: String,
-    pub stdout: String,
-    pub stderr: String,
+    /// Shared and capped: the log is deep-copied on every store dispatch
+    /// (copy-on-write state), so owned per-entry output turned every message
+    /// into a memcpy of up to 200 command transcripts.
+    pub stdout: Arc<str>,
+    pub stderr: Arc<str>,
     /// Whether finishing this command is worth telling the user about. Routine,
     /// user-initiated edits announce themselves through the change they make —
     /// a toast per staged line is noise — but they still belong in the log.
@@ -885,6 +1046,8 @@ pub struct PendingCommitRetry {
 
 #[derive(Clone, Debug)]
 pub struct HistoryState {
+    pub indexed: crate::indexed_history::IndexedHistoryState,
+    pub authors: crate::history_authors::HistoryAuthorsState,
     pub history_scope: LogScope,
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
@@ -892,10 +1055,10 @@ pub struct HistoryState {
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
-    /// Commits visited so far by a walk that is still running, when it reports
-    /// progress. `None` once the page is complete. An author filter has to walk
-    /// history until it finds a full page, which on a large repository takes
-    /// seconds; this is what tells the user it is working.
+    /// Identity of the exact Git inputs behind the loaded page.
+    pub log_snapshot: Option<gitcomet_core::services::HistorySnapshot>,
+    /// Commits visited by the streaming initial walk, retained for diagnostics.
+    /// `None` once the page is complete. Updating this does not rebuild rows.
     pub log_scan_progress: Option<u64>,
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
@@ -916,7 +1079,24 @@ pub struct HistoryState {
     pub reveal_target: Option<CommitId>,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
+    /// Signature verdicts by commit, shared by the details pane and the
+    /// history rows. Only badge-worthy commits appear: absent means no badge.
+    /// Behind `Arc` because `AppState` is deep-copied on every dispatch.
+    pub commit_signatures: Shared<CommitSignatureMap>,
+    pub commit_signatures_rev: u64,
+    /// Invalidates batches started before a refresh or preference change.
+    pub commit_signatures_epoch: u64,
+    /// Bounded memo of started attempts, including completed no-badge results.
+    pub(crate) commit_signatures_requested: Shared<FxHashSet<CommitId>>,
+    pub(crate) commit_signatures_attempt_order: Shared<VecDeque<CommitId>>,
+    pub(crate) commit_signatures_visible: Shared<[CommitId]>,
+    pub(crate) commit_signatures_queue: VecDeque<Shared<[CommitId]>>,
+    pub(crate) commit_signatures_in_flight: bool,
+    pub(crate) commit_signatures_batch: u64,
+    pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
+    selected_ids: Arc<FxHashSet<CommitId>>,
+    squash_cache: Option<Arc<HistorySquashCache>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -950,17 +1130,88 @@ pub struct HistoryState {
     /// plan is transiently invalid (e.g. HEAD momentarily unresolved during a
     /// concurrent reload), as long as the range still matches what was asked.
     pub squash_preview_pending: Option<(CommitId, CommitId)>,
+    /// The Reveal Commit dialog's current reference lookup. Preview only: it
+    /// never selects anything, so typing in the dialog cannot move the main
+    /// view the way `reveal_target` does.
+    ///
+    /// Carries no `_rev` counterpart because no pane fingerprints it: the
+    /// dialog is its own entity and repaints itself when this changes.
+    pub commit_lookup: CommitLookup,
+    /// Parents for the open cherry-pick/revert confirmation; see
+    /// [`CommitLookupPurpose`].
+    pub mainline_lookup: CommitLookup,
+}
+
+/// Which dialog a commit lookup answers. They resolve different references at
+/// the same time, so each owns its slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitLookupPurpose {
+    /// The Reveal Commit dialog's preview row.
+    RevealDialog,
+    /// The parent list the cherry-pick/revert confirmations pick a mainline from.
+    MainlineParents,
+}
+
+/// A resolved-or-failed answer to "what commit does this reference name?".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitLookup {
+    /// Monotonic id of the newest issued lookup. A reply carrying an older id
+    /// is dropped, so an out-of-order completion cannot overwrite a newer
+    /// answer — the same guard `range_files_request` uses.
+    pub request: u64,
+    /// The reference `result` answers, so a caller can tell whether the answer
+    /// is about what the user has typed *now*.
+    pub reference: Option<CommitId>,
+    pub result: Loadable<Commit>,
+}
+
+impl Default for CommitLookup {
+    fn default() -> Self {
+        Self {
+            request: 0,
+            reference: None,
+            result: Loadable::NotLoaded,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HistorySquashCache {
+    key: (usize, u64, u64, u64, Option<CommitId>, usize),
+    // Pin identities used by the cache key across asynchronous snapshots.
+    _selection: Arc<Vec<CommitId>>,
+    _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+    plan: Option<gitcomet_core::squash::SquashPlan>,
+}
+
+impl HistoryState {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn signature_targets_for_test(&self) -> &Shared<[CommitId]> {
+        &self.commit_signatures_visible
+    }
+
+    pub fn selection_contains(&self, id: &CommitId) -> bool {
+        if self.selected_ids.len() == self.multi_selection.commits.len() {
+            self.selected_ids.contains(id)
+        } else {
+            self.multi_selection.contains(id)
+        }
+    }
 }
 
 impl Default for HistoryState {
     fn default() -> Self {
         Self {
+            indexed: Default::default(),
+            authors: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
             log_scan_progress: None,
+            log_snapshot: None,
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
@@ -973,7 +1224,19 @@ impl Default for HistoryState {
             reveal_target: None,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
+            commit_signatures: Shared::default(),
+            commit_signatures_rev: 0,
+            commit_signatures_epoch: 0,
+            commit_signatures_requested: Shared::default(),
+            commit_signatures_attempt_order: Shared::default(),
+            commit_signatures_visible: Shared::default(),
+            commit_signatures_queue: VecDeque::new(),
+            commit_signatures_in_flight: false,
+            commit_signatures_batch: 0,
+            commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
+            selected_ids: Arc::new(FxHashSet::default()),
+            squash_cache: None,
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -985,6 +1248,8 @@ impl Default for HistoryState {
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
+            commit_lookup: CommitLookup::default(),
+            mainline_lookup: CommitLookup::default(),
         }
     }
 }
@@ -996,7 +1261,7 @@ impl Default for HistoryState {
 /// resolution hint trusted only while the log revision is unchanged.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommitMultiSelection {
-    pub commits: Vec<CommitId>,
+    pub commits: Arc<Vec<CommitId>>,
     pub anchor: Option<CommitId>,
     pub anchor_index: Option<usize>,
     pub anchor_log_rev: Option<u64>,
@@ -1124,6 +1389,132 @@ pub struct InlineSubmoduleDiffEntry {
     pub section: InlineSubmoduleDiffSection,
 }
 
+/// Which half of a submodule summary a changed file sits in, and therefore
+/// which target the inline diff opens it with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleChangeSection {
+    /// One of the summary's pointer ranges, by slot.
+    Range(usize),
+    LiveStaged,
+    LiveUnstaged,
+}
+
+/// The changed file at `section`/`index` and the target it opens under, or
+/// `None` when there is nothing to open.
+///
+/// The one place a summary's coordinates become a target, so a row and the entry
+/// a click resolves cannot describe different files.
+fn submodule_change_at(
+    summary: &SubmoduleDiffSummary,
+    section: SubmoduleChangeSection,
+    index: usize,
+) -> Option<(
+    &SubmoduleInnerChange,
+    DiffTarget,
+    InlineSubmoduleDiffSection,
+)> {
+    match section {
+        SubmoduleChangeSection::Range(slot) => {
+            let range = summary.ranges.get(slot)?;
+            let change = range.changes.get(index)?;
+            let (from_commit_id, to_commit_id) = (range.from.as_ref()?, range.to.as_ref()?);
+            Some((
+                change,
+                DiffTarget::CommitRange {
+                    from_commit_id: from_commit_id.clone(),
+                    to_commit_id: Some(to_commit_id.clone()),
+                    path: Some(change.path.clone()),
+                },
+                InlineSubmoduleDiffSection::Range(range.kind),
+            ))
+        }
+        // Only a worktree summary has live halves, and only it gets live rows.
+        SubmoduleChangeSection::LiveStaged | SubmoduleChangeSection::LiveUnstaged
+            if summary.mode != SubmoduleDiffSummaryMode::Worktree =>
+        {
+            None
+        }
+        SubmoduleChangeSection::LiveStaged => {
+            let change = summary.live_staged.get(index)?;
+            Some((
+                change,
+                DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Staged,
+                },
+                InlineSubmoduleDiffSection::LiveStaged,
+            ))
+        }
+        SubmoduleChangeSection::LiveUnstaged => {
+            let change = summary.live_unstaged.get(index)?;
+            Some((
+                change,
+                DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                InlineSubmoduleDiffSection::LiveUnstaged,
+            ))
+        }
+    }
+}
+
+/// The target alone, without the entry around it: what a row needs per frame.
+pub fn submodule_inline_diff_target(
+    summary: &SubmoduleDiffSummary,
+    section: SubmoduleChangeSection,
+    index: usize,
+) -> Option<DiffTarget> {
+    submodule_change_at(summary, section, index).map(|(_, target, _)| target)
+}
+
+/// The inline-diff entry for one changed file; `submodule_inline_diff_entries`
+/// is this in a loop.
+pub fn submodule_inline_diff_entry(
+    summary: &SubmoduleDiffSummary,
+    section: SubmoduleChangeSection,
+    index: usize,
+) -> Option<InlineSubmoduleDiffEntry> {
+    submodule_change_at(summary, section, index).map(|(change, target, section)| {
+        InlineSubmoduleDiffEntry {
+            path: change.path.clone(),
+            kind: change.kind,
+            target,
+            section,
+        }
+    })
+}
+
+pub fn submodule_inline_diff_entries(
+    summary: &SubmoduleDiffSummary,
+) -> Vec<InlineSubmoduleDiffEntry> {
+    let capacity = summary
+        .ranges
+        .iter()
+        .map(|range| range.changes.len())
+        .sum::<usize>()
+        + summary.live_staged.len()
+        + summary.live_unstaged.len();
+    let mut entries = Vec::with_capacity(capacity);
+    let sections = (0..summary.ranges.len())
+        .map(SubmoduleChangeSection::Range)
+        .chain([
+            SubmoduleChangeSection::LiveStaged,
+            SubmoduleChangeSection::LiveUnstaged,
+        ]);
+    for section in sections {
+        let count = match section {
+            SubmoduleChangeSection::Range(slot) => summary.ranges[slot].changes.len(),
+            SubmoduleChangeSection::LiveStaged => summary.live_staged.len(),
+            SubmoduleChangeSection::LiveUnstaged => summary.live_unstaged.len(),
+        };
+        entries.extend(
+            (0..count).filter_map(|index| submodule_inline_diff_entry(summary, section, index)),
+        );
+    }
+    entries
+}
+
 /// The inline-diff entries for a linked worktree's changed files, in the order
 /// the rows are rendered: staged first, then unstaged, the same order the
 /// working-tree pane uses.
@@ -1172,7 +1563,7 @@ pub struct InlineSubmoduleDiffState {
     pub origin: ForeignDiffOrigin,
     pub submodule_repo_path: PathBuf,
     pub parent_submodule_path: PathBuf,
-    pub entries: Vec<InlineSubmoduleDiffEntry>,
+    pub entries: Arc<[InlineSubmoduleDiffEntry]>,
     pub selected_ix: usize,
     pub target: DiffTarget,
     pub rev: u64,
@@ -1225,7 +1616,7 @@ fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
 }
 
 #[inline]
-fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
+pub fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
     let mut acc = STATUS_CACHE_REV_MIX;
     for value in values {
         acc ^= value.wrapping_mul(STATUS_CACHE_REV_MIX);
@@ -1289,6 +1680,14 @@ pub struct RepoNavigationState {
 }
 
 #[derive(Clone, Debug)]
+pub struct TagPushPreviewState {
+    pub request: gitcomet_core::tag_push::TagPushRequest,
+    pub generation: u64,
+    pub cancellation: gitcomet_core::services::CancellationToken,
+    pub result: Loadable<Arc<gitcomet_core::tag_push::TagPushPreview>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -1310,11 +1709,13 @@ pub struct RepoState {
     /// these before a save-and-close/move operation so a drained command queue
     /// cannot be mistaken for a successful save.
     pub worktree_file_save_failures: FxHashMap<PathBuf, u64>,
+    /// Commands that write sequencer state or move HEAD. Continue and Abort
+    /// wait for these alone, so a merge tool cannot lock them out.
+    pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
-    pub fetch_prune_deleted_remote_tracking_branches: bool,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -1332,6 +1733,12 @@ pub struct RepoState {
     pub remote_branches_rev: u64,
     pub worktree_status: Loadable<Arc<Vec<FileStatus>>>,
     pub worktree_status_rev: u64,
+    /// Per-file `+/-` for both lanes, cached until the next index or worktree
+    /// change.
+    pub uncommitted_line_stats: Loadable<Arc<UncommittedLineStats>>,
+    /// Per lane, so churn in one does not invalidate the other's rows.
+    pub staged_line_stats_rev: u64,
+    pub unstaged_line_stats_rev: u64,
     pub staged_status: Loadable<Arc<Vec<FileStatus>>>,
     pub staged_status_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
@@ -1359,10 +1766,15 @@ pub struct RepoState {
     /// Commit whose full message the history hover card is showing, and the
     /// message once it arrives. A single slot: only one card is ever open, and
     /// the view keeps its own small cache of recently fetched messages.
+    pub tag_push_previews: [Option<TagPushPreviewState>; 2],
     pub hover_commit_message: Option<(CommitId, Loadable<Arc<str>>)>,
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
     pub merge_message_rev: u64,
+    /// Commit message git prepared for the next commit (a staged revert), and
+    /// a rev so the commit box can apply it exactly once.
+    pub suggested_commit_message: Option<String>,
+    pub suggested_commit_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
     /// Uncommitted-change counts for the *other* linked worktrees, so the
@@ -1420,10 +1832,10 @@ impl RepoState {
             worktrees_in_flight: 0,
             local_actions_in_flight: 0,
             worktree_file_save_failures: FxHashMap::default(),
+            sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
-            fetch_prune_deleted_remote_tracking_branches: true,
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,
@@ -1440,6 +1852,9 @@ impl RepoState {
             remote_branches: Loadable::NotLoaded,
             remote_branches_rev: 0,
             worktree_status: Loadable::NotLoaded,
+            uncommitted_line_stats: Loadable::NotLoaded,
+            staged_line_stats_rev: 0,
+            unstaged_line_stats_rev: 0,
             worktree_status_rev: 0,
             staged_status: Loadable::NotLoaded,
             staged_status_rev: 0,
@@ -1459,10 +1874,13 @@ impl RepoState {
             rebase_in_progress: Loadable::NotLoaded,
             sequencer_state: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            tag_push_previews: [None, None],
             hover_commit_message: None,
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
             merge_message_rev: 0,
+            suggested_commit_message: None,
+            suggested_commit_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
             worktree_dirty: Loadable::NotLoaded,
@@ -1658,9 +2076,8 @@ impl RepoState {
 
     pub(crate) fn set_ref_metadata(
         &mut self,
-        ref_metadata: Loadable<FxHashMap<String, RefMetadata>>,
+        ref_metadata: Loadable<Arc<FxHashMap<String, RefMetadata>>>,
     ) {
-        let ref_metadata = loadable_into_arc(ref_metadata);
         if self.ref_metadata == ref_metadata {
             return;
         }
@@ -1727,6 +2144,45 @@ impl RepoState {
         self.sidebar_data_request = request;
     }
 
+    /// Bumps only the lanes that changed. Never sets `Loading`, so the numbers
+    /// stay on screen across a rescan the way `worktree_dirty` does.
+    pub(crate) fn set_uncommitted_line_stats(
+        &mut self,
+        stats: Loadable<Arc<UncommittedLineStats>>,
+    ) {
+        let (staged_changed, unstaged_changed) = match (&self.uncommitted_line_stats, &stats) {
+            (Loadable::Ready(previous), Loadable::Ready(next)) => (
+                previous.staged != next.staged,
+                previous.unstaged != next.unstaged,
+            ),
+            _ => (true, true),
+        };
+        self.uncommitted_line_stats = stats;
+        if staged_changed {
+            self.staged_line_stats_rev = self.staged_line_stats_rev.wrapping_add(1);
+        }
+        if unstaged_changed {
+            self.unstaged_line_stats_rev = self.unstaged_line_stats_rev.wrapping_add(1);
+        }
+    }
+
+    pub fn line_stats_rev(&self, area: DiffArea) -> u64 {
+        match area {
+            DiffArea::Staged => self.staged_line_stats_rev,
+            DiffArea::Unstaged => self.unstaged_line_stats_rev,
+        }
+    }
+
+    pub fn line_stats_for_area(
+        &self,
+        area: DiffArea,
+    ) -> Option<&rustc_hash::FxHashMap<PathBuf, LineStats>> {
+        match &self.uncommitted_line_stats {
+            Loadable::Ready(stats) => Some(stats.for_area(area)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn set_worktree_status(&mut self, status: Loadable<Vec<FileStatus>>) {
         let status = loadable_into_arc(status);
         if self.worktree_status == status {
@@ -1755,13 +2211,13 @@ impl RepoState {
             Loadable::NotLoaded => Loadable::NotLoaded,
             Loadable::Loading => Loadable::Loading,
             Loadable::Error(err) => Loadable::Error(err.clone()),
-            Loadable::Ready(status) => Loadable::Ready(Arc::new(status.unstaged.clone())),
+            Loadable::Ready(status) => Loadable::Ready(Arc::clone(&status.unstaged)),
         };
         let next_staged = match &status {
             Loadable::NotLoaded => Loadable::NotLoaded,
             Loadable::Loading => Loadable::Loading,
             Loadable::Error(err) => Loadable::Error(err.clone()),
-            Loadable::Ready(status) => Loadable::Ready(Arc::new(status.staged.clone())),
+            Loadable::Ready(status) => Loadable::Ready(Arc::clone(&status.staged)),
         };
         if self.worktree_status != next_worktree {
             self.worktree_status = next_worktree;
@@ -1920,6 +2376,9 @@ impl RepoState {
         if !matches!(log, Loadable::Loading) {
             self.history_state.retained_log_while_loading = None;
         }
+        // A caller accepting a backend result installs its snapshot after this
+        // write. Reload and filter transitions must never reuse the old token.
+        self.history_state.log_snapshot = None;
         self.history_state.log = log.clone();
         self.log = log;
         self.bump_log_revs();
@@ -1990,7 +2449,9 @@ impl RepoState {
         if self.history_state.history_scope == scope {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
+        self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
 
@@ -1998,12 +2459,48 @@ impl RepoState {
         if self.history_state.history_author_filter == author {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
         self.bump_log_revs();
     }
 
     pub(crate) fn set_reveal_target(&mut self, v: Option<CommitId>) {
         self.history_state.reveal_target = v;
+    }
+
+    /// Start a new Reveal Commit lookup, returning the request id the reply has
+    /// to carry to be accepted.
+    pub(crate) fn commit_lookup_mut(&mut self, purpose: CommitLookupPurpose) -> &mut CommitLookup {
+        match purpose {
+            CommitLookupPurpose::RevealDialog => &mut self.history_state.commit_lookup,
+            CommitLookupPurpose::MainlineParents => &mut self.history_state.mainline_lookup,
+        }
+    }
+
+    pub(crate) fn begin_commit_lookup(
+        &mut self,
+        purpose: CommitLookupPurpose,
+        reference: CommitId,
+    ) -> u64 {
+        let lookup = self.commit_lookup_mut(purpose);
+        lookup.request = lookup.request.wrapping_add(1);
+        lookup.reference = Some(reference);
+        lookup.result = Loadable::Loading;
+        lookup.request
+    }
+
+    /// Record a lookup reply, ignoring one that a newer lookup has overtaken.
+    pub(crate) fn finish_commit_lookup(
+        &mut self,
+        purpose: CommitLookupPurpose,
+        request: u64,
+        result: Loadable<Commit>,
+    ) {
+        let lookup = self.commit_lookup_mut(purpose);
+        if lookup.request != request {
+            return;
+        }
+        lookup.result = result;
     }
 
     /// Selecting a worktree row takes the details pane over, so the commit
@@ -2042,6 +2539,7 @@ impl RepoState {
             // relies on this. A range comparison is likewise a form of
             // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
+            self.history_state.selected_ids = Arc::new(FxHashSet::default());
             self.clear_range_comparison();
         }
         self.history_state.selected_commit = v;
@@ -2111,9 +2609,86 @@ impl RepoState {
         self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
+    fn history_squash_key(&self) -> (usize, u64, u64, u64, Option<CommitId>, usize) {
+        (
+            Arc::as_ptr(&self.history_state.multi_selection.commits) as usize,
+            self.log_rev,
+            self.head_branch_rev,
+            self.branches_rev,
+            self.detached_head_commit.clone(),
+            self.history_state
+                .indexed
+                .index
+                .as_ref()
+                .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+                .map_or(0, |index| Arc::as_ptr(index) as usize),
+        )
+    }
+
+    /// Called on the store worker before publication, once per selection/topology.
+    pub(crate) fn prepare_history_squash_plan(&mut self) {
+        if !self.history_state.multi_selection.is_multi() {
+            self.history_state.squash_cache = None;
+            return;
+        }
+        let key = self.history_squash_key();
+        if self
+            .history_state
+            .squash_cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let plan = self.compute_history_squash_plan();
+        self.history_state.squash_cache = Some(Arc::new(HistorySquashCache {
+            key,
+            _selection: self.history_state.multi_selection.commits.clone(),
+            _index: self.history_state.indexed.index.clone(),
+            plan,
+        }));
+    }
+
+    pub fn history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        if let Some(cache) = &self.history_state.squash_cache
+            && cache.key == self.history_squash_key()
+        {
+            return cache.plan.clone();
+        }
+        self.compute_history_squash_plan()
+    }
+
+    fn compute_history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        let head = self.head_commit_id()?;
+        if let Some(index) = self
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+        {
+            return gitcomet_core::squash::squash_eligibility_indexed(
+                index,
+                &self.history_state.multi_selection.commits,
+                &head,
+            );
+        }
+        let Loadable::Ready(page) = &self.log else {
+            return None;
+        };
+        gitcomet_core::squash::squash_eligibility(
+            &page.commits,
+            &self.history_state.multi_selection.commits,
+            &head,
+        )
+    }
+
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
         if self.history_state.multi_selection == v {
             return;
+        }
+        if !Arc::ptr_eq(&self.history_state.multi_selection.commits, &v.commits) {
+            self.history_state.selected_ids = Arc::new(v.commits.iter().cloned().collect());
         }
         self.history_state.multi_selection = v;
         self.history_state.selected_commit_rev =
@@ -2145,12 +2720,55 @@ impl RepoState {
             self.history_state.commit_details_rev.wrapping_add(1);
     }
 
+    /// Invalidates both verdicts and in-flight batches. Trust inputs can change
+    /// independently of commit objects, so refreshes must recheck signed commits.
+    pub(crate) fn clear_commit_signatures(&mut self) {
+        self.history_state.commit_signatures_cancellation.cancel();
+        self.history_state.commit_signatures_cancellation = Default::default();
+        self.history_state.commit_signatures_requested = Shared::default();
+        self.history_state.commit_signatures_attempt_order = Shared::default();
+        self.history_state.commit_signatures_visible = Shared::default();
+        self.history_state.commit_signatures_queue.clear();
+        self.history_state.commit_signatures_in_flight = false;
+        self.history_state.commit_signatures_epoch =
+            self.history_state.commit_signatures_epoch.wrapping_add(1);
+        self.history_state.commit_signatures = Shared::default();
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
+    }
+
+    /// Merges batches from the current verification epoch without dropping
+    /// verdicts for other pages or selected commits.
+    pub(crate) fn merge_commit_signatures(&mut self, verified: Vec<(CommitId, CommitSignature)>) {
+        let updates: Vec<_> = verified
+            .into_iter()
+            .filter(|(id, signature)| {
+                self.history_state.commit_signatures_requested.contains(id)
+                    && self.history_state.commit_signatures.get(id) != Some(signature)
+            })
+            .collect();
+        if updates.is_empty() {
+            return;
+        }
+        let map = Arc::make_mut(&mut self.history_state.commit_signatures);
+        for (id, signature) in updates {
+            map.insert(id, signature);
+        }
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
+    }
+
     pub(crate) fn set_hover_commit_message(
         &mut self,
         commit_id: CommitId,
         message: Loadable<Arc<str>>,
     ) {
         self.hover_commit_message = Some((commit_id, message));
+    }
+
+    pub(crate) fn set_suggested_commit_message(&mut self, message: Option<String>) {
+        self.suggested_commit_message = message;
+        self.suggested_commit_message_rev = self.suggested_commit_message_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_merge_commit_message(&mut self, v: Loadable<Option<String>>) {
@@ -2256,6 +2874,8 @@ impl RepoState {
     pub(crate) fn bump_load_epoch(&mut self) -> u64 {
         let previous = self.load_epoch;
         self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.history_state.indexed.cancel();
+        self.history_state.authors.cancellation.cancel();
         previous
     }
 }
@@ -2315,6 +2935,96 @@ impl<T> Loadable<T> {
 mod tests {
     use super::*;
     use std::time::SystemTime;
+
+    fn summary_with_live_halves(
+        mode: gitcomet_core::domain::SubmoduleDiffSummaryMode,
+    ) -> SubmoduleDiffSummary {
+        let change = |name: &str| SubmoduleInnerChange {
+            path: PathBuf::from(name),
+            kind: FileStatusKind::Modified,
+            additions: Some(1),
+            deletions: Some(0),
+        };
+        SubmoduleDiffSummary {
+            path: PathBuf::from("vendor/lib"),
+            mode,
+            status: None,
+            checkout_available: true,
+            commit_id: None,
+            parent_commit_id: None,
+            checked_out_head: None,
+            ranges: vec![gitcomet_core::domain::SubmoduleDiffRange {
+                kind: gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
+                from: Some(CommitId("aaaa".into())),
+                to: Some(CommitId("bbbb".into())),
+                unavailable_reason: None,
+                changes: vec![change("range.rs")],
+            }],
+            live_staged: vec![change("staged.rs")],
+            live_unstaged: vec![change("unstaged.rs")],
+        }
+    }
+
+    /// The pane draws live rows only for a worktree summary, and prev/next walks
+    /// this list by index -- so it must describe exactly the rows on screen.
+    #[test]
+    fn only_a_worktree_summary_has_live_inline_entries() {
+        use gitcomet_core::domain::SubmoduleDiffSummaryMode;
+
+        let worktree = summary_with_live_halves(SubmoduleDiffSummaryMode::Worktree);
+        let paths: Vec<_> = submodule_inline_diff_entries(&worktree)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("range.rs"),
+                PathBuf::from("staged.rs"),
+                PathBuf::from("unstaged.rs")
+            ]
+        );
+
+        let history = summary_with_live_halves(SubmoduleDiffSummaryMode::CommitHistory);
+        let paths: Vec<_> = submodule_inline_diff_entries(&history)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        assert_eq!(paths, vec![PathBuf::from("range.rs")]);
+        assert!(
+            submodule_inline_diff_target(&history, SubmoduleChangeSection::LiveStaged, 0).is_none(),
+            "a commit-history summary has no live half to open"
+        );
+    }
+
+    /// A row asks for the target alone; the list a click dispatches asks for the
+    /// whole entry. Both come from `submodule_change_at`, so they agree.
+    #[test]
+    fn a_rows_target_is_the_entry_the_click_selects() {
+        use gitcomet_core::domain::SubmoduleDiffSummaryMode;
+
+        let summary = summary_with_live_halves(SubmoduleDiffSummaryMode::Worktree);
+        let entries = submodule_inline_diff_entries(&summary);
+        for (index, section) in [
+            SubmoduleChangeSection::Range(0),
+            SubmoduleChangeSection::LiveStaged,
+            SubmoduleChangeSection::LiveUnstaged,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = submodule_inline_diff_target(&summary, section, 0).expect("a target");
+            assert_eq!(target, entries[index].target);
+            assert_eq!(
+                Some(&entries[index]),
+                submodule_inline_diff_entry(&summary, section, 0).as_ref()
+            );
+        }
+        assert!(
+            submodule_inline_diff_target(&summary, SubmoduleChangeSection::Range(0), 1).is_none(),
+            "past the end of a section there is no file"
+        );
+    }
 
     fn entry(name: &str) -> ViewHistoryEntry {
         ViewHistoryEntry {
@@ -2645,7 +3355,7 @@ mod tests {
 
     #[test]
     fn app_state_clone_shares_heavy_repo_fields_via_arc() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state.repos.push(RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -2834,11 +3544,11 @@ mod tests {
         assert!(!loads.is_active_log_reply(first));
         assert!(loads.is_active_log_reply(latest));
         // Nothing is left queued: the newest request is the one running.
-        assert_eq!(loads.finish_log(), None);
+        assert_eq!(loads.finish_log(|_| {}), None);
     }
 
     #[test]
-    fn request_log_same_scope_refresh_does_not_clobber_pending_pagination() {
+    fn request_log_same_scope_refresh_replaces_stale_pending_pagination() {
         let mut loads = RepoLoadsInFlight::default();
         let cursor = test_cursor("page-1");
 
@@ -2863,13 +3573,19 @@ mod tests {
         );
 
         assert_eq!(
-            loads.finish_log().map(|(_, next)| next),
-            Some(log_request(
-                LogScope::MergesOnly,
-                None,
-                Some(cursor.clone())
-            ))
+            loads.finish_log(|_| {}).map(|(_, next)| next),
+            Some(log_request(LogScope::MergesOnly, None, None))
         );
+    }
+
+    #[test]
+    fn promoted_log_bookkeeping_matches_the_prepared_effect_request() {
+        let mut loads = RepoLoadsInFlight::default();
+        loads.request_log(test_log_request()).unwrap();
+        assert!(loads.request_log(test_log_request()).is_none());
+        let (seq, request) = loads.finish_log(|next| next.limit = 800).unwrap();
+        assert_eq!(request.limit, 800);
+        assert_eq!(loads.active_log.as_ref(), Some(&(seq, request)));
     }
 
     #[test]
@@ -2898,7 +3614,7 @@ mod tests {
             .expect("an author change starts at once");
 
         assert!(loads.is_active_log_reply(latest));
-        assert_eq!(loads.finish_log(), None);
+        assert_eq!(loads.finish_log(|_| {}), None);
     }
 
     /// Replies are matched against the walk that is actually running, and by
@@ -2982,8 +3698,11 @@ mod tests {
     fn status_entry_for_path_prefers_split_lane_entries() {
         let mut repo = new_repo();
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            unstaged: vec![file_status("legacy.rs", FileStatusKind::Modified)],
-            staged: vec![file_status("legacy-stage.rs", FileStatusKind::Added)],
+            unstaged: std::sync::Arc::new(vec![file_status("legacy.rs", FileStatusKind::Modified)]),
+            staged: std::sync::Arc::new(vec![file_status(
+                "legacy-stage.rs",
+                FileStatusKind::Added,
+            )]),
         }));
         repo.status_rev = 1;
         repo.set_worktree_status(Loadable::Ready(vec![file_status(
@@ -3037,7 +3756,11 @@ mod tests {
         repo.local_actions_in_flight = 1;
         assert!(repo.history_rewrite_busy());
 
-        for state in [SequencerState::CherryPick, SequencerState::RebaseOrApply] {
+        for state in [
+            SequencerState::CherryPick,
+            SequencerState::RebaseOrApply,
+            SequencerState::Revert,
+        ] {
             let mut repo = new_repo();
             repo.sequencer_state = Loadable::Ready(state);
             assert!(repo.history_rewrite_busy(), "sequencer {state:?}");
@@ -3428,21 +4151,21 @@ mod tests {
             before + 1,
             "rev should not bump for an unchanged value"
         );
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::default())));
         assert_eq!(repo.ref_metadata_rev, before + 2);
     }
 
     #[test]
     fn set_branches_invalidates_cached_ref_metadata() {
         let mut repo = new_repo();
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::from_iter([(
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::from_iter([(
             "main".to_string(),
             RefMetadata {
                 author: "Ada".to_string(),
                 committed_at: 1,
                 summary: "first".to_string(),
             },
-        )])));
+        )]))));
         assert!(matches!(repo.ref_metadata, Loadable::Ready(_)));
 
         repo.set_branches(Loadable::Ready(vec![]));
@@ -3456,7 +4179,7 @@ mod tests {
     #[test]
     fn set_remote_branches_invalidates_cached_ref_metadata() {
         let mut repo = new_repo();
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::default())));
 
         repo.set_remote_branches(Loadable::Ready(vec![]));
 
@@ -3469,7 +4192,7 @@ mod tests {
         // refresh that finds the same refs must leave the cache alone.
         let mut repo = new_repo();
         repo.set_branches(Loadable::Ready(vec![]));
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::default())));
         let rev = repo.ref_metadata_rev;
 
         repo.set_branches(Loadable::Ready(vec![]));
@@ -3633,5 +4356,59 @@ mod tests {
         assert_eq!(Loadable::<Vec<u8>>::NotLoaded.ready(), None);
         assert_eq!(Loadable::<Vec<u8>>::Loading.ready(), None);
         assert_eq!(Loadable::<Vec<u8>>::Error("boom".into()).ready(), None);
+    }
+
+    /// Rows cache on these revs: an unchanged rescan must not bump them, and a
+    /// real change must.
+    #[test]
+    fn line_stats_revs_move_per_lane_only_when_that_lane_changes() {
+        use gitcomet_core::domain::{LineStats, UncommittedLineStats};
+
+        fn stats(staged: &[(&str, u32)], unstaged: &[(&str, u32)]) -> UncommittedLineStats {
+            let build = |entries: &[(&str, u32)]| {
+                entries
+                    .iter()
+                    .map(|(path, additions)| {
+                        (
+                            PathBuf::from(path),
+                            LineStats {
+                                additions: Some(*additions),
+                                deletions: Some(0),
+                            },
+                        )
+                    })
+                    .collect()
+            };
+            UncommittedLineStats {
+                staged: build(staged),
+                unstaged: build(unstaged),
+            }
+        }
+
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/line-stats"),
+            },
+        );
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 1)], &[("b", 2)]))));
+        let (staged_rev, unstaged_rev) = (repo.staged_line_stats_rev, repo.unstaged_line_stats_rev);
+
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 1)], &[("b", 2)]))));
+        assert_eq!(repo.staged_line_stats_rev, staged_rev, "unchanged rescan");
+        assert_eq!(
+            repo.unstaged_line_stats_rev, unstaged_rev,
+            "unchanged rescan"
+        );
+
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 9)], &[("b", 2)]))));
+        assert_ne!(
+            repo.staged_line_stats_rev, staged_rev,
+            "staged lane changed"
+        );
+        assert_eq!(
+            repo.unstaged_line_stats_rev, unstaged_rev,
+            "the untouched lane keeps its rev so its rows are not rebuilt"
+        );
     }
 }

@@ -539,6 +539,39 @@ pub(super) fn file_image_diff_cache_debug_snapshot(pane: &MainPaneView) -> Strin
     )
 }
 
+/// Scrolls `visible_ix` into view, draws, and returns what that row painted.
+///
+/// A virtualized row cannot be observed until it is on screen, so the scroll is
+/// part of the observation rather than a separate step. Several tests grew their
+/// own nested copy of this; prefer this one.
+pub(super) fn draw_paint_record_for_visible_ix(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    visible_ix: usize,
+    region: DiffTextRegion,
+) -> rows::DiffPaintRecord {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        let _ = window.draw(app);
+        rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == visible_ix && record.region == region)
+            .unwrap_or_else(|| {
+                panic!("expected paint record for visible_ix={visible_ix} region={region:?}")
+            })
+    })
+}
+
 pub(super) fn draw_and_drain_test_window(cx: &mut gpui::VisualTestContext) {
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -689,7 +722,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
 ) {
     let _clipboard_guard = lock_clipboard_test();
     let expected = lines.join("\n");
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -801,7 +834,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     create_worktree_file: bool,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -959,7 +992,7 @@ pub(super) fn app_state_with_repo(
     Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 
@@ -1039,7 +1072,11 @@ pub(super) fn set_test_file_status_with_conflict(
         gitcomet_core::domain::DiffArea::Unstaged => (vec![], vec![file_status]),
     };
     repo.status = gitcomet_state::model::Loadable::Ready(
-        gitcomet_core::domain::RepoStatus { staged, unstaged }.into(),
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(staged),
+            unstaged: std::sync::Arc::new(unstaged),
+        }
+        .into(),
     );
     repo.status_rev = repo.status_rev.wrapping_add(1);
     repo.has_unstaged_conflicts = matches!(
@@ -1195,6 +1232,7 @@ pub(super) fn set_ui_scale_percent_for_test(
 
 mod comparison;
 mod conflict;
+mod control_interaction;
 mod diff_stage_gutter;
 mod file_diff;
 mod file_editor;

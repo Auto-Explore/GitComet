@@ -20,19 +20,220 @@ pub(super) fn toast_total_lifetime(ttl: Duration) -> Duration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct SelectedBranch {
     pub(in crate::view) repo_id: RepoId,
-    pub(in crate::view) section: BranchSection,
-    pub(in crate::view) name: String,
+    pub(in crate::view) target: BranchMenuTarget,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum PushRequest {
+    Push,
+    SetUpstream { remote: String },
+    NoRemotes,
+    NotReady,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum PullRequest {
+    Pull,
+    NoRemotes,
+    NotReady,
+}
+
+/// What opening the repository's remote in a web browser should do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum RemoteWebRequest {
+    NotReady,
+    NoRemotes,
+    NoWebPage,
+    Open(super::permalink::RemoteWebPage),
+    /// Several remotes have a page; `origin`'s comes first.
+    Choose(Vec<super::permalink::RemoteWebPage>),
+}
+
+impl RemoteWebRequest {
+    /// Why nothing can be opened, for a disabled palette or menu row.
+    pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("The repository is still loading"),
+            Self::NoRemotes => Some("Add a remote first"),
+            Self::NoWebPage => Some("No remote URL points to a web page"),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+
+    /// The same, as the sentence a shortcut press shows in a toast.
+    pub(in crate::view) fn unavailable_message(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("This repository's remotes are still loading."),
+            Self::NoRemotes => Some("This repository has no remotes to open in a web browser."),
+            Self::NoWebPage => Some("None of this repository's remote URLs points to a web page."),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+}
+
+pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
+    matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
+}
+
+/// Whether the checked-out branch has a confirmed live remote-tracking
+/// upstream. This remains false until the remote-branch list is loaded, and a
+/// detached HEAD carries no branch to hold one.
+pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
+    let (Loadable::Ready(head), Loadable::Ready(branches)) = (&repo.head_branch, &repo.branches)
+    else {
+        return false;
+    };
+    let Some(upstream) = branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .and_then(|branch| branch.upstream.as_ref())
+    else {
+        return false;
+    };
+    let Some(remote_branches) = repo.remote_branches.ready() else {
+        return false;
+    };
+    remote_branches
+        .iter()
+        .any(|candidate| candidate.remote == upstream.remote && candidate.name == upstream.branch)
+}
+
+/// Decide whether Pull can run. A configured upstream is actionable only when
+/// its exact remote-tracking ref exists; a future upstream configured by
+/// "Create new" must be pushed before Pull is offered. For a branch with no
+/// configured upstream, the backend can still use the preferred remote, while
+/// detached HEAD falls back to Git's own diagnostics.
+pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return PullRequest::NotReady;
+    };
+    if head.is_empty() || head == "HEAD" {
+        return PullRequest::Pull;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return PullRequest::NotReady;
+    };
+    if branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .is_some_and(|branch| branch.upstream.is_some())
+    {
+        return if head_branch_has_live_upstream(repo) {
+            PullRequest::Pull
+        } else {
+            PullRequest::NotReady
+        };
+    }
+
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return PullRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return PullRequest::NoRemotes;
+    }
+    PullRequest::Pull
+}
+
+/// Whether the repository is part-way through a merge.
+pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
+    matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
+}
+
+/// The rebase, apply, cherry-pick, or revert the repository is part-way
+/// through, if any. `rebase_in_progress` stands in until the sequencer state loads.
+pub(in crate::view) fn active_sequencer_state(
+    repo: &RepoState,
+) -> gitcomet_core::services::SequencerState {
+    match repo.sequencer_state {
+        Loadable::Ready(state) => state,
+        _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => {
+            gitcomet_core::services::SequencerState::RebaseOrApply
+        }
+        _ => gitcomet_core::services::SequencerState::None,
+    }
+}
+
+/// Decide whether an interactive Push can run immediately or first needs the
+/// existing set-upstream prompt. A configured upstream can name a branch that
+/// has not been pushed yet; that still gives Push an exact destination.
+pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return PushRequest::NotReady;
+    };
+    // Preserve Git's own detached-HEAD diagnostics; there is no local branch
+    // for which GitComet could offer to set an upstream.
+    if head.is_empty() || head == "HEAD" {
+        return PushRequest::Push;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return PushRequest::NotReady;
+    };
+    let Some(branch) = branches.iter().find(|branch| branch.name == *head) else {
+        return PushRequest::NotReady;
+    };
+    if branch.upstream.is_some() {
+        return PushRequest::Push;
+    }
+
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return PushRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return PushRequest::NoRemotes;
+    }
+    let remote = remotes
+        .iter()
+        .find(|remote| remote.name == "origin")
+        .unwrap_or(&remotes[0])
+        .name
+        .clone();
+    PushRequest::SetUpstream { remote }
+}
+
+/// Decide what "Open remote in web browser" does: open the one remote with a
+/// web page, or let the user choose when several have one.
+pub(in crate::view) fn remote_web_request(repo: &RepoState) -> RemoteWebRequest {
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return RemoteWebRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return RemoteWebRequest::NoRemotes;
+    }
+    let mut pages = super::permalink::remote_web_pages(remotes);
+    match pages.len() {
+        0 => RemoteWebRequest::NoWebPage,
+        1 => RemoteWebRequest::Open(pages.remove(0)),
+        _ => RemoteWebRequest::Choose(pages),
+    }
+}
+
+pub(in crate::view) fn selected_remote_branch_is_missing(
+    state: &AppState,
+    selected_branch: Option<&SelectedBranch>,
+) -> bool {
+    let Some(selected) = selected_branch else {
+        return false;
+    };
+    let BranchMenuTarget::Remote { remote, branch } = &selected.target else {
+        return false;
+    };
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == selected.repo_id) else {
+        return true;
+    };
+    let Loadable::Ready(branches) = &repo.remote_branches else {
+        return false;
+    };
+    !branches
+        .iter()
+        .any(|candidate| candidate.remote == *remote && candidate.name == *branch)
 }
 
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
-    theme.colors.foreground.emphasis
+    theme.colors.interaction.selected_foreground
 }
 
 pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.foreground.primary,
-        if theme.is_dark { 0.16 } else { 0.10 },
-    )
+    theme.colors.interaction.selected_background
 }
 
 /// Which ref a history row should mark as the one the sidebar selected.
@@ -41,8 +242,7 @@ pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
 /// display text silently missed whichever form the row happened to use.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct SelectedHistoryBranch {
-    pub(in crate::view) section: BranchSection,
-    pub(in crate::view) name: SharedString,
+    pub(in crate::view) target: BranchMenuTarget,
 }
 
 pub(in crate::view) fn selected_branch_for_history_row(
@@ -60,8 +260,7 @@ pub(in crate::view) fn selected_branch_for_history_row(
     }
 
     Some(SelectedHistoryBranch {
-        section: selected_branch.section,
-        name: SharedString::from(selected_branch.name.clone()),
+        target: selected_branch.target.clone(),
     })
 }
 
@@ -797,6 +996,10 @@ pub struct GitCometView {
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) command_palette: Entity<super::command_palette::CommandPaletteView>,
     pub(super) command_palette_open: bool,
+    pub(super) reveal_commit_dialog: Entity<super::reveal_commit::RevealCommitView>,
+    pub(super) reveal_commit_open: bool,
+    /// Focus to hand back when an overlay opened from a background window
+    /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
@@ -808,6 +1011,9 @@ pub struct GitCometView {
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
+    /// Workdirs last published to the window registry; rebuilt only when the
+    /// repo list changes rather than collected on every store snapshot.
+    pub(super) synced_repo_paths: std::sync::Arc<[std::path::PathBuf]>,
     pub(super) ui_settings_persist_seq: u64,
     pub(super) window_group_persist_seq: u64,
     #[cfg(test)]
@@ -816,11 +1022,16 @@ pub struct GitCometView {
     /// Set when a deactivation was caused by a move/resize grab we requested, so
     /// the matching re-activation does not trigger a repo refresh.
     pub(super) window_grab_activation_suppressed_at: Option<Instant>,
+    /// Background gpg/ssh-keygen detection. A newer probe supersedes older ones.
+    pub(super) signing_tools_probe_seq: u64,
+    pub(super) signing_tools_probe_in_flight: bool,
+    pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) file_list_layout: FileListLayout,
     pub(super) terminal_preferences: TerminalPreferences,
     pub(super) terminal_sessions: FxHashMap<RepoId, RepoTerminalSession>,
     pub(super) terminal_panel_height: Pixels,
@@ -849,6 +1060,11 @@ pub struct GitCometView {
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
     pub(super) auto_save_file_edits: bool,
+    pub(super) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
+    pub(super) check_for_updates_on_startup: bool,
+    pub(super) update_check_in_flight: bool,
+    pub(super) update_check_manual_feedback_requested: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,
@@ -892,6 +1108,7 @@ pub struct GitCometView {
     pub(super) pending_unsaved_file_edits_flush: Option<gpui::Task<()>>,
     pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
+    pub(super) pending_branch_exists_prompt: Option<BranchExistsPromptState>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_delete_branch_centered: bool,
     pub(super) pending_force_remove_worktree_prompt:

@@ -118,19 +118,17 @@ pub(crate) fn log_paged_walk_filter(
 
     let shallow_commits = Arc::clone(&shallow.0);
     let objects = log_paged_walk_handle(repo);
-    let mut grafted_parents_to_skip: Vec<gix::ObjectId> = Vec::new();
+    let mut grafted_parents_to_skip: FxHashSet<gix::ObjectId> = FxHashSet::default();
     let mut buf = Vec::new();
     let filter: super::LogPagedWalkFilter = Box::new(move |id| {
         let id = id.to_owned();
-        if let Ok(index) = grafted_parents_to_skip.binary_search(&id) {
-            grafted_parents_to_skip.remove(index);
+        if grafted_parents_to_skip.remove(&id) {
             return false;
         }
         if shallow_commits.binary_search(&id).is_ok()
             && let Ok(commit) = objects.find_commit_iter(&id, &mut buf)
         {
             grafted_parents_to_skip.extend(commit.parent_ids());
-            grafted_parents_to_skip.sort();
         }
         true
     });
@@ -291,6 +289,11 @@ pub(crate) fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
     )))
 }
 
+/// Upper bound on how much of a caller-supplied page limit is pre-reserved.
+/// The limit is still enforced while iterating; a huge one (`usize::MAX` reads
+/// as "every commit after the cursor") must not reserve that much up front.
+pub(crate) const LOG_PAGE_RESERVE_MAX: usize = 512;
+
 pub(crate) fn paginate_commits(
     commits: impl Iterator<Item = Result<Commit>>,
     limit: usize,
@@ -301,7 +304,7 @@ pub(crate) fn paginate_commits(
     }
 
     let mut cursor_gate = CursorGate::new(cursor);
-    let mut result: Vec<Commit> = Vec::with_capacity(limit);
+    let mut result: Vec<Commit> = Vec::with_capacity(limit.min(LOG_PAGE_RESERVE_MAX));
     let mut next_cursor: Option<LogCursor> = None;
 
     for commit in commits {
@@ -494,7 +497,7 @@ impl DecodeWorkers {
         ) -> Result<()> {
             for info in chunk {
                 out.push(commit_from_walk_parts(
-                    repo,
+                    &repo.objects,
                     &info.id,
                     &info.parent_ids,
                     info.commit_time,

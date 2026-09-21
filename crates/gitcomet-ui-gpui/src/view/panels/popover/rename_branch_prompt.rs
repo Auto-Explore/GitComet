@@ -10,26 +10,25 @@ pub(super) fn panel(
     let theme = this.theme;
     let can_rename = this.can_submit_rename_branch(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
         .w(scaled_px(540.0))
-        .child(popover_title(if is_current_branch {
-            "Rename current branch"
-        } else {
-            "Rename branch"
-        }))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child(format!("Current name: {name}")),
-        )
+        .child(popover_title(
+            theme,
+            if is_current_branch {
+                "Rename current branch"
+            } else {
+                "Rename branch"
+            },
+        ))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(
+            theme,
+            format!("Current name: {name}"),
+        ))
         .child(input_label(theme, "New branch name"))
         .child(
             div()
@@ -39,14 +38,9 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.create_branch_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("rename_branch_cancel", "rename_branch_cancel_hint", theme)
                         .focus_handle(this.create_branch_from_ref_focus.cancel.clone())

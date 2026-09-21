@@ -53,14 +53,18 @@ impl GitRepository for RepoActivationRecordingRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         self.calls
             .log
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(LogPage {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -98,8 +102,8 @@ impl GitRepository for RepoActivationRecordingRepo {
             .status
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(RepoStatus {
-            staged: Vec::new(),
-            unstaged: Vec::new(),
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(Vec::new()),
         })
     }
 
@@ -124,10 +128,6 @@ impl GitRepository for RepoActivationRecordingRepo {
     }
 
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
 
@@ -193,7 +193,7 @@ fn active_ready_repo_state(repo_id: RepoId, workdir: PathBuf) -> AppState {
     AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     }
 }
 
@@ -302,7 +302,7 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         loads_in_flight.request(crate::model::RepoLoadsInFlight::REMOTE_BRANCHES);
         state
     };
-    let (store, _events) = AppStore::new(std::sync::Arc::new(FailingBackend));
+    let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));
     store.replace_snapshot_for_test(std::sync::Arc::new(state));
     store.insert_repo_for_test(
         repo_id,
@@ -333,7 +333,7 @@ fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
     std::fs::create_dir_all(&workdir).expect("create activation fallback workdir");
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = active_ready_repo_state(repo_id, workdir.clone());
-    let (store, _events) = AppStore::new(std::sync::Arc::new(FailingBackend));
+    let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));
     store.replace_snapshot_for_test(std::sync::Arc::new(state));
     store.insert_repo_for_test(
         repo_id,
@@ -428,7 +428,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     let state = AppState {
         repos: vec![old_repo, new_repo],
         active_repo: Some(new_repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     };
     let thread_state = std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(state)));
     let active_repo_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(old_repo_id.0));
@@ -459,6 +459,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
         metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
         session_persist_executor: &session_persist_executor,
         backend: &backend,
     }

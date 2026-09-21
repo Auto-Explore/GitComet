@@ -1,5 +1,8 @@
 use super::terminal_alacritty::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::path::PathBuf;
@@ -43,11 +46,12 @@ fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
 }
 
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
-const TERMINAL_FONT_SCALE: f32 = 0.92;
 const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.15;
 const TERMINAL_MIN_GRID_ROWS: u16 = 2;
 const TERMINAL_MIN_GRID_COLS: u16 = 8;
 const TERMINAL_CARET_WIDTH_RATIO: f32 = 0.12;
+/// Close affordance on a terminal tab. Smaller than a control by design, but it
+/// still follows the density ramp so the target grows with the tab.
 const TERMINAL_CARET_MIN_WIDTH_PX: f32 = 2.0;
 const TERMINAL_CARET_MAX_WIDTH_PX: f32 = 3.0;
 const TERMINAL_CARET_VERTICAL_INSET_PX: f32 = 1.0;
@@ -59,10 +63,11 @@ const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TerminalShortcutAction {
+pub(in crate::view) enum TerminalCommand {
     Copy,
     Paste,
     SelectAll,
+    ClearScreenAndScrollback,
 }
 
 /// Which surviving terminal receives focus after a stable-sequence close.
@@ -112,7 +117,7 @@ impl GitCometView {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            viewport.handle_key_down(keystroke, cx);
+            viewport.handle_key_down(keystroke, window, cx);
         });
     }
 
@@ -266,11 +271,13 @@ impl GitCometView {
             .collect::<FxHashSet<RepoId>>();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
+        let popover_host = self.popover_host.clone();
         cx.defer(move |cx| {
             repo_tabs_bar.update(cx, |bar, cx| {
                 bar.set_open_terminal_repo_ids(repo_ids.clone(), cx)
             });
             action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
+            popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
     }
 
@@ -409,8 +416,14 @@ impl GitCometView {
         let pty_sender = spawned.pty_sender.clone();
         let events_rx = spawned.events_rx;
 
-        let viewport = cx.new(|_cx| {
-            TerminalViewportView::new(theme, focus_handle.clone(), term_lock, pty_sender.clone())
+        let viewport = cx.new(|cx| {
+            TerminalViewportView::new(
+                theme,
+                focus_handle.clone(),
+                term_lock,
+                pty_sender.clone(),
+                cx,
+            )
         });
 
         Some(TerminalInstance {
@@ -477,20 +490,6 @@ impl GitCometView {
                                 if !title.is_empty() {
                                     instance.title = friendly_terminal_title(title);
                                     cx.notify();
-                                }
-                            }
-                            TerminalBackendEvent::ClipboardStore(data) => {
-                                crate::clipboard::write_text(
-                                    cx,
-                                    data,
-                                    crate::clipboard::CopySource::TerminalProtocol,
-                                );
-                            }
-                            TerminalBackendEvent::ClipboardLoad => {
-                                if let Some(text) = crate::clipboard::read_text(cx)
-                                    && let Some(ref pty) = instance.pty_sender
-                                {
-                                    pty.write(text.into_bytes());
                                 }
                             }
                             TerminalBackendEvent::Bell => {}
@@ -1163,82 +1162,37 @@ impl GitCometView {
         }
     }
 
-    pub(super) fn send_terminal_bytes_for_repo(&mut self, repo_id: RepoId, bytes: Vec<u8>) {
-        if let Some(pty) = self
-            .terminal_sessions
+    pub(in crate::view) fn terminal_viewport_for_session(
+        &self,
+        repo_id: RepoId,
+        session_seq: u64,
+    ) -> Option<Entity<TerminalViewportView>> {
+        self.terminal_sessions
             .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .and_then(|i| i.pty_sender.as_ref())
-        {
-            pty.write(bytes);
-        }
+            .and_then(|s| s.instance_by_seq(session_seq))
+            .map(|i| i.viewport.clone())
     }
 
-    pub(super) fn copy_terminal_selection_for_repo(
+    pub(in crate::view) fn dispatch_terminal_command(
         &mut self,
         repo_id: RepoId,
-        _window: &mut Window,
+        session_seq: u64,
+        command: TerminalCommand,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(viewport) = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .map(|i| i.viewport.clone())
-        else {
+        let Some(viewport) = self.terminal_viewport_for_session(repo_id, session_seq) else {
             return false;
         };
-        let Some(text) = viewport.read(cx).selected_text() else {
-            return false;
-        };
-        crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::TerminalContextMenu);
+        viewport.update(cx, |v, cx| {
+            v.perform_command(
+                command,
+                crate::clipboard::CopySource::TerminalContextMenu,
+                window,
+                cx,
+            )
+        });
         true
-    }
-
-    pub(super) fn paste_terminal_clipboard_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let Some(text) = crate::clipboard::read_text(cx) else {
-            return false;
-        };
-        let Some(viewport) = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .map(|i| i.viewport.clone())
-        else {
-            return false;
-        };
-        viewport.update(cx, |v, cx| v.paste_text(&text, cx));
-        true
-    }
-
-    pub(super) fn select_all_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if let Some(viewport) = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .map(|i| i.viewport.clone())
-        {
-            viewport.update(cx, |v, cx| v.select_all(cx));
-        }
-    }
-
-    pub(super) fn clear_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
-    ) {
-        self.send_terminal_bytes_for_repo(repo_id, vec![0x0c]);
     }
 
     pub(in crate::view) fn terminal_launch_context_for_active_repo(
@@ -1261,7 +1215,7 @@ impl GitCometView {
     ) -> Option<AnyElement> {
         let active_repo = self.active_repo_id()?;
 
-        let (viewport_entity, connected, tabs, active_index) = {
+        let (viewport_entity, session_seq, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
             let active = session.active_instance()?;
             let tabs: Vec<SharedString> = session
@@ -1271,18 +1225,11 @@ impl GitCometView {
                 .collect();
             (
                 active.viewport.clone(),
-                active.connected,
+                active.session_seq,
                 tabs,
                 session.active_index,
             )
         };
-        let has_selection = viewport_entity.read(cx).has_selection();
-        let mouse_mode = viewport_entity
-            .read(cx)
-            .last_content
-            .as_ref()
-            .map(|c| c.mode.mouse_mode())
-            .unwrap_or(false);
         // When the terminal holds keyboard focus, app shortcuts are routed to
         // the embedded TUI instead of the app. Surface that state so the user
         // understands why their usual shortcuts behave differently.
@@ -1297,6 +1244,8 @@ impl GitCometView {
             cx,
         );
         let viewport_element = div()
+            .id("terminal_context_surface")
+            .debug_selector(|| "terminal_context_surface".to_string())
             .flex_1()
             .min_h(px(0.0))
             // Breathing room so the first/last column doesn't touch the panel
@@ -1306,28 +1255,41 @@ impl GitCometView {
                 self.ui_scale_percent,
             ))
             .key_context("Terminal")
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    let Some(instance) = this
+                        .terminal_sessions
+                        .get(&active_repo)
+                        .and_then(|session| session.instance_by_seq(session_seq))
+                    else {
+                        return;
+                    };
+                    let viewport = instance.viewport.read(cx);
                     // When the running program has requested mouse reporting
                     // (e.g. a full-screen TUI), forward the click instead of
                     // showing our context menu.
-                    if mouse_mode {
+                    if viewport.live_modes().mouse_mode() {
                         return;
                     }
-                    cx.stop_propagation();
                     let context = TerminalMenuContext {
                         has_session: true,
-                        has_selection,
-                        connected,
+                        has_buffer: viewport.term_lock.is_some(),
+                        has_selection: viewport.has_selection(),
+                        connected: instance.connected,
                     };
+                    let focus_return = viewport.focus_handle.clone();
+                    cx.stop_propagation();
                     let invoker: SharedString = format!("terminal_menu_{}", active_repo.0).into();
-                    this.set_active_context_menu_invoker(Some(invoker), cx);
+
                     this.open_popover_at(
-                        PopoverKind::TerminalMenu {
+                        (PopoverKind::TerminalMenu {
                             repo_id: active_repo,
+                            session_seq,
                             context,
-                        },
+                        })
+                        .invoked_by(invoker)
+                        .returning_focus_to(focus_return),
                         e.position,
                         window,
                         cx,
@@ -1370,29 +1332,45 @@ impl GitCometView {
     ) -> AnyElement {
         let external_repo = active_repo;
         let clear_repo = active_repo;
+        let clear_session = self
+            .terminal_sessions
+            .get(&active_repo)
+            .and_then(|s| s.active_instance())
+            .filter(|instance| instance.viewport.read(cx).term_lock.is_some())
+            .map(|instance| instance.session_seq);
         let close_repo = active_repo;
         let repo_id = active_repo;
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        let control_height = components::control_height(ui_scale);
 
-        let icon_btn = move |id: &'static str, icon: &'static str, tip: &'static str| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(22.0))
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                .child(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
-                .gitcomet_tooltip(theme, tip.into())
-        };
+        let icon_btn =
+            move |id: &'static str, icon: &'static str, tip: &'static str, disabled: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(control_height)
+                    .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
+                    .control_interaction(
+                        InteractionStyle::new(theme),
+                        InteractionState::default().disabled(disabled),
+                    )
+                    .child(svg_icon(
+                        icon,
+                        theme.colors.foreground.primary,
+                        ui_scale.px(14.0),
+                    ))
+                    .gitcomet_tooltip(theme, tip.into())
+            };
 
         let mut tabs_row = div()
             .id("terminal_tabs_scroll")
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(2.0))
+            .gap(ui_scale.px(2.0))
             .flex_1()
             .min_w(px(0.0))
             .overflow_x_scroll()
@@ -1400,62 +1378,33 @@ impl GitCometView {
 
         for (i, title) in tabs.iter().enumerate() {
             let is_active = i == active_index;
-            let tab_bg = if is_active {
-                theme.colors.interaction.selected_background
-            } else {
-                theme.colors.surface.panel
-            };
-            let text_color = if is_active {
-                theme.colors.interaction.selected_foreground
-            } else {
-                theme.colors.foreground.secondary
-            };
+            let text_color = components::panel_tab_text_color(theme, is_active);
 
-            let close = div()
-                .id(("terminal_tab_close", i))
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(14.0))
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(with_alpha(theme.colors.status.danger.foreground, 0.18)))
-                .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.request_close_terminal_tab(repo_id, i, window, cx);
-                    }),
-                );
+            let close = components::on_nested_control_click(
+                components::panel_tab_close(("terminal_tab_close", i), theme, ui_scale, text_color),
+                cx,
+                move |this, _e: &gpui::ClickEvent, window, cx| {
+                    this.request_close_terminal_tab(repo_id, i, window, cx);
+                },
+            );
 
-            let tab = div()
-                .id(("terminal_tab", i))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(theme.radii.row))
-                .bg(tab_bg)
-                .text_color(text_color)
-                .text_size(px(12.0))
-                .flex_none()
-                .cursor(CursorStyle::PointingHand)
-                .when(!is_active, |d| {
-                    d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                })
-                .child(svg_icon("icons/terminal.svg", text_color, px(12.0)))
-                .child(title.clone())
-                .child(close)
-                .gitcomet_tooltip(theme, title.clone())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                        this.select_terminal_tab(repo_id, i, window, cx);
-                    }),
-                );
+            let tab = components::panel_tab(
+                ("terminal_tab", i),
+                theme,
+                ui_scale,
+                "icons/terminal.svg",
+                title.clone(),
+                is_active,
+            )
+            .child(close)
+            .gitcomet_tooltip(theme, title.clone())
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
+                    this.select_terminal_tab(repo_id, i, window, cx);
+                }),
+            );
 
             tabs_row = tabs_row.child(tab);
         }
@@ -1466,19 +1415,20 @@ impl GitCometView {
             .flex_none()
             .items_center()
             .justify_center()
-            .size(px(20.0))
+            .size(control_height)
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(svg_icon(
                 "icons/plus.svg",
                 theme.colors.foreground.primary,
-                px(12.0),
+                ui_scale.px(12.0),
             ))
             .gitcomet_tooltip(theme, "New terminal".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
                     this.add_terminal_tab_for_repo(repo_id, window, cx);
                 }),
             );
@@ -1489,9 +1439,9 @@ impl GitCometView {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(2.0))
-            .px(px(4.0))
-            .py(px(4.0))
+            .gap(ui_scale.px(2.0))
+            .px(ui_scale.px(4.0))
+            .py(ui_scale.px(4.0))
             .bg(theme.colors.surface.panel)
             .border_b_1()
             .border_color(theme.colors.stroke.subtle)
@@ -1506,20 +1456,20 @@ impl GitCometView {
                         .flex_none()
                         .flex_row()
                         .items_center()
-                        .gap(px(4.0))
-                        .px(px(6.0))
-                        .py(px(2.0))
+                        .gap(ui_scale.px(4.0))
+                        .px(ui_scale.px(6.0))
+                        .h(control_height)
                         .rounded(px(theme.radii.row))
                         .bg(with_alpha(theme.colors.accent.foreground, 0.15))
                         .child(
                             div()
-                                .size(px(6.0))
-                                .rounded(px(3.0))
+                                .size(ui_scale.px(6.0))
+                                .rounded(ui_scale.px(3.0))
                                 .bg(theme.colors.accent.foreground),
                         )
                         .child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(theme.ui_text(11.0))
                                 .text_color(theme.colors.foreground.primary)
                                 .child("Keyboard captured"),
                         )
@@ -1543,10 +1493,12 @@ impl GitCometView {
                             "terminal_open_external",
                             "icons/open_external.svg",
                             "Open in external terminal",
+                            false,
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                 this.open_external_terminal_for_repo(external_repo, cx);
                             }),
                         ),
@@ -1555,12 +1507,28 @@ impl GitCometView {
                         icon_btn(
                             "terminal_clear",
                             "icons/broom.svg",
-                            "Clear terminal (Ctrl+L)",
+                            "Clear Screen and Scrollback",
+                            clear_session.is_none(),
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                                this.clear_terminal_for_repo(clear_repo, window, cx);
+                        .debug_selector(|| "terminal_clear".to_string())
+                        .on_activate(
+                            clear_session.is_none(),
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
+                                let Some(viewport) = clear_session.and_then(|seq| {
+                                    this.terminal_viewport_for_session(clear_repo, seq)
+                                }) else {
+                                    return;
+                                };
+                                viewport.update(cx, |v, cx| {
+                                    v.perform_command(
+                                        TerminalCommand::ClearScreenAndScrollback,
+                                        crate::clipboard::CopySource::TerminalContextMenu,
+                                        window,
+                                        cx,
+                                    );
+                                    window.focus(&v.focus_handle, cx);
+                                });
                             }),
                         ),
                     )
@@ -1569,10 +1537,12 @@ impl GitCometView {
                             "terminal_close",
                             "icons/generic_close.svg",
                             "Close terminal",
+                            false,
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                 cx.stop_propagation();
                                 if !this.request_close_terminal_for_repo(close_repo, cx) {
                                     this.close_terminal_for_repo(close_repo, cx);
@@ -1667,6 +1637,7 @@ impl GitCometView {
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     this.terminal_panel_resize = Some(TerminalPanelResizeState {
                         start_y: e.position.y,
                         start_height: this.terminal_panel_height,
@@ -1711,6 +1682,7 @@ impl GitCometView {
 
 impl Drop for GitCometView {
     fn drop(&mut self) {
+        self.signing_tools_probe_cancellation.cancel();
         // Fallback teardown for OS-level window close / unwind that bypasses the
         // explicit shutdown flow. SIGTERM the child process group (a no-op on a
         // group already terminating) so commands aren't left as orphans, then
@@ -1743,7 +1715,26 @@ fn terminal_tab_default_title() -> String {
 /// default on Windows, e.g. `C:\Program Files\PowerShell\7\pwsh.exe`)
 /// collapse to the program stem ("pwsh"); anything else is a deliberate
 /// application-set title and passes through untouched.
+/// Longest tab title kept from an OSC 0/2 title change. Titles come from
+/// whatever runs in the terminal, so they are bounded like any other
+/// program-controlled display string.
+const MAX_TERMINAL_TITLE_CHARS: usize = 200;
+
+/// Strip control characters and cap the length of a program-set title.
+///
+/// The emulator hands the raw OSC payload through; GPUI renders text rather
+/// than interpreting escapes, so the risk is a title that hides or spoofs the
+/// tab label with embedded controls or unbounded length, not injection.
+fn sanitize_terminal_title(title: &str) -> String {
+    title
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_TERMINAL_TITLE_CHARS)
+        .collect()
+}
+
 fn friendly_terminal_title(title: String) -> String {
+    let title = sanitize_terminal_title(&title);
     let Some(program) = title
         .contains(['\\', '/'])
         .then(|| title.rsplit(['\\', '/']).next())
@@ -1889,13 +1880,11 @@ fn terminate_terminal_process_group(child_pid: Option<u32>) {
 #[cfg(not(unix))]
 fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
-fn terminal_clipboard_shortcut_action(
-    keystroke: &gpui::Keystroke,
-) -> Option<TerminalShortcutAction> {
+fn terminal_clipboard_shortcut_action(keystroke: &gpui::Keystroke) -> Option<TerminalCommand> {
     let action = match keystroke.key.as_str() {
-        "c" | "C" => TerminalShortcutAction::Copy,
-        "v" | "V" => TerminalShortcutAction::Paste,
-        "a" | "A" => TerminalShortcutAction::SelectAll,
+        "c" | "C" => TerminalCommand::Copy,
+        "v" | "V" => TerminalCommand::Paste,
+        "a" | "A" => TerminalCommand::SelectAll,
         _ => return None,
     };
     let mods = keystroke.modifiers;
@@ -1909,5 +1898,31 @@ fn terminal_clipboard_shortcut_action(
         Some(action)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod terminal_title_tests {
+    use super::{MAX_TERMINAL_TITLE_CHARS, friendly_terminal_title, sanitize_terminal_title};
+
+    #[test]
+    fn program_set_titles_lose_control_characters() {
+        assert_eq!(
+            sanitize_terminal_title("build\u{1b}[2J\u{7}done\r\n"),
+            "build[2Jdone"
+        );
+        assert_eq!(
+            friendly_terminal_title("C:\\Windows\\pwsh.exe\u{0}".to_string()),
+            "pwsh"
+        );
+    }
+
+    #[test]
+    fn program_set_titles_are_capped() {
+        let long = "x".repeat(MAX_TERMINAL_TITLE_CHARS * 3);
+        assert_eq!(
+            friendly_terminal_title(long).chars().count(),
+            MAX_TERMINAL_TITLE_CHARS
+        );
     }
 }

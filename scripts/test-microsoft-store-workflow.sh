@@ -63,7 +63,7 @@ steps = deploy.fetch("steps")
 raise "Microsoft Store runner must be pinned to ubuntu-24.04" unless deploy.fetch("runs-on") == "ubuntu-24.04"
 
 dotnet_step = steps.find { |step| step["name"] == "Install .NET 9 for Microsoft Store CLI" }
-raise "missing pinned .NET setup action" unless dotnet_step&.fetch("uses") == "actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7"
+raise "missing pinned .NET setup action" unless dotnet_step&.fetch("uses") == "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68"
 raise "Microsoft Store CLI requires .NET 9" unless dotnet_step.fetch("with").fetch("dotnet-version") == "9.0.x"
 
 cli_step = steps.find { |step| step["name"] == "Install Microsoft Store CLI" }

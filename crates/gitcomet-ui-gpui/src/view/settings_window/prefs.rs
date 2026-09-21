@@ -25,6 +25,12 @@ impl SettingsWindowView {
             ui_scale_percent: Some(self.ui_scale_percent),
             window_controls_mode: Some(self.window_controls_mode.key().to_string()),
             browser_open_target: Some(self.browser_open_target.key().to_string()),
+            ui_density: Some(self.appearance_metrics.density.key().to_string()),
+            ui_font_size_px: Some(self.appearance_metrics.ui_font_size_px),
+            editor_font_size_px: Some(self.appearance_metrics.editor_font_size_px),
+            markdown_preview_font_size_px: Some(
+                self.appearance_metrics.markdown_preview_font_size_px,
+            ),
             ui_font_family: Some(self.ui_font_family.clone()),
             editor_font_family: Some(self.editor_font_family.clone()),
             use_font_ligatures: Some(self.use_font_ligatures),
@@ -32,6 +38,7 @@ impl SettingsWindowView {
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
+            file_list_layout: Some(self.file_list_layout.key().to_string()),
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
@@ -42,6 +49,14 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
+            allowed_remote_protocols: Some(
+                self.remote_url_policy
+                    .allowed_protocols()
+                    .map(|protocol| protocol.key().to_string())
+                    .collect(),
+            ),
+            remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
+            check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
             auto_save_file_edits: Some(self.auto_save_file_edits),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
@@ -52,16 +67,20 @@ impl SettingsWindowView {
             mergetool_view_three_way: None,
             change_tracking_height: None,
             untracked_height: None,
+            history_branch_names: Some(self.history_branch_names.key().to_string()),
             history_show_graph: Some(self.history_show_graph),
             history_show_author: Some(self.history_show_author),
             history_show_date: Some(self.history_show_date),
             history_show_sha: Some(self.history_show_sha),
             history_relative_dates: Some(self.history_relative_dates),
             history_highlight_commit_chain: Some(self.history_highlight_commit_chain),
+            file_browser_follow_selected_commit: Some(self.files_follow_selected_commit),
             history_show_tags: Some(self.history_show_tags),
+            history_verify_commit_signatures: Some(self.history_verify_commit_signatures),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
+            fetch_prune_deleted_remote_branches: Some(self.prune_deleted_remote_branches_on_fetch),
             commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
             terminal_external_mode: None,
@@ -547,7 +566,9 @@ impl SettingsWindowView {
         }
 
         self.theme_mode = mode.clone();
-        self.theme = mode.resolve_theme(window.appearance());
+        self.theme = mode
+            .resolve_theme(window.appearance())
+            .with_appearance(self.appearance_metrics);
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
@@ -680,6 +701,24 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_file_list_layout(
+        &mut self,
+        next: FileListLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_layout == next {
+            return;
+        }
+
+        self.file_list_layout = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_file_list_layout(next, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn set_diff_scroll_sync(
         &mut self,
         next: DiffScrollSync,
@@ -803,6 +842,72 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_remote_markdown_image_policy(
+        &mut self,
+        next: RemoteMarkdownImagePolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy == next {
+            return;
+        }
+        self.remote_markdown_image_policy = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_markdown_image_policy(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn toggle_remote_protocol(
+        &mut self,
+        protocol: RemoteProtocol,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let allowed = !self.remote_url_policy.allows(protocol);
+        self.remote_url_policy.set_allowed(protocol, allowed);
+        let next = self.remote_url_policy;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_url_policy(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_check_for_updates_on_startup(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if crate::view::update_checks_disabled_by_environment()
+            || self.check_for_updates_on_startup == next
+        {
+            return;
+        }
+        self.check_for_updates_on_startup = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_check_for_updates_on_startup(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_branch_names == next {
+            return;
+        }
+        self.history_branch_names = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_branch_names(next, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -846,6 +951,22 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_files_follow_selected_commit(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.files_follow_selected_commit == enabled {
+            return;
+        }
+        self.files_follow_selected_commit = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_files_follow_selected_commit_preference(enabled, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn set_history_relative_dates(
         &mut self,
         enabled: bool,
@@ -876,6 +997,28 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_history_tag_preferences(enabled, tag_fetch_mode, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_verify_commit_signatures(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_verify_commit_signatures == enabled {
+            return;
+        }
+
+        self.history_verify_commit_signatures = enabled;
+        if enabled {
+            self.refresh_signing_tools(cx);
+        } else {
+            self.cancel_signing_tools_probe();
+        }
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_verify_commit_signatures_preference(enabled, cx);
         });
         cx.notify();
     }
@@ -932,5 +1075,64 @@ impl SettingsWindowView {
             view.set_default_tag_type_preference(tag_type, cx);
         });
         cx.notify();
+    }
+
+    pub(super) fn set_prune_deleted_remote_branches_on_fetch(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.prune_deleted_remote_branches_on_fetch == enabled {
+            return;
+        }
+
+        self.prune_deleted_remote_branches_on_fetch = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_prune_preference(enabled, cx);
+        });
+        cx.notify();
+    }
+}
+
+impl SettingsWindowView {
+    fn publish_appearance(&mut self, cx: &mut gpui::Context<Self>) {
+        self.theme = self.theme.with_appearance(self.appearance_metrics);
+        cx.set_global(self.appearance_metrics);
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, |view, _window, cx| {
+            view.notify_font_preferences_changed(cx);
+        });
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    pub(super) fn set_font_size(
+        &mut self,
+        role: FontRole,
+        value: u32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !role.range().contains(&value) {
+            return;
+        }
+        self.font_size_inputs[role.index()].update(cx, |input, cx| {
+            if input.text() != value.to_string() {
+                input.set_text(value.to_string(), cx);
+            }
+        });
+        if self.appearance_metrics.size(role) == value {
+            return;
+        }
+        self.appearance_metrics.set_size(role, value);
+        self.publish_appearance(cx);
+    }
+
+    pub(super) fn set_density(&mut self, density: UiDensity, cx: &mut gpui::Context<Self>) {
+        if self.appearance_metrics.density == density {
+            return;
+        }
+        self.appearance_metrics.density = density;
+        self.publish_appearance(cx);
     }
 }

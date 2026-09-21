@@ -1,9 +1,12 @@
 use super::GixRepo;
-use crate::util::{path_buf_from_git_bytes, run_git_capture_bytes, run_git_with_output};
+use crate::util::{
+    path_buf_from_git_bytes, run_git_capture_bytes, run_git_with_output, validate_ref_like_arg,
+};
 use gitcomet_core::domain::{CommitId, Worktree};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, Result};
 use std::path::Path;
+use std::process::Command;
 
 impl GixRepo {
     pub(super) fn list_worktrees_impl(&self) -> Result<Vec<Worktree>> {
@@ -19,20 +22,14 @@ impl GixRepo {
         reference: Option<&str>,
     ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("worktree").arg("add").arg(path);
-        let label = if let Some(reference) = reference {
-            cmd.arg(reference);
-            format!("git worktree add {} {}", path.display(), reference)
-        } else {
-            format!("git worktree add {}", path.display())
-        };
+        let label = push_worktree_args(&mut cmd, &["add"], path, reference)?;
         run_git_with_output(cmd, &label)
     }
 
     pub(super) fn remove_worktree_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("worktree").arg("remove").arg(path);
-        run_git_with_output(cmd, &format!("git worktree remove {}", path.display()))
+        let label = push_worktree_args(&mut cmd, &["remove"], path, None)?;
+        run_git_with_output(cmd, &label)
     }
 
     pub(super) fn force_remove_worktree_with_output_impl(
@@ -40,12 +37,36 @@ impl GixRepo {
         path: &Path,
     ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("worktree").arg("remove").arg("--force").arg(path);
-        run_git_with_output(
-            cmd,
-            &format!("git worktree remove --force {}", path.display()),
-        )
+        let label = push_worktree_args(&mut cmd, &["remove", "--force"], path, None)?;
+        run_git_with_output(cmd, &label)
     }
+}
+
+/// Append `git worktree <args> -- <path> [<reference>]` and return the display
+/// label.
+///
+/// `path` and `reference` are typed by the user, so `--` keeps a value that
+/// starts with `-` out of the option parser, and the reference is checked the
+/// way every other ref argument in this crate is.
+fn push_worktree_args(
+    cmd: &mut Command,
+    args: &[&str],
+    path: &Path,
+    reference: Option<&str>,
+) -> Result<String> {
+    if let Some(reference) = reference {
+        validate_ref_like_arg(reference, "worktree reference")?;
+    }
+    // The label is a human-readable summary that the UI also inspects to
+    // recover the worktree path, so `--` stays an argv concern only.
+    cmd.arg("worktree").args(args).arg("--").arg(path);
+    let mut label = format!("git worktree {} {}", args.join(" "), path.display());
+    if let Some(reference) = reference {
+        cmd.arg(reference);
+        label.push(' ');
+        label.push_str(reference);
+    }
+    Ok(label)
 }
 
 fn parse_git_worktree_list_porcelain_z(output: &[u8]) -> Result<Vec<Worktree>> {
@@ -110,9 +131,62 @@ fn canonicalize_worktree_path(worktree: &mut Worktree) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_git_worktree_list_porcelain_z;
+    use super::{parse_git_worktree_list_porcelain_z, push_worktree_args};
     use gitcomet_core::path_utils::canonicalize_or_original;
-    use std::path::PathBuf;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    #[test]
+    fn worktree_add_places_separator_before_path_and_reference() {
+        let mut cmd = Command::new("git");
+        let label = push_worktree_args(&mut cmd, &["add"], Path::new("-linked"), Some("main"))
+            .expect("valid worktree arguments");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--"),
+                OsStr::new("-linked"),
+                OsStr::new("main"),
+            ]
+        );
+        assert_eq!(label, "git worktree add -linked main");
+    }
+
+    #[test]
+    fn worktree_add_rejects_option_like_reference() {
+        let mut cmd = Command::new("git");
+        let err = push_worktree_args(&mut cmd, &["add"], Path::new("linked"), Some("--detach"))
+            .expect_err("an option-looking reference must be refused");
+        assert!(err.to_string().contains("worktree reference"), "{err}");
+        assert_eq!(
+            cmd.get_args().count(),
+            0,
+            "nothing should be appended on refusal"
+        );
+    }
+
+    #[test]
+    fn worktree_remove_keeps_flags_before_separator() {
+        let mut cmd = Command::new("git");
+        let label = push_worktree_args(&mut cmd, &["remove", "--force"], Path::new("linked"), None)
+            .expect("valid worktree arguments");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("remove"),
+                OsStr::new("--force"),
+                OsStr::new("--"),
+                OsStr::new("linked"),
+            ]
+        );
+        assert_eq!(label, "git worktree remove --force linked");
+    }
 
     #[test]
     fn parse_git_worktree_list_porcelain_z_parses_regular_and_detached_entries() {

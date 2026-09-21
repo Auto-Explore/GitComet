@@ -170,6 +170,19 @@ pub(super) fn migrate_scaled_dimension_to_design_units(
     (design_units.is_finite() && design_units >= 1.0).then_some(design_units as u32)
 }
 
+pub(super) fn migrate_legacy_repo_fetch_prune_setting(mut file: UiSessionFile) -> UiSessionFile {
+    if file.fetch_prune_deleted_remote_branches.is_none() {
+        file.fetch_prune_deleted_remote_branches = file
+            .repo_fetch_prune_deleted_remote_tracking_branches
+            .as_ref()
+            .filter(|settings| !settings.is_empty())
+            // The setting is global now, so preserve every prior opt-out.
+            .map(|settings| settings.values().all(|enabled| *enabled));
+    }
+    file.repo_fetch_prune_deleted_remote_tracking_branches = None;
+    file
+}
+
 pub(super) fn migrate_v2_file(mut file: UiSessionFile) -> UiSessionFile {
     let ui_scale_percent = file.ui_scale_percent;
     file.version = CURRENT_SESSION_FILE_VERSION;

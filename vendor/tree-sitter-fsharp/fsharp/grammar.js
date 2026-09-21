@@ -135,6 +135,23 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
+  // Keyword extraction alone is not enough: when a keyword is not valid in the
+  // current parse state, tree-sitter falls back to the word token, so `let type
+  // = 2` binds a value named "type" and `open System` inside a function body
+  // parses as the application `open System`. Listing the keywords here stops
+  // that fallback, so those positions become ERROR as FSC reports them.
+  // Two keywords are deliberately absent:
+  //
+  //  * `member`, because the grammar relies on it lexing as an identifier to
+  //    recover from over-indented member declarations (`inherit Base()` followed
+  //    by a more-indented `static member ...`), which FSC accepts.
+  //  * `val`, because the `basic long namespace` test in source_file.txt asserts
+  //    a tree for `namespace test.val`, which FSC rejects ("Unexpected start of
+  //    structured construct"). Reserving it would change that expected tree.
+  reserved: {
+    global: (_) => ["as", "namespace", "open", "type"],
+  },
+
   inline: ($) => [
     $._expression_or_range,
     $._object_expression_inner,
@@ -421,7 +438,9 @@ module.exports = grammar({
     // Top-level rules (END)
     //
 
-    class_as_reference: ($) => seq("as", $.identifier),
+    // Outranks as_pattern (prec 0), which would otherwise absorb the `as this`
+    // of `type T(args) as this` / `new (args) as this` into the argument pattern.
+    class_as_reference: ($) => prec(1, seq("as", $.identifier)),
 
     primary_constr_args: ($) =>
       seq(
@@ -742,7 +761,9 @@ module.exports = grammar({
         seq(
           "new",
           $._expression,
-          optional(seq("as", $.identifier)),
+          // No `as` binding: `{ new Base() as b with ... }` is rejected by FSC
+          // ("'inherit' declarations cannot have 'as' bindings"); `base` is a
+          // keyword instead.
           $._object_expression_inner,
         ),
       ),
@@ -1805,7 +1826,6 @@ module.exports = grammar({
       seq(
         optional($.attributes),
         optional("mutable"),
-        optional($.access_modifier),
         $.identifier,
         ":",
         $._type,
@@ -1871,7 +1891,7 @@ module.exports = grammar({
       seq($.union_type_field, repeat(seq("*", $.union_type_field))),
 
     union_type_field: ($) =>
-      prec.left(choice($._type, seq($.identifier, ":", $._type))),
+      prec.left(choice($._argument_type, seq($.identifier, ":", $._argument_type))),
 
     interface_type_defn: ($) =>
       prec.left(
@@ -1969,18 +1989,28 @@ module.exports = grammar({
             seq(
               // `static abstract` declares an interface member that
               // implementing types must provide statically (F# 7 IWSAMs).
-              // The accessibility modifier is accepted on either side of
-              // `abstract` (FSC parses both and rejects it later, FS0561),
-              // and `inline` likewise parses here (rejected as FS3151).
+              // An accessibility modifier *before* `abstract` parses and is
+              // rejected later (FS0561); after it, FSC fails in the parser
+              // ("Unexpected keyword 'public' in member definition"), so it is
+              // not accepted here. `inline` parses here (rejected as FS3151).
               optional($.access_modifier),
               optional("static"),
               "abstract",
               optional("member"),
               optional("inline"),
-              optional($.access_modifier),
               $.member_signature,
             ),
-            seq("member", "val", optional($.access_modifier), $.property_or_ident, $._val_property_defn),
+            // `static member val` declares a static auto-property. Without the
+            // `static` here it fell through to the generic member branch with
+            // `val` as the method name, which mis-nested whatever followed.
+            seq(
+              optional("static"),
+              "member",
+              "val",
+              optional($.access_modifier),
+              $.property_or_ident,
+              $._val_property_defn,
+            ),
             seq("override", optional($.access_modifier), $.method_or_prop_defn),
             seq("default", optional($.access_modifier), $.method_or_prop_defn),
             seq(
@@ -2100,6 +2130,9 @@ module.exports = grammar({
         optional($.access_modifier),
         "new",
         $._pattern,
+        // `new (args) as this = ...` binds the object being constructed, the
+        // same way a primary constructor does.
+        optional($.class_as_reference),
         "=",
         $._expression_block,
         optional(seq("then", $._expression_block)),

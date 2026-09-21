@@ -1,7 +1,7 @@
 use super::super::viewport::trim_terminal_copy;
 use super::super::*;
 use super::support::*;
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::vte::ansi::Handler;
 
 fn test_viewport_bounds() -> Bounds<Pixels> {
@@ -71,11 +71,13 @@ fn test_viewport(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<TerminalViewportView>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|_window, cx| {
+        let focus = cx.focus_handle();
         let mut view = TerminalViewportView::with_backend(
             AppTheme::gitcomet_dark(),
-            cx.focus_handle(),
+            focus,
             Some(term_lock),
             None,
+            cx,
         );
         view.viewport_bounds = Some(test_viewport_bounds());
         view.layout_cache = Some(test_layout_cache());
@@ -420,11 +422,13 @@ fn the_autoscroll_ticker_does_not_collapse_a_word_or_line_selection(cx: &mut gpu
 fn the_grid_stops_short_of_the_scrollbar_gutter(cx: &mut gpui::TestAppContext) {
     let term_lock = test_term_with_lines(3);
     let (view, cx) = cx.add_window_view(|_window, cx| {
+        let focus = cx.focus_handle();
         TerminalViewportView::with_backend(
             AppTheme::gitcomet_dark(),
-            cx.focus_handle(),
+            focus,
             Some(term_lock),
             None,
+            cx,
         )
     });
     cx.run_until_parked();
@@ -454,8 +458,8 @@ fn select_all_covers_the_whole_buffer_and_stays_visible_when_scrolled(
     let term_lock = test_term_with_lines(30);
     let (view, cx) = test_viewport(term_lock, cx);
 
-    let (start, end, history) = with_viewport(&view, cx, |this, _window, cx| {
-        this.select_all(cx);
+    let (start, end, history) = with_viewport(&view, cx, |this, window, cx| {
+        this.select_all(window, cx);
         let history = this.grid_geometry().expect("live term").history_size;
         (this.selection_start, this.selection_end, history)
     });
@@ -484,6 +488,131 @@ fn select_all_covers_the_whole_buffer_and_stays_visible_when_scrolled(
         .expect("select-all is visible at every scroll offset");
         assert_eq!(visible.clone().count(), TEST_ROWS);
         assert_eq!(*visible.start(), -(offset as i32));
+    }
+}
+
+#[gpui::test]
+fn clear_screen_and_scrollback_cancels_drag_and_repaints_without_backend_output(
+    cx: &mut gpui::TestAppContext,
+) {
+    let term = test_term_with_lines(30);
+    term.lock().scroll_display(Scroll::Delta(5));
+    let (view, cx) = test_viewport(term.clone(), cx);
+    with_viewport(&view, cx, |view, window, cx| {
+        view.select_all(window, cx);
+        view.selecting = true;
+        view.selection_last_mouse_pos = point(px(101.0), px(190.0));
+        let before = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(
+            before
+                .lines
+                .iter()
+                .any(|(line, _, _)| !line.text.trim().is_empty())
+        );
+        assert!(!before.selection_rects.is_empty());
+        let epoch = view.content_epoch;
+        let drag_seq = view.selection_autoscroll_seq;
+        view.clear_screen_and_scrollback(cx);
+        assert_ne!(view.content_epoch, epoch);
+        assert_ne!(view.selection_autoscroll_seq, drag_seq);
+        assert!(view.render_cache.viewport_key.is_none());
+        assert!(view.render_cache.rows.is_empty());
+        assert!(!view.has_selection());
+        assert!(!view.select_all_active);
+        assert!(!view.selecting);
+        assert!(!view.tick_selection_autoscroll());
+        assert_eq!(view.copy_entire_buffer(), "");
+        let cleared = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(
+            cleared
+                .lines
+                .iter()
+                .all(|(line, _, _)| line.text.trim().is_empty())
+        );
+        assert!(cleared.selection_rects.is_empty());
+        let mut term = term.lock();
+        assert_eq!(term.grid().history_size(), 0);
+        assert_eq!(term.grid().display_offset(), 0);
+        assert_eq!(
+            term.grid().cursor.point,
+            alacritty_terminal::index::Point::default()
+        );
+        term.input('N');
+        drop(term);
+        let next = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(
+            next.lines
+                .iter()
+                .any(|(line, _, _)| line.text.trim_end() == "N")
+        );
+        assert_eq!(view.copy_entire_buffer(), "N");
+    });
+}
+
+#[gpui::test]
+fn clear_screen_and_scrollback_preserves_alternate_screen_and_terminal_modes(
+    cx: &mut gpui::TestAppContext,
+) {
+    use alacritty_terminal::term::{TermDamage, TermMode};
+    use alacritty_terminal::vte::ansi::Processor;
+
+    for alternate in [false, true] {
+        let term = test_term_with_lines(30);
+        {
+            let mut term = term.lock();
+            let mut parser: Processor = Processor::new();
+            if alternate {
+                parser.advance(&mut *term, b"\x1b[?1049hfull screen app");
+            }
+            parser.advance(
+                &mut *term,
+                b"\x1b[?2004h\x1b[?1h\x1b[?1000h\x1b[31m\x1b[2;5r\x1b[?6h\x1b[>1u",
+            );
+            // A full last column leaves a pending wrap which clearing must drop.
+            for _ in 0..TEST_COLS {
+                term.input('X');
+            }
+            assert!(term.grid().cursor.input_needs_wrap);
+        }
+        let (view, cx) = test_viewport(term.clone(), cx);
+        with_viewport(&view, cx, |view, _, cx| {
+            let (modes, template) = {
+                let mut term = term.lock();
+                term.reset_damage();
+                (*term.mode(), term.grid().cursor.template.clone())
+            };
+            view.clear_screen_and_scrollback(cx);
+            let mut term = term.lock();
+            assert_eq!(*term.mode(), modes);
+            assert_eq!(term.mode().contains(TermMode::ALT_SCREEN), alternate);
+            assert_eq!(term.grid().cursor.template, template);
+            assert_eq!(
+                term.grid().cursor.point,
+                alacritty_terminal::index::Point::default()
+            );
+            assert_eq!(
+                term.grid().saved_cursor.point,
+                alacritty_terminal::index::Point::default()
+            );
+            assert!(!term.grid().cursor.input_needs_wrap);
+            assert!(matches!(term.damage(), TermDamage::Full));
+            assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
+            term.input('Z');
+            assert_eq!(
+                term.grid()[alacritty_terminal::index::Line(0)]
+                    [alacritty_terminal::index::Column(0)]
+                .c,
+                'Z'
+            );
+            term.swap_alt();
+            assert_eq!(
+                term.grid().history_size(),
+                0,
+                "clearing the alternate screen must purge hidden primary scrollback too"
+            );
+            assert_eq!(term.grid().display_offset(), 0);
+            assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
+        });
     }
 }
 
@@ -592,5 +721,97 @@ fn scrollbar_gutter_contains_only_points_inside_gutter() {
     assert!(
         !gutter.contains(&point(px(300.0), px(400.0))),
         "point exactly on bottom edge is NOT contained (exclusive)"
+    );
+}
+
+/// The terminal is a selection owner like any other surface: a right-click on
+/// its own selection opens a menu that acts on that selection, so the press
+/// must keep it rather than let the press resolver collapse it.
+#[gpui::test]
+fn a_right_click_keeps_the_terminal_selection_for_its_context_menu(cx: &mut gpui::TestAppContext) {
+    let term_lock = test_term_with_lines(30);
+    let (view, cx) = test_viewport(term_lock, cx);
+
+    with_viewport(&view, cx, |this, window, cx| {
+        this.handle_mouse_down(
+            &test_mouse_down(test_cell_pos(0, 0)),
+            window,
+            cx,
+            MouseButton::Left,
+        );
+    });
+    let dragged = with_viewport(&view, cx, |this, _window, _cx| {
+        this.drag_selection_to(test_cell_pos(2, 5))
+    });
+    assert!(dragged, "precondition: the drag established a selection");
+    assert!(
+        with_viewport(&view, cx, |this, _window, _cx| this.has_selection()),
+        "precondition: the terminal holds a selection"
+    );
+
+    // The press that opens the context menu: the window-level invalidator runs
+    // in the capture phase, then the viewport's own handler in the bubble phase.
+    with_viewport(&view, cx, |this, window, cx| {
+        crate::text_selection_owner::release_for_press(window, cx);
+        this.handle_mouse_down(
+            &MouseDownEvent {
+                button: MouseButton::Right,
+                position: test_cell_pos(1, 2),
+                modifiers: gpui::Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            },
+            window,
+            cx,
+            MouseButton::Right,
+        );
+    });
+    cx.run_until_parked();
+
+    assert!(
+        with_viewport(&view, cx, |this, _window, _cx| this.has_selection()),
+        "a right-click must keep the selection its context menu will copy"
+    );
+}
+
+/// The terminal drops its highlight when any other surface takes the window's
+/// selection, and keeps it through a selection-neutral gesture.
+#[gpui::test]
+fn terminal_selection_follows_window_ownership(cx: &mut gpui::TestAppContext) {
+    let term_lock = test_term_with_lines(30);
+    let (view, cx) = test_viewport(term_lock, cx);
+
+    with_viewport(&view, cx, |this, window, cx| {
+        this.handle_mouse_down(
+            &test_mouse_down(test_cell_pos(0, 0)),
+            window,
+            cx,
+            MouseButton::Left,
+        );
+    });
+    with_viewport(&view, cx, |this, _window, _cx| {
+        this.drag_selection_to(test_cell_pos(2, 5))
+    });
+    assert!(
+        with_viewport(&view, cx, |this, _window, _cx| this.has_selection()),
+        "precondition: the terminal holds a selection"
+    );
+
+    // A scrollbar drag elsewhere: writes the global, disturbs nothing.
+    cx.update(|_window, app| crate::text_selection_owner::preserve(app));
+    cx.run_until_parked();
+    assert!(
+        with_viewport(&view, cx, |this, _window, _cx| this.has_selection()),
+        "a selection-neutral gesture must not collapse the terminal selection"
+    );
+
+    cx.update(|window, app| {
+        let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
+        elsewhere.adopt(window, app);
+    });
+    cx.run_until_parked();
+    assert!(
+        !with_viewport(&view, cx, |this, _window, _cx| this.has_selection()),
+        "another surface taking the selection must clear the terminal's"
     );
 }

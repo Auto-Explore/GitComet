@@ -13,6 +13,7 @@ mod artifacts;
 mod budgets;
 mod cli;
 mod evaluate;
+mod indexed_history;
 mod model;
 mod report;
 #[cfg(test)]
@@ -52,7 +53,11 @@ fn run_report(cli: CliArgs) -> Result<(), String> {
         .map(load_artifact_freshness_reference)
         .transpose()?;
     let mut timing_results = Vec::with_capacity(PERF_BUDGETS.len());
-    for spec in PERF_BUDGETS.iter().copied() {
+    for spec in PERF_BUDGETS
+        .iter()
+        .copied()
+        .chain(indexed_history::calibrated_specs()?)
+    {
         timing_results.push(evaluate_budget(
             spec,
             &cli.criterion_roots,

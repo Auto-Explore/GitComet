@@ -1,10 +1,10 @@
-use super::branch::create_tracking_store;
+use super::branch::{create_tracking_store, wait_until};
 use super::*;
 use gitcomet_core::domain::{Branch, CommitId};
 
 #[gpui::test]
 fn repo_picker_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -304,7 +304,7 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
     }
 
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -374,7 +374,7 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn repo_picker_sort_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -914,6 +914,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         click_count: 1,
         first_mouse: false,
     });
+    cx.simulate_mouse_up(anchor, gpui::MouseButton::Right, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -934,7 +935,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         "the picker stays open underneath its row menu"
     );
 
-    // A press outside the menu dismisses it — and only it.
+    // A completed click outside the menu dismisses it — and only it.
     let outside = gpui::point(
         menu.origin.x - gpui::px(20.0),
         menu.origin.y - gpui::px(20.0),
@@ -947,6 +948,8 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         click_count: 1,
         first_mouse: false,
     });
+    assert!(cx.debug_bounds("picker_row_menu").is_some());
+    cx.simulate_mouse_up(outside, MouseButton::Left, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -962,7 +965,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
 #[gpui::test]
 fn review_regression_window_group_row_opens_title_bar_color_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut group = session::SavedWindowGroup::new(vec!["/tmp/window-group-color".into()]);
@@ -1003,6 +1006,7 @@ fn review_regression_window_group_row_opens_title_bar_color_menu(cx: &mut gpui::
         click_count: 1,
         first_mouse: false,
     });
+    cx.simulate_mouse_up(row.center(), MouseButton::Right, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -1868,6 +1872,19 @@ fn popover_feeds_pointer_positions_to_the_tooltip_host(cx: &mut gpui::TestAppCon
 fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::TestAppContext) {
     let (store, events, _repo, _workdir) = create_tracking_store("rebase-onto-picker");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    // The store's own repo-load races the injected branches below and only
+    // knows "main", and in gpui tests the view freezes the store snapshot it is
+    // constructed with — so let the load settle first, and only then inject.
+    wait_until("rebase-onto test repo to load", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.branches.ready().is_some() && repo.head_branch.ready().is_some()
+            })
+    });
     store.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
             repo_id,
@@ -1887,6 +1904,20 @@ fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::T
             ]),
         },
     ));
+    // Dispatch is asynchronous; the view below must be constructed from a
+    // snapshot that already contains the injected branches.
+    wait_until("injected branches to reach the store", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.branches
+                    .ready()
+                    .is_some_and(|branches| branches.iter().any(|branch| branch.name == "feature"))
+            })
+    });
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));

@@ -9,6 +9,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_core::test_support::git_fixture::FixtureTimer;
 use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
 use gitcomet_state::store::AppStore;
 use std::path::Path;
@@ -18,6 +19,43 @@ use std::time::{Duration, Instant};
 
 struct RecordingFailingBackend {
     opened: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+#[test]
+fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
+    let mut theme = AppTheme::gitcomet_dark();
+    let selected_background = gpui::rgba(0x12345678);
+    let selected_foreground = gpui::rgba(0xabcdefee);
+    theme.colors.interaction.selected_background = selected_background;
+    theme.colors.interaction.selected_foreground = selected_foreground;
+
+    assert_eq!(selected_branch_row_bg(theme), selected_background);
+    assert_eq!(selected_branch_label_color(theme), selected_foreground);
+}
+
+#[test]
+fn status_section_shortcuts_leave_modified_app_and_text_chords_alone() {
+    for chord in ["ctrl-a", "secondary-a", "ctrl-s", "secondary-u", "space"] {
+        assert!(
+            is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+    for chord in [
+        "a",
+        "s",
+        "ctrl-shift-a",
+        "secondary-shift-a",
+        "alt-a",
+        "alt-space",
+        "f4",
+        "secondary-f",
+    ] {
+        assert!(
+            !is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
 }
 
 #[test]
@@ -65,6 +103,7 @@ impl GitBackend for BlockingFailingBackend {
 }
 
 fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
+    let _timer = FixtureTimer::new("ui-wait", "timed-pump");
     let deadline = Instant::now() + duration;
     while Instant::now() < deadline {
         cx.update(|window, app| {
@@ -82,10 +121,15 @@ fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
 /// — rather than something the store's own worker thread advances: those tasks
 /// only run when the test driver pumps them, so a sleeping wait would spin out
 /// its whole deadline without ever letting the task complete.
-fn pump_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl Fn() -> bool) {
+fn pump_until(
+    cx: &mut gpui::VisualTestContext,
+    description: &str,
+    mut ready: impl FnMut(&mut gpui::VisualTestContext) -> bool,
+) {
+    let _timer = FixtureTimer::new("ui-wait", description);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if ready() {
+        if ready(cx) {
             return;
         }
         if Instant::now() >= deadline {
@@ -100,6 +144,7 @@ fn pump_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl F
 }
 
 fn wait_until(description: &str, ready: impl Fn() -> bool) {
+    let _timer = FixtureTimer::new("ui-wait", description);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if ready() {
@@ -149,7 +194,7 @@ fn install_repo_tab_test_state_with_count(
     let mut state = AppState {
         active_repo: Some(active_repo),
         git_runtime: available_git_runtime_state(),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     for ix in 1..=repo_count {
         state.repos.push(RepoState::new_opening(
@@ -199,6 +244,50 @@ fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
         let _ = window.draw(app);
     });
     test_support::redraw(cx);
+}
+
+fn reveal_commit_is_open(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> bool {
+    cx.update(|_window, app| test_support::reveal_commit_is_open(view.read(app), app))
+}
+
+fn open_reveal_commit_dialog(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+    cx.simulate_keystrokes("secondary-g");
+    test_support::redraw(cx);
+    assert!(
+        reveal_commit_is_open(cx, view),
+        "expected secondary-g to open the Go to dialog"
+    );
+}
+
+fn commit_lookup(store: &AppStore) -> gitcomet_state::model::CommitLookup {
+    store.snapshot().repos[0]
+        .history_state
+        .commit_lookup
+        .clone()
+}
+
+fn wait_for_commit_lookup(store: &AppStore, repo_id: RepoId, reference: &str) {
+    // GPUI's executor does not drive the store's worker thread. These fixtures
+    // have no open backend repository, so wait for the request, not a Git reply.
+    wait_until("store lookup for the current commit reference", || {
+        let lookup = repo_commit_lookup(store, repo_id);
+        lookup.reference.as_ref().map(|id| id.as_ref()) == Some(reference)
+    });
+}
+
+fn repo_commit_lookup(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::CommitLookup {
+    store
+        .snapshot()
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .unwrap_or_else(|| panic!("repo {repo_id:?} in snapshot"))
+        .history_state
+        .commit_lookup
+        .clone()
 }
 
 fn command_palette_input_focus(
@@ -253,8 +342,225 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
     AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     }
+}
+
+fn repo_with_push_state(
+    upstream: Option<Upstream>,
+    remotes: Loadable<Arc<Vec<Remote>>>,
+) -> RepoState {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/push-request"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("feature".to_string());
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feature".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream,
+        divergence: None,
+    }]));
+    repo.remotes = remotes;
+    repo
+}
+
+#[test]
+fn push_request_uses_configured_upstream_without_claiming_it_is_live() {
+    let repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Loading,
+    );
+
+    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert!(!head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
+    let mut repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature".to_string(),
+        target: CommitId("remote-feature".into()),
+    }]));
+
+    assert!(head_branch_has_live_upstream(&repo));
+    assert_eq!(pull_request(&repo), PullRequest::Pull);
+}
+
+#[test]
+fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
+    let mut repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "review/feature".to_string(),
+        }),
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+
+    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert!(!head_branch_has_live_upstream(&repo));
+    assert_eq!(
+        pull_request(&repo),
+        PullRequest::NotReady,
+        "Pull must stay disabled until the configured branch exists remotely"
+    );
+}
+
+#[test]
+fn push_request_offers_standard_remote_for_untracked_branch() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![
+            Remote {
+                name: "backup".to_string(),
+                url: None,
+            },
+            Remote {
+                name: "origin".to_string(),
+                url: None,
+            },
+        ])),
+    );
+
+    assert_eq!(
+        push_request(&repo),
+        PushRequest::SetUpstream {
+            remote: "origin".to_string()
+        }
+    );
+    assert!(!head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn push_request_uses_first_remote_when_origin_is_absent() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "upstream".to_string(),
+            url: None,
+        }])),
+    );
+
+    assert_eq!(
+        push_request(&repo),
+        PushRequest::SetUpstream {
+            remote: "upstream".to_string()
+        }
+    );
+}
+
+#[test]
+fn push_request_distinguishes_no_remotes_from_loading_data() {
+    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    let loading = repo_with_push_state(None, Loadable::Loading);
+
+    assert_eq!(push_request(&no_remotes), PushRequest::NoRemotes);
+    assert_eq!(push_request(&loading), PushRequest::NotReady);
+}
+
+#[test]
+fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it() {
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/selected-remote-branch"),
+        },
+    );
+    let selected = SelectedBranch {
+        repo_id,
+        target: BranchMenuTarget::remote("origin", "deleted"),
+    };
+    let mut state = AppState {
+        repos: vec![repo.clone()],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    };
+
+    assert!(
+        !selected_remote_branch_is_missing(&state, Some(&selected)),
+        "loading data is not proof that the selection disappeared"
+    );
+
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    state.repos[0] = repo;
+    assert!(selected_remote_branch_is_missing(&state, Some(&selected)));
+}
+
+#[test]
+fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+
+    assert!(!head_branch_has_live_upstream(&repo));
+    assert_eq!(
+        pull_request(&repo),
+        PullRequest::Pull,
+        "the backend pulls from the preferred remote and sets the upstream"
+    );
+}
+
+#[test]
+fn pull_request_allows_a_detached_head_and_reports_a_repo_without_remotes() {
+    let mut detached = repo_with_push_state(None, Loadable::Loading);
+    detached.head_branch = Loadable::Ready("HEAD".to_string());
+    assert!(head_is_detached(&detached));
+    assert_eq!(pull_request(&detached), PullRequest::Pull);
+
+    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    assert_eq!(pull_request(&no_remotes), PullRequest::NoRemotes);
+}
+
+#[test]
+fn a_selected_remote_branch_survives_a_remote_name_containing_a_slash() {
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/nested-remote"),
+        },
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "forks/alice".to_string(),
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+    let state = AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    };
+    let selected = SelectedBranch {
+        repo_id,
+        target: BranchMenuTarget::remote("forks/alice", "main"),
+    };
+
+    assert!(!selected_remote_branch_is_missing(&state, Some(&selected)));
 }
 
 #[gpui::test]
@@ -262,7 +568,7 @@ fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_state = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -375,7 +681,7 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
     let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
         opened: Arc::clone(&opened),
     });
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let store_for_state = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -411,7 +717,7 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
     // resolved path: on macOS the temp dir arrives as `/var/...` and comes back
     // as `/private/var/...`.
     let dropped = canonicalize_or_original(folder.path().to_path_buf());
-    pump_until(cx, "folder drop to dispatch a repository open", || {
+    pump_until(cx, "folder drop to dispatch a repository open", |_| {
         store_for_state
             .snapshot()
             .repos
@@ -441,7 +747,7 @@ fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_windo
     let backend: Arc<dyn GitBackend> = Arc::new(BlockingFailingBackend {
         release: Arc::clone(&release),
     });
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -499,7 +805,7 @@ fn review_regression_followup_window_bounds_do_not_schedule_global_settings_pers
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let before = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
@@ -518,7 +824,7 @@ fn review_regression_confirmed_focused_mergetool_bounds_persist_legacy_size(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let config = GitCometViewConfig {
         view_mode: GitCometViewMode::FocusedMergetool,
         focused_mergetool: Some(FocusedMergetoolViewConfig {
@@ -555,7 +861,7 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
     let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
         opened: Arc::clone(&opened),
     });
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let store_for_state = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -635,7 +941,7 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
 fn startup_crash_report_is_visible_after_relaunch(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let config = GitCometViewConfig::normal(Some(StartupCrashReport {
         issue_url: "https://example.invalid/crash-report".to_string(),
         summary: "WSLg clipboard copy terminated unexpectedly".to_string(),
@@ -667,7 +973,7 @@ fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui
     std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
 
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let config = GitCometViewConfig::normal(Some(StartupCrashReport {
         issue_url: "https://example.invalid/crash-report".to_string(),
         summary: "WSLg clipboard copy terminated unexpectedly".to_string(),
@@ -704,7 +1010,7 @@ fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppC
     std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
 
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let config = GitCometViewConfig::normal(Some(StartupCrashReport {
         issue_url: "https://example.invalid/crash-report".to_string(),
         summary: "previous crash".to_string(),
@@ -756,7 +1062,7 @@ fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppC
 fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -791,7 +1097,7 @@ fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui:
 fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -841,7 +1147,7 @@ fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::Test
 fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -876,7 +1182,7 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -913,7 +1219,7 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -934,18 +1240,19 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     state.repos[0].spec.workdir = workdir.clone();
     state.repos[0].status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: conflicted.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
-            }],
+            }]),
         }
         .into(),
     );
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
 
+    let ops_rev_before = test_support::repo_ops_rev(&view, cx, RepoId(1));
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.execute_command("stage-all", Some(window), cx)
@@ -966,16 +1273,10 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     });
 
     // The stage itself must wait for the user's answer.
-    assert!(
-        cx.update(|_window, app| {
-            view.read(app)
-                .store
-                .snapshot()
-                .repos
-                .iter()
-                .find(|repo| repo.id == RepoId(1))
-                .is_some_and(|repo| repo.local_actions_in_flight == 0)
-        }),
+    test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        test_support::repo_ops_rev(&view, cx, RepoId(1)),
+        ops_rev_before,
         "nothing may be staged until the confirmation is answered"
     );
 
@@ -988,7 +1289,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -1238,10 +1539,16 @@ fn explicit_initial_repository_mode_seeds_empty_session() {
 
 #[test]
 fn splash_backdrop_embedded_png_decodes() {
-    assert_eq!(
-        super::splash::load_splash_backdrop_image().format(),
-        gpui::ImageFormat::Png,
-        "expected splash backdrop image to decode from embedded PNG bytes"
+    for is_dark in [true, false] {
+        let backdrop = super::splash::load_splash_backdrop_image(is_dark);
+        let decoded = image::load_from_memory_with_format(&backdrop.bytes, image::ImageFormat::Png)
+            .expect("expected splash backdrop to decode from embedded PNG bytes");
+        assert!(decoded.width() > 0 && decoded.height() > 0);
+    }
+    assert_ne!(
+        super::splash::load_splash_backdrop_image(true).id(),
+        super::splash::load_splash_backdrop_image(false).id(),
+        "dark and light themes must have different backdrop artwork"
     );
 }
 
@@ -1252,25 +1559,26 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     let c = PathBuf::from("c.txt");
 
     let status = RepoStatus {
-        staged: vec![],
-        unstaged: vec![FileStatus {
+        staged: std::sync::Arc::new(vec![]),
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: a.clone(),
             kind: FileStatusKind::Modified,
             conflict: None,
-        }],
+        }]),
     };
 
     let mut selection = StatusMultiSelection {
+        explicit_section: Some(StatusSection::CombinedUnstaged),
         untracked: vec![],
         untracked_anchor: None,
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
         unstaged_anchor_index: None,
-        unstaged_anchor_status_rev: None,
+        unstaged_anchor_order_rev: None,
         staged: vec![c.clone()],
         staged_anchor: Some(c),
         staged_anchor_index: None,
-        staged_anchor_status_rev: None,
+        staged_anchor_order_rev: None,
     };
 
     reconcile_status_multi_selection(&mut selection, &status);
@@ -1606,7 +1914,7 @@ fn branch_sidebar_sorts_unsorted_remote_branches() {
 }
 
 #[test]
-fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
+fn remote_section_excludes_upstream_without_remote_tracking_ref() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1631,20 +1939,18 @@ fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
-    let tracked_row = rows.iter().find(|r| {
-        matches!(
-            r,
-            BranchSidebarRow::Branch {
-                section: BranchSection::Remote,
-                name,
-                is_upstream: true,
-                ..
-            } if name.as_ref() == "origin/feature"
-        )
-    });
     assert!(
-        tracked_row.is_some(),
-        "expected tracked upstream branch to be listed under Remote section"
+        rows.iter().all(|row| {
+            !matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Remote,
+                    name,
+                    ..
+                } if name.as_ref() == "origin/feature"
+            )
+        }),
+        "a configured upstream must not synthesize a missing remote branch"
     );
 }
 
@@ -2620,7 +2926,7 @@ fn focused_mergetool_target_path_prefers_repo_relative_path() {
 fn focused_mergetool_bootstrap_requests_open_repo_when_missing() {
     let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
-    let state = AppState::default();
+    let state = AppState::test_default();
 
     assert_eq!(
         focused_mergetool_bootstrap_action(&state, &bootstrap),
@@ -2634,7 +2940,7 @@ fn focused_mergetool_bootstrap_selects_worktree_diff_target() {
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
     let mut state = AppState {
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     state.repos.push(open_repo_state_with_workdir(
         repo.to_str().expect("test path should be unicode"),
@@ -2655,7 +2961,7 @@ fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
     let mut state = AppState {
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     let mut repo_state =
         open_repo_state_with_workdir(repo.to_str().expect("test path should be unicode"));
@@ -2680,7 +2986,7 @@ fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
     let mut state = AppState {
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     let mut repo_state =
         open_repo_state_with_workdir(repo.to_str().expect("test path should be unicode"));
@@ -2721,7 +3027,7 @@ fn state_with_active_diff(path: &str, kind: FileStatusKind) -> AppState {
     AppState {
         active_repo: Some(repo_id),
         repos: vec![repo],
-        ..AppState::default()
+        ..AppState::test_default()
     }
 }
 
@@ -2736,7 +3042,7 @@ fn merge_view_target_requires_an_unstaged_conflict() {
 
 #[gpui::test]
 fn merge_view_temporarily_collapses_and_restores_sidebar(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     store.replace_snapshot_for_test(Arc::new(state_with_active_diff(
@@ -2827,7 +3133,7 @@ fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette
 #[gpui::test]
 fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -2854,7 +3160,7 @@ fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -2883,7 +3189,7 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
 #[gpui::test]
 fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -2919,7 +3225,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         .expect("expected collapsed Files popover");
     assert!(
         cx.debug_bounds("collapsed_file_browser_rows").is_some(),
-        "collapsed Files should eagerly render intrinsic rows like branch popovers"
+        "collapsed Files should render its virtualized row band"
     );
     assert!(
         cx.debug_bounds("file_browser_scroll_container").is_none(),
@@ -2982,7 +3288,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
 #[gpui::test]
 fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -3086,7 +3392,7 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
 #[gpui::test]
 fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -3153,7 +3459,7 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3180,8 +3486,14 @@ fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     });
 }
 
+/// The full-chrome layout keeps every large pane behind a `stable_cached_*`
+/// boundary so a frame requested by one view (a spinner tick in the title bar,
+/// a store update in the main pane) does not re-render the others. The bottom
+/// status bar and the overlay hosts stay uncached: their paint ranges are
+/// recorded after a focused TextInput registers its platform input handler,
+/// and replaying them during a Wayland text-input redraw has panicked before.
 #[test]
-fn full_chrome_layout_only_caches_always_mounted_subviews() {
+fn full_chrome_layout_caches_the_pane_subviews() {
     let splash_source = include_str!("splash.rs");
     let normalized: String = splash_source
         .chars()
@@ -3196,7 +3508,7 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
 
     assert!(
         normalized_root.contains(
-            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::title_bar_height("
+            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::TITLE_BAR_HEIGHT"
         ),
         "expected the title bar (hosting the repo tabs bar) to stay behind the stable cache boundary"
     );
@@ -3218,20 +3530,12 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         "expected both full-chrome main pane mount sites to stay cached"
     );
     assert!(
-        normalized.contains("d.child(self.sidebar_pane.clone())"),
-        "expected the collapsible sidebar pane to mount directly"
+        normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
+        "expected the expanded sidebar pane to mount behind the stable cache boundary"
     );
     assert!(
-        normalized.contains(".child(self.details_pane.clone())"),
-        "expected the collapsible details pane to mount directly"
-    );
-    assert!(
-        !normalized.contains("stable_cached_fill_view(self.sidebar_pane.clone())"),
-        "sidebar pane must stay outside the stable cache boundary"
-    );
-    assert!(
-        !normalized.contains("stable_cached_fill_view(self.details_pane.clone())"),
-        "details pane must stay outside the stable cache boundary"
+        normalized.contains(".child(stable_cached_fill_view(self.details_pane.clone()"),
+        "expected the expanded details pane to mount behind the stable cache boundary"
     );
     assert!(
         !normalized.contains(
@@ -3242,9 +3546,37 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
 }
 
 #[gpui::test]
+fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let _cache_guard = enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    let renders_before =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).render_count);
+
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let renders_after =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).render_count);
+
+    assert!(
+        renders_after > renders_before,
+        "the cached sidebar must be dirtied by a Branches/Files mode change"
+    );
+}
+
+#[gpui::test]
 fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3274,13 +3606,13 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let next = Arc::new(AppState {
         git_runtime: unavailable_git_runtime_state(),
-        ..AppState::default()
+        ..AppState::test_default()
     });
 
     cx.update(|window, app| {
@@ -3310,13 +3642,13 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
 #[gpui::test]
 fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let next = Arc::new(AppState {
         git_runtime: unavailable_git_runtime_state(),
-        ..AppState::default()
+        ..AppState::test_default()
     });
 
     cx.update(|window, app| {
@@ -3354,14 +3686,14 @@ fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui
 #[gpui::test]
 fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let mut next = AppState {
         git_runtime: unavailable_git_runtime_state(),
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     next.repos.push(open_repo_state_with_workdir(
         "/tmp/git-unavailable-overlay-test",
@@ -3387,14 +3719,14 @@ fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContex
 #[gpui::test]
 fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let mut unavailable = AppState {
         git_runtime: unavailable_git_runtime_state(),
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     unavailable.repos.push(open_repo_state_with_workdir(
         "/tmp/git-unavailable-recovery-test",
@@ -3404,7 +3736,7 @@ fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppC
     let mut recovered = AppState {
         git_runtime: available_git_runtime_state(),
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     recovered.repos.push(open_repo_state_with_workdir(
         "/tmp/git-unavailable-recovery-test",
@@ -3437,13 +3769,21 @@ fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
-fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
+fn splash_backdrop_renders_native_layers_and_tracks_theme(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
+        let initial = view.read(app);
+        assert!(
+            Arc::ptr_eq(
+                &initial.splash_backdrop_image,
+                &super::splash::load_splash_backdrop_image(initial.theme.is_dark),
+            ),
+            "expected the resolved theme's backdrop before the first draw"
+        );
         let _ = window.draw(app);
     });
 
@@ -3451,13 +3791,27 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
         .expect("expected native splash backdrop root");
     cx.debug_bounds("splash_backdrop_image")
         .expect("expected SVG-backed splash image layer");
-    cx.update(|_window, app| {
-        assert_eq!(
-            view.read(app).splash_backdrop_image.format(),
-            gpui::ImageFormat::Png,
-            "expected splash backdrop to be preloaded before the first draw"
-        );
-    });
+    for theme in [
+        AppTheme::gitcomet_dark(),
+        AppTheme::gitcomet_light(),
+        AppTheme::gitcomet_dark(),
+    ] {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| this.set_theme(theme, cx));
+            assert!(
+                Arc::ptr_eq(
+                    &view.read(app).splash_backdrop_image,
+                    &super::splash::load_splash_backdrop_image(theme.is_dark),
+                ),
+                "expected theme changes to select the matching cached backdrop"
+            );
+            let _ = window.draw(app);
+        });
+        cx.debug_bounds("splash_backdrop_image")
+            .expect("expected backdrop after switching themes");
+        cx.debug_bounds("splash_open_repo_action")
+            .expect("expected splash controls after switching themes");
+    }
     assert!(
         cx.debug_bounds("splash_backdrop_glow_layer").is_none(),
         "expected legacy procedural glow layer to be removed"
@@ -3478,7 +3832,7 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3512,7 +3866,7 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
 #[gpui::test]
 fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3529,7 +3883,9 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "repository tab to render", |cx| {
+        cx.debug_bounds("repo_tab_1").is_some()
+    });
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -3562,7 +3918,14 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(
+        cx,
+        "splash screen to render after closing the last tab",
+        |cx| {
+            cx.debug_bounds("repository_entry_screen").is_some()
+                && cx.debug_bounds("repo_tab_1").is_none()
+        },
+    );
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -3581,7 +3944,7 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn request_quit_or_warn_queues_terminal_shutdown_prompt(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3602,7 +3965,7 @@ fn request_quit_or_warn_queues_terminal_shutdown_prompt(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn confirm_terminal_shutdown_close_window_removes_the_window(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3631,7 +3994,7 @@ fn confirm_terminal_shutdown_close_window_removes_the_window(cx: &mut gpui::Test
 #[gpui::test]
 fn cancel_pending_terminal_shutdown_clears_prompt(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3648,7 +4011,7 @@ fn cancel_pending_terminal_shutdown_clears_prompt(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn request_close_window_or_warn_returns_false_without_terminals(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3663,7 +4026,7 @@ fn request_close_window_or_warn_returns_false_without_terminals(cx: &mut gpui::T
 #[gpui::test]
 fn request_quit_or_warn_returns_false_when_no_running_commands(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3678,7 +4041,7 @@ fn request_quit_or_warn_returns_false_when_no_running_commands(cx: &mut gpui::Te
 #[gpui::test]
 fn quit_or_warn_stores_other_window_views(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3698,7 +4061,7 @@ fn quit_or_warn_stores_other_window_views(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn confirm_quit_app_terminates_other_window_terminals(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3729,7 +4092,7 @@ fn confirm_quit_app_terminates_other_window_terminals(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3762,7 +4125,7 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3777,7 +4140,9 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "repository tab to render", |cx| {
+        cx.debug_bounds("repo_tab_1").is_some()
+    });
 
     let repo_tab_center = cx
         .debug_bounds("repo_tab_1")
@@ -3815,7 +4180,9 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "removed tab and tooltip to disappear", |cx| {
+        cx.debug_bounds("repo_tab_1").is_none() && test_support::tooltip_text(cx, &view).is_none()
+    });
 
     assert_eq!(
         test_support::tooltip_text(cx, &view),
@@ -3839,7 +4206,7 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3854,7 +4221,9 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "repository tab to render", |cx| {
+        cx.debug_bounds("repo_tab_1").is_some()
+    });
 
     let repo_tab_center = cx
         .debug_bounds("repo_tab_1")
@@ -3890,7 +4259,9 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "removed tab and close tooltip to disappear", |cx| {
+        cx.debug_bounds("repo_tab_1").is_none() && test_support::tooltip_text(cx, &view).is_none()
+    });
 
     assert_eq!(
         test_support::tooltip_text(cx, &view),
@@ -3912,7 +4283,7 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
 #[gpui::test]
 fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3920,7 +4291,7 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(1);
     let mut state = AppState {
         active_repo: Some(repo_id),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -4112,7 +4483,7 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn inactive_repo_tab_tracks_pressed_state_for_its_label_fade(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(move |window, cx| {
         GitCometView::new(store_for_view, events, None, window, cx)
@@ -4153,7 +4524,7 @@ fn inactive_repo_tab_tracks_pressed_state_for_its_label_fade(cx: &mut gpui::Test
 #[gpui::test]
 fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4189,7 +4560,7 @@ fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4207,7 +4578,7 @@ fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
 #[gpui::test]
 fn repo_tab_context_menu_activate_activates_selected_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4224,7 +4595,7 @@ fn repo_tab_context_menu_activate_activates_selected_repo(cx: &mut gpui::TestApp
 #[gpui::test]
 fn repo_tab_context_menu_close_closes_selected_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4247,7 +4618,7 @@ fn repo_tab_context_menu_close_closes_selected_repo(cx: &mut gpui::TestAppContex
 #[gpui::test]
 fn repo_tab_context_menu_close_to_right_closes_right_repos(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4271,7 +4642,7 @@ fn repo_tab_context_menu_close_to_right_closes_right_repos(cx: &mut gpui::TestAp
 #[gpui::test]
 fn repo_tab_context_menu_close_other_repos_keeps_selected_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4295,7 +4666,7 @@ fn repo_tab_context_menu_close_other_repos_keeps_selected_repo(cx: &mut gpui::Te
 #[gpui::test]
 fn repo_tab_context_menu_activate_is_disabled_for_active_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4312,7 +4683,7 @@ fn repo_tab_context_menu_activate_is_disabled_for_active_repo(cx: &mut gpui::Tes
 #[gpui::test]
 fn repo_tab_context_menu_close_right_is_disabled_for_last_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4338,7 +4709,7 @@ fn repo_tab_context_menu_close_right_is_disabled_for_last_repo(cx: &mut gpui::Te
 #[gpui::test]
 fn repo_tab_context_menu_close_others_is_disabled_for_single_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4404,13 +4775,13 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(1);
     let error = "Fetch failed".to_string();
-    let mut next = AppState::default();
+    let mut next = AppState::test_default();
     let mut repo = RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -4425,8 +4796,8 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             ok: false,
             command: "git fetch".to_string(),
             summary: error.clone(),
-            stdout: String::new(),
-            stderr: "fatal: test".to_string(),
+            stdout: "".into(),
+            stderr: "fatal: test".into(),
             announce_success: true,
             hook_operation_id: None,
         });
@@ -4455,14 +4826,14 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let mut next = AppState {
         active_repo: Some(RepoId(1)),
-        ..AppState::default()
+        ..AppState::test_default()
     };
     next.repos
         .push(open_repo_state_with_workdir("/tmp/existing-active-repo"));
@@ -4499,12 +4870,12 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
 #[gpui::test]
 fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
         kind: AuthPromptKind::Passphrase,
         reason: "Enter passphrase".to_string(),
@@ -4535,12 +4906,12 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::T
 #[gpui::test]
 fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
         kind: AuthPromptKind::Passphrase,
         reason: "Enter passphrase".to_string(),
@@ -4572,12 +4943,12 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
@@ -4610,12 +4981,12 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
 #[gpui::test]
 fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
@@ -4689,7 +5060,7 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
     // The action is reachable from a shortcut, the app menu and the palette, so
     // it has to work with the sidebar on Branches and the folders collapsed.
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4745,12 +5116,11 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
-fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestAppContext) {
-    // It used to be gated on a file being open as well, so the strip's contents
-    // changed as files were opened and closed — and it was simply absent for
-    // anyone who had not opened one yet.
+fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppContext) {
+    // The trailing action stays put as its data becomes available; switching
+    // tabs swaps it for the action belonging to that tree.
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4761,7 +5131,11 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
     sync_view_snapshot(cx, &view);
     assert!(
         cx.debug_bounds("sidebar_locate_open_file").is_none(),
-        "the Branches tab has no tree to locate anything in"
+        "the file-locate action belongs only to Files"
+    );
+    assert!(
+        cx.debug_bounds("sidebar_locate_active_branch").is_some(),
+        "Branches keeps its disabled locate action before HEAD is available"
     );
 
     // Files, still with no file open: present, and disabled rather than absent.
@@ -4771,6 +5145,10 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
     assert!(
         cx.debug_bounds("sidebar_locate_open_file").is_some(),
         "the locate button belongs to the Files tab, open file or not"
+    );
+    assert!(
+        cx.debug_bounds("sidebar_locate_active_branch").is_none(),
+        "the branch-locate action belongs only to Branches"
     );
 
     state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
@@ -4784,9 +5162,214 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
+fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let active_name = "zzzz/deep/topic";
+    let active_tip = CommitId("active-branch-tip".into());
+    let branch = |name: String, target: CommitId| Branch {
+        name,
+        target,
+        upstream: None,
+        divergence: None,
+    };
+    let mut branches = (0..80)
+        .map(|ix| {
+            branch(
+                format!("group-{ix:03}/topic"),
+                CommitId(format!("tip-{ix:03}").into()),
+            )
+        })
+        .collect::<Vec<_>>();
+    branches.push(branch(active_name.to_string(), active_tip));
+    branches.push(branch(
+        "zzzz/deep/other".to_string(),
+        CommitId("other-tip".into()),
+    ));
+
+    let mut state = view_state_with_active_ready_repo(repo_id);
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    state.repos[0].head_branch = Loadable::Ready(active_name.to_string());
+    state.repos[0].branches = Loadable::Ready(Arc::new(branches));
+    state.repos[0].branches_rev = 1;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_window, app| {
+        sidebar_pane.update(app, |pane, _cx| {
+            pane.set_branch_filter_query_for_test("does-not-match-head");
+            pane.set_collapsed_keys_for_test(&[
+                branch_sidebar::local_section_storage_key(),
+                "group:local:zzzz",
+                "group:local:zzzz/deep",
+                "group:local:release",
+            ]);
+        });
+    });
+    test_support::redraw(cx);
+
+    let button_center = cx
+        .debug_bounds("sidebar_locate_active_branch")
+        .expect("expected the Branches locate action")
+        .center();
+    cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some(format!(
+            "Show and select the active local branch: {active_name}"
+        ))
+    );
+
+    click_debug_selector(cx, "sidebar_locate_active_branch");
+
+    let target_ix = cx.update(|_window, app| {
+        sidebar_pane.update(app, |pane, _cx| {
+            assert!(pane.branch_filter_query.is_empty());
+            assert_eq!(
+                pane.selected_branch(),
+                Some(&SelectedBranch {
+                    repo_id,
+                    target: BranchMenuTarget::local(active_name),
+                })
+            );
+
+            let collapsed = pane.collapsed_items_for_test();
+            for expanded in [
+                branch_sidebar::local_section_storage_key(),
+                "group:local:zzzz",
+                "group:local:zzzz/deep",
+            ] {
+                assert!(!collapsed.contains(expanded), "{expanded} stayed collapsed");
+            }
+            assert!(
+                collapsed.contains("group:local:release"),
+                "unrelated groups should retain their state"
+            );
+
+            let presentation = pane
+                .branch_sidebar_presentation_cached()
+                .expect("expected the expanded branch presentation");
+            presentation
+                .rows
+                .iter()
+                .rposition(|row| {
+                    matches!(
+                        row,
+                        BranchSidebarRow::Branch {
+                            name,
+                            section: BranchSection::Local,
+                            ..
+                        } if name.as_ref() == active_name
+                    )
+                })
+                .expect("expected the active branch row after expansion")
+        })
+    });
+    test_support::redraw(cx);
+    let target_selector: &'static str =
+        Box::leak(format!("branch_row_{}_{}", repo_id.0, target_ix).into_boxed_str());
+    assert!(
+        cx.debug_bounds(target_selector).is_some(),
+        "the locate action should scroll the distant active branch row into the rendered viewport"
+    );
+
+    // Drawing the programmatic scroll starts the branch scrollbar's auto-hide
+    // task. Remove that scrollbar from the element tree so its state drops and
+    // cancels the task on this test's thread, before another GPUI test installs
+    // a different test scheduler.
+    let mut teardown_state = store.snapshot().as_ref().clone();
+    teardown_state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(teardown_state));
+    sync_view_snapshot(cx, &view);
+    cx.run_until_parked();
+}
+
+/// The two sidebar lists swap in place, so a row in one must be exactly as tall
+/// as a row in the other -- at either density.
+#[gpui::test]
+fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::TestAppContext) {
+    use crate::appearance::{Appearance, UiDensity};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let base = {
+        let mut state = view_state_with_active_ready_repo(RepoId(1));
+        state.repos[0].head_branch = Loadable::Ready("main".to_string());
+        state.repos[0].branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        }]));
+        state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![FileEntry {
+            name: "a.rs".to_string(),
+            path: Arc::new(PathBuf::from("a.rs")),
+            kind: FileEntryKind::File,
+            depth: 0,
+        }]));
+        state.repos[0].file_browser.bump_rev();
+        state
+    };
+
+    let mut height_of = |mode, selectors: &[&'static str], density| {
+        cx.update(|_window, app| {
+            app.set_global(Appearance {
+                density,
+                ..Appearance::default()
+            });
+        });
+        let mut state = base.clone();
+        state.sidebar_mode = mode;
+        store.replace_snapshot_for_test(Arc::new(state));
+        sync_view_snapshot(cx, &view);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| this.notify_font_preferences_changed(cx));
+        });
+        cx.run_until_parked();
+        selectors
+            .iter()
+            .find_map(|selector| cx.debug_bounds(selector))
+            .unwrap_or_else(|| panic!("missing {selectors:?} in {mode:?} at {density:?}"))
+            .size
+            .height
+    };
+
+    for density in UiDensity::ALL {
+        let file_row = height_of(
+            gitcomet_state::model::SidebarMode::Files,
+            &["file_browser_row_0"],
+            density,
+        );
+        // The branch may sit under a section header, so it is not always row zero.
+        let branch_row = height_of(
+            gitcomet_state::model::SidebarMode::Branches,
+            &["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"],
+            density,
+        );
+
+        assert_eq!(
+            file_row, branch_row,
+            "a file row and a branch row must match at {density:?} density"
+        );
+    }
+}
+
+#[gpui::test]
 fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4883,7 +5466,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
 #[gpui::test]
 fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4951,7 +5534,7 @@ fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::Test
 #[gpui::test]
 fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -4975,6 +5558,9 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 
     // A clean tree: clicking a file opens the read-only content view.
     click_debug_selector(cx, "file_browser_row_0");
+    pump_until(cx, "file content selection", |_| {
+        store.snapshot().repos[0].diff_state.content_preview
+    });
     test_support::redraw(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
@@ -5010,6 +5596,9 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 
     // Rows 0 and 1 are now the pinned section, so `b.rs` sits at tree row 3.
     click_debug_selector(cx, "file_browser_row_3");
+    pump_until(cx, "unsaved file editor selection", |_| {
+        store.snapshot().repos[0].diff_state.edit_mode
+    });
     test_support::redraw(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
@@ -5031,6 +5620,9 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
     });
     sync_view_snapshot(cx, &view);
     click_debug_selector(cx, "file_browser_unsaved_1");
+    pump_until(cx, "pinned file editor selection", |_| {
+        store.snapshot().repos[0].diff_state.edit_mode
+    });
     test_support::redraw(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
@@ -5046,7 +5638,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -5123,7 +5715,7 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
 #[gpui::test]
 fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -5151,6 +5743,11 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         .or_else(|| cx.debug_bounds("branch_group_1"))
         .or_else(|| cx.debug_bounds("branch_group_2"))
         .expect("the feat/ group renders a row");
+    assert_eq!(
+        group_row.size.height,
+        px(24.0),
+        "branch hierarchy rows must remain 24 px tall"
+    );
     let center = group_row.center();
     cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
@@ -5183,3 +5780,445 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         "right-clicking a branch group must not toggle it, got {collapsed_after:?}"
     );
 }
+
+#[test]
+fn reconciliation_releases_vanished_selection_but_preserves_intentional_empty_selection() {
+    let status = RepoStatus {
+        staged: Default::default(),
+        unstaged: Default::default(),
+    };
+    for use_repo in [false, true] {
+        let mut selection = StatusMultiSelection {
+            explicit_section: Some(StatusSection::Staged),
+            staged: vec!["gone.txt".into()],
+            ..Default::default()
+        };
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
+        repo.worktree_status = Loadable::Ready(Arc::clone(&status.unstaged));
+        repo.staged_status = Loadable::Ready(Arc::clone(&status.staged));
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert!(selection.is_empty());
+        assert_eq!(selection.explicit_section, None);
+        selection.explicit_section = Some(StatusSection::Staged);
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert_eq!(selection.explicit_section, Some(StatusSection::Staged));
+    }
+}
+
+#[test]
+fn untracked_content_revision_ignores_line_stats() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+    let untracked = status_section_content_rev(&repo, StatusSection::Untracked);
+    let unstaged = status_section_content_rev(&repo, StatusSection::Unstaged);
+    repo.unstaged_line_stats_rev += 1;
+    assert_eq!(
+        status_section_content_rev(&repo, StatusSection::Untracked),
+        untracked
+    );
+    assert_ne!(
+        status_section_content_rev(&repo, StatusSection::Unstaged),
+        unstaged
+    );
+}
+
+/// Switching repository tabs while the dialog is open leaves the typed query
+/// pointing at the *new* repository, whose lookup slot has never been asked
+/// about it. Nothing else will ask until the user edits the query, so without a
+/// re-request the row sits on "Resolving…" forever.
+#[gpui::test]
+fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_input("deadbee");
+    cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(1), "deadbee");
+    test_support::redraw(cx);
+    assert_eq!(
+        repo_commit_lookup(&store, RepoId(1)).reference,
+        Some(CommitId("deadbee".into())),
+        "the active repository should have been asked about the typed reference"
+    );
+
+    // Switch tabs by publishing the snapshot directly: `dispatch` hands the
+    // message to the store's own worker thread, which `run_until_parked` (a
+    // gpui-executor barrier) does not wait for.
+    let mut switched = (*store.snapshot()).clone();
+    switched.active_repo = Some(RepoId(2));
+    store.replace_snapshot_for_test(Arc::new(switched));
+    sync_view_snapshot(cx, &view);
+    cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(2), "deadbee");
+    test_support::redraw(cx);
+
+    assert_eq!(
+        repo_commit_lookup(&store, RepoId(2)).reference,
+        Some(CommitId("deadbee".into())),
+        "the query must be re-asked of the repository that is now active"
+    );
+}
+
+/// The palette and the dialog paint on the same overlay layer, each with its
+/// own scrim. Opening one over the other would stack two scrims and strand the
+/// lower modal when the upper is dismissed.
+#[gpui::test]
+fn reveal_commit_and_the_command_palette_never_stack(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(command_palette_is_open(cx, &view), "palette should open");
+
+    cx.simulate_keystrokes("secondary-g");
+    test_support::redraw(cx);
+    assert!(
+        reveal_commit_is_open(cx, &view),
+        "the dialog should open over the palette"
+    );
+    assert!(
+        !command_palette_is_open(cx, &view),
+        "opening the dialog must close the palette rather than stack on it"
+    );
+
+    // And the other direction.
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(command_palette_is_open(cx, &view), "palette should reopen");
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "opening the palette must close the dialog"
+    );
+
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(
+        !command_palette_is_open(cx, &view) && !reveal_commit_is_open(cx, &view),
+        "escape should leave nothing open"
+    );
+}
+
+#[gpui::test]
+fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    open_reveal_commit_dialog(cx, &view);
+    assert!(
+        cx.debug_bounds("modal_scrim").is_some(),
+        "expected the dialog to use the shared modal scrim"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_title").is_some(),
+        "expected the Go to title"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_examples").is_some(),
+        "an empty query should show the examples"
+    );
+
+    let input_focus = cx.update(|_window, app| {
+        view.read(app)
+            .reveal_commit_dialog
+            .read(app)
+            .query_input
+            .read(app)
+            .focus_handle()
+    });
+    cx.update(|window, app| {
+        assert_eq!(
+            window.focused(app),
+            Some(input_focus),
+            "expected the query input to own window focus after opening"
+        );
+    });
+}
+
+/// Both close paths have to leave the dialog reopenable. Escape goes through the
+/// input's transient-key flag while the chord goes through the action, so they
+/// can drift apart.
+#[gpui::test]
+fn reveal_commit_dialog_toggles_and_escapes_without_latching(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_keystrokes("secondary-g");
+    test_support::redraw(cx);
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "expected secondary-g to close the dialog"
+    );
+
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "expected escape to close the dialog"
+    );
+
+    open_reveal_commit_dialog(cx, &view);
+}
+
+/// A lookup is a git call, so a single character must not spawn one; two
+/// already can be a tag, and that is where asking starts.
+#[gpui::test]
+fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_input("d");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert_eq!(
+        commit_lookup(&store).reference,
+        None,
+        "a single character must not send git looking for a reference"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_examples").is_some(),
+        "the examples stay up until there is something to look up"
+    );
+
+    cx.simulate_input("eadbee");
+    cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(1), "deadbee");
+    test_support::redraw(cx);
+    assert_eq!(
+        commit_lookup(&store).reference,
+        Some(CommitId("deadbee".into())),
+        "the current query should be the one being resolved"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_examples").is_none(),
+        "the examples give way once a lookup is under way"
+    );
+}
+
+/// The point of the preview is that Enter reveals the *resolved* commit: the
+/// full id, so the history walk matches loaded rows outright.
+#[gpui::test]
+fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    // `install_app_shortcuts_for_test` binds only the app chords; Enter belongs
+    // to the TextInput context, which the real app binds separately.
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_input("deadbee");
+    cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(1), "deadbee");
+    test_support::redraw(cx);
+
+    // Stand in for the backend answering the lookup the typing just issued.
+    let full = CommitId("deadbeef0123456789abcdef0123456789abcdef".into());
+    let mut state = (*store.snapshot()).clone();
+    let lookup = &mut state.repos[0].history_state.commit_lookup;
+    lookup.result = gitcomet_state::model::Loadable::Ready(gitcomet_core::domain::Commit {
+        id: full.clone(),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "the reland".into(),
+        author: "Test User".into(),
+        time: std::time::SystemTime::UNIX_EPOCH,
+    });
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    assert!(
+        cx.debug_bounds("reveal_commit_match").is_some(),
+        "expected the resolved commit to be offered as a row"
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "activating a result should close the dialog"
+    );
+    assert_eq!(
+        store.snapshot().repos[0]
+            .history_state
+            .reveal_target
+            .as_ref(),
+        Some(&full),
+        "the reveal should target the full id, not the abbreviation that was typed"
+    );
+}
+
+fn open_palette_on_ready_repo(
+    cx: &mut gpui::TestAppContext,
+    merging: bool,
+) -> (
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    if merging {
+        state.repos[0].merge_commit_message =
+            Loadable::Ready(Some("Merge branch 'feature'".to_string()));
+    }
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    (store, view, cx)
+}
+
+/// Asked for explicitly: a command that cannot run right now stays listed,
+/// greyed out, with a hover tooltip saying why — and Enter does nothing.
+#[gpui::test]
+fn command_palette_keeps_unavailable_commands_listed_with_a_reason(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_store, view, cx) = open_palette_on_ready_repo(cx, false);
+
+    cx.simulate_input("abort merge");
+    test_support::redraw(cx);
+
+    let row = cx
+        .debug_bounds("command_palette_disabled_abort-merge")
+        .expect("Abort Merge should be listed, disabled, with no merge in progress");
+    assert!(
+        cx.debug_bounds("command_palette_unavailable_reason")
+            .is_some(),
+        "the keyboard-selected disabled row should say why in place"
+    );
+
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some("Only available while a merge is in progress".to_string()),
+        "hovering the disabled row should explain why it is disabled"
+    );
+
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "Enter on a disabled command must not run it or close the palette"
+    );
+    cx.update(|_window, app| {
+        assert!(
+            test_support::popover_kind(view.read(app), app).is_none(),
+            "no abort confirmation should open"
+        );
+    });
+}
+
+/// The same command becomes live exactly when its state holds, and runs
+/// through the action bar's own confirmation.
+#[gpui::test]
+fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_store, view, cx) = open_palette_on_ready_repo(cx, true);
+
+    cx.simulate_input("abort merge");
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("command_palette_disabled_abort-merge")
+            .is_none(),
+        "Abort Merge should be enabled while a merge is in progress"
+    );
+
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert!(
+            matches!(
+                test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::MergeAbortConfirm { repo_id: RepoId(1) })
+            ),
+            "Abort Merge should open the same confirmation as the action bar"
+        );
+    });
+}
+
+mod open_remote_in_browser;

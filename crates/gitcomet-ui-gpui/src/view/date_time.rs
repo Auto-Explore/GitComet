@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) enum DateTimeFormat {
     YmdHm,
     YmdHms,
@@ -45,7 +45,7 @@ impl DateTimeFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub(super) enum Timezone {
     /// The device's timezone, resolved per timestamp (DST-correct via jiff).
     #[default]

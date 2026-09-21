@@ -1,7 +1,6 @@
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
-use crate::view::branch_sidebar::BranchSection;
 use gitcomet_core::domain::{Diff, FileDiffImage, FileDiffText, LogScope};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
@@ -210,6 +209,12 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            // Edit-size sorting can change file neighbors without a status change.
+            let line_stats_rev = match repo.diff_state.diff_target.as_ref() {
+                Some(DiffTarget::WorkingTree { area, .. }) => repo.line_stats_rev(*area),
+                _ => 0,
+            };
+            line_stats_rev.hash(&mut hasher);
             let commit_details_rev = if matches!(
                 repo.diff_state.diff_target,
                 Some(DiffTarget::Commit { path: Some(_), .. })
@@ -336,15 +341,13 @@ impl MainPaneView {
     pub(in crate::view) fn reveal_history_branch_commit(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        branch_name: &str,
+        target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let branch_name = branch_name.to_string();
         self.history_view.update(cx, |view, cx| {
-            view.set_selected_branch(repo_id, section, &branch_name, cx);
+            view.set_selected_branch(repo_id, target, cx);
         });
         self.reveal_history_commit(repo_id, commit_id, fallback_scope, cx);
     }
@@ -406,9 +409,9 @@ impl MainPaneView {
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
-        let full_path = repo.spec.workdir.join(&path);
         self.finish_focused_mergetool_output(
-            &full_path,
+            &repo.spec.workdir,
+            &path,
             FocusedMergetoolOutput::Write(output.as_bytes()),
             exit_code,
             cx,
@@ -427,9 +430,9 @@ impl MainPaneView {
             cx.quit();
             return;
         };
-        let full_path = repo.spec.workdir.join(path);
         self.finish_focused_mergetool_output(
-            &full_path,
+            &repo.spec.workdir,
+            path,
             FocusedMergetoolOutput::Write(bytes),
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
             cx,
@@ -447,9 +450,9 @@ impl MainPaneView {
             cx.quit();
             return;
         };
-        let full_path = repo.spec.workdir.join(path);
         self.finish_focused_mergetool_output(
-            &full_path,
+            &repo.spec.workdir,
+            path,
             FocusedMergetoolOutput::Delete,
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
             cx,
@@ -458,12 +461,13 @@ impl MainPaneView {
 
     fn finish_focused_mergetool_output(
         &self,
+        workdir: &std::path::Path,
         path: &std::path::Path,
         output: FocusedMergetoolOutput<'_>,
         success_exit_code: i32,
         cx: &mut gpui::Context<Self>,
     ) {
-        match apply_focused_mergetool_output(path, output) {
+        match apply_focused_mergetool_output(workdir, path, output) {
             Ok(()) => self.set_focused_mergetool_exit_code(success_exit_code),
             Err(err) => {
                 let operation = match output {
@@ -562,19 +566,13 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_line_height(
-                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
-                cx,
-            );
+            input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         // The editor's gutter sizes its rows from the same scale, so leaving
         // the buffer at the old line height would put the numbers out of step
         // with the code they label.
         self.file_editor_input.update(cx, |input, cx| {
-            input.set_line_height(
-                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
-                cx,
-            );
+            input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         self.history_view.update(cx, |view, cx| {
             view.apply_ui_scale_percent(previous_percent, next_percent, cx);
@@ -583,6 +581,17 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
+        let row_height = self.theme.editor_row_height(ui_scale::current(cx).percent);
+        self.file_editor_gutter_row_height = row_height;
+        self.conflict_resolved_gutter_row_height = row_height;
+        self.file_editor_wrap_row_starts.clear();
+        self.diff_raw_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.conflict_resolver_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.file_editor_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.clear_worktree_preview_segments_cache();
         self.diff_text_hitboxes.clear();
         self.diff_text_motion_targets.clear();
         self.diff_stage_gutter_cells.clear();
@@ -832,7 +841,7 @@ impl MainPaneView {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(text, cx);
-            input.set_selected_range(0..0, false, cx);
+            input.set_caret(0, cx);
         });
     }
 
@@ -867,7 +876,7 @@ impl MainPaneView {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
         self.diff_text_query_cache_options = Default::default();
-        self.diff_text_query_cache_matcher = None;
+        self.diff_text_query_cache_matcher_shared = None;
         self.diff_text_query_cache_generation =
             self.diff_text_query_cache_generation.wrapping_add(1);
     }
@@ -882,8 +891,8 @@ impl MainPaneView {
         {
             self.diff_text_query_cache_query = query.to_string().into();
             self.diff_text_query_cache_options = options;
-            self.diff_text_query_cache_matcher = (!query.is_empty())
-                .then(|| super::diff_search::DiffSearchMatcher::new(query, options));
+            self.diff_text_query_cache_matcher_shared = (!query.is_empty())
+                .then(|| Arc::new(super::diff_search::DiffSearchMatcher::new(query, options)));
             self.diff_text_query_cache_generation =
                 self.diff_text_query_cache_generation.wrapping_add(1);
         }
@@ -1211,6 +1220,7 @@ impl MainPaneView {
         self.diff_whitespace_mode = next;
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
         self.rebuild_patch_visual_line_kinds_from_current_diff();
         self.diff_word_highlights.clear();
         self.diff_word_highlights_inflight = None;
@@ -1280,6 +1290,47 @@ impl MainPaneView {
         self.diff_wrap_visible_cache_key = None;
         self.reset_diff_horizontal_scroll_state();
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_remote_markdown_image_policy(
+        &mut self,
+        next: RemoteMarkdownImagePolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy == next {
+            return;
+        }
+        self.remote_markdown_image_policy = next;
+        self.approved_remote_markdown_image_urls = Arc::default();
+        self.remote_markdown_image_approval_revision =
+            self.remote_markdown_image_approval_revision.wrapping_add(1);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn markdown_remote_image_access(
+        &self,
+        approval_view: Option<Entity<MainPaneView>>,
+    ) -> rows::MarkdownRemoteImageAccess {
+        rows::MarkdownRemoteImageAccess {
+            policy: self.remote_markdown_image_policy,
+            approved_urls: Arc::clone(&self.approved_remote_markdown_image_urls),
+            approval_view,
+        }
+    }
+
+    pub(in crate::view) fn approve_remote_markdown_image(
+        &mut self,
+        url: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+            return;
+        }
+        if Arc::make_mut(&mut self.approved_remote_markdown_image_urls).insert(url) {
+            self.remote_markdown_image_approval_revision =
+                self.remote_markdown_image_approval_revision.wrapping_add(1);
+            cx.notify();
+        }
     }
 
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
@@ -1437,6 +1488,16 @@ impl MainPaneView {
         self.history_view.read(cx).history_tag_preferences()
     }
 
+    pub(in crate::view) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_history_branch_names(next, cx));
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -1475,11 +1536,12 @@ impl MainPaneView {
 impl MainPaneView {
     pub(in crate::view) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -1493,11 +1555,12 @@ impl MainPaneView {
 
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -1506,16 +1569,6 @@ impl MainPaneView {
                     root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
                 });
             });
-        });
-    }
-
-    pub(in crate::view) fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -1531,14 +1584,14 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.activate_context_menu_invoker(invoker, cx);
         self.open_popover_at(
-            PopoverKind::ConflictResolverInputRowMenu {
+            (PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
                 line_target,
                 chunk_label,
                 chunk_target,
-            },
+            })
+            .invoked_by(invoker),
             anchor,
             window,
             cx,
@@ -1560,7 +1613,6 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.activate_context_menu_invoker(invoker, cx);
         // Opening the chunk menu selects that conflict and brings the
         // *other* pane to it — the pane the user right-clicked is already in
         // view and must not jump under the open menu. Reveals are non-strict:
@@ -1592,7 +1644,7 @@ impl MainPaneView {
         let (join_previous_region, join_next_region) =
             self.conflict_resolver_join_region_targets(conflict_ix);
         self.open_popover_at(
-            PopoverKind::ConflictResolverChunkMenu {
+            (PopoverKind::ConflictResolverChunkMenu {
                 conflict_ix,
                 has_base,
                 is_three_way,
@@ -1604,7 +1656,8 @@ impl MainPaneView {
                 alignment_marked_columns: self.conflict_resolver_alignment_marked_columns(),
                 has_manual_alignments: self.conflict_resolver_has_manual_alignments(),
                 output_is_protected: self.conflict_resolver.output_is_protected,
-            },
+            })
+            .invoked_by(invoker),
             anchor,
             window,
             cx,
@@ -1931,6 +1984,25 @@ impl MainPaneView {
             .flatten()
     }
 
+    /// Whether acting on this file will consume the singleton row selection.
+    /// Empty or unrelated selections must survive a shortcut in the diff pane.
+    pub(in crate::view) fn status_single_selection_for_shortcut(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        path: &std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.root_view
+            .update(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .status_selected_paths_for_area(repo_id, area)
+                    == std::slice::from_ref(path)
+            })
+            .unwrap_or(false)
+    }
+
     /// Drop the row selection a shortcut has just acted on.
     pub(in crate::view) fn clear_status_selection_for_shortcut(
         &mut self,
@@ -2029,15 +2101,23 @@ impl MainPaneView {
             .unwrap_or(ChangeTrackingView::Combined)
     }
 
-    pub(in crate::view) fn scroll_status_section_to_ix(
+    /// Resolve the path against the pane's current order, including when
+    /// navigation fell back to source order while its projection was unavailable.
+    pub(in crate::view) fn scroll_status_section_to_path(
         &mut self,
         section: StatusSection,
-        ix: usize,
+        path: &std::path::Path,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let Some(position) = pane.status_path_display_position(section, path) else {
+                        return;
+                    };
+                    let ix = pane
+                        .reveal_status_row(section, position, cx)
+                        .unwrap_or(position);
                     match section {
                         StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll
@@ -2056,16 +2136,22 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
+    /// `position` is an index into the tree-ordered file list, not a display
+    /// row: a tree pads the list with directory rows and may be hiding the
+    /// target entirely, so it is revealed and resolved first.
     pub(in crate::view) fn scroll_commit_details_file_to_ix(
         &mut self,
-        ix: usize,
+        position: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let row = pane
+                        .reveal_commit_file_row(position, cx)
+                        .unwrap_or(position);
                     pane.commit_files_scroll
-                        .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center);
+                        .scroll_to_item_strict(row, gpui::ScrollStrategy::Center);
                     cx.notify();
                 });
         });
@@ -2082,6 +2168,11 @@ impl MainPaneView {
         let next_repo_id = next.active_repo;
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
+        if prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target {
+            self.approved_remote_markdown_image_urls = Arc::default();
+            self.remote_markdown_image_approval_revision =
+                self.remote_markdown_image_approval_revision.wrapping_add(1);
+        }
         if prev_diff_target != next_diff_target {
             self.clear_diff_selection_state();
             self.diff_autoscroll_pending = next_diff_target.is_some();
@@ -2466,7 +2557,11 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn select_all_diff_text(&mut self) {
+    pub(in crate::view) fn select_all_diff_text(
+        &mut self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         // Markdown preview (both file preview and diff preview) uses
         // markdown preview row counts instead of source-text line counts.
         if self.is_markdown_preview_active() {
@@ -2505,6 +2600,9 @@ impl MainPaneView {
                 region,
                 offset: end_offset,
             });
+            if self.diff_text_has_selection() {
+                self.diff_text_selection_owner.adopt(window, cx);
+            }
             self.sync_diff_focus_to_text_selection();
             return;
         }
@@ -2531,6 +2629,9 @@ impl MainPaneView {
                 region: DiffTextRegion::Inline,
                 offset: end_offset,
             });
+            if self.diff_text_has_selection() {
+                self.diff_text_selection_owner.adopt(window, cx);
+            }
             self.sync_diff_focus_to_text_selection();
             return;
         }
@@ -2566,6 +2667,9 @@ impl MainPaneView {
             region: end_region,
             offset: end_offset,
         });
+        if self.diff_text_has_selection() {
+            self.diff_text_selection_owner.adopt(window, cx);
+        }
         self.sync_diff_focus_to_text_selection();
     }
 

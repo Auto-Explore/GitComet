@@ -1,0 +1,30 @@
+[package]
+name = "gitcomet-fs-watch"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Native FSEvents ownership is isolated here, like gitcomet-tree-sitter-alloc.
+# Application crates continue to inherit the workspace unsafe_code = forbid.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[features]
+test-support = ["dep:windows-sys"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", optional = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFString", "CFURL"] }
+objc2-core-services = { version = "0.3.2", default-features = false, features = ["std", "FSEvents", "dispatch2"] }
+dispatch2 = "0.3.1"
+libc = "0.2"
+
+[dev-dependencies]
+notify = { workspace = true }
+tempfile = { workspace = true }

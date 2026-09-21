@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 /// Bottom panel's minimum height while the reflog panel is the sole (or
 /// active) content. Matches the terminal panel's own floor so the resize
@@ -7,6 +8,16 @@ const REFLOG_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 /// Height of the Terminal/Reflog switcher shown above the bottom panel's
 /// content once more than one of its panels is open for the active repo.
 const BOTTOM_PANEL_TAB_BAR_HEIGHT_PX: f32 = 30.0;
+/// Comfortable lifts the tabs to a control height; the bar keeps its 4px
+/// above and below.
+const BOTTOM_PANEL_TAB_BAR_COMFORTABLE_HEIGHT_PX: f32 = 40.0;
+
+fn bottom_panel_tab_bar_height(ui_scale: crate::ui_scale::UiScale) -> gpui::Pixels {
+    ui_scale.row_height(
+        BOTTOM_PANEL_TAB_BAR_HEIGHT_PX,
+        BOTTOM_PANEL_TAB_BAR_COMFORTABLE_HEIGHT_PX,
+    )
+}
 
 impl GitCometView {
     /// Whether the reflog panel is open for `repo_id`. The panel itself owns
@@ -119,7 +130,7 @@ impl GitCometView {
                     .flex()
                     .flex_col()
                     .h(self.terminal_panel_height)
-                    .min_h(px(REFLOG_PANEL_MIN_HEIGHT_PX))
+                    .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX))
                     .child(self.reflog_pane.clone())
                     .into_any(),
             );
@@ -131,6 +142,7 @@ impl GitCometView {
             .copied()
             .unwrap_or(BottomPanelTab::Reflog);
 
+        let tab_bar_height = bottom_panel_tab_bar_height(self.ui_scale());
         let tab_bar = self.render_bottom_panel_tab_bar(theme, repo_id, active_tab, cx);
         let content = match active_tab {
             BottomPanelTab::Terminal => self.render_terminal_panel(theme, window, cx)?,
@@ -141,10 +153,8 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height + px(BOTTOM_PANEL_TAB_BAR_HEIGHT_PX))
-                .min_h(px(
-                    REFLOG_PANEL_MIN_HEIGHT_PX + BOTTOM_PANEL_TAB_BAR_HEIGHT_PX
-                ))
+                .h(self.terminal_panel_height + tab_bar_height)
+                .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX) + tab_bar_height)
                 .child(tab_bar)
                 .child(div().flex_1().min_h(px(0.0)).child(content))
                 .into_any(),
@@ -164,6 +174,7 @@ impl GitCometView {
         active_tab: BottomPanelTab,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale = self.ui_scale();
         let tab = |id: &'static str,
                    close_id: &'static str,
                    icon: &'static str,
@@ -172,40 +183,15 @@ impl GitCometView {
                    this_tab: BottomPanelTab,
                    cx: &mut gpui::Context<Self>| {
             let is_active = this_tab == active_tab;
-            let bg = if is_active {
-                theme.colors.interaction.selected_background
-            } else {
-                theme.colors.surface.panel
-            };
-            let text_color = if is_active {
-                theme.colors.interaction.selected_foreground
-            } else {
-                theme.colors.foreground.secondary
-            };
-            div()
-                .id(id)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(theme.radii.row))
-                .bg(bg)
-                .text_color(text_color)
-                .text_size(px(12.0))
-                .cursor(CursorStyle::PointingHand)
-                .when(!is_active, |d| {
-                    d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                })
-                .child(svg_icon(icon, text_color, px(12.0)))
-                .child(label)
+            let text_color = components::panel_tab_text_color(theme, is_active);
+            components::panel_tab(id, theme, ui_scale, icon, label, is_active)
                 .child(bottom_panel_tab_close(
-                    theme, close_id, close_tip, text_color, repo_id, this_tab, cx,
+                    theme, ui_scale, close_id, close_tip, text_color, repo_id, this_tab, cx,
                 ))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                         this.active_bottom_panel.insert(repo_id, this_tab);
                         cx.notify();
                     }),
@@ -217,10 +203,10 @@ impl GitCometView {
             .flex_none()
             .flex_row()
             .items_center()
-            .gap(px(2.0))
-            .px(px(4.0))
-            .py(px(4.0))
-            .h(px(BOTTOM_PANEL_TAB_BAR_HEIGHT_PX))
+            .gap(ui_scale.px(2.0))
+            .px(ui_scale.px(4.0))
+            .py(ui_scale.px(4.0))
+            .h(bottom_panel_tab_bar_height(ui_scale))
             .bg(theme.colors.surface.panel)
             .border_b_1()
             .border_color(theme.colors.stroke.subtle)
@@ -252,6 +238,7 @@ impl GitCometView {
 #[allow(clippy::too_many_arguments)]
 fn bottom_panel_tab_close(
     theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
     id: &'static str,
     tip: &'static str,
     text_color: gpui::Rgba,
@@ -259,29 +246,47 @@ fn bottom_panel_tab_close(
     tab: BottomPanelTab,
     cx: &mut gpui::Context<GitCometView>,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(14.0))
-        .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(with_alpha(theme.colors.status.danger.foreground, 0.18)))
-        .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
-        .gitcomet_tooltip(theme, tip.into())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                cx.stop_propagation();
-                this.close_bottom_panel_tab(repo_id, tab, cx);
-            }),
-        )
+    components::on_nested_control_click(
+        components::panel_tab_close(id, theme, ui_scale, text_color)
+            .gitcomet_tooltip(theme, tip.into()),
+        cx,
+        move |this, _e: &gpui::ClickEvent, _window, cx| {
+            this.close_bottom_panel_tab(repo_id, tab, cx);
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{bottom_panel_tab_bar_height, components};
+
+    /// The strip has to hold a full-height tab plus its 4px of air, or the tabs
+    /// clip the moment Comfortable lifts them.
+    #[test]
+    fn the_tab_bar_holds_a_tab_at_every_density() {
+        let font_stress = crate::appearance::Appearance {
+            ui_font_size_px: 24,
+            ..crate::appearance::Appearance::default()
+        };
+        for metrics in crate::appearance::UiDensity::ALL
+            .into_iter()
+            .map(|density| crate::appearance::Appearance {
+                density,
+                ..crate::appearance::Appearance::default()
+            })
+            .chain(std::iter::once(font_stress))
+        {
+            let scale = crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics);
+            let bar = bottom_panel_tab_bar_height(scale);
+            let tab = components::control_height(scale);
+
+            assert!(
+                bar >= tab + scale.px(8.0),
+                "bar {bar:?} must hold a {tab:?} tab and its padding"
+            );
+        }
+    }
+
     use super::*;
     use crate::view::test_support::NoopBackend as TestBackend;
     use gitcomet_state::model::RepoState;
@@ -292,7 +297,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) -> (Entity<GitCometView>, RepoId, &mut gpui::VisualTestContext) {
         let repo_id = RepoId(1);
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -304,7 +309,7 @@ mod tests {
                 },
             )],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         });
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
@@ -373,7 +378,7 @@ mod tests {
 
     #[gpui::test]
     fn opening_from_a_menu_without_a_repository_is_inert(cx: &mut gpui::TestAppContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

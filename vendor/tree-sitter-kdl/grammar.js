@@ -1,9 +1,10 @@
 /**
  * @file KDL grammar for tree-sitter
- * @author Amaan Qureshi <amaanq12@gmail.com>
+ * @author Amaan Qureshi <contact@amaanq.com>
  * @license MIT
  * @see {@link https://kdl.dev|official website}
- * @see {@link https://github.com/kdl-org/kdl/blob/main/SPEC.md|official syntax spec}
+ * @see {@link https://github.com/kdl-org/kdl/blob/1.0.0/SPEC.md|KDL 1 syntax spec}
+ * @see {@link https://github.com/kdl-org/kdl/blob/2.0.0/SPEC.md|KDL 2 syntax spec}
  */
 
 // deno-lint-ignore-file no-control-regex
@@ -13,56 +14,75 @@
 /// <reference types="tree-sitter-cli/dsl" />
 // @ts-check
 
-const ANNOTATION_BUILTINS = [
-  'i8',
-  'i16',
-  'i32',
-  'i64',
-  'u8',
-  'u16',
-  'u32',
-  'u64',
-  'isize',
-  'usize',
-  'f32',
-  'f64',
-  'decimal64',
-  'decimal128',
-  'date-time',
-  'time',
-  'date',
-  'duration',
-  'decimal',
-  'currency',
-  'country-2',
-  'country-3',
-  'country-subdivision',
-  'email',
-  'idn-email',
-  'hostname',
-  'idn-hostname',
-  'ipv4',
-  'ipv6',
-  'url',
-  'url-reference',
-  'irl',
-  'iri-reference',
-  'url-template',
-  'uuid',
-  'regex',
-  'base64',
-];
+const BOOLEAN_KEYWORDS = ['true', 'false', '#true', '#false'];
+const NULL_KEYWORDS = ['null', '#null'];
+const KEYWORD_NUMBERS = ['#inf', '#-inf', '#nan'];
+const UNICODE_SPACES = '\\u0009\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000';
+const NEWLINES = '\\r\\n\\u0085\\u000B\\u000C\\u2028\\u2029';
+const DISALLOWED_LITERAL =
+  '\\u0000-\\u0008\\u000E-\\u001F\\u007F\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF';
+const IDENTIFIER_EXCLUSIONS = `${UNICODE_SPACES}${NEWLINES}${DISALLOWED_LITERAL}\\\\\\/(){};\\[\\]"=`;
+const IDENTIFIER_CHAR = `[^${IDENTIFIER_EXCLUSIONS}]`;
+const IDENTIFIER_START = `[^${IDENTIFIER_EXCLUSIONS}0-9+\\-]`;
+const IDENTIFIER_START_AFTER_SIGN = `[^${IDENTIFIER_EXCLUSIONS}0-9]`;
+const STRING_CHAR = `[^"\\\\${DISALLOWED_LITERAL}]`;
+const SIGN = '[+-]';
+// integer := digit (digit | '_')*
+const DIGITS = '[0-9][0-9_]*';
+// hex-unicode := hex-digit{1, 6} - surrogate - above-max-scalar
+const HEX_CHARS = '0-9a-fA-F';
+const HEX = `[${HEX_CHARS}]`;
+const NON_SURROGATE_4 = `(?:[0-9a-cA-Ce-fE-F]${HEX}{3}|[dD][0-7]${HEX}{2})`;
+const SCALAR_5 = `(?:[1-9a-fA-F]${HEX}{4}|0${NON_SURROGATE_4})`;
+const SCALAR_6 = `(?:0${SCALAR_5}|10${HEX}{4})`;
+const UNICODE_SCALAR_ESCAPE = new RegExp(
+  `u\\{(?:${HEX}{1,3}|${NON_SURROGATE_4}|${SCALAR_5}|${SCALAR_6})\\}`,
+);
 
-module.exports = grammar({
+/**
+ * nodes := line-space* (node line-space*)*
+ *
+ * @param {GrammarSymbols<string>} $
+ * @returns {SeqRule}
+ */
+function linespacedNodes($) {
+  return seq(
+    repeat($._linespace),
+    repeat(seq($.node, repeat($._linespace))),
+  );
+}
+
+/**
+ * (node-space* slashdash node-children)* (node-space* node-children)?
+ * (node-space* slashdash node-children)*
+ *
+ * Written with the trailing slashdashes nested inside the optional block, since
+ * the flat spelling cannot say which repeat owns them when the block is absent.
+ *
+ * @param {GrammarSymbols<string>} $
+ * @returns {SeqRule}
+ */
+function childBlocks($) {
+  const commented = seq(repeat($._node_space), field('children', $.node_children_comment));
+  const block = seq(repeat($._node_space), field('children', $.node_children));
+  return seq(repeat(commented), optional(seq(block, repeat(commented))));
+}
+
+export default grammar({
   name: 'kdl',
 
   conflicts: $ => [
-    [$.document],
-    [$._node_space],
-    [$.node_children],
+    [$.version, $._ws],
+    [$.identifier, $.value],
   ],
 
-  externals: $ => [$._eof, $.multi_line_comment],
+  externals: $ => [
+    $._eof,
+    $.multi_line_comment,
+    $._raw_string_start,
+    $._raw_string_content,
+    $._raw_string_end,
+  ],
 
   extras: $ => [$.multi_line_comment],
 
@@ -70,171 +90,174 @@ module.exports = grammar({
 
   rules: {
     // nodes := linespace* (node nodes?)? linespace*
-    document: $ =>
-      seq(
-        repeat($._linespace),
-        optional(seq(
-          $.node,
-          repeat(seq(
-            repeat($._linespace),
-            $.node,
-          )),
-        )),
-        repeat($._linespace),
-      ),
+    document: $ => seq(optional($._bom), optional(field('version', $.version)), linespacedNodes($)),
+
+    version: $ => prec(2, seq(
+      '/-',
+      repeat($._unicode_space),
+      'kdl-version',
+      repeat1($._unicode_space),
+      field('version', choice('1', '2')),
+      repeat($._unicode_space),
+      $._newline,
+    )),
 
     // node := ('/-' node-space*)? type? identifier (node-space+ node-prop-or-arg)* (node-space* node-children ws*)? node-space* node-terminator
-    node: $ => prec(1,
+    node: $ => seq($._base_node, $._node_terminator),
+    _final_node: $ => seq(alias($._base_node, $.node), '}'),
+    _base_node: $ =>
       seq(
-        alias(optional(seq('/-', repeat($._node_space))), $.node_comment),
-        optional($.type),
-        $.identifier,
-        repeat(seq(repeat1($._node_space), $.node_field)),
-        optional(seq(repeat($._node_space), field('children', $.node_children), repeat($._ws))),
+        optional($.node_comment),
+        optional(seq(field('type', $.type), repeat($._node_space))),
+        field('name', $.identifier),
+        repeat($.node_field),
+        childBlocks($),
         repeat($._node_space),
-        $._node_terminator,
       ),
-    ),
 
     // node-prop-or-arg (field) := ('/-' node-space*)? (prop | value)
-    // _node_prop_or_arg: $ =>
-    //   seq(
-    //     alias(optional(seq('/-', repeat($._node_space))), $.node_prop_or_arg_slash_dash),
-    //     field('node_prop_or_arg', choice($.prop, $.value)),
-    //   ),
-    node_field: $ => choice($._node_field_comment, $._node_field),
-    _node_field_comment: $ => alias(seq('/-', repeat($._node_space), $._node_field), $.node_field_comment),
-    _node_field: $ => choice($.prop, $.value),
+    node_field: $ => choice(
+      seq(repeat1($._node_space), $._node_field),
+      seq(repeat($._node_space), $.node_field_comment),
+    ),
+    node_comment: $ => seq('/-', repeat($._linespace)),
+    node_field_comment: $ => seq('/-', repeat($._linespace), $._node_field),
+    _node_field: $ => choice(field('property', $.prop), field('argument', $.value)),
     // node-children := ('/-' node-space*)? '{' nodes '}'
-    node_children: $ =>
-      seq(
-        optional(seq(alias('/-', $.node_children_comment), repeat($._node_space))),
-        '{',
-        seq(
-          repeat($._linespace),
-          optional(seq($.node, repeat(seq(repeat($._linespace), $.node)))),
-          repeat($._linespace),
-        ),
-        '}',
-      ),
+    node_children_comment: $ => seq('/-', repeat($._linespace), $.node_children),
+    node_children: $ => seq(
+      '{',
+      repeat(choice($._linespace, $.node)),
+      choice('}', $._final_node),
+    ),
     // node-space := ws* escline ws* | ws+
-    _node_space: $ =>
-      choice(
-        seq(repeat($._ws), $._escline, repeat($._ws)),
-        repeat1($._ws),
-      ),
+    _node_space: $ => choice($._ws, $._escline),
     // node-terminator := single-line-comment | newline | ';' | eof
     _node_terminator: $ =>
       choice($.single_line_comment, $._newline, ';', $._eof),
 
     // identifier := string | bare-identifier
     identifier: $ => choice($.string, $._bare_identifier),
+
     // bare-identifier := ((identifier-char - digit - sign) identifier-char* | sign ((identifier-char - digit) identifier-char*)?) - keyword
-    _bare_identifier: $ =>
-      choice(
-        $._normal_bare_identifier,
-        seq($._sign, optional(seq($.__identifier_char_no_digit, repeat($._identifier_char)))),
-      ),
+    _bare_identifier: $ => choice($._normal_bare_identifier, $._signed_bare_identifier),
 
-    // _normal_bare_identifier: $ => $.__identifier_char_no_digit_sign,
-    _normal_bare_identifier: _ => token(
-      seq(
-        /[\u4E00-\u9FFF\p{L}\p{M}\p{N}\p{Emoji}_~!@#\$%\^&\*.:'\|\?&&[^\s\d\/(){}<>;\[\]=,"]]/,
-        /[\u4E00-\u9FFF\p{L}\p{M}\p{N}\p{Emoji}\-_~!@#\$%\^&\*.:'\|\?+&&[^\s\/(){}<>;\[\]=,"]]*/,
-      ),
-    ),
-    // identifier-char := unicode - linespace - [\/(){}<>;[]=,"]
-    _identifier_char: _ => token(
-      /[\u4E00-\u9FFF\p{L}\p{M}\p{N}\-_~!@#\$%\^&\*.:'\|\?+&&[^\s\/(){}<>;\[\]=,"]]/,
-    ),
+    _normal_bare_identifier: _ =>
+      token(new RegExp(`${IDENTIFIER_START}${IDENTIFIER_CHAR}*`)),
 
-    // can't start with a digit
-    __identifier_char_no_digit: _ => token(
-      /[\u4E00-\u9FFF\p{L}\p{M}\p{N}\-_~!@#\$%\^&\*.:'\|\?+&&[^\s\d\/(){}<>;\[\]=,"]]/,
+    _signed_bare_identifier: _ =>
+      token(new RegExp(`${SIGN}(?:${IDENTIFIER_START_AFTER_SIGN}${IDENTIFIER_CHAR}*)?`)),
+
+    keyword: $ => choice($.boolean, ...NULL_KEYWORDS.map(value => token(prec(2, value)))),
+
+    prop: $ => seq(
+      field('key', $.identifier),
+      repeat($._node_space),
+      '=',
+      repeat($._node_space),
+      field('value', $.value),
     ),
 
-    // can't start with a digit or sign
-    __identifier_char_no_digit_sign: _ => token(
-      /[\u4E00-\u9FFF\p{L}\p{M}\p{N}\-_~!@#\$%\^&\*.:'\|\?&&[^\s\d\+\-\/(){}<>;\[\]=,"]]/,
-    ),
-
-    // keyword := boolean | 'null'
-    keyword: $ => choice($.boolean, 'null'),
-    // type annotations
-    annotation_type: _ => choice(...ANNOTATION_BUILTINS),
-    // prop := identifier '=' value
-    prop: $ => seq($.identifier, '=', $.value),
     // value := type? (string | number | keyword)
-    value: $ => seq(optional($.type), choice($.string, $.number, $.keyword)),
+    value: $ => seq(
+      optional(seq(field('type', $.type), repeat($._node_space))),
+      field('value', choice($.string, alias($._bare_identifier, $.string), $.number, $.keyword)),
+    ),
+
     // type := '(' identifier ')'
-    type: $ => seq('(', choice($.identifier, $.annotation_type), ')'),
+    type: $ => seq(
+      '(',
+      repeat($._node_space),
+      field('name', $.identifier),
+      repeat($._node_space),
+      ')',
+    ),
 
     // String
-    // string := raw-string | escaped-string
-    string: $ => choice($._raw_string, $._escaped_string),
+    string: $ => choice($._raw_string, $.multi_line_string, $._escaped_string),
+    // raw-string := '#' raw-string-quotes '#' | '#' raw-string '#'
+    _raw_string: $ => seq(
+      $._raw_string_start,
+      optional(alias($._raw_string_content, $.string_fragment)),
+      $._raw_string_end,
+    ),
+    // quoted-string := '"""' newline (multi-line-string-body newline)?
+    //                  (unicode-space | ws-escape)* '"""'
+    multi_line_string: $ => seq(
+      $._multiline_open,
+      repeat(choice(
+        alias($._multiline_fragment, $.string_fragment),
+        $.escape,
+        $.escaped_whitespace,
+      )),
+      '"""',
+    ),
+    _multiline_open: _ => token(seq('"""', choice('\r\n', new RegExp(`[${NEWLINES}]`)))),
+    // multi-line-string-body := ('"' ^'"' | '""' ^'"' | string-character)*?
+    _multiline_fragment: _ =>
+      token.immediate(new RegExp(`(?:${STRING_CHAR}|"${STRING_CHAR}|""${STRING_CHAR})+`)),
     // escaped-string := '"' character* '"'
-    _escaped_string: $ => seq('"', alias(repeat(choice($.escape, /[^"]/)), $.string_fragment), '"'),
+    _escaped_string: $ => seq(
+      '"',
+      repeat(choice(
+        alias($._string_fragment, $.string_fragment),
+        $.escape,
+        $.escaped_whitespace,
+      )),
+      '"',
+    ),
     // character := '\' escape | [^\"]
-    _character: $ => choice($.escape, /[^"]/),
-    // escape := ["\\/bfnrt] | 'u{' hex-digit{1, 6} '}'
-    escape: _ =>
-      token.immediate(/\\\\|\\"|\\\/|\\b|\\f|\\n|\\r|\\t|\\u\{[0-9a-fA-F]{1,6}\}/),
-    // hex-digit := [0-9a-fA-F]
-    _hex_digit: _ => /[0-9a-fA-F]/,
-
-    // // raw-string := 'r' raw-string-hash
-    // raw_string: $ => seq('r', $._raw_string_hash),
-    // // raw-string-hash := '#' raw-string-hash '#' | raw-string-quotes
-    // _raw_string_hash: $ => choice(seq('#', $._raw_string_hash, '#'), $._raw_string_quotes),
-    // // raw-string-quotes := '"' .* '"'
-    // _raw_string_quotes: _ => seq('"', /.*/, '"'),
-    _raw_string: _ =>
-      seq(
-        choice(
-          // raw-string-hash := '#' raw-string-hash '#' | raw-string-quotes
-          // yes this isn't perfect but it works, ideally this should be handled in an external scanner
-          seq(token.immediate(seq('r', repeat1('#'))), /[^#]*/, repeat1('#')),
-          // raw-string-quotes := '"' . '"'
-          seq(token.immediate(seq('r', '"')), /[^"]*/, '"'),
-        ),
+    _string_fragment: _ => token.immediate(new RegExp(`${STRING_CHAR}+`)),
+    // escape := ["\\/bfnrts] | 'u{' hex-digit{1, 6} '}'
+    escape: _ => token.immediate(seq(
+      '\\',
+      choice(
+        '\\',
+        '"',
+        '/',
+        'b',
+        'f',
+        'n',
+        'r',
+        't',
+        's',
+        UNICODE_SCALAR_ESCAPE,
       ),
-
-    // number := decimal | hex | octal | binary
-    number: $ => choice($._decimal, $._hex, $._octal, $._binary),
+    )),
+    escaped_whitespace: _ => token.immediate(
+      /\\(?:\r\n|[\u0009\u0020\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\r\n\u0085\u000B\u000C\u2028\u2029])+/,
+    ),
+    number: $ => choice($.keyword_number, $._decimal, $._hex, $._octal, $._binary),
 
     // decimal := sign? integer ('.' integer)? exponent?
     _decimal: $ =>
       seq(
-        optional($._sign),
         $._integer,
-        optional(seq('.', alias($._integer, $.decimal))),
+        optional(seq('.', alias($._fraction, $.decimal))),
         optional(alias($._exponent, $.exponent)),
       ),
 
-    // exponent := ('e' | 'E') sign? integer
-    _exponent: $ => seq(choice('e', 'E'), optional($._sign), $._integer),
     // integer := digit (digit | '_')*
-    _integer: $ => seq($._digit, repeat(choice($._digit, '_'))),
-    // digit := [0-9]
-    _digit: _ => /[0-9]/,
-    // sign := '+' | '-'
-    _sign: _ => choice('+', '-'),
-
+    _integer: _ => token(new RegExp(`${SIGN}?${DIGITS}`)),
+    _fraction: _ => token.immediate(new RegExp(DIGITS)),
+    // exponent := ('e' | 'E') sign? integer
+    _exponent: _ => token.immediate(new RegExp(`[eE]${SIGN}?${DIGITS}`)),
     // hex := sign? '0x' hex-digit (hex-digit | '_')*
-    _hex: $ => seq(optional($._sign), '0x', $._hex_digit, repeat(choice($._hex_digit, '_'))),
+    _hex: _ => token(new RegExp(`${SIGN}?0x${HEX}[${HEX_CHARS}_]*`)),
     // octal := sign? '0o' [0-7] [0-7_]*
-    _octal: $ => seq(optional($._sign), '0o', /[0-7]/, repeat(choice(/[0-7]/, '_'))),
+    _octal: _ => token(new RegExp(`${SIGN}?0o[0-7][0-7_]*`)),
     // binary := sign? '0b' ('0' | '1') ('0' | '1' | '_')*
-    _binary: $ => seq(optional($._sign), '0b', choice('0', '1'), repeat(choice('0', '1', '_'))),
+    _binary: _ => token(new RegExp(`${SIGN}?0b[01][01_]*`)),
 
-    // boolean := 'true' | 'false'
-    boolean: _ => choice('true', 'false'),
+    keyword_number: _ => choice(...KEYWORD_NUMBERS.map(value => token(prec(2, value)))),
+
+    boolean: _ => choice(...BOOLEAN_KEYWORDS.map(value => token(prec(2, value)))),
 
     // escline := '\\' ws* (single-line-comment | newline)
-    _escline: $ => seq('\\', repeat($._ws), choice($.single_line_comment, $._newline)),
+    _escline: $ => seq('\\', repeat($._ws), choice($.single_line_comment, $._newline, $._eof)),
 
     // linespace := newline | ws | single-line-comment
-    _linespace: $ => choice($._newline, $._ws, $.single_line_comment),
+    _linespace: $ => choice($._ws, $._escline, $._newline, $.single_line_comment),
 
     // newline := See Table (All line-break white_space)
     // Newline
@@ -251,10 +274,10 @@ module.exports = grammar({
     // │  PS       Paragraph Separator            U+2029          │
     // ╰──────────────────────────────────────────────────────────╯
     // Note that for the purpose of new lines, CRLF is considered a single newline.
-    _newline: _ => choice(/\r'/, /\n/, /\r\n/, /\u0085/, /\u000C/, /\u2028/, /\u2029/),
+    _newline: _ => choice(/\r\n/, /\r/, /\n/, /\u0085/, /\u000B/, /\u000C/, /\u2028/, /\u2029/),
 
     // ws := bom | unicode-space | multi-line-comment
-    _ws: $ => choice($._bom, $._unicode_space, $.multi_line_comment),
+    _ws: $ => choice($._unicode_space, $.multi_line_comment),
 
     // bom := '\u{FEFF}'
     _bom: _ => /\u{FEFF}/,
@@ -291,7 +314,7 @@ module.exports = grammar({
     single_line_comment: $ =>
       seq(
         '//',
-        repeat(/[^\r\n\u0085\u000C\u2028\u2029]/),
+        repeat(/[^\r\n\u0085\u000B\u000C\u2028\u2029]/),
         choice($._newline, $._eof),
       ),
   },

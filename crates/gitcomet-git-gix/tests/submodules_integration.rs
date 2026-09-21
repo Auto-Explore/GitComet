@@ -2,6 +2,9 @@ use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
 };
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -17,6 +20,7 @@ fn git_command() -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -32,6 +36,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     git_command()
         .arg("-C")
         .arg(repo)
@@ -84,6 +89,7 @@ fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Opt
 }
 
 fn run_git_with_path(repo: &Path, args: &[&str], path: &Path) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -132,52 +138,31 @@ fn create_stale_submodule_git_dir(
 }
 
 fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "core.autocrlf", "false"]);
-    run_git(repo, &["config", "core.eol", "lf"]);
-
-    {
-        let mut f = std::fs::File::create(repo.join(file)).expect("create seed file");
-        std::io::Write::write_all(&mut f, contents.as_bytes()).expect("write seed file");
-        f.sync_all().ok();
-    }
-    run_git(repo, &["add", file]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", message],
-    );
-}
-
-#[cfg(windows)]
-fn is_git_shell_startup_failure(text: &str) -> bool {
-    text.contains("sh.exe: *** fatal error -")
-        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-}
-
-#[cfg(windows)]
-fn git_shell_available_for_submodule_tests() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git")
-            .args(["difftool", "--tool-help"])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return true,
-        };
-        if output.status.success() {
-            return true;
-        }
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+    init_repository(repo, |repo| {
+        run_git(repo, &["init", "-b", "master"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "you@example.com"),
+                ("user.name", "You"),
+                ("commit.gpgsign", "false"),
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+            ],
         );
-        !is_git_shell_startup_failure(&text)
-    })
+        import_linear_history(
+            git_command().arg("-C").arg(repo),
+            "master",
+            [LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_000,
+                message,
+                path: file,
+                contents,
+            }],
+        );
+        run_git(repo, &["reset", "--hard", "HEAD"]);
+    });
 }
 
 fn submodule_integration_test_lock() -> MutexGuard<'static, ()> {
@@ -187,26 +172,15 @@ fn submodule_integration_test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn require_git_shell_for_submodule_tests() -> Option<MutexGuard<'static, ()>> {
+fn setup_submodule_test() -> MutexGuard<'static, ()> {
     let guard = submodule_integration_test_lock();
     test_git_env::ensure_initialized();
-    #[cfg(windows)]
-    {
-        if !git_shell_available_for_submodule_tests() {
-            eprintln!(
-                "skipping submodule integration test: Git-for-Windows shell startup failed in this environment"
-            );
-            return None;
-        }
-    }
-    Some(guard)
+    guard
 }
 
 #[test]
 fn list_submodules_reports_missing_gitmodules_mapping() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -267,13 +241,19 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     assert_eq!(submodules[0].path, PathBuf::from("submod"));
     assert_eq!(submodules[0].status, SubmoduleStatus::MissingMapping);
     assert_eq!(submodules[0].recorded_head.as_ref(), submodule_head);
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("submod"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert_eq!(summary.status, Some(SubmoduleStatus::MissingMapping));
+    assert!(summary.checkout_available);
 }
 
 #[test]
 fn list_submodules_reports_not_initialized_and_head_mismatch() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -328,6 +308,15 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(not_initialized[0].status, SubmoduleStatus::NotInitialized);
     assert_eq!(not_initialized[0].recorded_head.as_ref(), original_head);
     assert_eq!(not_initialized[0].checked_out_head, None);
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("sm"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert_eq!(summary.status, Some(SubmoduleStatus::NotInitialized));
+    assert!(!summary.checkout_available);
+    assert!(summary.live_staged.is_empty() && summary.live_unstaged.is_empty());
 
     run_git(
         &parent_repo,
@@ -391,9 +380,7 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
 
 #[test]
 fn list_submodules_recurses_into_nested_submodules() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -494,13 +481,75 @@ fn list_submodules_recurses_into_nested_submodules() {
             .iter()
             .all(|submodule| submodule.status == SubmoduleStatus::UpToDate)
     );
+
+    let nested = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("mods/child/nested/grand"),
+            area: DiffArea::Unstaged,
+        })
+        .expect("summarize the nested gitlink against its owning repository");
+    assert_eq!(nested.path, PathBuf::from("mods/child/nested/grand"));
+    assert!(nested.checkout_available);
+    assert_eq!(
+        nested.ranges[0].from.as_ref(),
+        Some(&listed[1].recorded_head)
+    );
+    assert_eq!(nested.ranges[0].to, nested.ranges[0].from);
+}
+
+#[test]
+fn submodule_summary_ignores_broken_sibling_indexes_and_honors_cancellation() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&source, "file.txt", "hello\n", "seed");
+    init_repo_with_seed(&parent, "root.txt", "root\n", "root");
+    add_submodule_raw(&parent, &source, Path::new("wanted"), None);
+    add_submodule_raw(&parent, &source, Path::new("unrelated"), None);
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "submodules"],
+    );
+    let unrelated = parent.join("unrelated");
+    let index = git_stdout(&unrelated, &["rev-parse", "--git-path", "index"]);
+    fs::write(unrelated.join(index.trim()), b"broken sibling index").unwrap();
+    fs::write(parent.join("wanted/file.txt"), "changed\n").unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let listed = repo
+        .list_submodules()
+        .expect("one submodule with an unreadable index must not fail the whole enumeration");
+    let paths: Vec<_> = listed.iter().map(|s| s.path.clone()).collect();
+    assert!(paths.contains(&PathBuf::from("wanted")), "{paths:?}");
+    assert!(paths.contains(&PathBuf::from("unrelated")), "{paths:?}");
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("wanted"),
+        area: DiffArea::Unstaged,
+    };
+    let token = gitcomet_core::services::CancellationToken::new();
+    let summary = repo
+        .submodule_diff_summary_cancellable(&target, &token)
+        .unwrap();
+    assert!(summary.checkout_available);
+    assert_eq!(summary.live_unstaged.len(), 1);
+    assert_eq!(summary.live_unstaged[0].path, PathBuf::from("file.txt"));
+    assert_eq!(summary.live_unstaged[0].additions, Some(1));
+    token.cancel();
+    let error = repo
+        .submodule_diff_summary_cancellable(&target, &token)
+        .unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        gitcomet_core::error::ErrorKind::Cancelled
+    ));
 }
 
 #[test]
 fn list_submodules_reports_merge_conflicted_gitlinks() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -646,13 +695,59 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         listed[0].recorded_head.as_ref(),
         "0000000000000000000000000000000000000000"
     );
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("sm"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert_eq!(summary.status, Some(SubmoduleStatus::MergeConflict));
+    assert_eq!(
+        summary.ranges[0].to.as_ref(),
+        Some(&listed[0].recorded_head)
+    );
+    assert!(summary.ranges[0].unavailable_reason.is_some());
+    // A conflicted gitlink still has a usable checkout on disk, so the pointer
+    // ranges are unavailable while the working tree itself stays readable.
+    assert!(summary.checkout_available);
+    assert!(summary.checked_out_head.is_none());
+}
+
+#[test]
+fn submodule_summary_keeps_head_pointer_after_gitlink_is_removed_from_index() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&source, "file.txt", "hello\n", "seed");
+    init_repo_with_seed(&parent, "root.txt", "root\n", "root");
+    add_submodule_raw(&parent, &source, Path::new("sm"), None);
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "submodule"],
+    );
+    let head = git_stdout(&source, &["rev-parse", "HEAD"]);
+    run_git(&parent, &["rm", "--cached", "sm"]);
+    let repo = GixBackend.open(&parent).unwrap();
+    let summary = repo
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("sm"),
+            area: DiffArea::Staged,
+        })
+        .unwrap();
+    assert!(summary.checkout_available);
+    assert_eq!(
+        summary.ranges[0].from.as_ref().map(AsRef::as_ref),
+        Some(head.as_str())
+    );
+    assert_eq!(summary.ranges[0].to, None);
 }
 
 #[test]
 fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -696,9 +791,7 @@ fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
 
 #[test]
 fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -774,9 +867,7 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
 
 #[test]
 fn submodule_add_update_remove_round_trip() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -868,9 +959,7 @@ fn submodule_add_update_remove_round_trip() {
 
 #[test]
 fn add_submodule_does_not_restrict_https_or_ssh_transports() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("parent");
     fs::create_dir_all(&repo).expect("create parent repository directory");
@@ -896,9 +985,7 @@ fn add_submodule_does_not_restrict_https_or_ssh_transports() {
 
 #[test]
 fn add_local_submodule_requires_explicit_trust() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -952,9 +1039,7 @@ fn add_local_submodule_requires_explicit_trust() {
 
 #[test]
 fn add_submodule_supports_branch_selection() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1001,9 +1086,7 @@ fn add_submodule_supports_branch_selection() {
 
 #[test]
 fn add_submodule_supports_multiple_branches_from_same_source() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1096,9 +1179,7 @@ fn add_submodule_supports_multiple_branches_from_same_source() {
 
 #[test]
 fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1165,9 +1246,7 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
 
 #[test]
 fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1223,9 +1302,7 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() 
 
 #[test]
 fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1287,9 +1364,7 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
 
 #[test]
 fn add_submodule_supports_force_for_local_git_dir_collision() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1333,9 +1408,7 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
 
 #[test]
 fn remove_submodule_cleans_custom_logical_name_metadata() {
-    let Some(_guard) = require_git_shell_for_submodule_tests() else {
-        return;
-    };
+    let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1371,4 +1444,168 @@ fn remove_submodule_cleans_custom_logical_name_metadata() {
     assert_eq!(remove_output.exit_code, Some(0));
     assert!(local_submodule_config_entries(&parent_repo).is_empty());
     assert!(!parent_repo.join(".git/modules/custom").exists());
+}
+
+#[test]
+fn submodule_update_refuses_remote_helper_urls_from_gitmodules() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    add_submodule_raw(&parent_repo, &sub_repo, Path::new("mods/sub"), None);
+
+    // A URL the Add dialog refuses, reaching Git through .gitmodules instead.
+    fs::write(
+        parent_repo.join(".gitmodules"),
+        "[submodule \"mods/sub\"]\n\tpath = mods/sub\n\turl = hg::/tmp/gitcomet-pwned\n",
+    )
+    .expect("rewrite .gitmodules");
+    run_git(&parent_repo, &["add", ".gitmodules"]);
+    run_git(
+        &parent_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "hostile url"],
+    );
+    // A fresh clone has no local `submodule.<name>.url` and no module dir, so
+    // an update takes the URL straight from .gitmodules.
+    run_git(
+        &parent_repo,
+        &["submodule", "deinit", "-f", "--", "mods/sub"],
+    );
+    fs::remove_dir_all(parent_repo.join(".git/modules/mods")).expect("drop module dir");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let path = Path::new("mods/sub");
+    for (label, result) in [
+        (
+            "update",
+            opened.update_submodules_with_output(&[]).map(|_| ()),
+        ),
+        (
+            "load",
+            opened.load_submodule_with_output(path, &[]).map(|_| ()),
+        ),
+        (
+            "check update trust",
+            opened.check_submodule_update_trust().map(|_| ()),
+        ),
+        (
+            "check load trust",
+            opened.check_submodule_load_trust(path).map(|_| ()),
+        ),
+    ] {
+        let err = result.expect_err(label);
+        assert!(err.to_string().contains("remote-helper"), "{label}: {err}");
+    }
+}
+
+#[test]
+fn list_submodules_keeps_a_broken_submodules_own_row_and_prunes_only_its_children() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let grand = dir.path().join("grand");
+    let child = dir.path().join("child");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&grand).unwrap();
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&grand, "grand.txt", "grand\n", "seed grand");
+    init_repo_with_seed(&child, "child.txt", "child\n", "seed child");
+    init_repo_with_seed(&parent, "parent.txt", "parent\n", "seed parent");
+
+    add_submodule_raw(&child, &grand, Path::new("nested/grand"), None);
+    run_git(
+        &child,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add grand"],
+    );
+    add_submodule_raw(&parent, &child, Path::new("mods/child"), None);
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add child"],
+    );
+    run_git(
+        &parent,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        ],
+    );
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let healthy = repo.list_submodules().expect("list nested submodules");
+    assert_eq!(
+        healthy.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
+        vec![
+            PathBuf::from("mods/child"),
+            PathBuf::from("mods/child/nested/grand"),
+        ]
+    );
+
+    let checked_out_child = parent.join("mods/child");
+    let index = git_stdout(&checked_out_child, &["rev-parse", "--git-path", "index"]);
+    fs::write(
+        checked_out_child.join(index.trim()),
+        b"broken sibling index",
+    )
+    .unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let listed = repo
+        .list_submodules()
+        .expect("a broken nested index must not fail the whole enumeration");
+    assert_eq!(
+        listed.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
+        vec![PathBuf::from("mods/child")],
+        "the broken submodule keeps its own row; only its children are pruned"
+    );
+}
+
+#[test]
+fn checked_out_submodules_always_report_checkout_available() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&source, "file.txt", "hello\n", "seed");
+    init_repo_with_seed(&parent, "root.txt", "root\n", "root");
+    add_submodule_raw(&parent, &source, Path::new("plain"), None);
+    add_submodule_raw(&parent, &source, Path::new("moved"), Some("renamed"));
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "submodules"],
+    );
+    fs::write(parent.join("moved/file.txt"), "changed\n").unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let listed = repo.list_submodules().expect("list submodules");
+    assert_eq!(listed.len(), 2);
+    for submodule in &listed {
+        let summary = repo
+            .submodule_diff_summary(&DiffTarget::WorkingTree {
+                path: submodule.path.clone(),
+                area: DiffArea::Unstaged,
+            })
+            .expect("summarize a configured submodule");
+        assert_eq!(summary.status, Some(submodule.status));
+        assert!(
+            !matches!(
+                submodule.status,
+                SubmoduleStatus::UpToDate | SubmoduleStatus::HeadMismatch
+            ) || summary.checkout_available,
+            "{:?} reports {:?} but checkout_available is false",
+            submodule.path,
+            submodule.status
+        );
+    }
 }

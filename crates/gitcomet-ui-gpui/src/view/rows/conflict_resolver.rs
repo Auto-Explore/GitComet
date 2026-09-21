@@ -3,9 +3,10 @@ use super::super::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use super::conflict_canvas::{self, ConflictChunkContext};
 use super::diff_text::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
-const CONFLICT_ROW_FONT_SCALE: f32 = 0.80;
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 
 /// Resolved-output gutter geometry, in design units. `resolved_output_gutter_width`
@@ -178,48 +179,83 @@ fn conflict_display_text(
     }
 }
 
+const CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES: usize = 16_384;
+
+thread_local! {
+    /// Measured widths keyed by (text, font family, font size). The list
+    /// processors measure every visible row each frame to size the row, and
+    /// shaping a line just to read its width was the one uncached shape on
+    /// that path (the canvas shapes the same line again through
+    /// `CONFLICT_TEXT_LAYOUT_CACHE`).
+    static CONFLICT_ROW_WIDTH_CACHE: std::cell::RefCell<super::FxLruCache<u64, Pixels>> =
+        std::cell::RefCell::new(super::new_fx_lru_cache(CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES));
+}
+
 fn conflict_row_text_width(
+    theme: AppTheme,
     window: &mut Window,
     text: &SharedString,
     font_family: Option<&str>,
 ) -> Pixels {
+    use std::hash::{Hash as _, Hasher as _};
+
     if text.is_empty() {
         return px(0.0);
     }
 
     let mut style = window.text_style();
     style.font_weight = FontWeight::NORMAL;
-    if let Some(font_family) = font_family {
+    if let Some(font_family) = font_family
+        && style.font_family.as_ref() != font_family
+    {
         style.font_family = font_family.to_string().into();
     }
 
-    let font_size = style.font_size.to_pixels(window.rem_size()) * CONFLICT_ROW_FONT_SCALE;
-    if !text.as_ref().contains(['\n', '\r']) {
-        return window
-            .text_system()
-            .shape_line(text.clone(), font_size, &[style.to_run(text.len())], None)
-            .width;
+    let font_size = theme.editor_font_size(ui_scale::UiScale::from_window(window).percent());
+    let key = {
+        let mut hasher = FxHasher::default();
+        text.as_ref().hash(&mut hasher);
+        style.font_family.hash(&mut hasher);
+        f32::from(font_size).to_bits().hash(&mut hasher);
+        hasher.finish()
+    };
+    if let Some(width) =
+        CONFLICT_ROW_WIDTH_CACHE.with(|cache| cache.borrow_mut().get(&key).copied())
+    {
+        return width;
     }
 
-    text.as_ref()
-        .split(['\n', '\r'])
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            window
-                .text_system()
-                .shape_line(
-                    line.to_string().into(),
-                    font_size,
-                    &[style.to_run(line.len())],
-                    None,
-                )
-                .width
-        })
-        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(px(0.0))
+    let width = if !text.as_ref().contains(['\n', '\r']) {
+        window
+            .text_system()
+            .shape_line(text.clone(), font_size, &[style.to_run(text.len())], None)
+            .width
+    } else {
+        text.as_ref()
+            .split(['\n', '\r'])
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                window
+                    .text_system()
+                    .shape_line(
+                        line.to_string().into(),
+                        font_size,
+                        &[style.to_run(line.len())],
+                        None,
+                    )
+                    .width
+            })
+            .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(px(0.0))
+    };
+    CONFLICT_ROW_WIDTH_CACHE.with(|cache| {
+        cache.borrow_mut().put(key, width);
+    });
+    width
 }
 
 fn conflict_input_row_min_width(
+    theme: AppTheme,
     window: &mut Window,
     text: &SharedString,
     editor_font_family: &str,
@@ -229,18 +265,21 @@ fn conflict_input_row_min_width(
     let pad = window.rem_size() * 0.5;
     let gap = pad;
     let line_no_width = if show_line_numbers {
-        conflict_line_no_width(ui_scale_percent) + gap
+        conflict_line_no_width(
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+        ) + gap
     } else {
         px(0.0)
     };
     let row_extra = pad * 2.0 + line_no_width;
     (row_extra
-        + conflict_row_text_width(window, text, Some(editor_font_family))
+        + conflict_row_text_width(theme, window, text, Some(editor_font_family))
         + conflict_scaled_px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
     .round()
 }
 
 fn conflict_resolved_output_row_min_width(
+    theme: AppTheme,
     window: &mut Window,
     text: &SharedString,
     editor_font_family: &str,
@@ -249,7 +288,7 @@ fn conflict_resolved_output_row_min_width(
     let pad = window.rem_size() * 0.5;
     let row_extra = pad * 2.0;
     (row_extra
-        + conflict_row_text_width(window, text, Some(editor_font_family))
+        + conflict_row_text_width(theme, window, text, Some(editor_font_family))
         + conflict_scaled_px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
     .round()
 }
@@ -262,12 +301,17 @@ fn conflict_resolved_output_row_min_width(
 /// (the same way any editor's line-number gutter widens with the line total).
 pub(in crate::view) fn resolved_output_line_no_width(
     line_count: usize,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
     /// Design width of one line-number digit at the resolver's row font size.
     const DIGIT_WIDTH_PX: f32 = 8.0;
     let digits = line_count.max(1).to_string().len().max(2);
-    conflict_scaled_px(digits as f32 * DIGIT_WIDTH_PX, ui_scale_percent)
+    conflict_scaled_px(
+        digits as f32 * DIGIT_WIDTH_PX * scale.appearance.editor_font_size_px as f32 / 13.0,
+        ui_scale_percent,
+    )
 }
 
 /// Total width of the resolved-output gutter (marker lane + optional line-number
@@ -276,15 +320,17 @@ pub(in crate::view) fn resolved_output_line_no_width(
 pub(in crate::view) fn resolved_output_gutter_width(
     line_count: usize,
     show_line_numbers: bool,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
     let marker_and_badge = conflict_scaled_px(
         RESOLVED_OUTPUT_MARKER_LANE_PX + RESOLVED_OUTPUT_BADGE_PX + CONFLICT_ROW_PADDING_X_PX * 2.0,
         ui_scale_percent,
     );
     if show_line_numbers {
         marker_and_badge
-            + resolved_output_line_no_width(line_count, ui_scale_percent)
+            + resolved_output_line_no_width(line_count, scale)
             + conflict_scaled_px(RESOLVED_OUTPUT_LINE_NO_GAP_PX, ui_scale_percent)
     } else {
         marker_and_badge
@@ -353,6 +399,7 @@ fn render_conflict_markdown_preview_rows(
             text_region: DiffTextRegion::Inline,
             wrap_plan: None,
             image_base_dir: None,
+            remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
             query: this.markdown_preview_search_query(),
         },
     )
@@ -677,7 +724,7 @@ impl MainPaneView {
                     div()
                         .id((div_id_prefix, vi))
                         .w_full()
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .into_any_element(),
                 );
                 continue;
@@ -712,7 +759,7 @@ impl MainPaneView {
                         .id((div_id_prefix, vi))
                         .relative()
                         .w_full()
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .flex()
                         .items_center()
                         .bg(with_alpha(
@@ -737,18 +784,18 @@ impl MainPaneView {
                             },
                         )
                         .px_2()
-                        .text_xs()
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .text_color(theme.colors.foreground.secondary)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 // section 30: clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -914,6 +961,7 @@ impl MainPaneView {
                     let display_text = conflict_display_text(&line_text, styled, show_ws);
                     let show_line_numbers = this.mergetool_show_line_numbers;
                     let min_width = conflict_input_row_min_width(
+                        theme,
                         window,
                         &display_text,
                         editor_font_family.as_str(),
@@ -989,12 +1037,12 @@ impl MainPaneView {
                         .relative()
                         .w_full()
                         .min_w(min_width)
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_xs()
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .text_color(fg)
                         .whitespace_nowrap()
                         .bg(bg)
@@ -1073,7 +1121,7 @@ impl MainPaneView {
                         if !row_selection_enabled {
                             // When split-selection is available, the begin
                             // handler above already selects the block.
-                            cell = cell.on_mouse_down(
+                            cell = cell.on_pointer_click(
                                 MouseButton::Left,
                                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                     // section 30: clicking a conflict block body selects it.
@@ -1081,7 +1129,7 @@ impl MainPaneView {
                                 }),
                             );
                         }
-                        cell = cell.on_mouse_down(
+                        cell = cell.on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1118,7 +1166,7 @@ impl MainPaneView {
                             }),
                         );
                     } else if let Some(target_index) = semantic_nav_target {
-                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                        cell = cell.cursor(CursorStyle::PointingHand).on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 this.conflict_jump_to_nav_target(target_index, cx);
@@ -1209,8 +1257,8 @@ impl MainPaneView {
                 else {
                     return div()
                         .id((div_id_prefix, visible_row_ix))
-                        .h(conflict_row_height(ui_scale_percent))
-                        .text_xs()
+                        .h(theme.editor_row_height(ui_scale_percent))
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .text_color(theme.colors.foreground.secondary)
                         .child("")
                         .into_any_element();
@@ -1295,6 +1343,7 @@ impl MainPaneView {
                 let display_text = conflict_display_text(&text, styled, show_ws);
                 let show_line_numbers = this.mergetool_show_line_numbers;
                 let min_width = conflict_input_row_min_width(
+                    theme,
                     window,
                     &display_text,
                     editor_font_family.as_str(),
@@ -1349,12 +1398,12 @@ impl MainPaneView {
                     .relative()
                     .w_full()
                     .min_w(min_width)
-                    .h(conflict_row_height(ui_scale_percent))
+                    .h(theme.editor_row_height(ui_scale_percent))
                     .px_2()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_xs()
+                    .text_size(theme.editor_font_size(ui_scale_percent))
                     .bg(bg)
                     .text_color(fg)
                     .whitespace_nowrap()
@@ -1392,14 +1441,14 @@ impl MainPaneView {
                         this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                     let (line_label, line_target, chunk_label, chunk_target) =
                         two_way_split_input_row_menu_targets(row_ix, conflict_ix, side);
-                    cell = cell.on_mouse_down(
+                    cell = cell.on_pointer_click(
                         MouseButton::Left,
                         cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                             // section 30: clicking a conflict block body selects it.
                             this.conflict_resolver_select_conflict(conflict_ix, cx);
                         }),
                     );
-                    cell = cell.on_mouse_down(
+                    cell = cell.on_pointer_click(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
@@ -1508,7 +1557,7 @@ impl MainPaneView {
                     div()
                         .id((div_id_prefix, vi))
                         .w_full()
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .into_any_element(),
                 );
                 continue;
@@ -1543,7 +1592,7 @@ impl MainPaneView {
                         .id((div_id_prefix, vi))
                         .relative()
                         .w_full()
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .flex()
                         .items_center()
                         .bg(with_alpha(
@@ -1568,18 +1617,18 @@ impl MainPaneView {
                             },
                         )
                         .px_2()
-                        .text_xs()
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .text_color(theme.colors.foreground.secondary)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 // section 30: clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1720,6 +1769,7 @@ impl MainPaneView {
                     let display_text = conflict_display_text(&text, styled, show_ws);
                     let show_line_numbers = this.mergetool_show_line_numbers;
                     let min_width = conflict_input_row_min_width(
+                        theme,
                         window,
                         &display_text,
                         editor_font_family.as_str(),
@@ -1786,12 +1836,12 @@ impl MainPaneView {
                         .relative()
                         .w_full()
                         .min_w(min_width)
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_xs()
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .bg(bg)
                         .text_color(fg)
                         .whitespace_nowrap()
@@ -1866,7 +1916,7 @@ impl MainPaneView {
                                     },
                                 ));
                         } else {
-                            cell = cell.on_mouse_down(
+                            cell = cell.on_pointer_click(
                                 MouseButton::Left,
                                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                     // section 30: clicking a conflict block body selects it.
@@ -1874,7 +1924,7 @@ impl MainPaneView {
                                 }),
                             );
                         }
-                        cell = cell.on_mouse_down(
+                        cell = cell.on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1911,7 +1961,7 @@ impl MainPaneView {
                             }),
                         );
                     } else if let Some(target_index) = semantic_nav_target {
-                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                        cell = cell.cursor(CursorStyle::PointingHand).on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 this.conflict_jump_to_nav_target(target_index, cx);
@@ -1960,48 +2010,38 @@ impl MainPaneView {
                           from_top: bool,
                           cx: &mut gpui::Context<Self>| {
             let btn_size = conflict_scaled_px(CONFLICT_FOLD_REVEAL_BUTTON_PX, ui_scale_percent);
-            div()
-                .id((id_suffix, vi))
-                .w(btn_size)
-                .h(btn_size)
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |style| {
-                    style.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                        if output_pane {
-                            this.conflict_resolver_reveal_output_context_fold(
-                                fold_id, from_top, cx,
-                            );
-                        } else {
-                            this.conflict_resolver_reveal_context_fold(fold_id, from_top, cx);
-                        }
-                    }),
-                )
-                .child(svg_icon(
-                    icon,
-                    theme.colors.foreground.secondary,
-                    conflict_scaled_px(CONFLICT_FOLD_REVEAL_ICON_PX, ui_scale_percent),
-                ))
-                .gitcomet_tooltip(theme, tooltip.into())
+            components::inline_icon_button(
+                (id_suffix, vi),
+                theme,
+                btn_size,
+                icon,
+                conflict_scaled_px(CONFLICT_FOLD_REVEAL_ICON_PX, ui_scale_percent),
+                theme.colors.foreground.secondary,
+                true,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Nested,
+                cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
+                    if output_pane {
+                        this.conflict_resolver_reveal_output_context_fold(fold_id, from_top, cx);
+                    } else {
+                        this.conflict_resolver_reveal_context_fold(fold_id, from_top, cx);
+                    }
+                }),
+            )
+            .gitcomet_tooltip(theme, tooltip.into())
         };
         div()
             .id((id_prefix, vi))
             .w_full()
-            .h(conflict_row_height(ui_scale_percent))
+            .h(theme.editor_row_height(ui_scale_percent))
             .px_2()
             .flex()
             .items_center()
             .gap_2()
             .bg(fold_bg)
-            .text_xs()
+            .text_size(theme.editor_font_size(ui_scale_percent))
             .text_color(theme.colors.foreground.secondary)
             .child(
                 div()
@@ -2026,7 +2066,7 @@ impl MainPaneView {
             )
             .child(label)
             .cursor(CursorStyle::PointingHand)
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Left,
                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation();
@@ -2055,10 +2095,7 @@ impl MainPaneView {
         let line_count = this.conflict_resolved_preview_line_count;
         // Navigation centres the editable output on a row without a `cx` to hand,
         // so leave the height these rows actually lay out at where it can read it.
-        this.conflict_resolved_gutter_row_height = crate::ui_scale::design_px_from_percent(
-            crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX,
-            ui_scale_percent,
-        );
+        this.conflict_resolved_gutter_row_height = theme.editor_row_height(ui_scale_percent);
 
         if this.conflict_resolver.resolved_outline_gutter_rows.len() != line_count {
             let meta = &this.conflict_resolver.resolved_outline.meta;
@@ -2108,7 +2145,10 @@ impl MainPaneView {
         );
         // Line-number cell sized to this file's digit count so short numbers sit
         // snug against the marker lane; the gutter container width tracks it.
-        let line_no_w = resolved_output_line_no_width(line_count, ui_scale_percent);
+        let line_no_w = resolved_output_line_no_width(
+            line_count,
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+        );
         let elements: Vec<AnyElement> = range
             .map(|vi| {
                 // Collapsed context mode projects the output row space; map
@@ -2118,7 +2158,7 @@ impl MainPaneView {
                     Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. }) => {
                         return div()
                             .id(("conflict_resolved_preview_fold", vi))
-                            .h(conflict_row_height(ui_scale_percent))
+                            .h(theme.editor_row_height(ui_scale_percent))
                             .w_full()
                             .bg(fold_bg)
                             .into_any_element();
@@ -2126,9 +2166,9 @@ impl MainPaneView {
                     Some(conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(_)) | None => {
                         return div()
                             .id(("conflict_resolved_preview_oob", vi))
-                            .h(conflict_row_height(ui_scale_percent))
+                            .h(theme.editor_row_height(ui_scale_percent))
                             .px_2()
-                            .text_xs()
+                            .text_size(theme.editor_font_size(ui_scale_percent))
                             .text_color(theme.colors.foreground.secondary)
                             .child("")
                             .into_any_element();
@@ -2224,14 +2264,11 @@ impl MainPaneView {
                 let mut row = div()
                     .id(("conflict_resolved_preview_row", ix))
                     .relative()
-                    .h(crate::ui_scale::design_px_from_percent(
-                        crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX,
-                        ui_scale_percent,
-                    ))
+                    .h(theme.editor_row_height(ui_scale_percent))
                     .px_2()
                     .flex()
                     .items_center()
-                    .text_xs()
+                    .text_size(theme.editor_font_size(ui_scale_percent))
                     .font_family(editor_font_family.clone())
                     .text_color(theme.colors.foreground.primary)
                     // The active conflict's open row wears the same yellow wash
@@ -2339,7 +2376,7 @@ impl MainPaneView {
                         this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                     let context_menu_invoker: SharedString =
                         format!("resolver_output_chunk_menu_{}_{}", conflict_ix, ix).into();
-                    row = row.on_mouse_down(
+                    row = row.on_pointer_click(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
@@ -2401,6 +2438,7 @@ impl MainPaneView {
                     SharedString::new(line)
                 };
                 let min_width = conflict_resolved_output_row_min_width(
+                    theme,
                     window,
                     &line_text,
                     editor_font_family.as_str(),
@@ -2439,16 +2477,16 @@ impl MainPaneView {
                         .id(("conflict_resolved_output_row", ix))
                         .w_full()
                         .min_w(min_width)
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
-                        .text_xs()
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .font_family(editor_font_family.clone())
                         .text_color(text_color)
                         .whitespace_nowrap()
                         .when_some(row_bg, |d, bg| d.bg(bg))
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -2481,9 +2519,9 @@ impl MainPaneView {
                 elements.push(
                     div()
                         .id(("conflict_resolved_output_oob", ix))
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(theme.editor_row_height(ui_scale_percent))
                         .px_2()
-                        .text_xs()
+                        .text_size(theme.editor_font_size(ui_scale_percent))
                         .text_color(theme.colors.foreground.secondary)
                         .child("")
                         .into_any_element(),
@@ -2530,9 +2568,9 @@ impl MainPaneView {
                 else {
                     return div()
                         .id(("conflict_compare_split_visible_oob", visible_row_ix))
-                        .h(conflict_row_height(ui_scale_percent))
+                        .h(this.theme.editor_row_height(ui_scale_percent))
                         .px_2()
-                        .text_xs()
+                        .text_size(this.theme.editor_font_size(ui_scale_percent))
                         .text_color(this.theme.colors.foreground.secondary)
                         .child("")
                         .into_any_element();
@@ -2807,12 +2845,12 @@ impl MainPaneView {
             .id(("conflict_compare_split_ours", row_ix))
             .w(left_col_w)
             .min_w(px(0.0))
-            .h(conflict_row_height(ui_scale_percent))
+            .h(theme.editor_row_height(ui_scale_percent))
             .px_2()
             .flex()
             .items_center()
             .gap_2()
-            .text_xs()
+            .text_size(theme.editor_font_size(ui_scale_percent))
             .bg(left_bg)
             .text_color(left_fg)
             .whitespace_nowrap()
@@ -2835,12 +2873,12 @@ impl MainPaneView {
             .w(right_col_w)
             .flex_grow(1.)
             .min_w(px(0.0))
-            .h(conflict_row_height(ui_scale_percent))
+            .h(theme.editor_row_height(ui_scale_percent))
             .px_2()
             .flex()
             .items_center()
             .gap_2()
-            .text_xs()
+            .text_size(theme.editor_font_size(ui_scale_percent))
             .bg(right_bg)
             .text_color(right_fg)
             .whitespace_nowrap()
@@ -2887,7 +2925,9 @@ fn conflict_diff_line_number_cell(
     ui_scale_percent: u32,
 ) -> gpui::Div {
     div()
-        .w(conflict_line_no_width(ui_scale_percent))
+        .w(conflict_line_no_width(
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+        ))
         .h_full()
         .flex()
         .items_center()
@@ -3242,18 +3282,21 @@ mod tests {
         for percent in [80, 100, 150, 200] {
             let factor = percent as f32 / 100.0;
 
+            // The digit cell is measured at the editor font, so anchor on what
+            // it is at 100% rather than on one font size's number.
+            let digit_cell: f32 = resolved_output_line_no_width(1_234, 100).into();
             let digits: f32 = resolved_output_line_no_width(1_234, percent).into();
             assert!(
-                (digits - 4.0 * 8.0 * factor).abs() < 0.01,
+                (digits - digit_cell * factor).abs() < 0.01,
                 "a four-digit cell at {percent}% should be {}, got {digits}",
-                4.0 * 8.0 * factor,
+                digit_cell * factor,
             );
 
             let with_numbers: f32 = resolved_output_gutter_width(1_234, true, percent).into();
             let expected_with = (RESOLVED_OUTPUT_MARKER_LANE_PX
                 + RESOLVED_OUTPUT_BADGE_PX
                 + CONFLICT_ROW_PADDING_X_PX * 2.0
-                + 4.0 * 8.0
+                + digit_cell
                 + RESOLVED_OUTPUT_LINE_NO_GAP_PX)
                 * factor;
             assert!(

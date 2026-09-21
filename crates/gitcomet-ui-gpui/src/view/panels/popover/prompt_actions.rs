@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 impl PopoverHost {
     pub(in crate::view) fn popover_view(
@@ -10,7 +11,7 @@ impl PopoverHost {
         let theme = self.theme;
         let ui_scale = popover_ui_scale(cx);
         let ui_scale_percent = ui_scale.percent();
-        let scaled_px = |value: f32| popover_scaled_px(value, ui_scale);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
         let anchor_source = self
             .popover_anchor
             .clone()
@@ -56,6 +57,9 @@ impl PopoverHost {
             } => hook_activity::panel(self, repo_id, operation_id, window, cx),
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
+            PopoverKind::UpstreamPicker { repo_id, branch } => {
+                upstream_picker::panel(self, repo_id, branch, cx)
+            }
             PopoverKind::CreateBranchFromRefPrompt {
                 repo_id,
                 target,
@@ -80,6 +84,12 @@ impl PopoverHost {
                 remote,
                 branch,
             } => checkout_remote_branch_prompt::panel(self, repo_id, remote, branch, cx),
+            PopoverKind::BranchExistsPrompt {
+                repo_id,
+                name,
+                target,
+                operation,
+            } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {
@@ -114,6 +124,10 @@ impl PopoverHost {
                     }
                     RemotePopoverKind::Menu { name } => self.context_menu_view(
                         PopoverKind::remote(repo_id, RemotePopoverKind::Menu { name }),
+                        cx,
+                    ),
+                    RemotePopoverKind::OpenInBrowserMenu => self.context_menu_view(
+                        PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
                         cx,
                     ),
                 },
@@ -172,14 +186,19 @@ impl PopoverHost {
             PopoverKind::FileHistory { repo_id, path } => {
                 file_history::panel(self, repo_id, path, cx)
             }
-            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
-                push_set_upstream_prompt::panel(self, repo_id, remote, cx)
-            }
+            PopoverKind::PushSetUpstreamPrompt {
+                repo_id,
+                remote,
+                configure_only_for,
+            } => push_set_upstream_prompt::panel(self, repo_id, remote, configure_only_for, cx),
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
             }
             PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
                 cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
+            }
+            PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
+                revert_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
             PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
                 merge_commit_confirm::panel(self, repo_id, commit_id, cx)
@@ -222,9 +241,16 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
-            PopoverKind::WebLinkMenu { url } => {
-                self.context_menu_view(PopoverKind::WebLinkMenu { url }, cx)
-            }
+            PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            } => self.context_menu_view(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url,
+                },
+                cx,
+            ),
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,
@@ -240,15 +266,27 @@ impl PopoverHost {
             PopoverKind::MergetoolSettingsMenu => {
                 self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
             }
-            PopoverKind::TerminalMenu { repo_id, context } => {
-                self.context_menu_view(PopoverKind::TerminalMenu { repo_id, context }, cx)
-            }
+            PopoverKind::TerminalMenu {
+                repo_id,
+                session_seq,
+                context,
+            } => self.context_menu_view(
+                PopoverKind::TerminalMenu {
+                    repo_id,
+                    session_seq,
+                    context,
+                },
+                cx,
+            ),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }
             PopoverKind::HistoryAuthorFilter { repo_id } => author_filter::panel(self, repo_id, cx),
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
+            }
+            PopoverKind::CommitFileSortMenu { list } => {
+                self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
@@ -282,18 +320,6 @@ impl PopoverHost {
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
             }
-            PopoverKind::TagRefMenu {
-                repo_id,
-                commit_id,
-                name,
-            } => self.context_menu_view(
-                PopoverKind::TagRefMenu {
-                    repo_id,
-                    commit_id,
-                    name,
-                },
-                cx,
-            ),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 self.context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
             }
@@ -395,18 +421,9 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::BranchMenu {
-                repo_id,
-                section,
-                name,
-            } => self.context_menu_view(
-                PopoverKind::BranchMenu {
-                    repo_id,
-                    section,
-                    name,
-                },
-                cx,
-            ),
+            PopoverKind::BranchMenu { repo_id, target } => {
+                self.context_menu_view(PopoverKind::BranchMenu { repo_id, target }, cx)
+            }
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 self.context_menu_view(PopoverKind::BranchSectionMenu { repo_id, section }, cx)
             }
@@ -555,11 +572,11 @@ impl PopoverHost {
                         div()
                             .px_2()
                             .py_1()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .child("Reword commit message"),
                     )
-                    .child(div().border_t_1().border_color(theme.colors.stroke.default))
+                    .child(super::popover_rule(theme))
                     .child(
                         div()
                             .px_2()
@@ -570,7 +587,7 @@ impl PopoverHost {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Commit message"),
                             )
@@ -586,7 +603,7 @@ impl PopoverHost {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Description"),
                             )
@@ -605,20 +622,15 @@ impl PopoverHost {
                         div()
                             .px_2()
                             .pb_1()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child(
                                 "Clear the message and save to keep the original commit message.",
                             ),
                     )
-                    .child(div().border_t_1().border_color(theme.colors.stroke.default))
+                    .child(super::popover_rule(theme))
                     .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
+                        super::prompt_footer_row()
                             .child(
                                 components::Button::new("reword_cancel", "Cancel")
                                     .separated_end_slot(hotkey_hint(
@@ -627,14 +639,12 @@ impl PopoverHost {
                                         "Esc",
                                     ))
                                     .style(components::ButtonStyle::Outlined)
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(cancel),
+                                    .on_click_handler(theme, ui_scale_percent, cancel),
                             )
                             .child(
                                 components::Button::new(submit_button_id, "Save message")
                                     .style(components::ButtonStyle::Filled)
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(submit),
+                                    .on_click_handler(theme, ui_scale_percent, submit),
                             ),
                     )
             }
@@ -649,7 +659,7 @@ impl PopoverHost {
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
         let popover_border_color = theme.colors.stroke.default;
         let gap_y = if is_app_menu {
-            crate::view::chrome::title_bar_height(ui_scale_percent)
+            crate::view::chrome::TITLE_BAR_HEIGHT
         } else if anchor_is_bounds {
             px(1.0)
         } else if is_right {
@@ -702,6 +712,7 @@ impl PopoverHost {
                     .id("context_menu_scroll")
                     .min_h(px(0.0))
                     .max_h(max_panel_h)
+                    .track_scroll(&self.context_menu_scroll)
                     .overflow_y_scroll(),
             )
             .child(panel)
@@ -763,6 +774,7 @@ impl PopoverHost {
         if is_centered {
             let top_offset = scaled_px(80.0);
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                this.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
                 if !this.dismiss_hook_activity_workflow(window, cx) {
                     this.close_popover_and_restore_focus(window, cx);
                 }
@@ -783,7 +795,11 @@ impl PopoverHost {
                 .top_0()
                 .left_0()
                 .size_full()
-                .child(components::modal_scrim(theme).on_mouse_down(MouseButton::Left, scrim_close))
+                .child(
+                    components::modal_scrim(theme)
+                        .id("prompt_scrim")
+                        .on_pointer_click(MouseButton::Left, scrim_close),
+                )
                 .child(placement)
                 .into_any_element()
         } else {

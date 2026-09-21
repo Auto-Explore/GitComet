@@ -15,7 +15,7 @@ Windows prerequisites (Windows 10/11):
 - Install Visual Studio 2022 (Community or Build Tools).
 - Install the `Desktop development with C++` workload.
 - Ensure both MSVC tools and Windows 10/11 SDK components are installed.
-- This repo configures Cargo to use `scripts/windows/msvc-linker.cmd`, so `cargo build` works from a regular PowerShell/CMD shell when those components are present.
+- This repo configures Cargo to use `scripts/windows/msvc-linker.cmd` for x64 and ARM64 Windows builds. The wrapper uses the active Rust toolchain's bundled `rust-lld` linker and discovers the MSVC and Windows SDK libraries, so `cargo build` works from a regular PowerShell/CMD shell. No separate LLVM installation is needed; the Visual Studio components above are still required.
 
 Offline-friendly default build (does not build the UI or the Git backend):
 

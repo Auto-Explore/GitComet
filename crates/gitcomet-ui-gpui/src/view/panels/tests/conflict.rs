@@ -18,7 +18,7 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
     }
 
     let _trace = mergetool_trace::capture();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -219,7 +219,7 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
 fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -351,7 +351,7 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
 fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -531,7 +531,7 @@ fn raster_conflict_preview_uses_alpha_correct_oriented_render_images(
                 .is_some_and(|pixel| pixel == expected)
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -675,7 +675,7 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
         );
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -846,7 +846,7 @@ fn conflict_resolver_three_way_remote_horizontal_overflow_with_divergent_context
         );
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1062,7 +1062,7 @@ fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
 fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabled(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1226,7 +1226,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
 fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1501,7 +1501,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
 fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2247,7 +2247,7 @@ fn assert_streamed_whole_file_three_way_state(pane: &MainPaneView, line_count: u
 fn whole_file_conflict_bootstrap_streams_input_but_keeps_output_editable(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2335,7 +2335,7 @@ fn whole_file_conflict_bootstrap_streams_input_but_keeps_output_editable(
 fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2437,7 +2437,7 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
 fn whole_file_conflict_stage_anyway_serializes_the_materialized_output(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2521,7 +2521,7 @@ fn whole_file_conflict_stage_anyway_serializes_the_materialized_output(
 
 #[gpui::test]
 fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2574,7 +2574,7 @@ fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui:
 fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2743,7 +2743,7 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
 
 #[gpui::test]
 fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2870,7 +2870,7 @@ fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestA
 /// bootstrap diff/highlight work.
 #[gpui::test]
 fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3036,7 +3036,7 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
 fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3138,7 +3138,7 @@ fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
 /// before the prepared documents become available for rendering.
 #[gpui::test]
 fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3332,7 +3332,7 @@ fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui:
 
 #[gpui::test]
 fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3650,7 +3650,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
 fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflicts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3702,7 +3702,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
         },
     );
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
@@ -3751,7 +3751,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
 fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3849,7 +3849,7 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
         },
     );
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 let first_block = pane
@@ -3937,7 +3937,7 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
 fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4023,7 +4023,7 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
 #[ignore = "manual stress: 500k-line focused mergetool bootstrap"]
 #[gpui::test]
 fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4121,7 +4121,7 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
 fn large_conflict_bootstrap_populates_resolved_outline_in_background(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4226,7 +4226,7 @@ fn large_conflict_bootstrap_populates_resolved_outline_in_background(
 fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4328,7 +4328,7 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
 fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompute_is_pending(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4534,7 +4534,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
 /// should be accessible without materializing rows for earlier indices.
 #[gpui::test]
 fn giant_two_way_paged_provider_generates_rows_on_demand(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4617,7 +4617,7 @@ fn giant_two_way_paged_provider_generates_rows_on_demand(cx: &mut gpui::TestAppC
 /// large conflict block.
 #[gpui::test]
 fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4718,7 +4718,7 @@ fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestA
 fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4949,7 +4949,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
 fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5333,7 +5333,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5535,7 +5535,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
 ) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5745,7 +5745,7 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
 ) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -6116,7 +6116,7 @@ fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_outpu
 ) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -6320,7 +6320,7 @@ fn read_conflict_scroll_snapshot(
 /// input, wins the master election, and drags the others onto it.
 #[gpui::test]
 fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -6585,3 +6585,133 @@ use navigation_and_search::{
     assert_resolved_output_carries_treesitter_classes, other_dark_theme,
     resolved_output_placeholder_protected_ranges_for_test,
 };
+
+#[gpui::test]
+fn conflict_canvas_clicks_cannot_transfer_between_rows(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(173);
+    let path = std::path::PathBuf::from("conflict_clicks.txt");
+    let base = "ctx\nb1\nb2\nb3\ntail\n";
+    let ours = "ctx\no1\no2\no3\ntail\n";
+    let theirs = "ctx\nt1\nt2\nt3\ntail\n";
+    let current = "ctx\n<<<<<<< ours\no1\no2\no3\n=======\nt1\nt2\nt3\n>>>>>>> theirs\ntail\n";
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/conflict_completed_clicks"));
+    set_test_conflict_status(
+        &mut repo,
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    set_test_conflict_file(&mut repo, path.clone(), base, ours, theirs, current);
+    repo.conflict_state.conflict_file_load_mode = gitcomet_state::model::ConflictFileLoadMode::Full;
+    repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+        path.clone(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+        current,
+    ));
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_canvas_rows_enabled = true;
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+            });
+        })
+    });
+    cx.simulate_resize(gpui::size(px(1280.0), px(720.0)));
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "conflict canvas click fixture",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&path)
+                && pane.conflict_resolver.manual_alignment_enabled()
+                && pane
+                    .conflict_text_hitboxes
+                    .contains_key(&(2, ThreeWayColumn::Ours))
+        },
+        |pane| {
+            format!(
+                "path={:?} hitboxes={:?}",
+                pane.conflict_resolver.path,
+                pane.conflict_text_hitboxes.keys()
+            )
+        },
+    );
+    let [first, second] = cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        [1, 2].map(|row| {
+            pane.conflict_text_hitboxes[&(row, ThreeWayColumn::Ours)]
+                .bounds
+                .center()
+        })
+    });
+    let menu_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| view.read(app).popover_host.read(app).is_open())
+    };
+    cx.simulate_mouse_down(first, MouseButton::Right, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(!menu_open(cx), "a context menu waits for the release");
+    cx.simulate_mouse_move(second, Some(MouseButton::Right), Modifiers::default());
+    cx.simulate_mouse_up(second, MouseButton::Right, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        !menu_open(cx),
+        "a release on another row cannot open its menu"
+    );
+    cx.simulate_mouse_down(second, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(second, MouseButton::Right, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        menu_open(cx),
+        "the same row opens its menu on a completed click"
+    );
+    cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .clone()
+            .update(app, |host, cx| host.close_popover(cx))
+    });
+    draw_and_drain_test_window(cx);
+
+    let alt = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    let marked_columns = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolver_alignment_marked_columns()
+        })
+    };
+    cx.simulate_mouse_down(first, MouseButton::Left, alt);
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        marked_columns(cx),
+        0,
+        "alignment marking waits for the release"
+    );
+    cx.simulate_mouse_move(second, Some(MouseButton::Left), alt);
+    cx.simulate_mouse_up(second, MouseButton::Left, alt);
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        marked_columns(cx),
+        0,
+        "cancelled marking changes neither row"
+    );
+    cx.simulate_mouse_down(second, MouseButton::Left, alt);
+    cx.simulate_mouse_up(second, MouseButton::Left, alt);
+    draw_and_drain_test_window(cx);
+    assert_eq!(marked_columns(cx), 1, "a completed Alt-click marks the row");
+}

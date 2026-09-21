@@ -4,7 +4,7 @@ use super::*;
 fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -469,7 +469,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         );
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -599,7 +599,7 @@ index 1111111..2222222 100644
 fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -666,7 +666,7 @@ fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payloa
 
 #[gpui::test]
 fn replacing_file_image_diff_cache_releases_old_sprite_atlas_tiles(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -744,7 +744,7 @@ fn replacing_file_image_diff_cache_releases_old_sprite_atlas_tiles(cx: &mut gpui
 fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -825,7 +825,7 @@ fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshe
 fn file_image_diff_cache_keeps_distinct_valid_svg_sides_on_render_fast_path(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -882,7 +882,7 @@ fn file_image_diff_cache_keeps_distinct_valid_svg_sides_on_render_fast_path(
 fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -935,7 +935,7 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
 fn failed_raster_image_diff_cache_is_terminal_instead_of_processing_forever(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -976,7 +976,7 @@ fn failed_raster_image_diff_cache_is_terminal_instead_of_processing_forever(
 /// either diff mode, and the Image/Code toggle has to stay reachable.
 #[gpui::test]
 fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1056,7 +1056,7 @@ fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui:
 fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1259,7 +1259,7 @@ fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
 fn html_file_diff_renders_injected_attribute_syntax_from_real_documents(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1468,7 +1468,7 @@ fn html_file_diff_renders_injected_attribute_syntax_from_real_documents(
 
 #[gpui::test]
 fn xml_file_diff_renders_syntax_highlights_from_real_documents(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2093,7 +2093,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         }
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2104,12 +2104,8 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         std::process::id()
     ));
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
-    let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| fixture_git_show(&repo_root, spec, "YAML diff regression fixture");
-    let old_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
-    let new_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
+    let old_text = DEPLOYMENT_CI.old_text.to_owned();
+    let new_text = DEPLOYMENT_CI.new_text.to_owned();
 
     let baseline_path_line = 17u32;
     let affected_path_lines = [18u32, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33];
@@ -2932,7 +2928,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         })
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2944,13 +2940,8 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         std::process::id()
     ));
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
-    let repo_root = fixture_repo_root();
-    let git_show =
-        |spec: &str| fixture_git_show(&repo_root, spec, "YAML fallback prepared baseline fixture");
-    let old_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
-    let new_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
+    let old_text = DEPLOYMENT_CI.old_text.to_owned();
+    let new_text = DEPLOYMENT_CI.new_text.to_owned();
     let (old_shared_text, old_line_starts) = shared_text_and_line_starts(old_text.as_str());
     let (new_shared_text, new_line_starts) = shared_text_and_line_starts(new_text.as_str());
     let old_document = match rows::prepare_diff_syntax_document_with_budget_reuse_text(
@@ -3464,7 +3455,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
             .collect()
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3476,20 +3467,8 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
         std::process::id()
     ));
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
-    let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        fixture_git_show(
-            &repo_root,
-            spec,
-            "build-release YAML file-diff regression fixture",
-        )
-    };
-    let old_text = git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
-    );
-    let new_text = git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/build-release-artifacts.yml",
-    );
+    let old_text = BUILD_RELEASE_ARTIFACTS.old_text.to_owned();
+    let new_text = BUILD_RELEASE_ARTIFACTS.new_text.to_owned();
 
     let baseline_secret_key_line = 20u32;
     let affected_secret_key_lines = [22u32, 24, 26, 28, 30, 32];
@@ -4002,7 +3981,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         })
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4014,15 +3993,8 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         std::process::id()
     ));
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
-    let repo_root = fixture_repo_root();
-    let git_show =
-        |spec: &str| fixture_git_show(&repo_root, spec, "build-release prepared-baseline fixture");
-    let old_text = git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
-    );
-    let new_text = git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/build-release-artifacts.yml",
-    );
+    let old_text = BUILD_RELEASE_ARTIFACTS.old_text.to_owned();
+    let new_text = BUILD_RELEASE_ARTIFACTS.new_text.to_owned();
     let (old_shared_text, old_line_starts) = shared_text_and_line_starts(old_text.as_str());
     let (new_shared_text, new_line_starts) = shared_text_and_line_starts(new_text.as_str());
     let old_document = match rows::prepare_diff_syntax_document_with_budget_reuse_text(
@@ -4427,7 +4399,7 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
         )
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4440,9 +4412,7 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     ));
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
-    let patch_text =
-        std::fs::read_to_string(fixture_repo_root().join("test_data/commit-bd8b4a04.patch"))
-            .expect("read patch fixture");
+    let patch_text = COMMIT_PATCH.to_owned();
     let patch_target = DiffTarget::Commit {
         commit_id: commit_id.clone(),
         path: None,
@@ -4493,20 +4463,10 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
         },
     );
 
-    let repo_root = fixture_repo_root();
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
-    let git_show =
-        |spec: &str| fixture_git_show(&repo_root, spec, "patch->file YAML transition fixture");
-    let old_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
-    let new_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
-    let unified = fixture_git_diff(
-        &repo_root,
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml",
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml",
-        "patch->file YAML transition fixture",
-    );
+    let old_text = DEPLOYMENT_CI.old_text.to_owned();
+    let new_text = DEPLOYMENT_CI.new_text.to_owned();
+    let unified = DEPLOYMENT_CI.unified_diff().to_owned();
     let file_target = DiffTarget::Commit {
         commit_id,
         path: Some(path.clone()),
@@ -4849,7 +4809,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
             .collect()
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4861,14 +4821,6 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         std::process::id()
     ));
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
-    let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        fixture_git_show(
-            &repo_root,
-            spec,
-            "same-content YAML refresh regression fixture",
-        )
-    };
     fn append_yaml_padding(text: &str) -> String {
         use std::fmt::Write as _;
 
@@ -4887,12 +4839,8 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         out
     }
 
-    let old_text = append_yaml_padding(&git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
-    ));
-    let new_text = append_yaml_padding(&git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/build-release-artifacts.yml",
-    ));
+    let old_text = append_yaml_padding(BUILD_RELEASE_ARTIFACTS.old_text);
+    let new_text = append_yaml_padding(BUILD_RELEASE_ARTIFACTS.new_text);
     let affected_lines = [173u32, 175, 176, 183, 190, 193, 206, 212, 218, 221];
     let (new_shared_text, new_line_starts) = shared_text_and_line_starts(new_text.as_str());
     let new_document = match rows::prepare_diff_syntax_document_with_budget_reuse_text(
@@ -5350,7 +5298,7 @@ fn click_blame_toggle(cx: &mut gpui::VisualTestContext) {
 /// survive the toggle in both directions.
 #[gpui::test]
 fn blame_toggle_keeps_split_view(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5393,7 +5341,7 @@ fn blame_toggle_keeps_split_view(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn blame_toggle_keeps_inline_view(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5422,7 +5370,7 @@ fn blame_toggle_keeps_inline_view(cx: &mut gpui::TestAppContext) {
 /// Inline unnecessary in the first place.
 #[gpui::test]
 fn split_annotate_reserves_the_annotation_column(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5468,7 +5416,7 @@ fn split_annotate_reserves_the_annotation_column(cx: &mut gpui::TestAppContext) 
 /// against the same epochs, so a stale entry can paint the wrong row.
 #[gpui::test]
 fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5558,7 +5506,7 @@ fn assert_diff_search_scrolls_sideways(
         }
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

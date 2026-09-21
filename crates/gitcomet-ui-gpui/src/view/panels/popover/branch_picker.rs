@@ -133,6 +133,26 @@ fn branch_row(
     item.secondary_parts(metadata_parts(repo, lookup_name, now))
 }
 
+/// The canonical remote-branch row used by every picker that offers a remote
+/// tracking ref. Keeping this here makes the upstream picker inherit the exact
+/// icon, section header, two-line metadata, truncation and search behaviour of
+/// the Checkout Branch picker.
+pub(super) fn remote_branch_row(
+    repo: &RepoState,
+    display_name: String,
+    lookup_name: &str,
+    now: std::time::SystemTime,
+) -> components::PickerPromptItem {
+    branch_row(
+        repo,
+        display_name,
+        lookup_name,
+        "icons/cloud.svg",
+        REMOTE_SECTION,
+        now,
+    )
+}
+
 /// Rows for the checkout picker: local branches, remote branches, and a create
 /// row. Both the panel and keyboard navigation go through this, so the rendered
 /// list and the list Enter walks can never disagree.
@@ -186,14 +206,7 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
                 continue;
             }
             let display = format!("{}/{}", remote_branch.remote, remote_branch.name);
-            items.push(branch_row(
-                repo,
-                display.clone(),
-                &display,
-                "icons/cloud.svg",
-                REMOTE_SECTION,
-                now,
-            ));
+            items.push(remote_branch_row(repo, display.clone(), &display, now));
             rows.push(BranchPickerNavTarget::RemoteBranch {
                 remote: remote_branch.remote.clone(),
                 branch: remote_branch.name.clone(),
@@ -425,7 +438,8 @@ pub(super) fn cached(
         super::rows_cache::RowsCacheOwner::BranchCheckout,
         rows_signature(repo),
         query,
-    );
+    )
+    .with_query_dependent_model();
     super::rows_cache::get_or_build(&this.branch_picker_rows_cache, key, |now| {
         let built = rows(repo, query, now);
         (built.items, built.rows, built.marked_index)
@@ -475,6 +489,7 @@ pub(super) fn activate(
                 repo_id,
                 name,
                 target,
+                force: false,
             });
             this.close_popover(cx);
         }
@@ -485,7 +500,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let is_checkout = is_checkout_picker(this);
     let width = if is_checkout {
         super::LARGE_PICKER_WIDTH
@@ -517,8 +532,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex_col()
         .min_w(width.min_px(ui_scale))
         .max_w(width.max_px(ui_scale))
-        .child(popover_title(title))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default));
+        .child(popover_title(theme, title))
+        .child(super::popover_rule(theme));
 
     // The checkout picker renders sectioned, metadata-bearing rows and a create
     // row, so it drives PickerPrompt directly rather than through
@@ -647,9 +662,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                     ),
                             )
                             .tooltip_host(this.tooltip_host.clone())
-                            .render(theme, ui_scale_percent, cx)
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, window, cx| {
+                            .on_select(
+                                theme,
+                                ui_scale_percent,
+                                cx,
+                                move |this, _e, window, cx| {
                                     this.handle_inline_branch_picker_select(
                                         name.clone(),
                                         repo_id,
@@ -657,7 +674,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                         cx,
                                     );
                                 },
-                            )),
+                            ),
                         );
                     }
                 }
@@ -686,7 +703,7 @@ fn branch_picker_status_panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
     if let Some(search) = this.branch_picker_search_input.clone() {
         // No rows at all — this panel exists to say why, in the picker's own

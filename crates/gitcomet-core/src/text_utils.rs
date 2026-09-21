@@ -27,6 +27,33 @@ pub fn panic_payload_to_string(payload: &(dyn Any + Send), fallback: &str) -> St
 ///
 /// Used for shell command fragments such as `GIT_EDITOR` values, which git
 /// hands to `sh` on every platform.
+/// Mask credentials embedded in a URL's userinfo for display.
+///
+/// `scheme://user:secret@host/…` becomes `scheme://user:***@host/…`. For
+/// http(s), where a token is commonly the whole userinfo
+/// (`https://ghp_…@github.com`), the userinfo is masked entirely. Other
+/// schemes keep a bare username (`ssh://git@host`), and inputs without an
+/// authority — scp-like `git@host:path`, local paths — are returned as-is.
+/// Only display strings go through here; the URL git receives is untouched.
+pub fn redact_url_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..authority_end].rfind('@') else {
+        return url.to_string();
+    };
+    let userinfo = &rest[..at];
+    let masked = match userinfo.split_once(':') {
+        Some((user, _)) => format!("{user}:***"),
+        None if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => {
+            "***".to_string()
+        }
+        None => return url.to_string(),
+    };
+    format!("{scheme}://{masked}{}", &rest[at..])
+}
+
 pub fn shell_single_quote(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\"'\"'"))
 }
@@ -95,6 +122,21 @@ where
     if saw_cr { "\r" } else { "\n" }
 }
 
+/// `(CRLF count, total LF count)` of `text` in one scan; every LF is found
+/// with `memchr` and the byte before it decides whether it was a CRLF.
+pub fn count_line_feeds(text: &str) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let mut crlf = 0usize;
+    let mut lf = 0usize;
+    for position in memchr::memchr_iter(b'\n', bytes) {
+        lf += 1;
+        if position > 0 && bytes[position - 1] == b'\r' {
+            crlf += 1;
+        }
+    }
+    (crlf, lf)
+}
+
 fn detect_by_dominant_counts<'a, I>(texts: I) -> &'static str
 where
     I: IntoIterator<Item = &'a str>,
@@ -102,9 +144,9 @@ where
     let mut crlf_count = 0usize;
     let mut lf_only_count = 0usize;
     for text in texts {
-        let crlf = text.matches("\r\n").count();
+        let (crlf, lf) = count_line_feeds(text);
         crlf_count += crlf;
-        lf_only_count += text.matches('\n').count().saturating_sub(crlf);
+        lf_only_count += lf.saturating_sub(crlf);
     }
     if crlf_count > lf_only_count {
         "\r\n"
@@ -119,9 +161,11 @@ where
 /// ending for every line, so a mixed document cannot survive that round trip.
 /// Callers use this to keep the original bytes instead of normalizing them.
 pub fn text_has_mixed_line_endings(text: &str) -> bool {
-    let crlf = text.matches("\r\n").count();
-    let bare_lf = text.matches('\n').count().saturating_sub(crlf);
-    let bare_cr = text.matches('\r').count().saturating_sub(crlf);
+    let (crlf, lf) = count_line_feeds(text);
+    let bare_lf = lf.saturating_sub(crlf);
+    let bare_cr = memchr::memchr_iter(b'\r', text.as_bytes())
+        .count()
+        .saturating_sub(crlf);
     [crlf, bare_lf, bare_cr]
         .into_iter()
         .filter(|count| *count > 0)
@@ -791,6 +835,39 @@ pub(crate) fn delete_last_line(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redact_url_userinfo_masks_secrets_and_keeps_the_rest() {
+        use super::redact_url_userinfo;
+        assert_eq!(
+            redact_url_userinfo("https://user:s3cret@example.com/org/repo.git"),
+            "https://user:***@example.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_url_userinfo("https://ghp_token@github.com/org/repo.git"),
+            "https://***@github.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_url_userinfo("HTTP://user@example.com:8080/repo?x=a@b#f"),
+            "HTTP://***@example.com:8080/repo?x=a@b#f"
+        );
+        assert_eq!(
+            redact_url_userinfo("ssh://git@example.com/org/repo.git"),
+            "ssh://git@example.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_url_userinfo("ssh://git:pass@example.com/org/repo.git"),
+            "ssh://git:***@example.com/org/repo.git"
+        );
+        for untouched in [
+            "git@github.com:org/repo.git",
+            "/tmp/repo.git",
+            "https://example.com/repo?token=a@b",
+            "",
+        ] {
+            assert_eq!(redact_url_userinfo(untouched), untouched);
+        }
+    }
+
     use super::{LineEndingDetectionMode, chars_to_tokens, detect_line_ending_from_texts};
 
     #[test]

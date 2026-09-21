@@ -41,7 +41,7 @@ cargo clippy -p gitcomet --bin gitcomet -- -D warnings
 cargo fmt --all -- --check
 ```
 
-The cross-platform workflow repeats the portability regressions on Linux display profiles, Apple Silicon and Intel macOS, and x64 and ARM64 Windows. Platform CI proves compilation, path encoding, broker transport, and GPUI state transitions; it does not replace the native desktop checks below.
+The cross-platform workflow runs the full workspace suite, including these portability regressions, on Linux, Apple Silicon and Intel macOS, and x64 and ARM64 Windows. Separate Linux display-profile smoke tests cover display selection. Platform CI proves compilation, path encoding, broker transport, and GPUI state transitions; it does not replace the native desktop checks below.
 
 ## Manual fixture
 

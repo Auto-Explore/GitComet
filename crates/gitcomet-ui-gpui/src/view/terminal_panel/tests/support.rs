@@ -26,7 +26,7 @@ pub(super) fn test_root_view_with_active_repo(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<GitCometView>, RepoId, &mut gpui::VisualTestContext) {
     let repo_id = RepoId(1);
-    let (store, events) = AppStore::new(Arc::new(TerminalTestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TerminalTestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let state = Arc::new(AppState {
@@ -37,7 +37,7 @@ pub(super) fn test_root_view_with_active_repo(
             },
         )],
         active_repo: Some(repo_id),
-        ..AppState::default()
+        ..AppState::test_default()
     });
     cx.update(|_window, app| {
         view.update(app, |this, _cx| this.state = state);
@@ -52,8 +52,14 @@ pub(super) fn test_terminal_instance(
 ) -> TerminalInstance {
     let focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
     let viewport_focus = focus_handle.clone();
-    let viewport = cx.new(move |_cx| {
-        TerminalViewportView::with_backend(AppTheme::gitcomet_dark(), viewport_focus, None, None)
+    let viewport = cx.new(move |cx| {
+        TerminalViewportView::with_backend(
+            AppTheme::gitcomet_dark(),
+            viewport_focus,
+            None,
+            None,
+            cx,
+        )
     });
     TerminalInstance {
         focus_handle,

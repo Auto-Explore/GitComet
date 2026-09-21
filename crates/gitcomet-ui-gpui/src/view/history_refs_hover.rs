@@ -1,10 +1,16 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Rows in the refs hover card share the sidebar tree's row rhythm.
+const HISTORY_REFS_HOVER_ROW_HEIGHT_PX: f32 = 24.0;
+const HISTORY_REFS_HOVER_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+
 const HISTORY_REFS_HOVER_CLOSE_GRACE_MS: u64 = 120;
 const HISTORY_REFS_HOVER_OPEN_DELAY_MS: u64 = 160;
-const HISTORY_REFS_HOVER_WIDTH_PX: f32 = 220.0;
+const HISTORY_REFS_HOVER_WIDTH_PX: f32 = 240.0;
 const HISTORY_REFS_HOVER_MAX_HEIGHT_PX: f32 = 260.0;
 const HISTORY_REFS_HOVER_POINTER_INSET_PX: f32 = 16.0;
 pub(in crate::view) const HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX: &str = "history_refs_hover_menu_";
@@ -327,29 +333,11 @@ impl HistoryRefsHoverHost {
         commit_id: &CommitId,
         item: &HistoryRefListItem,
     ) -> Option<PopoverKind> {
-        match &item.kind {
-            HistoryRefListItemKind::Tag { name } => Some(PopoverKind::TagRefMenu {
-                repo_id,
-                commit_id: commit_id.clone(),
-                name: name.clone(),
-            }),
-            HistoryRefListItemKind::LocalBranch { name } => Some(PopoverKind::BranchMenu {
-                repo_id,
-                section: BranchSection::Local,
-                name: name.clone(),
-            }),
-            HistoryRefListItemKind::RemoteBranch { name } => Some(PopoverKind::BranchMenu {
-                repo_id,
-                section: BranchSection::Remote,
-                name: name.clone(),
-            }),
-            HistoryRefListItemKind::AttachedHead { branch } => Some(PopoverKind::BranchMenu {
-                repo_id,
-                section: BranchSection::Local,
-                name: branch.clone(),
-            }),
-            HistoryRefListItemKind::DetachedHead => None,
-        }
+        let _ = item;
+        Some(PopoverKind::CommitMenu {
+            repo_id,
+            commit_id: commit_id.clone(),
+        })
     }
 
     fn item_debug_selector(item: &HistoryRefListItem) -> String {
@@ -367,9 +355,20 @@ impl HistoryRefsHoverHost {
         match item.kind {
             HistoryRefListItemKind::Tag { .. } => "icons/tag.svg",
             HistoryRefListItemKind::LocalBranch { .. }
-            | HistoryRefListItemKind::RemoteBranch { .. }
-            | HistoryRefListItemKind::AttachedHead { .. } => "icons/git_branch.svg",
+            | HistoryRefListItemKind::AttachedHead { .. } => "icons/computer.svg",
+            HistoryRefListItemKind::RemoteBranch { .. } => "icons/cloud.svg",
             HistoryRefListItemKind::DetachedHead => "icons/question.svg",
+        }
+    }
+
+    fn item_icon_color(theme: AppTheme, kind: &HistoryRefListItemKind) -> gpui::Rgba {
+        match kind {
+            HistoryRefListItemKind::Tag { .. }
+            | HistoryRefListItemKind::LocalBranch { .. }
+            | HistoryRefListItemKind::AttachedHead { .. } => theme.colors.accent.foreground,
+            HistoryRefListItemKind::RemoteBranch { .. } | HistoryRefListItemKind::DetachedHead => {
+                theme.colors.foreground.secondary
+            }
         }
     }
 
@@ -407,9 +406,8 @@ impl HistoryRefsHoverHost {
         self.set_item_menu_open(true, cx);
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
             root.popover_host.update(cx, |host, cx| {
-                host.open_popover_at(kind, position, window, cx)
+                host.open_popover_at(kind.invoked_by(invoker), position, window, cx)
             });
             cx.notify();
         });
@@ -496,28 +494,27 @@ impl Render for HistoryRefsHoverHost {
         let items = state.items.iter().enumerate().map(|(ix, item)| {
             let item_for_right = item.clone();
             let label = item.text.shared().clone();
+            let tooltip = label.clone();
             let actionable =
                 Self::item_popover_kind(state.repo_id, &state.commit_id, item).is_some();
             let frozen = self.item_menu_open;
             let pinned = self.pinned_item_ix == Some(ix);
-            let debug_selector = Self::item_debug_selector(item);
             let icon = Self::item_icon(item);
-            let icon_color = match item.kind {
-                HistoryRefListItemKind::Tag { .. } => theme.colors.accent.foreground,
-                HistoryRefListItemKind::DetachedHead => theme.colors.foreground.secondary,
-                _ => theme.colors.foreground.secondary,
-            };
+            let icon_color = Self::item_icon_color(theme, &item.kind);
             div()
                 .id(("history_refs_hover_item", ix))
-                .debug_selector(move || debug_selector.clone())
-                .h(ui_scale.px(24.0))
+                .debug_selector(|| Self::item_debug_selector(item))
+                .h(ui_scale.row_height(
+                    HISTORY_REFS_HOVER_ROW_HEIGHT_PX,
+                    HISTORY_REFS_HOVER_ROW_COMFORTABLE_HEIGHT_PX,
+                ))
                 .w_full()
                 .min_w(px(0.0))
                 .px_2()
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .line_height(ui_scale.px(16.0))
                 .rounded(px(theme.radii.row))
                 .text_color(if actionable {
@@ -525,36 +522,11 @@ impl Render for HistoryRefsHoverHost {
                 } else {
                     theme.colors.foreground.secondary
                 })
-                .cursor(if actionable && !frozen {
-                    CursorStyle::PointingHand
-                } else {
-                    CursorStyle::Arrow
-                })
-                .when(pinned, |row| {
-                    row.bg(theme.colors.interaction.pressed_background)
-                })
-                .hover(move |row| {
-                    if pinned {
-                        row.bg(theme.colors.interaction.pressed_background)
-                    } else if frozen {
-                        row
-                    } else {
-                        // `theme.colors.interaction.hover_background` is nearly identical to the
-                        // elevated popover surface; use a text-tinted overlay
-                        // that reads clearly.
-                        row.bg(with_alpha(
-                            theme.colors.foreground.primary,
-                            if theme.is_dark { 0.08 } else { 0.05 },
-                        ))
-                    }
-                })
-                .active(move |row| {
-                    if pinned || !frozen {
-                        row.bg(theme.colors.interaction.pressed_background)
-                    } else {
-                        row
-                    }
-                })
+                .control_interaction(
+                    controls::InteractionStyle::new(theme).pointer_feedback(!frozen),
+                    controls::InteractionState::default()
+                        .selected(pinned, theme.colors.interaction.selected_background),
+                )
                 .child(svg_icon(icon, icon_color, ui_scale.px(12.0)))
                 .child(
                     div()
@@ -564,37 +536,42 @@ impl Render for HistoryRefsHoverHost {
                         .whitespace_nowrap()
                         .child(label),
                 )
+                .gitcomet_tooltip(theme, tooltip)
                 // `on_click`/`on_aux_click` rather than raw mouse-up: the panel
                 // shows on hover, so it can slide under a button that is
                 // already held, and gpui only fires these when the press
                 // landed on this row too.
-                .on_click(cx.listener({
-                    let commit_id = state.commit_id.clone();
-                    let item_for_left = item.clone();
-                    move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        if actionable {
-                            this.open_item_menu(
-                                state.repo_id,
-                                commit_id.clone(),
-                                ix,
-                                &item_for_left,
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                        } else {
-                            if this.item_menu_open {
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Composite,
+                    cx.listener({
+                        let commit_id = state.commit_id.clone();
+                        let item_for_left = item.clone();
+                        move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
                                 return;
                             }
-                            this.select_commit(state.repo_id, commit_id.clone(), cx);
-                            this.close(cx);
+                            cx.stop_propagation();
+                            if actionable {
+                                this.open_item_menu(
+                                    state.repo_id,
+                                    commit_id.clone(),
+                                    ix,
+                                    &item_for_left,
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                if this.item_menu_open {
+                                    return;
+                                }
+                                this.select_commit(state.repo_id, commit_id.clone(), cx);
+                                this.close(cx);
+                            }
                         }
-                    }
-                }))
+                    }),
+                )
                 .when(actionable, |row| {
                     row.on_aux_click(cx.listener({
                         let commit_id = state.commit_id.clone();
@@ -616,7 +593,7 @@ impl Render for HistoryRefsHoverHost {
                     }))
                 })
                 .when(!actionable, |row| {
-                    row.on_mouse_down(
+                    row.on_pointer_click(
                         MouseButton::Right,
                         cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
                             cx.stop_propagation();
@@ -701,6 +678,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_branch_computer_icons_match_the_sidebar_accent() {
+        let local = HistoryRefListItemKind::LocalBranch {
+            name: "main".to_string(),
+        };
+        let head = HistoryRefListItemKind::AttachedHead {
+            branch: "main".to_string(),
+        };
+        let remote = HistoryRefListItemKind::RemoteBranch {
+            name: "origin/main".to_string(),
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+        };
+
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            assert_eq!(
+                HistoryRefsHoverHost::item_icon_color(theme, &local),
+                theme.colors.accent.foreground
+            );
+            assert_eq!(
+                HistoryRefsHoverHost::item_icon_color(theme, &head),
+                theme.colors.accent.foreground
+            );
+            assert_eq!(
+                HistoryRefsHoverHost::item_icon_color(theme, &remote),
+                theme.colors.foreground.secondary
+            );
+        }
+    }
+
+    #[test]
     fn history_refs_hover_layout_clamps_right_and_chooses_above_near_bottom() {
         let layout = history_refs_hover_layout(
             Bounds::new(point(px(280.0), px(150.0)), size(px(20.0), px(16.0))),
@@ -714,8 +721,8 @@ mod tests {
         );
 
         assert!(matches!(layout.anchor_corner, Anchor::BottomLeft));
-        assert_eq!(layout.panel_w, px(220.0));
-        assert_eq!(layout.anchor.x, px(72.0));
+        assert_eq!(layout.panel_w, px(240.0));
+        assert_eq!(layout.anchor.x, px(52.0));
         assert_eq!(layout.anchor.y, px(150.0));
         assert_eq!(layout.max_panel_h, px(142.0));
         assert!(layout.anchor.x + layout.panel_w <= px(292.0));

@@ -69,13 +69,6 @@ fn wrapper_apis_return_defaults_without_session_path() {
     assert_eq!(session::load_repo_history_scope(repo), None);
     assert!(session::load_repo_history_scopes().is_empty());
     assert!(session::persist_repo_history_scope(repo, LogScope::CurrentBranch).is_ok());
-
-    assert_eq!(
-        session::load_repo_fetch_prune_deleted_remote_tracking_branches(repo),
-        None
-    );
-    assert!(session::load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo().is_empty());
-    assert!(session::persist_repo_fetch_prune_deleted_remote_tracking_branches(repo, true).is_ok());
 }
 
 #[test]
@@ -123,18 +116,6 @@ fn wrapper_apis_use_session_file_env_when_set() {
     assert_eq!(
         scopes.get(&repo.to_string_lossy().to_string()),
         Some(&LogScope::CurrentBranch)
-    );
-
-    session::persist_repo_fetch_prune_deleted_remote_tracking_branches(repo, false)
-        .expect("persist fetch-prune through wrapper");
-    assert_eq!(
-        session::load_repo_fetch_prune_deleted_remote_tracking_branches(repo),
-        Some(false)
-    );
-    let by_repo = session::load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo();
-    assert_eq!(
-        by_repo.get(&repo.to_string_lossy().to_string()),
-        Some(&false)
     );
 }
 
@@ -705,63 +686,44 @@ fn legacy_history_scope_current_branch_maps_to_first_parent_mode() {
     );
 }
 
+/// `UiSettings` is a struct literal, so a missing field is a compile error —
+/// but the `apply_setting!` line that actually writes it is not. Without this
+/// the layout preference would work all session and silently never persist.
 #[test]
-fn fetch_prune_round_trips_for_individual_and_bulk_loaders() {
-    let dir = unique_temp_dir("fetch-prune");
+fn file_list_layout_round_trips_through_persist_and_load() {
+    let dir = unique_temp_dir("file-list-layout");
     let session_file = dir.join("session.json");
-    let repo_a = dir.join("repo-a");
-    let repo_b = dir.join("repo-b");
 
-    session::persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
-        &repo_a,
-        true,
+    write_session_json(
+        &session_file,
+        json!({ "version": 3, "open_repos": [], "active_repo": null }),
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            file_list_layout: Some("tree".to_string()),
+            ..Default::default()
+        },
         &session_file,
     )
-    .expect("persist repo_a setting");
-    session::persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
-        &repo_b,
-        false,
+    .expect("persist file_list_layout");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.file_list_layout.as_deref(), Some("tree"));
+
+    // A `None` field leaves the stored value alone.
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("light".to_string()),
+            ..Default::default()
+        },
         &session_file,
     )
-    .expect("persist repo_b setting");
-
+    .expect("persist an unrelated field");
     assert_eq!(
-        session::load_repo_fetch_prune_deleted_remote_tracking_branches_from_path(
-            &repo_a,
-            &session_file,
-        ),
-        Some(true)
+        session::load_from_path(&session_file)
+            .file_list_layout
+            .as_deref(),
+        Some("tree")
     );
-    assert_eq!(
-        session::load_repo_fetch_prune_deleted_remote_tracking_branches_from_path(
-            &repo_b,
-            &session_file,
-        ),
-        Some(false)
-    );
-    assert_eq!(
-        session::load_repo_fetch_prune_deleted_remote_tracking_branches_from_path(
-            Path::new("/tmp/missing"),
-            &session_file,
-        ),
-        None
-    );
-
-    let by_repo = session::load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo_from_path(
-        &session_file,
-    );
-    assert_eq!(by_repo.len(), 2);
-    assert_eq!(
-        by_repo.get(&repo_a.to_string_lossy().to_string()),
-        Some(&true)
-    );
-    assert_eq!(
-        by_repo.get(&repo_b.to_string_lossy().to_string()),
-        Some(&false)
-    );
-
-    let missing = session::load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo_from_path(
-        &dir.join("does-not-exist.json"),
-    );
-    assert!(missing.is_empty());
 }

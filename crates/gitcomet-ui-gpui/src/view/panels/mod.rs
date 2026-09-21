@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
@@ -11,6 +12,8 @@ pub(in crate::view) enum AppMenuAction {
     /// variant here, whether it can run is carried by the menu item's own
     /// `disabled` flag rather than duplicated in the payload.
     LocateFileInExplorer,
+    /// Open the active repository's remote in the browser, or its picker.
+    OpenRemoteInBrowser,
     Settings,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
@@ -18,6 +21,7 @@ pub(in crate::view) enum AppMenuAction {
     ApplyPatch {
         repo_id: Option<RepoId>,
     },
+    CheckForUpdates,
     /// Show the reflog panel for the active repository, in the bottom panel.
     ShowReflog {
         repo_id: Option<RepoId>,
@@ -35,8 +39,17 @@ pub(in crate::view) enum AddRepoMenuAction {
     Initialize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::view) enum HistoryMenuRef {
+    Branch(BranchMenuTarget),
+    Tag(String),
+}
+
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    ToggleHistoryRefGroup {
+        target: HistoryMenuRef,
+    },
     AppMenu(AppMenuAction),
     AddRepoMenu(AddRepoMenuAction),
     SelectDiff {
@@ -137,6 +150,21 @@ pub(in crate::view) enum ContextMenuAction {
     RevealHistoryCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    ShowFileChangesAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    OpenFileAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
     },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
@@ -241,6 +269,10 @@ pub(in crate::view) enum ContextMenuAction {
     SetHistoryScope {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
+    },
+    SetCommitFileSort {
+        list: crate::view::rows::FileListId,
+        sort: crate::view::rows::CommitFileSort,
     },
     SetDiffContentMode {
         mode: DiffContentMode,
@@ -348,13 +380,17 @@ pub(in crate::view) enum ContextMenuAction {
         index: usize,
         message: String,
     },
+    PushWithTags {
+        repo_id: RepoId,
+        mode: gitcomet_core::tag_push::TagPushMode,
+    },
     Push {
         repo_id: RepoId,
     },
     SetUpstreamBranch {
         repo_id: RepoId,
         branch: String,
-        upstream: String,
+        upstream: Upstream,
     },
     UnsetUpstreamBranch {
         repo_id: RepoId,
@@ -421,6 +457,11 @@ pub(in crate::view) enum ContextMenuAction {
     CopyLinkAddress {
         url: String,
     },
+    /// Approve one repository-controlled remote image in the current Markdown
+    /// preview. The pane re-checks that Ask mode is still active when invoked.
+    LoadRemoteMarkdownImage {
+        url: SharedString,
+    },
     OpenWebUrl {
         url: String,
     },
@@ -431,20 +472,14 @@ pub(in crate::view) enum ContextMenuAction {
         visible_ix: usize,
         region: DiffTextRegion,
     },
-    TerminalCopy {
+    TerminalCommand {
         repo_id: RepoId,
-    },
-    TerminalPaste {
-        repo_id: RepoId,
-    },
-    TerminalSelectAll {
-        repo_id: RepoId,
-    },
-    TerminalClear {
-        repo_id: RepoId,
+        session_seq: u64,
+        command: terminal_panel::TerminalCommand,
     },
     TerminalOpenExternal {
         repo_id: RepoId,
+        session_seq: u64,
     },
     ApplyIndexPatch {
         repo_id: RepoId,
@@ -608,11 +643,13 @@ mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::{ActionBarView, action_bar_height};
+pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
 pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
-pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
+pub(in crate::view) use popover::{
+    benchmark_branch_checkout_rows, benchmark_file_history_rows, benchmark_workspace_rows,
+};
 /// Layout guards outside this module assert against the tab padding, so they
 /// follow the constant instead of hardcoding the current value.
 #[cfg(test)]

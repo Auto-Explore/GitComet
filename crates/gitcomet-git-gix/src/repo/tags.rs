@@ -1,4 +1,4 @@
-use super::GixRepo;
+use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
     git_workdir_cmd_for, run_git_capture, run_git_capture_cancellable, run_git_with_output,
     validate_ref_like_arg,
@@ -34,7 +34,7 @@ fn parse_ls_remote_tags(output: &str, remote_name: &str) -> Vec<RemoteTag> {
             Some(RemoteTag {
                 remote: remote_name.to_string(),
                 name: name.to_string(),
-                target: CommitId(object.to_string().into()),
+                target: CommitId(object.into()),
             })
         })
         .collect()
@@ -69,7 +69,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<Tag>> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
 
         let refs = repo
             .references()
@@ -81,18 +81,18 @@ impl GixRepo {
             .peeled()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
 
-        let mut tags = Vec::new();
+        let mut tags = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
             cancellation.check_cancelled()?;
             let reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let name = reference.name().shorten().to_str_lossy().into_owned();
-            let target = CommitId(reference.id().detach().to_string().into());
+            let target = CommitId(oid_to_arc_str(&reference.id()));
             tags.push(Tag { name, target });
         }
 
         cancellation.check_cancelled()?;
-        tags.sort_by(|a, b| a.name.cmp(&b.name));
+        tags.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         Ok(tags)
     }
 
@@ -160,7 +160,7 @@ impl GixRepo {
         if cancelled {
             return Err(Error::new(ErrorKind::Cancelled));
         }
-        remote_tags.sort_by(|a, b| {
+        remote_tags.sort_unstable_by(|a, b| {
             a.remote
                 .cmp(&b.remote)
                 .then_with(|| a.name.cmp(&b.name))
@@ -201,7 +201,7 @@ impl GixRepo {
     pub(super) fn delete_tag_with_output_impl(&self, name: &str) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "tag name")?;
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         delete_local_tag(&repo, name)?;
         Ok(CommandOutput::empty_success(format!("git tag -d {name}")))
     }

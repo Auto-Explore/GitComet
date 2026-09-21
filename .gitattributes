@@ -14,6 +14,7 @@
 *.html      text eol=lf
 *.css       text eol=lf
 *.txt       text eol=lf
+*.patch     text eol=lf
 .gitignore  text eol=lf
 .gitattributes text eol=lf
 CONTRIBUTING.md text eol=lf

@@ -7,9 +7,6 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::process::{
-    GitExecutablePreference, current_git_executable_preference, install_git_executable_preference,
-};
 use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result};
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::fs;
@@ -60,48 +57,6 @@ fn run_git(repo: &Path, args: &[&str]) {
     assert!(status.success(), "git {:?} failed", args);
 }
 
-#[cfg(windows)]
-fn is_git_shell_startup_failure(text: &str) -> bool {
-    text.contains("sh.exe: *** fatal error -")
-        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-}
-
-#[cfg(windows)]
-fn git_shell_available_for_store_tests() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git")
-            .args(["difftool", "--tool-help"])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return true,
-        };
-        if output.status.success() {
-            return true;
-        }
-        let stdout =
-            String::from_utf8(output.stdout).unwrap_or_else(|_| "<non-utf8 stdout>".to_string());
-        let stderr =
-            String::from_utf8(output.stderr).unwrap_or_else(|_| "<non-utf8 stderr>".to_string());
-        let text = format!("{}{}", stdout, stderr);
-        !is_git_shell_startup_failure(&text)
-    })
-}
-
-fn require_git_shell_for_store_tests() -> bool {
-    #[cfg(windows)]
-    {
-        if !git_shell_available_for_store_tests() {
-            eprintln!(
-                "skipping store integration test: Git-for-Windows shell startup failed in this environment"
-            );
-            return false;
-        }
-    }
-    true
-}
-
 fn wait_for_state_changed(event_rx: &smol::channel::Receiver<StoreEvent>) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -126,70 +81,6 @@ pub(crate) fn staged_auth_test_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-}
-
-fn git_runtime_store_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
-struct GitRuntimePreferenceResetGuard {
-    original: GitExecutablePreference,
-}
-
-impl GitRuntimePreferenceResetGuard {
-    fn install(preference: GitExecutablePreference) -> Self {
-        let original = current_git_executable_preference();
-        let _ = install_git_executable_preference(preference);
-        Self { original }
-    }
-}
-
-impl Drop for GitRuntimePreferenceResetGuard {
-    fn drop(&mut self) {
-        let _ = install_git_executable_preference(self.original.clone());
-    }
-}
-
-#[cfg(unix)]
-fn write_git_runtime_probe_script(script_path: &Path, probe_log: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::write(
-        script_path,
-        format!(
-            "#!/bin/sh\nprintf 'probe\\n' >> '{}'\nprintf 'git version 9.9.9-test\\n'\n",
-            probe_log.display()
-        ),
-    )
-    .expect("write git runtime probe script");
-    let mut permissions = fs::metadata(script_path)
-        .expect("git runtime probe script metadata")
-        .permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(script_path, permissions)
-        .expect("set git runtime probe script permissions");
-}
-
-#[cfg(windows)]
-fn write_git_runtime_probe_script(script_path: &Path, probe_log: &Path) {
-    fs::write(
-        script_path,
-        format!(
-            "@echo off\r\necho probe>>\"{}\"\r\necho git version 9.9.9-test\r\n",
-            probe_log.display()
-        ),
-    )
-    .expect("write git runtime probe script");
-}
-
-fn git_runtime_probe_count(probe_log: &Path) -> usize {
-    fs::read_to_string(probe_log)
-        .unwrap_or_default()
-        .lines()
-        .count()
 }
 
 fn has_worktree_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
@@ -228,7 +119,7 @@ fn has_status_refresh_effects(effects: &[Effect], repo_id: RepoId) -> bool {
 #[test]
 fn app_store_clone_dispatches_restore_and_close_paths() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
     let cloned = store.clone();
 
     cloned.dispatch(Msg::RestoreSession {
@@ -248,44 +139,9 @@ fn app_store_clone_dispatches_restore_and_close_paths() {
 }
 
 #[test]
-fn app_store_dispatch_does_not_reprobe_git_runtime_for_git_messages() {
-    let _lock = git_runtime_store_test_lock();
-    let temp = tempfile::tempdir().expect("create tempdir for git runtime probe");
-    let probe_log = temp.path().join("git-runtime-probes.log");
-    #[cfg(unix)]
-    let script_path = temp.path().join("git");
-    #[cfg(windows)]
-    let script_path = temp.path().join("git.cmd");
-    write_git_runtime_probe_script(&script_path, &probe_log);
-
-    let _restore =
-        GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(script_path));
-    let initial_probe_count = git_runtime_probe_count(&probe_log);
-
-    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, _event_rx) = AppStore::new(backend);
-
-    assert_eq!(
-        git_runtime_probe_count(&probe_log),
-        initial_probe_count,
-        "creating the store should reuse the installed runtime state without probing again"
-    );
-
-    store.dispatch(Msg::ReloadRepo {
-        repo_id: RepoId(999),
-    });
-
-    assert_eq!(
-        git_runtime_probe_count(&probe_log),
-        initial_probe_count,
-        "dispatch should not re-run `git --version` for regular Git-backed messages"
-    );
-}
-
-#[test]
 fn app_store_open_repo_effect_propagates_open_error_into_state() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
 
     let base = std::env::temp_dir().join(format!(
         "gitcomet-store-open-repo-{}-{}",
@@ -327,12 +183,15 @@ fn app_store_open_repo_effect_propagates_open_error_into_state() {
 
 mod actions_emit_effects;
 mod auth_prompt;
+mod commit_signatures;
 mod conflict_session;
 mod conflict_telemetry;
 mod diff_selection;
 mod effects;
 mod external_and_history;
+mod file_browser_follow;
 mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;
 mod send_failures;
+mod worktree_redirect;

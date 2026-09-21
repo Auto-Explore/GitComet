@@ -24,6 +24,38 @@ fn mergetool_settings_menu_is_wider_than_diff_actions() {
     assert!(mergetool.min_px(scale) > diff_actions.min_px(scale));
 }
 
+/// The sort menu's labels name both the key and the direction ("File type:
+/// Descending"), which does not fit the narrow bucket it used to share with the
+/// icon-and-a-word menus -- it ellipsised the longest option.
+#[test]
+fn sort_menu_is_wider_than_the_narrow_menus_it_used_to_share() {
+    let scale = ui_scale::UiScale::from_percent(100);
+    let sort = popover_width_spec(&PopoverKind::CommitFileSortMenu {
+        list: crate::view::rows::FileListId::CommitFiles,
+    })
+    .expect("sort menu width");
+    let narrow = popover_width_spec(&PopoverKind::DiffContentModeSettings)
+        .expect("a still-narrow menu for contrast");
+
+    assert!(sort.preferred_px(scale) > narrow.preferred_px(scale));
+    assert!(sort.max_px(scale) > narrow.max_px(scale));
+
+    // Padding, the check-mark column and its gap, and the trailing gap the row
+    // spends before its (empty) end slot -- see `components::context_menu`.
+    const ROW_CHROME_PX: f32 = 8.0 + 16.0 + 8.0 + 8.0 + 20.0;
+    // The header-row budget's per-character estimate, reused here.
+    const CHAR_PX: f32 = 5.2;
+    let longest = crate::view::rows::CommitFileSort::ALL
+        .into_iter()
+        .map(|sort| sort.label().chars().count())
+        .max()
+        .expect("at least one sort");
+    assert!(
+        sort.min_px(scale) >= px(ROW_CHROME_PX + CHAR_PX * longest as f32),
+        "the longest label must fit without ellipsis at the menu's narrowest",
+    );
+}
+
 #[test]
 fn repository_tab_menu_has_dedicated_wider_layout() {
     let scale = ui_scale::UiScale::from_percent(100);
@@ -46,6 +78,21 @@ fn application_menu_is_wide_enough_for_editor_action_and_shortcut() {
 }
 
 #[test]
+fn branch_exists_prompt_uses_the_wide_dialog_layout() {
+    let scale = ui_scale::UiScale::from_percent(100);
+    let dialog = popover_width_spec(&PopoverKind::BranchExistsPrompt {
+        repo_id: RepoId(1),
+        name: "feature".to_string(),
+        target: "origin/a-long-feature-branch".to_string(),
+        operation: BranchExistsPromptOperation::CreateBranch,
+    })
+    .expect("branch-exists dialog width");
+
+    assert_eq!(dialog.preferred_px(scale), px(540.0));
+    assert_eq!(dialog.min_px(scale), px(540.0));
+}
+
+#[test]
 fn choose_popover_anchor_corner_prefers_side_with_more_space() {
     assert_eq!(
         choose_popover_anchor_corner(Anchor::TopRight, px(260.0), px(640.0), px(420.0),),
@@ -60,7 +107,7 @@ fn choose_popover_anchor_corner_prefers_side_with_more_space() {
 #[gpui::test]
 fn reword_dialog_with_long_squash_message_stays_within_viewport(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

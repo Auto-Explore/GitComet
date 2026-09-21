@@ -6,7 +6,7 @@ use crate::view::panes::main::DiffWrapVisualRow;
 fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -127,7 +127,7 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
 fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -248,7 +248,7 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 #[gpui::test]
 fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -335,7 +335,7 @@ fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppC
 fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -445,7 +445,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
     cx: &mut gpui::TestAppContext,
 ) {
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -568,7 +568,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
 #[gpui::test]
 fn split_markdown_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -779,7 +779,7 @@ fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -811,7 +811,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -848,7 +848,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
 fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1004,7 +1004,7 @@ fn a_document_past_the_render_budget_falls_back_to_source(cx: &mut gpui::TestApp
     // parsed, it is only too big to lay out at once. Leaving the reader on an
     // empty pane with a message and a toggle to find would be worse than
     // showing them the source.
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1084,7 +1084,7 @@ fn the_renderer_refuses_a_document_past_its_budget(cx: &mut gpui::TestAppContext
     // hands the renderer an unbounded document still must not make the pane lay
     // one out. Injecting the document directly is exactly that caller.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1119,7 +1119,7 @@ fn the_renderer_refuses_a_document_past_its_budget(cx: &mut gpui::TestAppContext
 fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1205,7 +1205,7 @@ fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
 fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1305,7 +1305,7 @@ fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
 #[gpui::test]
 fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1422,7 +1422,7 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
 fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1496,7 +1496,7 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
 fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1601,7 +1601,7 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
 fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1771,7 +1771,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
 fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1938,7 +1938,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 ) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2249,7 +2249,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 #[gpui::test]
 fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2608,7 +2608,7 @@ fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestApp
     // gate reading the wrong coordinate space would reject visible rows and
     // silently stop selection working in any scrolled preview.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2685,7 +2685,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
     // picture stopping propagation the click opens the menu *and* starts a
     // drag-selection behind it.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2730,7 +2730,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
             assert!(
                 matches!(
                     popover,
-                    Some(PopoverKind::WebLinkMenu { ref url })
+                    Some(PopoverKind::WebLinkMenu { ref url, .. })
                         if url.as_ref() == "https://example.com/badge"
                 ),
                 "clicking a badge opens its link menu, got {popover:?}"
@@ -2746,13 +2746,159 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    // Keep two pictures in one paragraph so both remain inline and wrapped in
+    // their respective links.
+    let first_image_url = "https://images.example.invalid/one.svg";
+    let second_image_url = "https://images.example.invalid/two.svg";
+    let source = format!(
+        "[![one]({first_image_url})](https://example.com/one) \
+         [![two]({second_image_url})](https://example.com/two)\n"
+    );
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(108),
+        "markdown_linked_remote_image_approval",
+        &source,
+    );
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a linked picture");
+    let retry = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{source_byte}"
+        )))
+        .expect("Ask mode draws the linked image's Retry control");
+
+    // The linked image is one action: its completed click opens a menu with
+    // navigation and image approval; the retry icon is part of that action.
+    simulate_counted_click(cx, retry.center(), 1);
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu {
+                ref url,
+                load_remote_image_url: Some(ref image_url),
+            }) if url.as_ref() == "https://example.com/one"
+                && image_url.as_ref() == first_image_url
+        ));
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let load_image = cx
+        .debug_bounds("context_menu_load_image")
+        .expect("a linked blocked image menu offers Load image")
+        .center();
+    cx.simulate_mouse_move(load_image, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        load_image,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: load_image,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.read(app);
+        assert_eq!(main_pane.approved_remote_markdown_image_urls.len(), 1);
+        assert!(
+            main_pane
+                .approved_remote_markdown_image_urls
+                .contains(first_image_url)
+        );
+        assert!(
+            !main_pane
+                .approved_remote_markdown_image_urls
+                .contains(second_image_url),
+            "Load image must approve only the image represented by the menu"
+        );
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::NeverLoad,
+                cx,
+            );
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let blocked = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{source_byte}_blocked_box"
+        )))
+        .expect("Never mode draws the linked image's blocked control");
+    simulate_counted_click(cx, blocked.center(), 1);
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("context_menu_load_image").is_none(),
+        "Never mode must not offer any path to approve the remote image"
+    );
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.read(app);
+        assert!(main_pane.approved_remote_markdown_image_urls.is_empty());
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu {
+                load_remote_image_url: None,
+                ..
+            })
+        ));
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
     // The counterpart to `source_mode_copies_the_file_exactly_as_written`: the
     // rendered preview copies what it drew, so the heading loses its `#` and
     // the section break under it comes back as the blank line it looks like.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2768,7 +2914,7 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
     let last = fixture.row_ix("Body paragraph.");
     let last_len = fixture.document.rows[last].text.len();
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 assert!(
@@ -2785,6 +2931,7 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
                     region: DiffTextRegion::Inline,
                     offset: last_len,
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });
@@ -2802,7 +2949,7 @@ fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::Tes
     // and that list took the file's line count as its length — so the Word wrap
     // toggle had nothing to act on and a long line just ran off the pane.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2895,7 +3042,7 @@ fn source_mode_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::
     // current. Measuring the wrong face gives the wrong column count, and every
     // wrapped row lands short or runs past the pane.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2972,7 +3119,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
     // blank line the author wrote.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3002,7 +3149,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
 
     let lines: Vec<&str> = source.lines().collect();
     let last_ix = lines.len() - 1;
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 assert!(
@@ -3019,6 +3166,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
                     region: DiffTextRegion::Inline,
                     offset: lines[last_ix].len(),
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });
@@ -3041,7 +3189,7 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
     // has to say so or the reader cannot tell it happened.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3087,7 +3235,12 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
         .debug_bounds("context_menu_copy_link_address")
         .expect("the link menu offers copying the address")
         .center();
-    // Menu entries fire on release.
+    // Menu entries require their own completed click.
+    cx.simulate_mouse_down(
+        copy_entry,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     cx.simulate_mouse_move(
         copy_entry,
         Some(gpui::MouseButton::Left),
@@ -3126,7 +3279,7 @@ fn a_wide_table_scrolls_while_a_narrow_one_still_spans_the_pane(cx: &mut gpui::T
     // wide one has somewhere to scroll — but a narrow one must not shrink away
     // from the pane it used to fill.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3194,7 +3347,7 @@ fn a_code_block_wider_than_the_pane_gets_a_scrollbar(cx: &mut gpui::TestAppConte
     // horizontal wheel. The bar is drawn for every block, but only has a thumb
     // where there is somewhere to scroll to.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3269,7 +3422,7 @@ fn a_code_block_does_not_swallow_the_page_scroll(cx: &mut gpui::TestAppContext) 
     // block that only scrolls sideways would take the page's scroll the moment
     // the pointer crossed it and the document would stop moving.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3360,7 +3513,7 @@ fn markdown_preview_code_blocks_scroll_independently(cx: &mut gpui::TestAppConte
     // clipped, and each block holds its own offset — which is what the per-block
     // element id is for. A shared id made them scroll as one.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3451,7 +3604,7 @@ fn markdown_preview_draws_an_inline_picture_beside_its_heading(cx: &mut gpui::Te
     // the kind of constraint that can collapse to zero without any parse-level
     // assertion noticing.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3508,7 +3661,7 @@ fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::Te
     // with text has to fit into the line rather than take a block of its own.
     // Its rows still have to draw.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3620,7 +3773,7 @@ fn markdown_preview_selection_highlights_every_line_of_a_wrapped_row(
     // every quad on the first visual line, or steps them by the wrong amount,
     // is invisible to every other assertion in this file.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3695,7 +3848,7 @@ fn markdown_preview_selection_paints_over_inline_code_backgrounds(cx: &mut gpui:
     // background after the selection quad, the selected part of the code span
     // looks unselected even though copy and selection geometry are correct.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3746,7 +3899,7 @@ fn a_partial_wrapped_selection_starts_and_ends_where_the_drag_did(cx: &mut gpui:
     // that starts and ends mid-line is where the first and last quads have to
     // be measured rather than assumed.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3859,7 +4012,7 @@ fn copied_preview_selection(
 fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3952,7 +4105,7 @@ fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpu
 fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4049,7 +4202,7 @@ fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui
 fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4419,7 +4572,7 @@ fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppCon
     // reader was left with whatever they had already covered.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4476,7 +4629,7 @@ fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppCo
     // repeat its description once per row.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4536,7 +4689,7 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
     // remove it. The decode itself is too fast to catch mid-flight in a test,
     // so the skeleton is measured through its own unit test instead.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4579,10 +4732,178 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
+fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(107),
+        "markdown_remote_image_approval",
+        concat!(
+            "<img alt=\"remote\" src=\"https://example.invalid/tracking.png\" ",
+            "width=\"120\" height=\"60\" />\n\n",
+            "<img alt=\"other\" src=\"https://example.invalid/other.png\" ",
+            "width=\"80\" height=\"40\" />\n",
+        ),
+    );
+    let row_ix = fixture.row_ix("remote");
+    let retry_selector = leaked_selector(format!("markdown_preview_block_image_load_{row_ix}"));
+    let retry_icon_selector = leaked_selector(format!(
+        "markdown_preview_block_image_load_{row_ix}_retry_icon"
+    ));
+    let blocked_icon_selector = leaked_selector(format!(
+        "markdown_preview_block_image_load_{row_ix}_blocked_icon"
+    ));
+
+    let retry = cx
+        .debug_bounds(retry_selector)
+        .expect("approval mode should draw a per-image Retry control");
+    assert!(
+        (retry.size.width - px(120.0)).abs() <= px(0.5)
+            && (retry.size.height - px(60.0)).abs() <= px(0.5),
+        "the blocked box should preserve the declared image size; got {retry:?}"
+    );
+    assert!(cx.debug_bounds(retry_icon_selector).is_some());
+    assert!(cx.debug_bounds(blocked_icon_selector).is_none());
+    assert!(
+        cx.debug_bounds("markdown_preview_load_all_remote_images")
+            .is_some(),
+        "the preview header should offer Load all images"
+    );
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{row_ix}"
+        )))
+        .is_none(),
+        "the remote image element must not be created before approval"
+    );
+
+    cx.simulate_click(retry.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            assert_eq!(pane.approved_remote_markdown_image_urls.len(), 1);
+            assert!(
+                pane.approved_remote_markdown_image_urls
+                    .contains("https://example.invalid/tracking.png"),
+                "clicking Retry should approve only that image's exact URL"
+            );
+            assert!(
+                !pane
+                    .approved_remote_markdown_image_urls
+                    .contains("https://example.invalid/other.png")
+            );
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::NeverLoad,
+                cx,
+            );
+            assert!(
+                pane.approved_remote_markdown_image_urls.is_empty(),
+                "changing policy should clear preview-scoped approvals"
+            );
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let blocked = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_load_{row_ix}_blocked_box"
+        )))
+        .expect("never-load mode should draw a blocked-image box");
+    assert!(
+        (blocked.size.width - px(120.0)).abs() <= px(0.5)
+            && (blocked.size.height - px(60.0)).abs() <= px(0.5),
+        "the never-load box should preserve the declared image size; got {blocked:?}"
+    );
+    assert!(cx.debug_bounds(blocked_icon_selector).is_some());
+    assert!(cx.debug_bounds(retry_icon_selector).is_none());
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_image_access_snapshots_share_approved_url_storage(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let first = pane.markdown_remote_image_access(None);
+        let second = pane.markdown_remote_image_access(None);
+        assert!(
+            Arc::ptr_eq(&first.approved_urls, &second.approved_urls),
+            "render snapshots should share approval storage instead of cloning every URL"
+        );
+    });
+}
+
+#[gpui::test]
+fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(109),
+        "markdown_remote_image_summary_cache",
+        "![remote](https://example.invalid/tracking.png)\n",
+    );
+    crate::view::panes::main::reset_remote_markdown_image_row_visits_for_tests();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.has_blocked_remote_markdown_images());
+        let after_first = crate::view::panes::main::remote_markdown_image_row_visits_for_tests();
+        assert!(pane.has_blocked_remote_markdown_images());
+        let after_second = crate::view::panes::main::remote_markdown_image_row_visits_for_tests();
+        assert_eq!(
+            after_second, after_first,
+            "an unchanged render must reuse the blocked-image summary"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4638,7 +4959,7 @@ fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestApp
 fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4696,7 +5017,7 @@ fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui:
 fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4805,7 +5126,7 @@ fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::Tes
 fn markdown_below_eof_resolves_after_a_trailing_thematic_break(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4884,7 +5205,7 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     // decode finished and holds an empty slot. The pane waits on its own
     // pictures instead of relying on that.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4936,7 +5257,7 @@ fn markdown_preview_hit_testing_follows_a_row_onto_its_wrapped_lines(
     // two dimensions. Reading only the x offset along one shaped line put the
     // caret near the start of the row wherever the reader clicked low and left.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4987,7 +5308,7 @@ fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5034,7 +5355,7 @@ fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
 #[gpui::test]
 fn split_markdown_diff_word_wrap_keeps_both_columns_row_aligned(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5163,7 +5484,7 @@ fn split_markdown_diff_word_wrap_keeps_both_columns_row_aligned(cx: &mut gpui::T
 fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5294,7 +5615,7 @@ fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui:
 #[gpui::test]
 fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5426,7 +5747,7 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
 #[gpui::test]
 fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5465,7 +5786,7 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
             assert!(
                 matches!(
                     popover,
-                    Some(PopoverKind::WebLinkMenu { ref url })
+                    Some(PopoverKind::WebLinkMenu { ref url, .. })
                         if url.as_ref() == "https://example.com/docs"
                 ),
                 "clicking a link should open its menu, got {popover:?}"
@@ -5510,7 +5831,7 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
     // be the glyph box. Padding applied to the box itself shifted the highlight
     // left of the text and cut it short at the end of the line.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5575,7 +5896,7 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
 fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5698,7 +6019,7 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
 /// list has to be built from the rendered rows and mapped through the wrap plan.
 #[gpui::test]
 fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5816,7 +6137,7 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
 fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5931,7 +6252,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
 /// instead of quietly scanning a view that is not there.
 #[gpui::test]
 fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

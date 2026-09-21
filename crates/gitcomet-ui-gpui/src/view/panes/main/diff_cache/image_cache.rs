@@ -7,6 +7,7 @@ use std::hash::Hasher;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+const IMAGE_DIFF_CACHE_DIR_NAME: &str = "gitcomet-image-diff";
 const IMAGE_DIFF_CACHE_FILE_PREFIX: &str = "gitcomet-image-diff-";
 const IMAGE_DIFF_CACHE_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 24 * 7);
@@ -66,9 +67,40 @@ fn maybe_cleanup_image_diff_cache_on_write() {
     }
 }
 
+/// Previews live in an owner-only directory, not the shared temp root: the file
+/// name is a content hash, so anyone able to create an entry there could plant
+/// a name and have it served as a cache hit. The temp root is world-creatable,
+/// so a directory already there is used only if nobody else can write to it.
+fn image_diff_cache_dir() -> std::io::Result<std::path::PathBuf> {
+    image_diff_cache_dir_in(&std::env::temp_dir())
+}
+
+fn image_diff_cache_dir_in(base: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let dir = base.join(IMAGE_DIFF_CACHE_DIR_NAME);
+    gitcomet_core::fs_utils::ensure_private_dir(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if std::fs::metadata(&dir)?.permissions().mode() & 0o022 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "image diff cache dir is writable by others: {}",
+                    dir.display()
+                ),
+            ));
+        }
+    }
+    Ok(dir)
+}
+
 fn cleanup_image_diff_cache_now() {
+    let Ok(cache_dir) = image_diff_cache_dir() else {
+        return;
+    };
     let _ = cleanup_image_diff_cache_dir(
-        &std::env::temp_dir(),
+        &cache_dir,
         IMAGE_DIFF_CACHE_MAX_AGE,
         IMAGE_DIFF_CACHE_MAX_TOTAL_BYTES,
         std::time::SystemTime::now(),
@@ -593,37 +625,61 @@ fn file_image_diff_signature(file: &gitcomet_core::domain::FileDiffImage) -> u64
 }
 
 fn cached_image_diff_path(bytes: &[u8], extension: &str) -> Option<std::path::PathBuf> {
-    use std::io::Write;
-
     cleanup_image_diff_cache_startup_once();
+    image_diff_cache_path(&image_diff_cache_dir().ok()?, bytes, extension).ok()
+}
 
+/// Content-addressed cache file, written once and reused on later rebuilds.
+fn image_diff_cache_path(
+    cache_dir: &std::path::Path,
+    bytes: &[u8],
+    extension: &str,
+) -> std::io::Result<std::path::PathBuf> {
     let mut hasher = FxHasher::default();
     hasher.write(bytes);
     hasher.write(extension.as_bytes());
-    let path = std::env::temp_dir().join(format!(
+    let path = cache_dir.join(format!(
         "{IMAGE_DIFF_CACHE_FILE_PREFIX}{:016x}-{}.{}",
         hasher.finish(),
         bytes.len(),
         extension
     ));
-    if path.is_file() {
-        return Some(path);
+
+    if !is_regular_file(&path) {
+        write_image_diff_cache_file(&path, bytes)?;
+        maybe_cleanup_image_diff_cache_on_write();
+        // O_EXCL leaves a planted symlink in place; never serve that as an image.
+        if !is_regular_file(&path) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "image diff cache path is not a regular file: {}",
+                    path.display()
+                ),
+            ));
+        }
     }
+    Ok(path)
+}
+
+fn is_regular_file(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
+}
+
+fn write_image_diff_cache_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
 
     let mut file = tempfile::Builder::new()
         .prefix(IMAGE_DIFF_CACHE_FILE_PREFIX)
         .suffix(".tmp")
-        .tempfile_in(std::env::temp_dir())
-        .ok()?;
-    file.as_file_mut().write_all(bytes).ok()?;
-
-    match file.persist_noclobber(&path) {
-        Ok(_) => {
-            maybe_cleanup_image_diff_cache_on_write();
-            Some(path)
-        }
-        Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Some(path),
-        Err(_) => None,
+        .tempfile_in(path.parent().unwrap_or_else(|| std::path::Path::new(".")))?;
+    file.write_all(bytes)?;
+    file.as_file().sync_data()?;
+    match file.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        // Another writer produced the same content first.
+        Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err.error),
     }
 }
 
@@ -1876,13 +1932,77 @@ mod tests {
     }
 
     #[test]
-    fn cached_image_diff_path_writes_ico_cache_file() {
+    fn image_diff_cache_reuses_the_content_addressed_file() {
+        let dir = tempfile::tempdir().unwrap();
         let bytes = [0_u8, 0, 1, 0, 1, 0, 16, 16];
-        let path = cached_image_diff_path(&bytes, "ico").expect("cached path");
-        let same_path = cached_image_diff_path(&bytes, "ico").expect("second cached path");
-        assert!(path.exists());
-        assert_eq!(path, same_path);
+
+        let path = image_diff_cache_path(dir.path(), &bytes, "ico").expect("cached path");
+        let reused = image_diff_cache_path(dir.path(), &bytes, "ico").expect("second cached path");
+
+        assert_eq!(path, reused);
         assert_eq!(path.extension().and_then(|s| s.to_str()), Some("ico"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "a cache hit must not write a second file"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_diff_cache_dir_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // A content-addressed name is guessable, so the directory holding it
+        // must not be one other users can create entries in.
+        let dir = image_diff_cache_dir().expect("cache dir");
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_diff_cache_dir_rejects_a_world_writable_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(IMAGE_DIFF_CACHE_DIR_NAME);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let result = image_diff_cache_dir_in(root.path());
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_diff_cache_does_not_reuse_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+
+        // Plant the symlink under the exact name this content hashes to.
+        let planted = image_diff_cache_path(dir.path(), b"preview", "svg").unwrap();
+        std::fs::remove_file(&planted).unwrap();
+        std::os::unix::fs::symlink(&victim, &planted).unwrap();
+
+        let err = image_diff_cache_path(dir.path(), b"preview", "svg")
+            .expect_err("a planted symlink must never be served as a cache hit");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
     }
 
     #[test]

@@ -12,7 +12,7 @@ fn push_raw_patch_diff_state(
 
 #[gpui::test]
 fn split_file_diff_multiline_search_preserves_blank_side_rows(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -94,7 +94,7 @@ index 1111111..2222222 100644
 #[gpui::test]
 fn short_split_diff_has_region_confined_below_eof_surfaces(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -185,7 +185,7 @@ index 1111111..2222222 100644
 fn diff_search_f3_continues_from_previous_location_after_patch_refresh(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -362,7 +362,7 @@ index 1111111..2222222 100644
         unified
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1434,7 +1434,7 @@ fn assert_diff_horizontal_scrollbar_drag_keeps_range_stable(
 
 #[gpui::test]
 fn diff_vertical_scrollbar_gutter_stays_reserved_when_unmeasured(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1691,7 +1691,7 @@ fn assert_working_tree_full_file_diff_horizontal_scroll_stable_across_same_targe
 fn full_file_diff_inline_unstaged_same_target_loading_preserves_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1711,7 +1711,7 @@ fn full_file_diff_inline_unstaged_same_target_loading_preserves_horizontal_scrol
 fn full_file_diff_split_unstaged_same_target_loading_preserves_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1731,7 +1731,7 @@ fn full_file_diff_split_unstaged_same_target_loading_preserves_horizontal_scroll
 fn full_file_diff_split_staged_same_target_loading_preserves_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1751,7 +1751,7 @@ fn full_file_diff_split_staged_same_target_loading_preserves_horizontal_scroll(
 fn full_file_diff_split_vertical_sync_same_target_loading_preserves_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1939,7 +1939,7 @@ fn assert_raw_patch_diff_horizontal_scroll_stable_across_same_target_loading(
 
 #[gpui::test]
 fn raw_patch_inline_same_target_loading_preserves_horizontal_scroll(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1958,7 +1958,7 @@ fn raw_patch_inline_same_target_loading_preserves_horizontal_scroll(cx: &mut gpu
 fn raw_patch_split_vertical_sync_same_target_loading_preserves_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1977,7 +1977,7 @@ fn raw_patch_split_vertical_sync_same_target_loading_preserves_horizontal_scroll
 fn collapsed_diff_split_same_target_loading_preserves_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2164,7 +2164,7 @@ fn collapsed_diff_split_same_target_loading_preserves_horizontal_scroll(
 fn raw_patch_inline_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2188,7 +2188,7 @@ fn raw_patch_inline_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
 fn raw_patch_split_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2212,7 +2212,7 @@ fn raw_patch_split_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
 fn raw_patch_split_vertical_sync_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2234,7 +2234,7 @@ fn raw_patch_split_vertical_sync_horizontal_scrollbar_bounds_stable_across_unmea
 
 #[gpui::test]
 fn raw_patch_inline_horizontal_scrollbar_drag_keeps_range_stable(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2253,7 +2253,7 @@ fn raw_patch_inline_horizontal_scrollbar_drag_keeps_range_stable(cx: &mut gpui::
 fn collapsed_diff_split_horizontal_scrollbar_drag_keeps_range_stable(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2276,7 +2276,7 @@ fn collapsed_diff_split_horizontal_scrollbar_drag_keeps_range_stable(
 fn collapsed_diff_inline_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2304,7 +2304,7 @@ fn collapsed_diff_inline_horizontal_scrollbar_bounds_stable_across_unmeasured_re
 fn collapsed_diff_split_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2332,7 +2332,7 @@ fn collapsed_diff_split_horizontal_scrollbar_bounds_stable_across_unmeasured_ren
 fn collapsed_diff_split_vertical_sync_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2358,7 +2358,7 @@ fn collapsed_diff_split_vertical_sync_horizontal_scrollbar_bounds_stable_across_
 
 #[gpui::test]
 fn collapsed_diff_split_scroll_sync_setting_controls_each_axis(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2494,7 +2494,7 @@ fn collapsed_diff_split_scroll_sync_setting_controls_each_axis(cx: &mut gpui::Te
 fn full_file_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_restore(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2517,7 +2517,7 @@ fn full_file_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_rest
 fn full_file_diff_split_unmeasured_render_does_not_force_horizontal_scroll_restore(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2540,7 +2540,7 @@ fn full_file_diff_split_unmeasured_render_does_not_force_horizontal_scroll_resto
 fn raw_patch_inline_unmeasured_render_does_not_force_horizontal_scroll_restore(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2563,7 +2563,7 @@ fn raw_patch_inline_unmeasured_render_does_not_force_horizontal_scroll_restore(
 fn raw_patch_split_unmeasured_render_does_not_force_horizontal_scroll_restore(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2586,7 +2586,7 @@ fn raw_patch_split_unmeasured_render_does_not_force_horizontal_scroll_restore(
 fn full_file_diff_inline_unmeasured_render_does_not_zero_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2609,7 +2609,7 @@ fn full_file_diff_inline_unmeasured_render_does_not_zero_horizontal_scroll(
 fn full_file_diff_split_unmeasured_render_does_not_zero_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2632,7 +2632,7 @@ fn full_file_diff_split_unmeasured_render_does_not_zero_horizontal_scroll(
 fn raw_patch_inline_unmeasured_render_does_not_zero_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2655,7 +2655,7 @@ fn raw_patch_inline_unmeasured_render_does_not_zero_horizontal_scroll(
 fn raw_patch_split_unmeasured_render_does_not_zero_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2676,7 +2676,7 @@ fn raw_patch_split_unmeasured_render_does_not_zero_horizontal_scroll(
 
 #[gpui::test]
 fn full_file_diff_inline_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2693,7 +2693,7 @@ fn full_file_diff_inline_scroll_to_start_persists(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn full_file_diff_split_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2710,7 +2710,7 @@ fn full_file_diff_split_scroll_to_start_persists(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn raw_patch_inline_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2727,7 +2727,7 @@ fn raw_patch_inline_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn raw_patch_split_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2746,7 +2746,7 @@ fn raw_patch_split_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
 fn full_file_diff_inline_horizontal_range_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2769,7 +2769,7 @@ fn full_file_diff_inline_horizontal_range_stable_across_unmeasured_render(
 fn full_file_diff_split_horizontal_range_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2792,7 +2792,7 @@ fn full_file_diff_split_horizontal_range_stable_across_unmeasured_render(
 fn raw_patch_inline_horizontal_range_stable_across_unmeasured_render(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2813,7 +2813,7 @@ fn raw_patch_inline_horizontal_range_stable_across_unmeasured_render(
 
 #[gpui::test]
 fn raw_patch_split_horizontal_range_stable_across_unmeasured_render(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2949,7 +2949,7 @@ fn assert_collapsed_diff_trailing_down_button_clickable_above_hscrollbar(
 fn collapsed_diff_inline_trailing_down_button_stays_above_hscrollbar(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2965,7 +2965,7 @@ fn collapsed_diff_inline_trailing_down_button_stays_above_hscrollbar(
 
 #[gpui::test]
 fn collapsed_diff_split_trailing_down_button_stays_above_hscrollbar(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2983,7 +2983,7 @@ fn collapsed_diff_split_trailing_down_button_stays_above_hscrollbar(cx: &mut gpu
 fn collapsed_diff_inline_reveal_buttons_expand_context_without_creating_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3071,7 +3071,7 @@ fn collapsed_diff_inline_reveal_buttons_expand_context_without_creating_selectio
 fn collapsed_diff_split_reveal_buttons_expand_context_without_creating_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3157,7 +3157,7 @@ fn collapsed_diff_split_reveal_buttons_expand_context_without_creating_selection
 
 #[gpui::test]
 fn collapsed_diff_split_reveal_arrows_show_directional_tooltips(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3196,7 +3196,7 @@ fn collapsed_diff_split_reveal_arrows_show_directional_tooltips(cx: &mut gpui::T
 fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3311,7 +3311,7 @@ fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
 fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3461,7 +3461,7 @@ fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
 fn collapsed_diff_split_down_before_reveal_moves_both_columns_without_vertical_sync(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3595,7 +3595,7 @@ fn collapsed_diff_split_down_before_reveal_moves_both_columns_without_vertical_s
 
 #[gpui::test]
 fn collapsed_diff_short_gap_merge_moves_following_file_row(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

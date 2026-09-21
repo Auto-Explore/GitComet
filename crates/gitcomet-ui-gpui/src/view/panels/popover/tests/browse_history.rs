@@ -3,7 +3,7 @@ use crate::view::panels::tests::{app_state_with_repo, opening_repo_state};
 
 #[gpui::test]
 fn browse_history_menu_exposes_full_commit_message_tooltip(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -48,6 +48,13 @@ fn browse_history_menu_exposes_full_commit_message_tooltip(cx: &mut gpui::TestAp
                 })
             })
             .expect("expected browse-history context menu model");
+
+        assert!(model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Exit file browsing"
+                    && matches!(action.as_ref(), ContextMenuAction::ResetBrowseToLive { .. })
+        )));
 
         let entry_ix = model
             .items

@@ -380,7 +380,7 @@ impl GixRepo {
     pub(super) fn blame_file_impl(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
         const BLOB_LINE_MISMATCH: &str = "gix blame blob line count did not match blame entries";
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let spec = rev.unwrap_or("HEAD");
         let suspect = repo
             .rev_parse_single(spec)
@@ -473,7 +473,7 @@ impl GixRepo {
         // from HEAD, so `git blame` fails with "no such path ... in HEAD". Every
         // line is local, so synthesize the blame directly from the shown content
         // (working tree for unstaged, the staged blob for staged).
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         if !path_exists_at_head(&repo, path) {
             let contents = match area {
                 DiffArea::Unstaged => {
@@ -524,7 +524,7 @@ impl GixRepo {
             ConflictSide::Theirs => 3,
         };
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
 
         if !gix_index_stage_exists(&repo, path, desired_stage)? {
             let mut rm = self.git_workdir_cmd();
@@ -572,7 +572,7 @@ impl GixRepo {
     }
 
     pub(super) fn checkout_conflict_base_impl(&self, path: &Path) -> Result<CommandOutput> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let base_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 1)?.ok_or_else(|| {
             Error::new(ErrorKind::Backend(format!(
                 "base conflict stage is not available for {}",

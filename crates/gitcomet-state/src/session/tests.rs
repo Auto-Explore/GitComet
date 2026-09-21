@@ -1,4 +1,5 @@
 use super::history_mode::HistoryScopeSetting;
+#[cfg(unix)]
 use super::paths::hex_encode;
 use super::repos::SESSION_REPOS_SNAPSHOT_CACHE;
 use super::survey::SurveyPromptSession;
@@ -23,6 +24,88 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
     ));
     let _ = fs::create_dir_all(&dir);
     dir
+}
+
+#[test]
+fn signature_verification_requires_fresh_opt_in_and_survives_other_writers() {
+    let dir = unique_session_test_dir("signature-opt-in");
+    let path = dir.join("session.json");
+    for legacy in ["true", "false", "null"] {
+        fs::write(&path, format!(r#"{{"version":3,"open_repos":[],"active_repo":null,"history_verify_commit_signatures":{legacy}}}"#)).unwrap();
+        assert_eq!(
+            load_from_path(&path).history_verify_commit_signatures,
+            Some(false)
+        );
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: Some(1200),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from_path(&path).history_verify_commit_signatures,
+            Some(false)
+        );
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_verify_commit_signatures: Some(true),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_height: Some(800),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from_path(&path).history_verify_commit_signatures,
+            Some(true)
+        );
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["history_verify_commit_signatures_opt_in"], true);
+        assert_eq!(saved["history_verify_commit_signatures"], true);
+        assert_eq!(saved["version"], CURRENT_SESSION_FILE_VERSION);
+    }
+}
+
+#[test]
+fn history_branch_names_survives_other_session_writers() {
+    let dir = unique_session_test_dir("history-branch-names");
+    let path = dir.join("session.json");
+    assert_eq!(load_from_path(&path).history_branch_names, None);
+    for mode in ["inline", "separate_column"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_branch_names: Some(mode.into()),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        // A later geometry/settings snapshot must not reset placement.
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph: Some(false),
+                window_width: Some(1200),
+                window_height: Some(800),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.history_branch_names.as_deref(), Some(mode));
+        assert_eq!(loaded.history_show_graph, Some(false));
+        assert_eq!(loaded.window_width, Some(1200));
+    }
+    fs::remove_dir_all(dir).unwrap();
 }
 
 fn assert_session_writer_waits_for_shared_lock(
@@ -114,10 +197,6 @@ fn session_file_persist_lock_is_shared_by_session_writers() {
         let repo = path.with_file_name("history-scope-repo");
         persist_repo_history_scope_to_path(&repo, LogScope::AllBranches, &path)
     });
-    assert_session_writer_waits_for_shared_lock("persist-fetch-prune", |path| {
-        let repo = path.with_file_name("fetch-prune-repo");
-        persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo, true, &path)
-    });
     assert_session_writer_waits_for_shared_lock("persist-survey-opened", |path| {
         persist_survey_prompt_opened_to_path(&path, "survey", 123)
     });
@@ -173,10 +252,8 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
     let session_file = dir.join("session.json");
     let repo_mode = dir.join("repo-mode");
     let repo_legacy = dir.join("repo-legacy");
-    let repo_fetch = dir.join("repo-fetch");
     let _ = fs::create_dir_all(&repo_mode);
     let _ = fs::create_dir_all(&repo_legacy);
-    let _ = fs::create_dir_all(&repo_fetch);
 
     assert_eq!(
         load_repo_session_preferences_from_path(&dir.join("missing.json")),
@@ -195,12 +272,6 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
         .expect("persist explicit history mode");
     persist_repo_history_scope_to_path(&repo_legacy, LogScope::CurrentBranch, &session_file)
         .expect("persist legacy history scope");
-    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
-        &repo_fetch,
-        true,
-        &session_file,
-    )
-    .expect("persist fetch-prune setting");
 
     let loaded = load_repo_session_preferences_from_path(&session_file);
     assert_eq!(loaded.default_history_mode, Some(HistoryMode::MergesOnly));
@@ -213,12 +284,6 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
             .repo_history_scopes
             .get(&path_storage_key(&repo_legacy)),
         Some(&HistoryMode::FirstParent)
-    );
-    assert_eq!(
-        loaded
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&path_storage_key(&repo_fetch)),
-        Some(&true)
     );
 }
 
@@ -301,8 +366,6 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
     .expect("persist default history mode");
     persist_repo_history_scope_to_path(&repo_b, LogScope::CurrentBranch, &session_file)
         .expect("persist legacy history scope");
-    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo_c, true, &session_file)
-        .expect("persist fetch-prune setting");
     persist_repo_history_mode_to_path(&repo_a, HistoryMode::FirstParent, &session_file)
         .expect("persist repo_a history mode");
 
@@ -351,12 +414,6 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
     assert_eq!(
         loaded.repo_history_scopes.get(&path_storage_key(&repo_b)),
         Some(&HistoryMode::FirstParent)
-    );
-    assert_eq!(
-        loaded
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&path_storage_key(&repo_c)),
-        Some(&true)
     );
 }
 
@@ -701,7 +758,7 @@ fn persist_from_state_and_load_from_path_round_trip() {
             ),
         ],
         active_repo: Some(RepoId(2)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     persist_from_state_to_path(&state, &path).expect("persist succeeds");
@@ -730,7 +787,7 @@ fn snapshot_repos_from_state_dedups_and_filters_inactive_selection() {
             ),
         ],
         active_repo: Some(RepoId(999)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let snapshot = snapshot_repos_from_state(&state);
@@ -756,7 +813,7 @@ fn snapshot_repos_from_state_dedups_and_filters_inactive_selection() {
             ),
         ],
         active_repo: Some(RepoId(2)),
-        ..Default::default()
+        ..AppState::test_default()
     };
     let snapshot = snapshot_repos_from_state(&state);
     assert_eq!(snapshot.active_repo_index, Some(1));
@@ -781,7 +838,7 @@ fn snapshot_repos_from_state_reuses_cached_open_repo_slice_for_same_repo_list() 
             ),
         ],
         active_repo: Some(RepoId(2)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -823,7 +880,7 @@ fn snapshot_excludes_provisional_drop_and_preserves_its_previous_active_tab() {
     let mut state = AppState {
         repos: vec![first, second, provisional],
         active_repo: Some(RepoId(3)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let pending = snapshot_repos_from_state(&state);
@@ -863,7 +920,7 @@ fn snapshot_repos_from_state_cache_keeps_dedup_index_for_duplicate_workdirs() {
             RepoState::new_opening(RepoId(2), RepoSpec { workdir: repo_a }),
         ],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -902,7 +959,7 @@ fn snapshot_repos_from_state_preserves_first_seen_order_for_repeated_workdirs() 
             ),
         ],
         active_repo: Some(RepoId(3)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let snapshot = snapshot_repos_from_state(&state);
@@ -938,7 +995,7 @@ fn snapshot_repos_from_state_cache_invalidates_when_repo_order_changes() {
             ),
         ],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -973,7 +1030,7 @@ fn snapshot_repos_from_state_cache_invalidates_when_repo_spec_changes() {
             },
         )],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -2355,6 +2412,42 @@ fn persist_ui_settings_round_trips_auto_save_file_edits() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_security_preferences() {
+    let dir = unique_session_test_dir("security-preferences");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            remote_markdown_image_policy: Some("ask".to_string()),
+            allowed_remote_protocols: Some(
+                ["https", "ssh", "http"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            check_for_updates_on_startup: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist security preferences");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.remote_markdown_image_policy.as_deref(), Some("ask"));
+    assert_eq!(
+        loaded.allowed_remote_protocols,
+        Some(
+            ["http", "https", "ssh"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        )
+    );
+    assert_eq!(loaded.check_for_updates_on_startup, Some(false));
+}
+
+#[test]
 fn persist_ui_settings_round_trips_change_tracking_heights() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",
@@ -2658,6 +2751,90 @@ fn persist_ui_settings_round_trips_commit_push_after_enabled() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
+    let dir = env::temp_dir().join(format!(
+        "gitcomet-ui-settings-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            open_repos: Vec::new(),
+            active_repo: None,
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            fetch_prune_deleted_remote_branches: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist remote pruning setting");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
+}
+
+#[test]
+fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
+    let dir = unique_session_test_dir("legacy-repo-fetch-prune-migration");
+    let path = dir.join("session.json");
+    let legacy_session = serde_json::json!({
+        "version": SESSION_FILE_VERSION_V3,
+        "open_repos": [],
+        "active_repo": null,
+        "repo_fetch_prune_deleted_remote_tracking_branches": {
+            "/repos/pruning-enabled": true,
+            "/repos/pruning-disabled": false
+        }
+    });
+    fs::write(
+        &path,
+        serde_json::to_vec(&legacy_session).expect("serialize legacy session"),
+    )
+    .expect("write legacy session");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(
+        loaded.fetch_prune_deleted_remote_branches,
+        Some(false),
+        "one saved opt-out must keep pruning disabled after the setting becomes global"
+    );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            sidebar_collapsed: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist an unrelated UI setting");
+
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read migrated session"))
+            .expect("parse migrated session");
+    assert_eq!(
+        persisted
+            .get("fetch_prune_deleted_remote_branches")
+            .and_then(serde_json::Value::as_bool),
+        Some(false),
+        "the migrated global choice must survive the next session save"
+    );
+}
+
+#[test]
 fn persist_repo_history_scope_round_trips() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-repo-history-scope-test-{}-{}",
@@ -2819,6 +2996,38 @@ fn v3_open_repositories_migrate_to_one_restorable_window_group() {
 }
 
 #[test]
+fn legacy_fetch_prune_and_window_groups_migrate_together() {
+    for version in [SESSION_FILE_VERSION_V2, SESSION_FILE_VERSION_V3] {
+        let path =
+            unique_session_test_dir("window-group-fetch-prune-migration").join("session.json");
+        persist_to_path(
+            &path,
+            &serde_json::json!({
+                "version": version,
+                "open_repos": ["/work/alpha", "/work/beta"],
+                "active_repo": "/work/beta",
+                "ui_density": "comfortable",
+                "repo_fetch_prune_deleted_remote_tracking_branches": {
+                    "/work/alpha": true,
+                    "/work/beta": false
+                }
+            }),
+        )
+        .expect("seed legacy session");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.window_groups.len(), 1);
+        assert_eq!(loaded.window_groups[0].id, LEGACY_WINDOW_GROUP_ID);
+        assert_eq!(loaded.active_repo, Some(PathBuf::from("/work/beta")));
+        assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
+        assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+
+        persist_window_groups_to_path(&loaded.window_groups, &path).expect("persist v4 session");
+        assert_eq!(load_from_path(&path), loaded);
+    }
+}
+
+#[test]
 fn multiple_window_groups_round_trip_without_last_writer_loss() {
     let path = unique_session_test_dir("window-group-round-trip").join("session.json");
     let mut group_a =
@@ -2857,6 +3066,12 @@ fn multiple_window_groups_round_trip_without_last_writer_loss() {
     persist_ui_settings_to_path(
         UiSettings {
             theme_mode: Some("dark".to_string()),
+            ui_density: Some("comfortable".to_string()),
+            ui_font_size_px: Some(18),
+            editor_font_size_px: Some(15),
+            markdown_preview_font_size_px: Some(22),
+            window_controls_mode: Some("hide".to_string()),
+            browser_open_target: Some("new_window".to_string()),
             ..UiSettings::default()
         },
         &path,
@@ -2873,6 +3088,15 @@ fn multiple_window_groups_round_trip_without_last_writer_loss() {
     )
     .expect("persist legacy repository projection");
     assert_eq!(load_from_path(&path).window_groups, loaded.window_groups);
+
+    persist_window_groups_to_path(&loaded.window_groups, &path).expect("persist groups again");
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+    assert_eq!(loaded.ui_font_size_px, Some(18));
+    assert_eq!(loaded.editor_font_size_px, Some(15));
+    assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
+    assert_eq!(loaded.window_controls_mode.as_deref(), Some("hide"));
+    assert_eq!(loaded.browser_open_target.as_deref(), Some("new_window"));
 }
 
 #[test]
@@ -2902,14 +3126,125 @@ fn first_v4_write_preserves_one_v3_backup() {
     )
     .expect("seed v3 session");
     let original = fs::read(&path).expect("read v3 session");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("simulate a legacy session with public permissions");
+    }
 
     let group = SavedWindowGroup::new(vec![PathBuf::from("/work/legacy")]);
     persist_window_groups_to_path(&[group], &path).expect("persist v4 groups");
 
     let mut backup_name = path.as_os_str().to_os_string();
     backup_name.push(".v3.bak");
+    let backup_path = PathBuf::from(backup_name);
+    assert_eq!(fs::read(&backup_path).expect("read v3 backup"), original);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        for private_path in [&path, &backup_path] {
+            assert_eq!(
+                fs::metadata(private_path)
+                    .expect("private session file")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+            );
+        }
+    }
+}
+
+#[test]
+fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
+    let dir = unique_session_test_dir("file-browser-follow-selected-commit");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    // Absent from the file means "not chosen yet", which the UI reads as on.
     assert_eq!(
-        fs::read(PathBuf::from(backup_name)).expect("read v3 backup"),
-        original
+        load_from_path(&path).file_browser_follow_selected_commit,
+        None
     );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            file_browser_follow_selected_commit: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist ui settings");
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        Some(false)
+    );
+
+    // A later write that says nothing about the toggle must not clear it.
+    persist_ui_settings_to_path(
+        UiSettings {
+            diff_word_wrap: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist unrelated ui settings");
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        Some(false)
+    );
+}
+
+/// The layer stores density as an opaque string, so a value this build has never
+/// heard of must survive a write/read cycle intact rather than being dropped or
+/// normalised — that is what lets a newer build's choice come back.
+#[test]
+fn an_unknown_density_survives_the_session_round_trip() {
+    let path = unique_session_test_dir("density_forward_compat").join("session.json");
+
+    for density in ["compact", "comfortable", "spacious", "something-newer"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                ui_density: Some(density.into()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+
+        assert_eq!(load_from_path(&path).ui_density.as_deref(), Some(density));
+    }
+}
+
+#[test]
+fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes() {
+    let path = unique_session_test_dir("appearance").join("session.json");
+    let default = load_from_path(&path);
+    assert_eq!(default.ui_density, None);
+    assert_eq!(default.ui_font_size_px, None);
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_density: Some("comfortable".into()),
+            ui_font_size_px: Some(18),
+            editor_font_size_px: Some(15),
+            markdown_preview_font_size_px: Some(22),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            editor_font_size_px: Some(17),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+    assert_eq!(loaded.ui_font_size_px, Some(18));
+    assert_eq!(loaded.editor_font_size_px, Some(17));
+    assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
 }

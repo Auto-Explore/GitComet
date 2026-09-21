@@ -71,7 +71,11 @@ pub(super) fn record(args: std::fmt::Arguments<'_>) {
 
 macro_rules! trace {
     ($($arg:tt)*) => {
-        $crate::store::repo_load_trace::record(format_args!($($arg)*))
+        // Gate before the arguments are evaluated: call sites format paths
+        // per filesystem event, which must cost nothing while tracing is off.
+        if $crate::store::repo_load_trace::enabled() {
+            $crate::store::repo_load_trace::record(format_args!($($arg)*))
+        }
     };
 }
 
@@ -128,6 +132,7 @@ pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
         InternalMsg::RemoteBranchesLoaded { .. } => "RemoteBranchesLoaded",
         InternalMsg::WorktreeStatusLoaded { .. } => "WorktreeStatusLoaded",
         InternalMsg::StagedStatusLoaded { .. } => "StagedStatusLoaded",
+        InternalMsg::UncommittedLineStatsLoaded { .. } => "UncommittedLineStatsLoaded",
         InternalMsg::StatusLoaded { .. } => "StatusLoaded",
         InternalMsg::HeadBranchLoaded { .. } => "HeadBranchLoaded",
         InternalMsg::UpstreamDivergenceLoaded { .. } => "UpstreamDivergenceLoaded",
@@ -155,6 +160,7 @@ pub(super) fn effect_name(effect: &Effect) -> &'static str {
         Effect::LoadRemoteBranches { .. } => "LoadRemoteBranches",
         Effect::LoadWorktreeStatus { .. } => "LoadWorktreeStatus",
         Effect::LoadStagedStatus { .. } => "LoadStagedStatus",
+        Effect::LoadUncommittedLineStats { .. } => "LoadUncommittedLineStats",
         Effect::LoadStatus { .. } => "LoadStatus",
         Effect::LoadHeadBranch { .. } => "LoadHeadBranch",
         Effect::LoadUpstreamDivergence { .. } => "LoadUpstreamDivergence",
@@ -185,6 +191,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadRemoteBranches { repo_id }
         | Effect::LoadWorktreeStatus { repo_id }
         | Effect::LoadStagedStatus { repo_id }
+        | Effect::LoadUncommittedLineStats { repo_id, .. }
         | Effect::LoadStatus { repo_id }
         | Effect::LoadHeadBranch { repo_id }
         | Effect::LoadUpstreamDivergence { repo_id }

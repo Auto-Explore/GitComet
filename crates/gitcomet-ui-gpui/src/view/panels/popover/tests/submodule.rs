@@ -2,7 +2,7 @@ use super::*;
 
 #[gpui::test]
 fn submodule_add_advanced_toggle_keeps_its_geometry_when_focused(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -58,7 +58,7 @@ fn submodule_add_advanced_toggle_keeps_its_geometry_when_focused(cx: &mut gpui::
 
 #[gpui::test]
 fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -238,7 +238,7 @@ fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::T
 
 #[gpui::test]
 fn submodule_add_popover_escape_closes_from_advanced_toggle(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));

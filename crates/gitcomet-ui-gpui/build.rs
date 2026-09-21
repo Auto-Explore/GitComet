@@ -97,22 +97,22 @@ fn generate_icon_assets(manifest_dir: &std::path::Path, out_dir: &std::path::Pat
 fn main() {
     build_themes::generate_embedded_theme_registry();
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../../assets/splash_backdrop.svg");
 
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR missing"));
     generate_icon_assets(&manifest_dir, &out_dir);
-    let svg_path = manifest_dir.join("../../assets/splash_backdrop.svg");
-    let out_path =
-        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR missing")).join("splash_backdrop.png");
-
-    let svg_bytes = fs::read(&svg_path).expect("read splash_backdrop.svg");
-    let png = rasterize_svg_png(
-        &svg_bytes,
-        SPLASH_BACKDROP_RASTER_WIDTH_PX,
-        SPLASH_BACKDROP_MAX_EDGE_PX,
-    )
-    .expect("rasterize splash_backdrop.svg");
-    fs::write(out_path, png).expect("write splash_backdrop.png");
+    for variant in ["dark", "light"] {
+        let asset = format!("splash_backdrop_{variant}");
+        let svg_path = manifest_dir.join(format!("../../assets/{asset}.svg"));
+        println!("cargo:rerun-if-changed={}", svg_path.display());
+        let svg_bytes = fs::read(&svg_path).expect("read splash backdrop SVG");
+        let png = rasterize_svg_png(
+            &svg_bytes,
+            SPLASH_BACKDROP_RASTER_WIDTH_PX,
+            SPLASH_BACKDROP_MAX_EDGE_PX,
+        )
+        .expect("rasterize splash backdrop SVG");
+        fs::write(out_dir.join(format!("{asset}.png")), png).expect("write splash backdrop PNG");
+    }
 }

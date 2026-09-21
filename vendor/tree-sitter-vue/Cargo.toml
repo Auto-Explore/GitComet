@@ -50,4 +50,4 @@ tree-sitter-build = { path = "../tree-sitter-build" }
 # exactly the check whoever regenerates the grammar wants to be able to run. The
 # version tracks `tree-sitter` in the root Cargo.toml.
 [dev-dependencies]
-tree-sitter = "0.26.13"
+tree-sitter = "0.27.0"

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "gitcomet-win32-window-utils"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "windows-sys",
 ]

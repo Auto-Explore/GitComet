@@ -6,7 +6,6 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{env, fs, io};
@@ -36,6 +35,10 @@ pub struct UiSession {
     pub ui_scale_percent: Option<u32>,
     pub window_controls_mode: Option<String>,
     pub browser_open_target: Option<String>,
+    pub ui_density: Option<String>,
+    pub ui_font_size_px: Option<u32>,
+    pub editor_font_size_px: Option<u32>,
+    pub markdown_preview_font_size_px: Option<u32>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -43,6 +46,7 @@ pub struct UiSession {
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
+    pub file_list_layout: Option<String>,
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
@@ -51,6 +55,9 @@ pub struct UiSession {
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
+    pub remote_markdown_image_policy: Option<String>,
+    pub allowed_remote_protocols: Option<BTreeSet<String>>,
+    pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
@@ -59,6 +66,7 @@ pub struct UiSession {
     pub mergetool_view_three_way: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    pub history_branch_names: Option<String>,
     pub history_show_graph: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
@@ -68,12 +76,15 @@ pub struct UiSession {
     pub terminal_external_args: Option<Vec<String>>,
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
+    pub history_verify_commit_signatures: Option<bool>,
     pub history_relative_dates: Option<bool>,
     pub history_highlight_commit_chain: Option<bool>,
+    pub file_browser_follow_selected_commit: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
+    pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -118,6 +129,10 @@ struct UiSessionFile {
     ui_scale_percent: Option<u32>,
     window_controls_mode: Option<String>,
     browser_open_target: Option<String>,
+    ui_density: Option<String>,
+    ui_font_size_px: Option<u32>,
+    editor_font_size_px: Option<u32>,
+    markdown_preview_font_size_px: Option<u32>,
     ui_font_family: Option<String>,
     editor_font_family: Option<String>,
     use_font_ligatures: Option<bool>,
@@ -125,6 +140,7 @@ struct UiSessionFile {
     timezone: Option<String>,
     show_timezone: Option<bool>,
     change_tracking_view: Option<String>,
+    file_list_layout: Option<String>,
     diff_scroll_sync: Option<String>,
     diff_content_mode: Option<String>,
     diff_whitespace_mode: Option<String>,
@@ -133,6 +149,9 @@ struct UiSessionFile {
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
+    remote_markdown_image_policy: Option<String>,
+    allowed_remote_protocols: Option<BTreeSet<String>>,
+    check_for_updates_on_startup: Option<bool>,
     auto_save_file_edits: Option<bool>,
     mergetool_auto_advance: Option<bool>,
     mergetool_collapse_unchanged: Option<bool>,
@@ -141,6 +160,7 @@ struct UiSessionFile {
     mergetool_view_three_way: Option<bool>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
+    history_branch_names: Option<String>,
     history_show_graph: Option<bool>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
@@ -150,17 +170,22 @@ struct UiSessionFile {
     terminal_external_args: Option<Vec<String>>,
     terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
+    history_verify_commit_signatures: Option<bool>,
+    history_verify_commit_signatures_opt_in: Option<bool>,
     history_relative_dates: Option<bool>,
     history_highlight_commit_chain: Option<bool>,
+    file_browser_follow_selected_commit: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
     default_tag_type: Option<DefaultTagType>,
+    fetch_prune_deleted_remote_branches: Option<bool>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    #[serde(skip_serializing)]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
 }
@@ -267,6 +292,10 @@ pub fn load_from_path(path: &Path) -> UiSession {
         ui_scale_percent: file.ui_scale_percent,
         window_controls_mode: file.window_controls_mode,
         browser_open_target: file.browser_open_target,
+        ui_density: file.ui_density,
+        ui_font_size_px: file.ui_font_size_px,
+        editor_font_size_px: file.editor_font_size_px,
+        markdown_preview_font_size_px: file.markdown_preview_font_size_px,
         ui_font_family: file.ui_font_family,
         editor_font_family: file.editor_font_family,
         use_font_ligatures: file.use_font_ligatures,
@@ -274,6 +303,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         timezone: file.timezone,
         show_timezone: file.show_timezone,
         change_tracking_view: file.change_tracking_view,
+        file_list_layout: file.file_list_layout,
         diff_scroll_sync: file.diff_scroll_sync,
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
@@ -282,6 +312,9 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
+        remote_markdown_image_policy: file.remote_markdown_image_policy,
+        allowed_remote_protocols: file.allowed_remote_protocols,
+        check_for_updates_on_startup: file.check_for_updates_on_startup,
         auto_save_file_edits: file.auto_save_file_edits,
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,
@@ -296,6 +329,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
             .as_ref()
             .and_then(|layout| layout.untracked_height)
             .or(file.untracked_height),
+        history_branch_names: file.history_branch_names,
         history_show_graph: file.history_show_graph,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
@@ -305,12 +339,15 @@ pub fn load_from_path(path: &Path) -> UiSession {
         terminal_external_args: file.terminal_external_args,
         terminal_action_bar_target: file.terminal_action_bar_target,
         history_show_tags: file.history_show_tags,
+        history_verify_commit_signatures: file.history_verify_commit_signatures,
         history_relative_dates: file.history_relative_dates,
         history_highlight_commit_chain: file.history_highlight_commit_chain,
+        file_browser_follow_selected_commit: file.file_browser_follow_selected_commit,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
+        fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -325,7 +362,6 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
-    pub(crate) repo_fetch_prune_deleted_remote_tracking_branches: BTreeMap<String, bool>,
 }
 
 #[cfg(test)]
@@ -383,7 +419,7 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         .get("version")
         .and_then(|v| v.as_u64())
         .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
-    match version {
+    let mut file = match version {
         SESSION_FILE_VERSION_V1 => {
             let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
             Some(migrate_v3_file(UiSessionFile {
@@ -404,21 +440,21 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
             .ok()
             .map(migrate_v3_file),
         _ => None,
-    }
+    }?;
+    file = migrate_legacy_repo_fetch_prune_setting(file);
+    let enabled = file
+        .history_verify_commit_signatures_opt_in
+        .unwrap_or(false);
+    file.history_verify_commit_signatures = Some(enabled);
+    file.history_verify_commit_signatures_opt_in = Some(enabled);
+    Some(file)
 }
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
     preserve_pre_v4_session_backup(path, &contents)?;
-
-    let mut tmp_file = tempfile::NamedTempFile::new_in(parent)?;
-    tmp_file.write_all(&contents)?;
-    tmp_file.flush()?;
-
-    tmp_file.persist(path).map(|_| ()).map_err(|err| err.error)
+    // Records every open repository path; keep it owner-only.
+    gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
 
 fn default_session_file_path() -> Option<PathBuf> {

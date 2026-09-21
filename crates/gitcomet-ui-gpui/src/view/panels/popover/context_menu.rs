@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::ControlInteractionExt as _;
 
 mod branch;
 mod branch_group;
@@ -7,6 +8,7 @@ mod browse_history;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
+mod commit_file_sort;
 mod commit_options;
 mod commit_sha_link;
 mod conflict_resolver_chunk;
@@ -18,7 +20,9 @@ mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
 mod file_browser_folder;
+pub(super) mod file_history_commit;
 mod history_branch_filter;
+mod history_refs;
 mod mergetool_settings;
 mod pinned_section;
 mod previous_commit_messages;
@@ -26,6 +30,7 @@ mod pull;
 mod push;
 mod reflog_entry;
 mod remote;
+mod remote_web_picker;
 mod repo_picker_row;
 mod repo_tab;
 mod stash;
@@ -161,7 +166,25 @@ fn context_menu_entry_debug_selector(label: &str) -> String {
     }
 }
 
-fn context_menu_entry_action_at(model: &ContextMenuModel, ix: usize) -> Option<ContextMenuAction> {
+pub(super) fn selection_key(
+    model: &ContextMenuModel,
+    ix: usize,
+) -> Option<(std::mem::Discriminant<ContextMenuAction>, SharedString)> {
+    let ContextMenuItem::Entry { label, action, .. } = model.items.get(ix)? else {
+        return None;
+    };
+    let identity = match action.as_ref() {
+        ContextMenuAction::ToggleHistoryRefGroup { target } => format!("{target:?}").into(),
+        ContextMenuAction::PushWithTags { mode, .. } => mode.label().into(),
+        _ => label.clone(),
+    };
+    Some((std::mem::discriminant(action.as_ref()), identity))
+}
+
+pub(super) fn context_menu_entry_action_at(
+    model: &ContextMenuModel,
+    ix: usize,
+) -> Option<ContextMenuAction> {
     match model.items.get(ix) {
         Some(ContextMenuItem::Entry { action, .. }) => Some((**action).clone()),
         _ => None,
@@ -410,7 +433,7 @@ impl PopoverHost {
             }
             PopoverKind::RepoTabMenu { repo_id } => Some(repo_tab::model(self, *repo_id)),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
-                Some(commit::model(self, *repo_id, commit_id))
+                Some(history_refs::model(self, *repo_id, commit_id))
             }
             PopoverKind::ReflogEntryMenu {
                 repo_id,
@@ -420,21 +443,14 @@ impl PopoverHost {
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 Some(tag::model(self, *repo_id, commit_id))
             }
-            PopoverKind::TagRefMenu {
-                repo_id,
-                commit_id,
-                name,
-            } => Some(tag::model_for_tag(self, *repo_id, commit_id, name)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,
                 path,
             } => Some(status_file::model(self, *repo_id, *area, path, cx)),
-            PopoverKind::BranchMenu {
-                repo_id,
-                section,
-                name,
-            } => Some(branch::model(self, *repo_id, *section, name)),
+            PopoverKind::BranchMenu { repo_id, target } => {
+                Some(branch::model(self, *repo_id, target))
+            }
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 Some(branch_section::model(self, *repo_id, *section))
             }
@@ -442,7 +458,20 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
-            PopoverKind::WebLinkMenu { url } => Some(web_link::model(url)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+            } => Some(remote_web_picker::model(self, *repo_id)),
+            PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            } => {
+                let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
+                    self.main_pane.read(cx).remote_markdown_image_policy
+                        == RemoteMarkdownImagePolicy::AskBeforeLoading
+                });
+                Some(web_link::model(url, load_remote_image_url))
+            }
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,
@@ -474,6 +503,9 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::CommitFileSortMenu { list } => {
+                Some(commit_file_sort::model(self, *list, cx))
+            }
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
             }
@@ -609,9 +641,11 @@ impl PopoverHost {
             PopoverKind::InteractiveRebaseAutosquashMenu => {
                 Some(interactive_rebase_autosquash_menu_model())
             }
-            PopoverKind::TerminalMenu { repo_id, context } => {
-                Some(terminal::model(*repo_id, *context, cx))
-            }
+            PopoverKind::TerminalMenu {
+                repo_id,
+                session_seq,
+                context,
+            } => Some(terminal::model(*repo_id, *session_seq, *context, cx)),
             _ => None,
         }
     }
@@ -625,6 +659,21 @@ impl PopoverHost {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         match action {
+            ContextMenuAction::ToggleHistoryRefGroup { target } => {
+                self.expanded_history_ref = if self.expanded_history_ref.as_ref() == Some(&target) {
+                    None
+                } else {
+                    Some(target.clone())
+                };
+                if let Some(kind) = self.popover.as_ref()
+                    && let Some(model) = self.context_menu_model(kind, cx)
+                {
+                    self.context_menu_selected_ix = model.items.iter().position(|item| matches!(item,
+                        ContextMenuItem::Entry { action, .. } if matches!(action.as_ref(), ContextMenuAction::ToggleHistoryRefGroup { target: candidate } if candidate == &target)));
+                }
+                cx.notify();
+                return;
+            }
             ContextMenuAction::AppMenu(action) => {
                 app_menu::activate(self, action, window, cx);
                 return;
@@ -632,6 +681,39 @@ impl PopoverHost {
             ContextMenuAction::AddRepoMenu(action) => {
                 add_repo_menu::activate(self, action, window, cx);
                 return;
+            }
+            ContextMenuAction::ShowFileChangesAtCommit {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                self.store.dispatch(Msg::ShowFileChangesAtCommit {
+                    repo_id,
+                    commit_id,
+                    path,
+                });
+            }
+            ContextMenuAction::OpenFileAtCommit {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                self.store.dispatch(Msg::OpenFileAtCommit {
+                    repo_id,
+                    commit_id,
+                    path,
+                });
+            }
+            ContextMenuAction::OpenFileAtCommitParent {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                self.store.dispatch(Msg::OpenFileAtCommitParent {
+                    repo_id,
+                    commit_id,
+                    path,
+                });
             }
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
@@ -997,8 +1079,14 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::RevertCommit { repo_id, commit_id } => {
-                self.store
-                    .dispatch(Msg::RevertCommit { repo_id, commit_id });
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::RevertCommitConfirm { repo_id, commit_id },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
             }
             ContextMenuAction::SquashSelectedCommits { repo_id } => {
                 // PrepareSquash and the eventual SquashCommits are both
@@ -1036,6 +1124,11 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
+            }
+            ContextMenuAction::SetCommitFileSort { list, sort } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_file_list_sort(list, sort, cx);
+                });
             }
             ContextMenuAction::SetDiffContentMode { mode } => {
                 self.diff_content_mode = mode;
@@ -1311,8 +1404,43 @@ impl PopoverHost {
                 );
                 return;
             }
+            ContextMenuAction::PushWithTags { repo_id, mode } => {
+                let anchor = self.popover_anchor_point();
+                if self.push_with_tags(repo_id, mode, Some(anchor), window, cx) {
+                    return;
+                }
+            }
             ContextMenuAction::Push { repo_id } => {
-                self.store.dispatch(Msg::Push { repo_id });
+                let request = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(push_request)
+                    .unwrap_or(PushRequest::NotReady);
+                match request {
+                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
+                    PushRequest::SetUpstream { remote } => {
+                        let anchor = self.popover_anchor_point();
+                        self.open_popover_at(
+                            PopoverKind::PushSetUpstreamPrompt {
+                                repo_id,
+                                remote,
+                                configure_only_for: None,
+                            },
+                            anchor,
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    PushRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PushRequest::NotReady => {}
+                }
             }
             ContextMenuAction::SetUpstreamBranch {
                 repo_id,
@@ -1498,6 +1626,11 @@ impl PopoverHost {
                     cx,
                 );
             }
+            ContextMenuAction::LoadRemoteMarkdownImage { url } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.approve_remote_markdown_image(url, cx);
+                });
+            }
             ContextMenuAction::OpenWebUrl { url } => {
                 crate::view::platform_open::spawn_launch(
                     cx,
@@ -1527,31 +1660,44 @@ impl PopoverHost {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
                 });
             }
-            ContextMenuAction::TerminalCopy { repo_id } => {
+            ContextMenuAction::TerminalCommand {
+                repo_id,
+                session_seq,
+                command,
+            } => {
                 window.activate_window();
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.copy_terminal_selection_for_repo(repo_id, window, cx);
-                });
+                let dispatched = self
+                    .root_view
+                    .update(cx, |root, cx| {
+                        root.dispatch_terminal_command(repo_id, session_seq, command, window, cx)
+                    })
+                    .unwrap_or(false);
+                if !dispatched {
+                    self.close_popover(cx);
+                    return;
+                }
             }
-            ContextMenuAction::TerminalPaste { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.paste_terminal_clipboard_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalSelectAll { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.select_all_terminal_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalClear { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.clear_terminal_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalOpenExternal { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.open_external_terminal_from_menu(repo_id, window, cx);
-                });
+            ContextMenuAction::TerminalOpenExternal {
+                repo_id,
+                session_seq,
+            } => {
+                let dispatched = self
+                    .root_view
+                    .update(cx, |root, cx| {
+                        if root
+                            .terminal_viewport_for_session(repo_id, session_seq)
+                            .is_none()
+                        {
+                            return false;
+                        }
+                        root.open_external_terminal_from_menu(repo_id, window, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !dispatched {
+                    self.close_popover(cx);
+                    return;
+                }
             }
             ContextMenuAction::ApplyIndexPatch {
                 repo_id,
@@ -1953,6 +2099,15 @@ impl PopoverHost {
         crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)
     }
 
+    fn scroll_context_menu_selection(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if let Some(anchor) = self
+            .context_menu_selected_ix
+            .and_then(|ix| self.context_menu_scroll_anchors.get(ix))
+        {
+            anchor.scroll_to(window, cx);
+        }
+    }
+
     pub(super) fn context_menu_view(
         &mut self,
         kind: PopoverKind,
@@ -1964,6 +2119,11 @@ impl PopoverHost {
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
+        self.context_menu_scroll_anchors
+            .resize_with(model.items.len(), || {
+                gpui::ScrollAnchor::for_handle(self.context_menu_scroll.clone())
+            });
+        let scroll_anchors = self.context_menu_scroll_anchors.clone();
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
@@ -1998,6 +2158,9 @@ impl PopoverHost {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    // Entries activate on mouse-*up*, so without this the press
+                    // would collapse the very selection a Copy entry reads.
+                    crate::text_selection_owner::preserve(cx);
                     window.focus(&this.context_menu_focus_handle, cx);
                 }),
             )
@@ -2014,11 +2177,36 @@ impl PopoverHost {
                             cx.stop_propagation();
                             this.close_popover_and_restore_focus(window, cx);
                         }
+                        "right" => {
+                            if let Some(ix) = this.context_menu_selected_ix
+                                && let Some(ContextMenuAction::ToggleHistoryRefGroup { target }) =
+                                    context_menu_entry_action_at(&model_for_keys, ix)
+                                && this.expanded_history_ref.as_ref() != Some(&target)
+                            {
+                                cx.stop_propagation();
+                                this.context_menu_activate_action(
+                                    ContextMenuAction::ToggleHistoryRefGroup { target },
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                        "left" => {
+                            if let Some(target) = this.expanded_history_ref.clone() {
+                                cx.stop_propagation();
+                                this.context_menu_activate_action(
+                                    ContextMenuAction::ToggleHistoryRefGroup { target },
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
                         "up" => {
                             cx.stop_propagation();
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, -1);
                             this.context_menu_selected_ix = next;
+                            this.scroll_context_menu_selection(window, cx);
                             cx.notify();
                         }
                         "down" => {
@@ -2026,6 +2214,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, 1);
                             this.context_menu_selected_ix = next;
+                            this.scroll_context_menu_selection(window, cx);
                             cx.notify();
                         }
                         "tab" => {
@@ -2033,16 +2222,19 @@ impl PopoverHost {
                             let direction = if mods.shift { -1 } else { 1 };
                             this.context_menu_selected_ix = model_for_keys
                                 .next_selectable(this.context_menu_selected_ix, direction);
+                            this.scroll_context_menu_selection(window, cx);
                             cx.notify();
                         }
                         "home" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.first_selectable();
+                            this.scroll_context_menu_selection(window, cx);
                             cx.notify();
                         }
                         "end" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.last_selectable();
+                            this.scroll_context_menu_selection(window, cx);
                             cx.notify();
                         }
                         "enter" | "space" => {
@@ -2179,8 +2371,7 @@ impl PopoverHost {
                         let tooltip_host_for_move = tooltip_host.clone();
                         let tooltip_text_for_move = tooltip_text.clone();
                         let tooltip_host_for_hover = tooltip_host.clone();
-                        let activate_on_left_release = model_for_mouse.clone();
-                        let activate_on_right_release = model_for_mouse.clone();
+                        let activate_on_release = model_for_mouse.clone();
                         let icon_slot = match icon {
                             Some(icon) => components::ContextMenuIconSlot::Icon(icon),
                             None if reserve_icon_column => {
@@ -2197,6 +2388,7 @@ impl PopoverHost {
                                 .disabled(disabled)
                                 .tooltip_host(tooltip_host.clone())
                                 .render(theme, ui_scale, cx)
+                                .anchor_scroll(scroll_anchors.get(ix).cloned())
                                 .debug_selector(move || debug_selector.clone());
 
                         row.on_mouse_move(cx.listener(
@@ -2224,32 +2416,17 @@ impl PopoverHost {
                                 });
                             }
                         }))
-                        .when(!disabled, |row| {
-                            row.on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_left_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Right,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_right_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                        })
+                        .on_menu_activate(
+                            disabled,
+                            cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                this.context_menu_activate_model_entry(
+                                    &activate_on_release,
+                                    ix,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
                         .into_any_element()
                     }
                 }

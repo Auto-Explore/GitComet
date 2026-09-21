@@ -658,7 +658,7 @@ fn parse_app_mode_from_args_env_and_config(
 ) -> Result<AppMode, String> {
     let normalized_args = normalize_empty_mergetool_base_arg(&args);
 
-    match Cli::try_parse_from(normalized_args.clone()) {
+    match Cli::try_parse_from(normalized_args.iter()) {
         Ok(cli) => match cli.command {
             None => Ok(AppMode::Browser { path: cli.path }),
             Some(Command::Difftool(args)) => {

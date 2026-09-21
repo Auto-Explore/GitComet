@@ -2,7 +2,7 @@ use super::*;
 
 #[gpui::test]
 fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(3);
@@ -24,8 +24,8 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: a.clone(),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -36,7 +36,7 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
+                    ]),
                 }
                 .into(),
             );
@@ -44,22 +44,23 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.insert(
                     repo_id,
                     StatusMultiSelection {
+                        explicit_section: Some(StatusSection::CombinedUnstaged),
                         untracked: vec![],
                         untracked_anchor: None,
                         unstaged: vec![a.clone(), b.clone()],
                         unstaged_anchor: Some(a.clone()),
                         unstaged_anchor_index: None,
-                        unstaged_anchor_status_rev: None,
+                        unstaged_anchor_order_rev: None,
                         staged: vec![],
                         staged_anchor: None,
                         staged_anchor_index: None,
-                        staged_anchor_status_rev: None,
+                        staged_anchor_order_rev: None,
                     },
                 );
                 cx.notify();
@@ -108,7 +109,7 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(4);
@@ -130,7 +131,7 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![
+                    staged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: a.clone(),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -141,8 +142,8 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
-                    unstaged: vec![],
+                    ]),
+                    unstaged: std::sync::Arc::new(vec![]),
                 }
                 .into(),
             );
@@ -150,22 +151,23 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.insert(
                     repo_id,
                     StatusMultiSelection {
+                        explicit_section: Some(StatusSection::Staged),
                         untracked: vec![],
                         untracked_anchor: None,
                         unstaged: vec![],
                         unstaged_anchor: None,
                         unstaged_anchor_index: None,
-                        unstaged_anchor_status_rev: None,
+                        unstaged_anchor_order_rev: None,
                         staged: vec![a.clone(), b.clone()],
                         staged_anchor: Some(a.clone()),
                         staged_anchor_index: None,
-                        staged_anchor_status_rev: None,
+                        staged_anchor_order_rev: None,
                     },
                 );
                 cx.notify();
@@ -214,7 +216,7 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(5);
@@ -234,19 +236,19 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Conflicted,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -341,7 +343,7 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(7);
@@ -361,19 +363,19 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Conflicted,
                         conflict: None,
-                    }],
-                    unstaged: vec![],
+                    }]),
+                    unstaged: std::sync::Arc::new(vec![]),
                 }
                 .into(),
             );
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -415,7 +417,7 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
 
 #[gpui::test]
 fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(8);
@@ -435,12 +437,12 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -461,7 +463,7 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -496,7 +498,7 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9);
@@ -516,12 +518,12 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -541,7 +543,7 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -590,7 +592,7 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
 fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(6);
@@ -610,19 +612,19 @@ fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Conflicted,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             cx.notify();
         });
@@ -654,7 +656,7 @@ fn status_menu_for(
     selection: &[&str],
     clicked: &str,
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(7);
@@ -684,15 +686,15 @@ fn status_menu_for(
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged,
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(unstaged),
                 }
                 .into(),
             );
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             // In the running app the host mirrors the UI model through an
@@ -705,16 +707,17 @@ fn status_menu_for(
                     pane.status_multi_selection.insert(
                         repo_id,
                         StatusMultiSelection {
+                            explicit_section: Some(StatusSection::CombinedUnstaged),
                             untracked: vec![],
                             untracked_anchor: None,
                             unstaged: selection.clone(),
                             unstaged_anchor: selection.first().cloned(),
                             unstaged_anchor_index: None,
-                            unstaged_anchor_status_rev: None,
+                            unstaged_anchor_order_rev: None,
                             staged: vec![],
                             staged_anchor: None,
                             staged_anchor_index: None,
-                            staged_anchor_status_rev: None,
+                            staged_anchor_order_rev: None,
                         },
                     );
                     cx.notify();

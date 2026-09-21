@@ -38,6 +38,7 @@ pub(super) enum StoreExecutorPool {
     Primary,
     RepoLoad,
     Metadata,
+    Signatures,
     SessionPersist,
 }
 
@@ -60,6 +61,9 @@ pub(super) struct TaskExecutor {
 /// process survived it — unchanged by this recovery, which only decides whether
 /// the worker thread lives.
 fn worker_loop(rx: Arc<std::sync::Mutex<mpsc::Receiver<Task>>>) {
+    // These long-lived workers run unrelated jobs across repositories. Mark
+    // each worker once, before its first task, for mimalloc's locality heuristics.
+    rustfs_mimalloc::set_current_thread_in_threadpool();
     loop {
         let task = {
             let rx = rx.lock().unwrap_or_else(|e| e.into_inner());
@@ -126,6 +130,7 @@ impl TaskExecutor {
 
         static PRIMARY: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static REPO_LOAD: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static SIGNATURES: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
@@ -133,6 +138,9 @@ impl TaskExecutor {
             StoreExecutorPool::Primary => sender_for(&PRIMARY, "gitcomet-store-primary", threads),
             StoreExecutorPool::RepoLoad => {
                 sender_for(&REPO_LOAD, "gitcomet-store-repo-load", threads)
+            }
+            StoreExecutorPool::Signatures => {
+                sender_for(&SIGNATURES, "gitcomet-store-signatures", threads)
             }
             StoreExecutorPool::Metadata => {
                 sender_for(&METADATA, "gitcomet-store-metadata", threads)

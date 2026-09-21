@@ -343,5 +343,5 @@ pub(super) fn preserve_pre_v4_session_backup(path: &Path, replacement: &[u8]) ->
     if backup_path.exists() {
         return Ok(());
     }
-    fs::copy(path, backup_path).map(|_| ())
+    gitcomet_core::fs_utils::write_private_file(&backup_path, &previous)
 }

@@ -389,7 +389,13 @@ fn aligned_row_kind(row: &AlignedRow, three_way: bool) -> AlignedRunKind {
 
 fn aligned_plan_to_runs(plan: &MergePlan) -> Vec<AlignedRun> {
     let three_way = plan.has_base();
-    let mut forced_conflict = vec![false; plan.rows.len()];
+    // Only two-input plans force rows; `aligned_rows_to_runs` treats an
+    // out-of-range index as not forced, so three-way plans pass no vector.
+    let mut forced_conflict = if three_way {
+        Vec::new()
+    } else {
+        vec![false; plan.rows.len()]
+    };
 
     // In true two-input mode KDiff3 groups an uneven replacement as one
     // conflict block. The aligned-row projection must keep that block whole:
@@ -508,25 +514,22 @@ impl<'a> MergePlanLineSlices<'a> {
         }
     }
 
-    fn block_source_lines(
-        &self,
-        plan: &MergePlan,
+    fn block_source_lines<'s>(
+        &'s self,
+        plan: &'s MergePlan,
         block: &MergeBlock,
         source: MergeSource,
-    ) -> Vec<&'a str> {
+    ) -> impl Iterator<Item = &'a str> + 's {
         let source_lines = self.source(source);
-        plan.rows[block.rows.clone()]
-            .iter()
-            .filter_map(|row| {
-                row.line(source)
-                    .and_then(|index| source_lines.get(index).copied())
-            })
-            .collect()
+        plan.rows[block.rows.clone()].iter().filter_map(move |row| {
+            row.line(source)
+                .and_then(|index| source_lines.get(index).copied())
+        })
     }
 
-    fn block_ancestor_lines(&self, plan: &MergePlan, block: &MergeBlock) -> Vec<&'a str> {
+    fn block_ancestor_lines(&self, plan: &MergePlan, block: &MergeBlock) -> &[&'a str] {
         if !plan.has_base() {
-            return Vec::new();
+            return &[];
         }
         let start = plan.rows[..block.rows.start]
             .iter()
@@ -539,7 +542,7 @@ impl<'a> MergePlanLineSlices<'a> {
             .find(|row| row.equal_ab && row.equal_ac)
             .and_then(|row| row.a)
             .unwrap_or(self.a.len());
-        self.a[start.min(end)..end].to_vec()
+        &self.a[start.min(end)..end]
     }
 }
 
@@ -565,18 +568,16 @@ fn render_plan_conflict(
 ) {
     let ours: Vec<Cow<'_, str>> = lines
         .block_source_lines(plan, block, plan.local_source())
-        .into_iter()
         .map(Cow::Borrowed)
         .collect();
     let theirs: Vec<Cow<'_, str>> = lines
         .block_source_lines(plan, block, plan.remote_source())
-        .into_iter()
         .map(Cow::Borrowed)
         .collect();
     let base = lines.block_ancestor_lines(plan, block);
 
     if plan.has_base() {
-        emit_conflict_markers(output, &ours, &theirs, &base, options, plan.line_ending);
+        emit_conflict_markers(output, &ours, &theirs, base, options, plan.line_ending);
     } else {
         // Diff3/zdiff3 have no ancestor section in true two-input mode.
         let mut two_input_options = options.clone();
@@ -594,7 +595,10 @@ fn render_plan_conflict(
 
 /// Render a shared merge plan using the requested marker and strategy options.
 pub fn render_merge_plan(plan: &MergePlan, options: &MergeOptions) -> MergeResult {
-    let mut output = String::new();
+    // A merge output is at least as long as its larger contributor except
+    // when whole blocks are dropped; growing from empty re-copied the buffer
+    // ~20 times for a multi-megabyte file.
+    let mut output = String::with_capacity(plan.local.len().max(plan.remote.len()));
     let mut conflict_count = 0usize;
     let lines = MergePlanLineSlices::new(plan);
     let final_block_is_manual = plan

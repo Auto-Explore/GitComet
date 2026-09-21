@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use rustc_hash::FxHasher;
 
 fn diff_text_empty_space_surface(
@@ -17,11 +18,11 @@ fn diff_text_empty_space_surface(
             let focus = left_view.read(cx).diff_panel_focus_handle.clone();
             window.focus(&focus, cx);
             left_view.update(cx, |this, cx| {
-                this.handle_diff_text_empty_space_mouse_down(region, event.position, cx);
+                this.handle_diff_text_empty_space_mouse_down(region, event.position, window, cx);
                 cx.notify();
             });
         })
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(MouseButton::Right, move |event, window, cx| {
             crate::press_gesture::claim_press(cx);
             cx.stop_propagation();
             let focus = right_view.read(cx).diff_panel_focus_handle.clone();

@@ -1,6 +1,6 @@
 use super::*;
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
-use alacritty_terminal::event_loop::{EventLoop, Msg};
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSendError, Msg};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Point as AlacPoint;
 use alacritty_terminal::sync::FairMutex;
@@ -149,8 +149,6 @@ pub(super) enum TerminalBackendEvent {
     /// these via the event proxy and relies on us to forward them.
     PtyWrite(String),
     Title(String),
-    ClipboardStore(String),
-    ClipboardLoad,
     Wakeup,
     Bell,
     Exit,
@@ -163,8 +161,12 @@ impl From<AlacEvent> for TerminalBackendEvent {
         match event {
             AlacEvent::PtyWrite(text) => Self::PtyWrite(text),
             AlacEvent::Title(title) => Self::Title(title),
-            AlacEvent::ClipboardStore(_, data) => Self::ClipboardStore(data),
-            AlacEvent::ClipboardLoad(_, _) => Self::ClipboardLoad,
+            // OSC 52 is disabled in `terminal_config`, so the emulator never
+            // raises these. They stay explicitly inert rather than growing a
+            // handler: program output must not write to or read the system
+            // clipboard, and a clipboard read pushed into the PTY would be
+            // unbracketed keystrokes.
+            AlacEvent::ClipboardStore(..) | AlacEvent::ClipboardLoad(..) => Self::Wakeup,
             AlacEvent::Wakeup => Self::Wakeup,
             AlacEvent::Bell => Self::Bell,
             AlacEvent::Exit => Self::Exit,
@@ -187,30 +189,48 @@ pub(super) struct SpawnedAlacTerminal {
 }
 
 #[derive(Clone)]
-pub(super) struct PtySender {
-    event_loop_tx: alacritty_terminal::event_loop::EventLoopSender,
+pub(super) enum PtySender {
+    EventLoop(alacritty_terminal::event_loop::EventLoopSender),
+    #[cfg(test)]
+    Recording(smol::channel::Sender<Msg>),
 }
 
 impl PtySender {
+    fn send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        match self {
+            Self::EventLoop(sender) => sender.send(msg),
+            #[cfg(test)]
+            Self::Recording(sender) => {
+                sender.try_send(msg).ok();
+                Ok(())
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn recording() -> (Self, smol::channel::Receiver<Msg>) {
+        let (sender, receiver) = smol::channel::unbounded();
+        (Self::Recording(sender), receiver)
+    }
+
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        if let Err(err) = self.event_loop_tx.send(Msg::Input(bytes.into())) {
+        if let Err(err) = self.send(Msg::Input(bytes.into())) {
             eprintln!("terminal: failed to write input to pty: {err}");
         }
     }
 
     pub fn resize(&self, columns: usize, screen_lines: usize) {
-        self.event_loop_tx
-            .send(Msg::Resize(alacritty_terminal::event::WindowSize {
-                num_lines: screen_lines as u16,
-                num_cols: columns as u16,
-                cell_width: 1,
-                cell_height: 1,
-            }))
-            .ok();
+        self.send(Msg::Resize(alacritty_terminal::event::WindowSize {
+            num_lines: screen_lines as u16,
+            num_cols: columns as u16,
+            cell_width: 1,
+            cell_height: 1,
+        }))
+        .ok();
     }
 
     pub fn shutdown(&self) {
-        self.event_loop_tx.send(Msg::Shutdown).ok();
+        self.send(Msg::Shutdown).ok();
     }
 }
 
@@ -281,7 +301,7 @@ pub(super) fn spawn_alacritty_terminal(
     Ok(SpawnedAlacTerminal {
         term_lock,
         events_rx,
-        pty_sender: PtySender { event_loop_tx },
+        pty_sender: PtySender::EventLoop(event_loop_tx),
         child_pid,
     })
 }
@@ -327,6 +347,39 @@ pub(super) fn new_term(
 ) -> AlacrittyTermLock {
     let term = Term::new(config.clone(), bounds, GitCometListener { events_tx });
     Arc::new(FairMutex::new(term))
+}
+
+/// Clear both grids without resetting terminal modes or sending input to the
+/// running process. In particular, leaving an alternate screen must not bring
+/// back the primary screen's old output or scrollback.
+pub(super) fn clear_terminal_screen_and_scrollback(term: &mut Term<GitCometListener>) {
+    let mut cursor = term.grid().cursor.clone();
+    let mut saved_cursor = term.grid().saved_cursor.clone();
+    cursor.point = AlacPoint::default();
+    cursor.input_needs_wrap = false;
+    saved_cursor.point = AlacPoint::default();
+    saved_cursor.input_needs_wrap = false;
+
+    term.grid_mut().reset();
+    // The inactive grid is private. Swapping twice restores the original
+    // screen and its keyboard mode stack, and marks the terminal fully damaged.
+    term.swap_alt();
+    let mut inactive_cursor = term.grid().cursor.clone();
+    let mut inactive_saved_cursor = term.grid().saved_cursor.clone();
+    inactive_cursor.point = AlacPoint::default();
+    inactive_cursor.input_needs_wrap = false;
+    inactive_saved_cursor.point = AlacPoint::default();
+    inactive_saved_cursor.input_needs_wrap = false;
+    term.grid_mut().reset();
+    term.grid_mut().cursor = inactive_cursor;
+    term.grid_mut().saved_cursor = inactive_saved_cursor;
+    term.swap_alt();
+
+    // Entering the alternate screen copies the primary cursor, so restore the
+    // active screen's rendition and character sets after the swaps.
+    term.grid_mut().cursor = cursor;
+    term.grid_mut().saved_cursor = saved_cursor;
+    term.vi_mode_cursor.point = AlacPoint::default();
 }
 
 fn pty_child_pid(pty: &tty::Pty) -> Option<u32> {
@@ -1663,6 +1716,32 @@ impl gpui::InputHandler for TerminalTextInputHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Program output must never reach the system clipboard, nor pull it into
+    /// the PTY: OSC 52 stays disabled and the emulator's clipboard events map
+    /// to nothing.
+    #[test]
+    fn terminal_config_disables_osc52() {
+        let config = terminal_config(TERMINAL_SCROLLBACK_ROWS);
+        assert!(matches!(config.osc52, Osc52::Disabled));
+    }
+
+    #[test]
+    fn clipboard_events_from_the_emulator_are_inert() {
+        use alacritty_terminal::term::ClipboardType;
+
+        let store = TerminalBackendEvent::from(AlacEvent::ClipboardStore(
+            ClipboardType::Clipboard,
+            "exfiltrated".to_string(),
+        ));
+        assert!(matches!(store, TerminalBackendEvent::Wakeup));
+
+        let load = TerminalBackendEvent::from(AlacEvent::ClipboardLoad(
+            ClipboardType::Clipboard,
+            std::sync::Arc::new(|text: &str| text.to_string()),
+        ));
+        assert!(matches!(load, TerminalBackendEvent::Wakeup));
+    }
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
     use alacritty_terminal::term::cell::Cell as AlacCell;
     use gpui::{FontStyle, FontWeight, WhiteSpace};

@@ -15,14 +15,16 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::git_operation::GitOperationId;
-use gitcomet_core::process::refresh_git_runtime;
-use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::process::current_git_runtime;
+use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DefaultTagType,
-    DiagnosticKind, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable, RepoId,
-    RepoState, SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
+    BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
+    FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
+    RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
-use gitcomet_state::msg::{Msg, StoreEvent};
+use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
@@ -37,12 +39,54 @@ use gpui::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
+
+/// An invoker travels with the surface it opens, so opening and highlighting
+/// are one operation. Root requests start a new workflow; host-local requests
+/// can continue the current one.
+#[derive(Clone)]
+pub(in crate::view) struct PopoverRequest {
+    kind: PopoverKind,
+    invoker: Option<SharedString>,
+    focus_return: Option<FocusHandle>,
+    new_source: bool,
+}
+
+impl From<PopoverKind> for PopoverRequest {
+    fn from(kind: PopoverKind) -> Self {
+        Self {
+            kind,
+            invoker: None,
+            focus_return: None,
+            new_source: false,
+        }
+    }
+}
+
+impl PopoverRequest {
+    pub(in crate::view) fn returning_focus_to(mut self, focus: FocusHandle) -> Self {
+        self.focus_return = Some(focus);
+        self
+    }
+}
+
+impl PopoverKind {
+    pub(in crate::view) fn invoked_by(self, invoker: SharedString) -> PopoverRequest {
+        PopoverRequest {
+            kind: self,
+            invoker: Some(invoker),
+            focus_return: None,
+            new_source: true,
+        }
+    }
+}
 
 const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 
@@ -51,7 +95,6 @@ const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 /// generous enough for a loaded system, short enough that a genuine alt-tab
 /// right after a drag is not mistaken for the grab.
 const WINDOW_GRAB_DEACTIVATE_GRACE: Duration = Duration::from_millis(1_500);
-
 /// Upper bound on how long a drag may hold the grab before the re-activation is
 /// no longer treated as its echo. Only a safety valve: arming already requires a
 /// fresh grab plus a deactivation within [`WINDOW_GRAB_DEACTIVATE_GRACE`].
@@ -75,14 +118,33 @@ actions!(
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
+        PushUpstreamRemoteClose,
+        PushUpstreamRemoteNext,
+        PushUpstreamRemoteOpenOrSelect,
+        PushUpstreamRemotePrev,
         TerminalCopy,
         TerminalPaste,
         TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
+        ToggleRevealCommit,
         LocateFileInExplorer,
+        OpenRemoteInBrowser,
     ]
 );
+
+/// Chords owned by a focused status section, including empty sections.
+pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    let mods = keystroke.modifiers;
+    if mods.alt || mods.shift || mods.function {
+        return false;
+    }
+    if mods.control || mods.platform {
+        matches!(keystroke.key.as_str(), "a" | "s" | "u")
+    } else {
+        keystroke.key == "space"
+    }
+}
 
 pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
     let key = keystroke.key.as_str();
@@ -147,17 +209,18 @@ fn repo_activation_msg(
 mod app_model;
 mod branch_sidebar;
 mod caches;
-mod chrome;
+pub(crate) mod chrome;
 pub(crate) mod clone_progress;
 mod color;
 mod command_palette;
 mod commit_message_hover;
 mod commit_message_text;
+mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
-mod diff_navigation;
+pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
@@ -187,6 +250,7 @@ mod preference_sync;
 mod preferences;
 mod reflog_panel;
 mod repo_open;
+mod reveal_commit;
 pub(crate) mod rows;
 mod settings_window;
 pub(crate) mod shortcut_labels;
@@ -202,16 +266,17 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
+pub(crate) use update_check::update_checks_disabled_by_environment;
 mod user_survey;
 mod word_diff;
 
 use app_model::AppUiModel;
-use branch_sidebar::{BranchSection, BranchSidebarRow};
+use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryCache,
-    HistoryCacheBuildRequest, HistoryDecorationCache, HistoryDecorationCacheRequest,
-    HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind,
-    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryBranchChipKind,
+    HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest, HistoryDecorationCache,
+    HistoryDecorationCacheRequest, HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem,
+    HistoryRefListItemKind, HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
@@ -223,7 +288,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
-use preferences::UiPreferences;
+use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
@@ -260,7 +325,7 @@ pub use mod_helpers::{
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_height,
+    action_bar_density, action_bar_height,
 };
 pub(crate) use panes::MainPaneView;
 use panes::{
@@ -270,13 +335,14 @@ use panes::{
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
-use tooltip::GitCometTooltipExt;
+pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
-use color::with_alpha;
-use icons::{svg_icon, svg_spinner};
+use color::{composite_over, with_alpha};
+pub(crate) use icons::svg_icon;
+use icons::svg_spinner;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;
@@ -288,7 +354,9 @@ const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
 const HISTORY_COL_BRANCH_MAX_PX: f32 = 320.0;
-const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
+/// One lane: the graph's left and right insets around column 0; every other lane
+/// pins onto it.
+const HISTORY_COL_GRAPH_MIN_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX + HISTORY_GRAPH_MARGIN_RIGHT_PX;
 const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
 const HISTORY_COL_AUTHOR_MAX_PX: f32 = 260.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
@@ -300,7 +368,12 @@ const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
 const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
-const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
+/// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px
+/// padding.
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 12.0;
+/// Inset from the graph cell's right edge to the right-most lane, wider than the
+/// left one so a 16px node keeps 8px clear of the message border.
+const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 16.0;
 /// Corner radius where a graph line turns between columns. Against a 16px column
 /// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
 /// per column crossed and 8px of straight vertical below the corner, so the turn
@@ -321,11 +394,9 @@ const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;
 /// Alpha of the hover branch badge. Faint by design -- it is an on-demand hint
 /// in a column that otherwise holds solid ref chips, and must not read as one.
 const HISTORY_BRANCH_BADGE_ALPHA: f32 = 0.70;
-/// Width of the lane-coloured border down the left edge of the message cell.
+/// Width of the lane-coloured border down the left edge of the message cell. It
+/// spans the full row height with square ends.
 const HISTORY_MESSAGE_BORDER_W_PX: f32 = 3.0;
-/// Vertical inset of that border, so consecutive rows read as separate borders
-/// rather than as one continuous stripe down the list.
-const HISTORY_MESSAGE_BORDER_INSET_Y_PX: f32 = 3.0;
 /// Gap between that border and the message text.
 const HISTORY_MESSAGE_BORDER_GAP_PX: f32 = 6.0;
 
@@ -372,15 +443,58 @@ pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: 
     element
 }
 
-// Only use these wrappers for views that remain mounted while their parent is mounted.
-// Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
+// A cached view reuses its previous frame's layout and paint whenever the frame
+// was requested through `notify` on some other view (spinner ticks, store
+// updates elsewhere) and its own bounds, content mask and text style are
+// unchanged; `window.refresh()` frames (hover changes) bypass every cache.
+//
+// Unmounting is safe: GPUI keeps only the element states accessed during a
+// frame, so a pane collapsed for one frame loses its cache entry and renders
+// from scratch when it returns. The wrapper needs a definite size, which the
+// helpers below provide; the view's own root must fill it (`size_full`), since
+// a cached root is laid out against the wrapper's bounds rather than stretched
+// by a flex parent.
+#[cfg(test)]
+thread_local! {
+    static STABLE_CACHED_VIEWS_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+struct StableCachedViewsTestGuard(bool);
+
+#[cfg(test)]
+impl Drop for StableCachedViewsTestGuard {
+    fn drop(&mut self) {
+        STABLE_CACHED_VIEWS_ENABLED.with(|enabled| enabled.set(self.0));
+    }
+}
+
+#[cfg(test)]
+fn enable_stable_cached_views_for_test() -> StableCachedViewsTestGuard {
+    let previous = STABLE_CACHED_VIEWS_ENABLED.with(|enabled| enabled.replace(true));
+    StableCachedViewsTestGuard(previous)
+}
+
+fn stable_cached_views_enabled() -> bool {
+    #[cfg(test)]
+    {
+        STABLE_CACHED_VIEWS_ENABLED.with(Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
 fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyElement {
     let view = AnyView::from(view);
-    // GPUI's cached mount path skips some test-only debug bounds and paint tracking.
-    if cfg!(test) {
-        view.into_any_element()
-    } else {
+    // Most visual tests need uncached mounts because GPUI's reuse path does not
+    // replay test-only debug bounds. Focused cache-invalidation tests opt in so
+    // production cache behavior remains covered.
+    if stable_cached_views_enabled() {
         view.cached(style).into_any_element()
+    } else {
+        view.into_any_element()
     }
 }
 
@@ -647,6 +761,7 @@ pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FO
 
 mod gitcomet_view;
 mod gitcomet_view_render;
+mod runtime_probe;
 
 #[cfg(test)]
 mod tests;

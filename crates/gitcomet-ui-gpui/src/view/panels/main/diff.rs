@@ -206,14 +206,14 @@ impl MainPaneView {
                                         .object_fit(gpui::ObjectFit::Contain)
                                         .with_loading(move || {
                                             div()
-                                                .text_sm()
+                                                .text_size(theme.ui_text(14.0))
                                                 .text_color(muted)
                                                 .child("Processing image...")
                                                 .into_any_element()
                                         })
                                         .with_fallback(move || {
                                             div()
-                                                .text_sm()
+                                                .text_size(theme.ui_text(14.0))
                                                 .text_color(muted)
                                                 .child("Preview unavailable.")
                                                 .into_any_element()
@@ -230,7 +230,7 @@ impl MainPaneView {
                                         .into_any_element()
                                     }
                                     None => div()
-                                        .text_sm()
+                                        .text_size(theme.ui_text(14.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .child("No image")
                                         .into_any_element(),
@@ -654,6 +654,7 @@ impl MainPaneView {
                                                     move |this, e: &MouseDownEvent, _w, cx| {
                                                         cx.stop_propagation();
                                                         crate::press_gesture::claim_press(cx);
+                                                        crate::text_selection_owner::preserve(cx);
                                                         this.diff_split_resize =
                                                             Some(DiffSplitResizeState {
                                                                 handle:
@@ -753,10 +754,13 @@ impl MainPaneView {
                                         // up. Padding keeps the band and its bottom border
                                         // full-bleed.
                                         .pr(shared_scrollbar_gutter)
-                                        .h(components::control_height(ui_scale_percent))
+                                        .h(components::control_height(
+                                            ui_scale::UiScale::from_percent(ui_scale_percent)
+                                                .with_appearance(theme.metrics),
+                                        ))
                                         .flex()
                                         .items_center()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .bg(crate::theme::content_header_bg(theme))
                                         .border_b_1()
@@ -966,7 +970,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("Empty file.")
                     .into_any_element(),

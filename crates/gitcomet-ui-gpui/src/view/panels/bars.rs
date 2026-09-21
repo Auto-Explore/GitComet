@@ -19,7 +19,7 @@ impl GitCometView {
             .rounded(px(theme.radii.panel))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("Path"),
             )

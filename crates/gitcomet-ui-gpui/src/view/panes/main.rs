@@ -14,6 +14,7 @@ mod file_editor;
 mod helpers;
 mod interactive_rebase;
 mod preview;
+pub(in crate::view) mod submodule_summary;
 
 #[cfg(feature = "benchmarks")]
 #[allow(unused_imports)]
@@ -26,6 +27,10 @@ pub(in crate::view) use core_impl::MainPaneInit;
 #[cfg(test)]
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::*;
+#[cfg(test)]
+pub(in crate::view) use preview::{
+    remote_markdown_image_row_visits_for_tests, reset_remote_markdown_image_row_visits_for_tests,
+};
 
 #[cfg(not(test))]
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
@@ -90,6 +95,7 @@ impl Render for MainPaneView {
         let in_rebase = self.active_repo().is_some_and(|r| {
             r.interactive_rebase_setup.is_some() || r.interactive_cherry_pick_setup.is_some()
         });
+        self.release_stale_submodule_summary_cache();
         // Keep blame in sync with the displayed file/revision while annotate is
         // on; the request is a no-op when the target is unchanged. Render must not
         // force a retry — a persistent error would re-dispatch every frame.

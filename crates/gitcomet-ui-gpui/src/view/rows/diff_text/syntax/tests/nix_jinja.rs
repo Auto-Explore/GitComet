@@ -342,13 +342,95 @@ fn text_bodied_jinja_templates_do_not_get_html_injected() {
         markup.injection_query.is_some(),
         "the markup reading is the one that injects HTML"
     );
+    let text_targets = injection_language_targets(text);
     assert!(
-        text.injection_query.is_none(),
-        "the text reading must have no injection query at all"
+        !text_targets.contains(&DiffSyntaxLanguage::Html),
+        "the text reading must not inject HTML: {text_targets:?}"
     );
     assert!(
         !text.has_combined_injections,
-        "with no injection query there is no combined group to build"
+        "without the HTML rule there is no combined group to build"
+    );
+    // Front matter is body-agnostic, so both readings keep it.
+    assert!(
+        text_targets.contains(&DiffSyntaxLanguage::Yaml),
+        "the text reading still injects YAML front matter: {text_targets:?}"
+    );
+}
+
+/// Every `#set! injection.language` literal of a spec's injection query.
+fn injection_language_targets(spec: &TreesitterHighlightSpec) -> Vec<DiffSyntaxLanguage> {
+    let Some(query) = spec.injection_query.as_ref() else {
+        return Vec::new();
+    };
+    (0..query.pattern_count())
+        .flat_map(|ix| query.property_settings(ix).iter())
+        .filter(|setting| setting.key.as_ref() == "injection.language")
+        .filter_map(|setting| setting.value.as_deref())
+        .filter_map(diff_syntax_language_for_code_fence_info)
+        .collect()
+}
+
+/// The `front_matter` token is GitComet's addition to the vendored grammar.
+#[test]
+fn jinja_front_matter_is_highlighted_as_yaml() {
+    let lines = [
+        /* 0 */ "---",
+        /* 1 */ "title: Sign up",
+        /* 2 */ "layout: base.njk",
+        /* 3 */ "---",
+        /* 4 */ "<h1>{{ title }}</h1>",
+    ];
+    let doc = prepare_jinja_document(&lines);
+    let key = token_kinds_for_line_fragment(doc, 1, lines[1], "title");
+    assert!(
+        key.contains(&SyntaxTokenKind::Property),
+        "a front-matter key should carry YAML's key kind: {key:?}"
+    );
+    for line_ix in [0, 3] {
+        let marker = token_kinds_for_line_fragment(doc, line_ix, lines[line_ix], "---");
+        assert!(
+            marker.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "line {line_ix}: `---` should be YAML's document marker: {marker:?}"
+        );
+    }
+    let tag = token_kinds_for_line_fragment(doc, 4, lines[4], "h1");
+    assert!(
+        tag.contains(&SyntaxTokenKind::Tag),
+        "the HTML layer must still start after the front matter: {tag:?}"
+    );
+}
+
+/// Only byte 0 can open front matter; error recovery marks every external
+/// token valid, and the scanner must not promote a later `---` block then.
+#[test]
+fn jinja_front_matter_is_only_recognised_at_byte_zero() {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_jinja_dialects::LANGUAGE.into())
+        .expect("jinja grammar should load");
+    for source in [
+        "<p>---</p>\n---\nfoo: 1\n---\n",
+        "\n---\nfoo: 1\n---\n",
+        // Unclosed `if`: the whole file is error-recovered.
+        "{% if x %}\n---\nfoo: 1\n---\n<p>{{ title }}</p>\n",
+        // No closing line: stays text.
+        "---\nfoo: 1\n<p>{{ title }}</p>\n",
+    ] {
+        let tree = parser.parse(source, None).expect("should parse");
+        let sexp = tree.root_node().to_sexp();
+        assert!(
+            !sexp.contains("front_matter"),
+            "{source:?} must not produce front_matter: {sexp}"
+        );
+    }
+    let tree = parser
+        .parse("---\r\nfoo: 1\r\n---\r\n<p>{{ title }}</p>\n", None)
+        .expect("should parse");
+    let sexp = tree.root_node().to_sexp();
+    assert!(
+        sexp.starts_with("(source_file (front_matter)") && !tree.root_node().has_error(),
+        "CRLF front matter should be one token: {sexp}"
     );
 }
 
@@ -590,7 +672,7 @@ fn jinja_injection_query_stays_under_the_match_limit_on_a_dense_template() {
     assert!(matched > 0, "the dense template should produce matches");
 }
 
-/// The grammar is a young crates.io release binding through
+/// The grammar is vendored (vendor/tree-sitter-jinja-dialects) and binds through
 /// `tree-sitter-language`, so a tree-sitter bump could outrun it.
 #[test]
 fn jinja_grammar_is_abi_compatible_with_workspace_tree_sitter() {

@@ -239,7 +239,7 @@ pub(crate) fn bench_app_state(repos: Vec<RepoState>, active_repo: Option<RepoId>
     AppState {
         repos,
         active_repo,
-        ..AppState::default()
+        ..AppState::test_default()
     }
 }
 
@@ -255,13 +255,20 @@ pub(crate) fn seed_repo_status_entries(
     repo.worktree_status_rev = 1;
     repo.staged_status = Loadable::Ready(Arc::new(staged.clone()));
     repo.staged_status_rev = 1;
-    repo.status = Loadable::Ready(Arc::new(RepoStatus { unstaged, staged }));
+    repo.status = Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(unstaged),
+        staged: std::sync::Arc::new(staged),
+    }));
     repo.status_rev = 1;
 }
 
 pub(crate) fn seed_repo_status(repo: &mut RepoState, status: RepoStatus) {
     let RepoStatus { unstaged, staged } = status;
-    seed_repo_status_entries(repo, unstaged, staged);
+    seed_repo_status_entries(
+        repo,
+        Arc::unwrap_or_clone(unstaged),
+        Arc::unwrap_or_clone(staged),
+    );
 }
 
 pub(crate) fn load_split_repo_status(repo: &dyn GitRepository, context: &str) -> RepoStatus {
@@ -271,7 +278,10 @@ pub(crate) fn load_split_repo_status(repo: &dyn GitRepository, context: &str) ->
     let staged = repo
         .staged_status()
         .unwrap_or_else(|error| panic!("{context} staged_status failed: {error}"));
-    RepoStatus { unstaged, staged }
+    RepoStatus {
+        unstaged: std::sync::Arc::new(unstaged),
+        staged: std::sync::Arc::new(staged),
+    }
 }
 
 pub(crate) fn measure_split_repo_status(
@@ -290,7 +300,14 @@ pub(crate) fn measure_split_repo_status(
         .unwrap_or_else(|error| panic!("{context} staged_status failed: {error}"));
     let staged_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
 
-    (RepoStatus { unstaged, staged }, 2, worktree_ms + staged_ms)
+    (
+        RepoStatus {
+            unstaged: std::sync::Arc::new(unstaged),
+            staged: std::sync::Arc::new(staged),
+        },
+        2,
+        worktree_ms + staged_ms,
+    )
 }
 
 pub(crate) fn build_repo_switch_repo_state(
@@ -485,8 +502,8 @@ pub(crate) fn build_repo_switch_minimal_repo_state(repo_id: RepoId, workdir: &st
 
 pub(crate) fn build_synthetic_repo_status(entries: usize) -> RepoStatus {
     RepoStatus {
-        staged: Vec::new(),
-        unstaged: build_synthetic_status_entries(entries, DiffArea::Unstaged),
+        staged: std::sync::Arc::new(Vec::new()),
+        unstaged: std::sync::Arc::new(build_synthetic_status_entries(entries, DiffArea::Unstaged)),
     }
 }
 
@@ -1026,13 +1043,23 @@ pub(crate) fn commit_details_cached_row_hash(
     details: &CommitDetails,
     message_render: Option<&CommitDetailsMessageRenderState>,
     file_rows: &mut crate::view::rows::CommitFileRowPresentationCache<CommitId>,
+    file_projection: &mut crate::view::rows::CommitFileProjectionCache<CommitId>,
 ) -> u64 {
     let mut h = FxHasher::default();
     details.id.as_ref().hash(&mut h);
     commit_details_message_hash(details.message.len(), message_render, &mut h);
     let rows = file_rows.rows_for(&details.id, &details.files);
     hash_commit_file_row_presentations(rows.as_ref()).hash(&mut h);
-    details.files.len().hash(&mut h);
+    let projection = file_projection.projection_for(
+        &details.id,
+        &details.files,
+        crate::view::rows::CommitFileSort::PathAscending,
+        crate::view::rows::CommitFileFilter::All,
+    );
+    projection.source_indices.hash(&mut h);
+    for filter in crate::view::rows::CommitFileFilter::ALL {
+        projection.counts.for_filter(filter).hash(&mut h);
+    }
     h.finish()
 }
 

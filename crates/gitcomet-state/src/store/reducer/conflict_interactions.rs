@@ -12,7 +12,6 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::merge::{
     ManualAlignment, MergeBlockId, MergeOptions, MergeSource, OrderedSelection,
 };
-use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(super) fn set_hide_resolved(
@@ -257,32 +256,41 @@ fn unique_selection_for_region_content(
     } else {
         &[MergeSource::A, MergeSource::B]
     };
-    let mut matches = Vec::new();
+    // Every candidate materializes the region text; stop at the second
+    // match, since only a unique one is usable.
+    let mut found: Option<OrderedSelection> = None;
+    let mut consider = |selection: OrderedSelection| -> bool {
+        if region_text_for_selection(region, &selection).as_deref() != Some(content) {
+            return true;
+        }
+        if found.is_some() {
+            return false;
+        }
+        found = Some(selection);
+        true
+    };
     for &first in sources {
-        let single = OrderedSelection::from(first);
-        if region_text_for_selection(region, &single).as_deref() == Some(content) {
-            matches.push(single);
+        if !consider(OrderedSelection::from(first)) {
+            return None;
         }
         for &second in sources {
             if first == second {
                 continue;
             }
-            let pair = OrderedSelection::from_sources([first, second]);
-            if region_text_for_selection(region, &pair).as_deref() == Some(content) {
-                matches.push(pair);
+            if !consider(OrderedSelection::from_sources([first, second])) {
+                return None;
             }
             for &third in sources {
                 if third == first || third == second {
                     continue;
                 }
-                let triple = OrderedSelection::from_sources([first, second, third]);
-                if region_text_for_selection(region, &triple).as_deref() == Some(content) {
-                    matches.push(triple);
+                if !consider(OrderedSelection::from_sources([first, second, third])) {
+                    return None;
                 }
             }
         }
     }
-    (matches.len() == 1).then(|| matches.remove(0))
+    found
 }
 
 fn split_resolution_carry(region: &ConflictRegion) -> Option<SplitResolutionCarry> {
@@ -577,7 +585,8 @@ pub(super) fn sync_region_resolutions(
         return Vec::new();
     }
 
-    let mut latest_by_region: BTreeMap<usize, ConflictRegionResolution> = BTreeMap::new();
+    let mut latest_by_region: rustc_hash::FxHashMap<usize, ConflictRegionResolution> =
+        rustc_hash::FxHashMap::default();
     for update in updates {
         latest_by_region.insert(update.region_index, update.resolution);
     }

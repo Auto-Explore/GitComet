@@ -1,6 +1,8 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::panes::main::{
     CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
@@ -52,20 +54,16 @@ struct CollapsedHunkRevealClick {
     src_ix: usize,
 }
 
-fn diff_row_height(ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_row_height_for_ui_scale(ui_scale_percent)
+fn diff_file_header_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_file_header_height_for_ui_scale(theme, ui_scale_percent)
 }
 
-fn diff_file_header_height(ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_file_header_height_for_ui_scale(ui_scale_percent)
+fn diff_hunk_header_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(theme, ui_scale_percent)
 }
 
-fn diff_hunk_header_height(ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(ui_scale_percent)
-}
-
-fn collapsed_hunk_header_row_height(ui_scale_percent: u32) -> Pixels {
-    diff_row_height(ui_scale_percent)
+fn collapsed_hunk_header_row_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    theme.editor_row_height(ui_scale_percent)
 }
 
 fn collapsed_hunk_shell_width(
@@ -131,13 +129,14 @@ fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
 ///
 /// A context/header/hunk row belongs to no diff kind and keeps the neutral wash.
 fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
-    match kind {
+    let background = match kind {
         DiffLineKind::Add => theme.colors.diff.added.focused_background,
         DiffLineKind::Remove => theme.colors.diff.removed.focused_background,
         DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
             focused_diff_neutral_row_bg(theme)
         }
-    }
+    };
+    crate::theme::composite_over(theme.colors.editor.background, background)
 }
 
 fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
@@ -171,6 +170,18 @@ fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::
     theme.colors.foreground.secondary
 }
 
+/// Hit box for a collapsed-hunk reveal chevron. An editor row, not a chrome
+/// row: follows the editor line height, not the density, and caps out.
+fn collapsed_hunk_reveal_button_size(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    const ROW_FRACTION: f32 = 0.9;
+    const MAX_PX: f32 = 24.0;
+    let row: f32 = theme.editor_row_height(ui_scale_percent).into();
+    px(row * ROW_FRACTION).min(crate::ui_scale::design_px_from_percent(
+        MAX_PX,
+        ui_scale_percent,
+    ))
+}
+
 fn collapsed_hunk_reveal_button(
     id: impl Into<gpui::ElementId>,
     debug_selector: &'static str,
@@ -182,48 +193,38 @@ fn collapsed_hunk_reveal_button(
     click: CollapsedHunkRevealClick,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
-    let mut button = div()
-        .id(id)
-        .debug_selector(move || debug_selector.to_string())
-        .w(px(18.0))
-        .h(px(18.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme.radii.row));
-
-    if enabled {
-        button = button
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
-                    cx.stop_propagation();
-                }),
-            )
-            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                cx.stop_propagation();
-                match click.action {
-                    CollapsedHunkRevealAction::Up => {
-                        this.collapsed_diff_reveal_hunk_up(click.src_ix, cx);
-                    }
-                    CollapsedHunkRevealAction::Down => {
-                        this.collapsed_diff_reveal_hunk_down(click.src_ix, cx);
-                    }
-                    CollapsedHunkRevealAction::DownBefore => {
-                        this.collapsed_diff_reveal_hunk_down_before(click.src_ix, cx);
-                    }
-                    CollapsedHunkRevealAction::Short => {
-                        this.collapsed_diff_reveal_hunk_short(click.src_ix, cx);
-                    }
-                }
-            }));
-    }
+    let ui_scale_percent = crate::ui_scale::current(cx).percent;
+    let size = collapsed_hunk_reveal_button_size(theme, ui_scale_percent);
+    let button = components::inline_icon_button(
+        id,
+        theme,
+        size,
+        icon,
+        crate::ui_scale::design_px_from_percent(10.0, ui_scale_percent),
+        icon_color,
+        enabled,
+    )
+    .debug_selector(move || debug_selector.to_string())
+    .on_activate(
+        !enabled,
+        controls::ControlActivation::Nested,
+        cx.listener(move |this, _e: &ClickEvent, _w, cx| match click.action {
+            CollapsedHunkRevealAction::Up => {
+                this.collapsed_diff_reveal_hunk_up(click.src_ix, cx);
+            }
+            CollapsedHunkRevealAction::Down => {
+                this.collapsed_diff_reveal_hunk_down(click.src_ix, cx);
+            }
+            CollapsedHunkRevealAction::DownBefore => {
+                this.collapsed_diff_reveal_hunk_down_before(click.src_ix, cx);
+            }
+            CollapsedHunkRevealAction::Short => {
+                this.collapsed_diff_reveal_hunk_short(click.src_ix, cx);
+            }
+        }),
+    );
 
     button
-        .child(svg_icon(icon, icon_color, px(10.0)))
         .gitcomet_tooltip(theme, tooltip.into())
         .into_any_element()
 }
@@ -331,9 +332,9 @@ fn diff_placeholder_row(
 ) -> AnyElement {
     div()
         .id(id)
-        .h(diff_row_height(ui_scale_percent))
+        .h(theme.editor_row_height(ui_scale_percent))
         .px_2()
-        .text_xs()
+        .text_size(theme.editor_font_size(ui_scale_percent))
         .text_color(theme.colors.foreground.secondary)
         .child("")
         .into_any_element()
@@ -344,7 +345,7 @@ fn streamed_diff_text_spec_with_syntax(
     query: &SharedString,
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
-    word_ranges: Vec<Range<usize>>,
+    word_ranges: Arc<[Range<usize>]>,
     word_kind: Option<crate::theme::DiffColorKind>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
@@ -355,7 +356,7 @@ fn streamed_diff_text_spec_with_syntax(
             query_options,
             query_matcher,
             query_emphasis: DiffSearchMatchEmphasis::Other,
-            word_ranges: Arc::from(word_ranges),
+            word_ranges,
             word_kind,
             syntax,
         }
@@ -367,7 +368,7 @@ fn heuristic_streamed_diff_text_spec(
     query: &SharedString,
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
-    word_ranges: Vec<Range<usize>>,
+    word_ranges: Arc<[Range<usize>]>,
     word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     mode: rows::DiffSyntaxMode,
@@ -393,7 +394,7 @@ fn prepared_streamed_diff_text_spec(
     query: &SharedString,
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
-    word_ranges: Vec<Range<usize>>,
+    word_ranges: Arc<[Range<usize>]>,
     word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     fallback_mode: rows::DiffSyntaxMode,
@@ -519,6 +520,54 @@ fn file_diff_split_side_line(row: &FileDiffRow, is_left: bool) -> Option<u32> {
     if is_left { row.old_line } else { row.new_line }
 }
 
+/// Per-view memo behind [`BlameRenderCtx`]. Relative times are keyed by
+/// timestamp within a ten-second bucket of "now", so a label is formatted once
+/// per bucket rather than once per run-start row per frame.
+#[derive(Default)]
+pub(in crate::view) struct BlameLabelCache {
+    when_bucket: i64,
+    when: FxHashMap<i64, SharedString>,
+    initials: FxHashMap<std::sync::Arc<str>, SharedString>,
+}
+
+impl BlameRenderCtx {
+    fn relative_time_label(&self, author_time_unix: i64) -> SharedString {
+        let now_secs = self
+            .now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let bucket = now_secs / 10;
+        let mut cache = self.labels.borrow_mut();
+        if cache.when_bucket != bucket {
+            cache.when_bucket = bucket;
+            cache.when.clear();
+        }
+        cache
+            .when
+            .entry(author_time_unix)
+            .or_insert_with(|| {
+                crate::view::date_time::format_relative_time(author_time_unix, self.now).into()
+            })
+            .clone()
+    }
+
+    fn initials_label(&self, author: &std::sync::Arc<str>) -> SharedString {
+        let mut cache = self.labels.borrow_mut();
+        if let Some(label) = cache.initials.get(author) {
+            return label.clone();
+        }
+        if cache.initials.len() >= 4_096 {
+            cache.initials.clear();
+        }
+        let label: SharedString = super::blame::author_initials(author).into();
+        cache
+            .initials
+            .insert(std::sync::Arc::clone(author), label.clone());
+        label
+    }
+}
+
 /// Snapshot of blame data needed to render the annotation column for one diff
 /// render pass. Owns its data (an `Arc` clone of the loaded blame plus the
 /// recency range and a single `now` timestamp) so it does not borrow the view.
@@ -527,6 +576,9 @@ pub(in crate::view) struct BlameRenderCtx {
     lines: std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>,
     range: Option<(i64, i64)>,
     now: std::time::SystemTime,
+    /// Relative-time and initials labels, shared with the view across frames:
+    /// every run-start row formatted both per frame.
+    labels: std::rc::Rc<std::cell::RefCell<BlameLabelCache>>,
     path: std::sync::Arc<std::path::Path>,
     /// The commit currently being viewed (when blaming a specific revision), used
     /// to hide the "view file at this commit" action on lines from that commit.
@@ -710,11 +762,11 @@ fn build_row_blame_paint_inner(
     } else {
         let when = line
             .author_time_unix
-            .map(|ts| crate::view::date_time::format_relative_time(ts, ctx.now))
-            .unwrap_or_else(|| "unknown".to_string());
+            .map(|ts| ctx.relative_time_label(ts))
+            .unwrap_or_else(|| "unknown".into());
         (
-            SharedString::from(when),
-            SharedString::from(super::blame::author_initials(&line.author)),
+            when,
+            ctx.initials_label(&line.author),
             // `Arc<str>` -> `SharedString` is a refcount bump, not a byte copy,
             // so this avoids re-allocating the summary/body every render pass.
             SharedString::from(line.summary.clone()),
@@ -866,6 +918,7 @@ impl MainPaneView {
             _ => None,
         };
         let lines = std::sync::Arc::clone(lines);
+        let labels = std::rc::Rc::clone(&self.blame_label_cache);
         // The time range never changes for a given loaded blame, so memoize it by
         // the blame Arc's identity instead of rescanning every frame. Compare by
         // `ptr_eq` against a held Arc clone: keeping the cached allocation alive
@@ -881,6 +934,7 @@ impl MainPaneView {
         };
         Some(BlameRenderCtx {
             lines,
+            labels,
             range,
             now: std::time::SystemTime::now(),
             path,
@@ -924,7 +978,7 @@ impl MainPaneView {
             let overlaid = build_cached_diff_query_overlay_styled_text(
                 self.theme,
                 &base,
-                self.diff_text_query_cache_matcher.as_ref()?,
+                self.diff_text_query_cache_matcher_shared.as_ref()?,
                 DiffSearchMatchEmphasis::Other,
             );
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
@@ -955,8 +1009,7 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
-        let query_matcher = (!query.as_ref().is_empty())
-            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let query_matcher = this.diff_search_query_matcher_shared();
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let annotation_width = if this.annotation_active() {
@@ -969,9 +1022,13 @@ impl MainPaneView {
         if this.is_collapsed_diff_projection_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
-            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                .into();
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
-            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitRight)
+                .into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
             let pinned_hunk_shell_scroll = this.diff_scroll.clone();
@@ -1141,7 +1198,7 @@ impl MainPaneView {
                                         build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                             theme,
                                             &row.text,
-                                            row_word_ranges.as_slice(),
+                                            &row_word_ranges,
                                             "",
                                             DiffSyntaxConfig {
                                                 language: line_language,
@@ -1200,9 +1257,13 @@ impl MainPaneView {
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
-            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                .into();
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
-            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitRight)
+                .into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             // Inline syntax is now projected from the real old/new (split)
             // documents instead of parsing a synthetic mixed inline stream.
@@ -1397,7 +1458,7 @@ impl MainPaneView {
                                     build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                         theme,
                                         &row.text,
-                                        row_word_ranges.as_slice(),
+                                        &row_word_ranges,
                                         "",
                                         DiffSyntaxConfig {
                                             language: line_language,
@@ -1451,7 +1512,7 @@ impl MainPaneView {
                                 build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                     theme,
                                     diff_content_text(&line),
-                                    row_word_ranges.as_slice(),
+                                    &row_word_ranges,
                                     "",
                                     DiffSyntaxConfig {
                                         language: line_language,
@@ -1563,7 +1624,7 @@ impl MainPaneView {
                             &query,
                             query_options,
                             query_matcher.clone(),
-                            word_ranges.to_vec(),
+                            Arc::from(word_ranges.to_vec()),
                             diff_line_word_kind(visual_kind),
                             language,
                             syntax_mode,
@@ -1711,8 +1772,7 @@ impl MainPaneView {
             });
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
-        let query_matcher = (!query.as_ref().is_empty())
-            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let query_matcher = this.diff_search_query_matcher_shared();
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
@@ -1762,9 +1822,11 @@ impl MainPaneView {
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
             let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
-                this.file_diff_old_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                    .into()
             } else {
-                this.file_diff_new_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitRight)
+                    .into()
             };
             let line_starts = if is_left {
                 Arc::clone(&this.file_diff_old_line_starts)
@@ -1882,7 +1944,7 @@ impl MainPaneView {
                                         build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                             theme,
                                             raw_text,
-                                            row_word_ranges.as_slice(),
+                                            &row_word_ranges,
                                             "",
                                             DiffSyntaxConfig {
                                                 language,
@@ -1957,9 +2019,11 @@ impl MainPaneView {
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
             let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
-                this.file_diff_old_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                    .into()
             } else {
-                this.file_diff_new_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitRight)
+                    .into()
             };
             let line_starts = if is_left {
                 Arc::clone(&this.file_diff_old_line_starts)
@@ -2015,7 +2079,7 @@ impl MainPaneView {
                             let (styled, is_pending) = build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                 theme,
                                 raw_text,
-                                row_word_ranges.as_slice(),
+                                &row_word_ranges,
                                 "",
                                 DiffSyntaxConfig {
                                     language,
@@ -2144,7 +2208,7 @@ impl MainPaneView {
                                         &query,
                                         query_options,
                                         query_matcher.clone(),
-                                        word_ranges.clone(),
+                                        Arc::from(word_ranges.clone()),
                                         word_kind,
                                         language,
                                         syntax_mode,
@@ -2352,7 +2416,7 @@ fn diff_row(
             header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
-            .h(diff_file_header_height(ui_scale_percent))
+            .h(diff_file_header_height(theme, ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -2362,7 +2426,7 @@ fn diff_row(
             .bg(crate::theme::content_header_bg(theme))
             .border_b_1()
             .border_color(theme.colors.stroke.default)
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .font_weight(FontWeight::BOLD)
             .child(selectable_cached_diff_text(
                 visible_ix,
@@ -2377,7 +2441,7 @@ fn diff_row(
                 let (a, r) = file_stat.unwrap_or_default();
                 this.child(components::diff_stat(theme, ui_scale_percent, a, r))
             })
-            .on_click(on_click);
+            .on_activate(false, controls::ControlActivation::Composite, on_click);
 
         if selected {
             row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -2392,7 +2456,7 @@ fn diff_row(
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
-            .h(diff_hunk_header_height(ui_scale_percent))
+            .h(diff_hunk_header_height(theme, ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -2407,7 +2471,7 @@ fn diff_row(
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.22 },
             ))
-            .text_xs()
+            .text_size(theme.editor_font_size(ui_scale_percent))
             .text_color(theme.colors.foreground.secondary)
             .child(selectable_cached_diff_text(
                 visible_ix,
@@ -2418,7 +2482,7 @@ fn diff_row(
                 display,
                 cx,
             ))
-            .on_click(on_click);
+            .on_activate(false, controls::ControlActivation::Composite, on_click);
         let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
             cx.stop_propagation();
             if this.is_inline_submodule_diff_active() {
@@ -2432,15 +2496,15 @@ fn diff_row(
             };
             let context_menu_invoker: SharedString =
                 format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-            this.activate_context_menu_invoker(context_menu_invoker, cx);
+
             this.open_popover_at(
-                PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                (PopoverKind::DiffHunkMenu { repo_id, src_ix }).invoked_by(context_menu_invoker),
                 e.position,
                 window,
                 cx,
             );
         });
-        row = row.on_mouse_down(MouseButton::Right, on_right_click);
+        row = row.on_pointer_click(MouseButton::Right, on_right_click);
 
         if selected {
             row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -2634,7 +2698,7 @@ fn collapsed_inline_header_row(
             // moves neither the band nor the file name.
             let inner = div()
                 .id(("collapsed_diff_file_hdr", visible_ix))
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -2643,7 +2707,7 @@ fn collapsed_inline_header_row(
                 .items_center()
                 .justify_between()
                 .px_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -2660,7 +2724,7 @@ fn collapsed_inline_header_row(
                 });
 
             div()
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .bg(header_bg)
@@ -2674,7 +2738,9 @@ fn collapsed_inline_header_row(
                 .into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let gutter_w = diff_canvas::diff_inline_text_start(ui_scale_percent);
+            let gutter_w = diff_canvas::diff_inline_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
             let text_color = collapsed_inline_hunk_fg(theme, collapsed_hunk);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -2687,9 +2753,10 @@ fn collapsed_inline_header_row(
                 };
                 let context_menu_invoker: SharedString =
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    (PopoverKind::DiffHunkMenu { repo_id, src_ix })
+                        .invoked_by(context_menu_invoker),
                     e.position,
                     window,
                     cx,
@@ -2803,7 +2870,7 @@ fn collapsed_inline_header_row(
             let mut row = div()
                 .id(("collapsed_diff_hunk_hdr", visible_ix))
                 .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -2811,7 +2878,7 @@ fn collapsed_inline_header_row(
                 .flex()
                 .items_center()
                 .bg(painted_row_bg)
-                .text_xs()
+                .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(text_color);
             row = row
                 .child(
@@ -2842,7 +2909,7 @@ fn collapsed_inline_header_row(
                             cx,
                         )),
                 )
-                .on_mouse_down(MouseButton::Right, on_right_click);
+                .on_pointer_click(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(painted_row_bg);
@@ -2852,7 +2919,7 @@ fn collapsed_inline_header_row(
             }
 
             div()
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .min_w(min_width)
                 .bg(painted_row_bg)
                 .child(scroll_pinned_hunk_shell(
@@ -3006,7 +3073,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -3016,7 +3083,7 @@ fn patch_split_header_row(
                 .bg(crate::theme::content_header_bg(theme))
                 .border_b_1()
                 .border_color(theme.colors.stroke.default)
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -3031,7 +3098,7 @@ fn patch_split_header_row(
                     let (a, r) = file_stat.unwrap_or_default();
                     this.child(components::diff_stat(theme, ui_scale_percent, a, r))
                 })
-                .on_click(on_click);
+                .on_activate(false, controls::ControlActivation::Composite, on_click);
 
             if selected {
                 row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -3051,7 +3118,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(diff_hunk_header_height(ui_scale_percent))
+                .h(diff_hunk_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -3066,7 +3133,7 @@ fn patch_split_header_row(
                     theme.colors.accent.foreground,
                     if theme.is_dark { 0.28 } else { 0.22 },
                 ))
-                .text_xs()
+                .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(theme.colors.foreground.secondary)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -3077,7 +3144,7 @@ fn patch_split_header_row(
                     display,
                     cx,
                 ))
-                .on_click(on_click);
+                .on_activate(false, controls::ControlActivation::Composite, on_click);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if this.is_inline_submodule_diff_active() {
@@ -3098,15 +3165,16 @@ fn patch_split_header_row(
                 };
                 let context_menu_invoker: SharedString =
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    (PopoverKind::DiffHunkMenu { repo_id, src_ix })
+                        .invoked_by(context_menu_invoker),
                     e.position,
                     window,
                     cx,
                 );
             });
-            row = row.on_mouse_down(MouseButton::Right, on_right_click);
+            row = row.on_pointer_click(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -3173,7 +3241,7 @@ fn collapsed_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -3182,7 +3250,7 @@ fn collapsed_split_header_row(
                 .items_center()
                 .justify_between()
                 .px_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -3199,7 +3267,7 @@ fn collapsed_split_header_row(
                 });
 
             div()
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .bg(header_bg)
@@ -3213,7 +3281,9 @@ fn collapsed_split_header_row(
                 .into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let gutter_w = diff_canvas::diff_single_column_text_start(ui_scale_percent);
+            let gutter_w = diff_canvas::diff_single_column_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
             let text_color = collapsed_split_hunk_fg(theme, column);
             let (
@@ -3260,9 +3330,10 @@ fn collapsed_split_header_row(
                 };
                 let context_menu_invoker: SharedString =
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    (PopoverKind::DiffHunkMenu { repo_id, src_ix })
+                        .invoked_by(context_menu_invoker),
                     e.position,
                     window,
                     cx,
@@ -3376,7 +3447,7 @@ fn collapsed_split_header_row(
             let mut row = div()
                 .id((row_id, visible_ix))
                 .debug_selector(move || shell_debug_selector.to_string())
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -3384,7 +3455,7 @@ fn collapsed_split_header_row(
                 .flex()
                 .items_center()
                 .bg(painted_row_bg)
-                .text_xs()
+                .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(text_color)
                 .child(
                     div()
@@ -3412,7 +3483,7 @@ fn collapsed_split_header_row(
                             cx,
                         )),
                 )
-                .on_mouse_down(MouseButton::Right, on_right_click);
+                .on_pointer_click(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(painted_row_bg);
@@ -3422,7 +3493,7 @@ fn collapsed_split_header_row(
             }
 
             div()
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .min_w(min_width)
                 .bg(painted_row_bg)
                 .child(scroll_pinned_hunk_shell(
@@ -3477,11 +3548,11 @@ fn patch_split_meta_row(
             },
             visible_ix,
         ))
-        .h(diff_row_height(ui_scale_percent))
+        .h(theme.editor_row_height(ui_scale_percent))
         .flex()
         .items_center()
         .px_2()
-        .text_xs()
+        .text_size(theme.editor_font_size(ui_scale_percent))
         .bg(bg)
         .text_color(fg)
         .whitespace_nowrap()
@@ -3494,7 +3565,7 @@ fn patch_split_meta_row(
             SharedString::from(line.text.as_ref().to_owned()),
             cx,
         ))
-        .on_click(on_click);
+        .on_activate(false, controls::ControlActivation::Composite, on_click);
 
     if selected {
         row = row.bg(focused_diff_line_bg(theme, line.kind));
@@ -3505,6 +3576,115 @@ fn patch_split_meta_row(
 
 #[cfg(test)]
 mod tests {
+
+    /// Wrap columns come from a measured character, so that measurement has to
+    /// answer the editor font size and the UI zoom. (Family cannot be checked
+    /// here: the test text system measures every font identically.)
+    #[gpui::test]
+    fn wrap_char_width_follows_the_editor_font_and_zoom(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+
+        struct Probe;
+        impl gpui::Render for Probe {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                gpui::div()
+            }
+        }
+
+        let (_view, cx) = cx.add_window_view(|_window, _cx| Probe);
+        cx.update(|window, _app| {
+            fn width(window: &mut Window, size: u32) -> Pixels {
+                crate::view::rows::diff_canvas_text_wrap_char_width(
+                    window,
+                    crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
+                    size,
+                )
+            }
+            fn columns(char_width: Pixels) -> usize {
+                (f32::from(px(400.0)) / f32::from(char_width)).floor() as usize
+            }
+
+            let (small, default, large) = (width(window, 8), width(window, 13), width(window, 26));
+            assert!(small < default && default < large);
+            assert!(
+                columns(large) < columns(default),
+                "a larger font must wrap sooner"
+            );
+
+            crate::ui_scale::apply_to_window(window, 200);
+            let zoomed = width(window, 13);
+            crate::ui_scale::apply_to_window(window, 100);
+            assert!(zoomed > default, "zoom must widen the measured character");
+        });
+    }
+
+    /// Collapsed hunk headers and split meta rows are painted with the editor
+    /// font, so their boxes have to follow it or the text clips.
+    #[test]
+    fn diff_rows_grow_with_the_editor_font() {
+        let theme = |editor_font_size_px| {
+            AppTheme::gitcomet_dark().with_appearance(crate::appearance::Appearance {
+                editor_font_size_px,
+                ..crate::appearance::Appearance::default()
+            })
+        };
+
+        for percent in [100, 150] {
+            let small = collapsed_hunk_header_row_height(theme(8), percent);
+            let default = collapsed_hunk_header_row_height(theme(13), percent);
+            let large = collapsed_hunk_header_row_height(theme(32), percent);
+
+            assert!(small < default && default < large, "at {percent}%");
+            assert!(
+                large >= theme(32).editor_font_size(percent),
+                "the row must clear the glyphs it paints at {percent}%"
+            );
+        }
+    }
+
+    /// The chevron tracks the editor row it sits in, not the UI density, and
+    /// stops growing before a large editor font turns it into a slab.
+    #[test]
+    fn collapsed_hunk_reveal_buttons_track_the_editor_row_and_cap_out() {
+        let at = |editor_font_size_px: u32, density, percent| {
+            collapsed_hunk_reveal_button_size(
+                AppTheme::gitcomet_dark().with_appearance(crate::appearance::Appearance {
+                    editor_font_size_px,
+                    density,
+                    ..crate::appearance::Appearance::default()
+                }),
+                percent,
+            )
+        };
+        use crate::appearance::UiDensity::{Comfortable, Compact};
+
+        assert!(at(8, Compact, 100) < at(13, Compact, 100));
+        assert!(at(13, Compact, 100) < at(100, Compact, 100));
+        assert_eq!(at(32, Compact, 100), at(13, Compact, 100).max(px(24.0)));
+        assert_eq!(
+            at(13, Compact, 100),
+            at(13, Comfortable, 100),
+            "the diff body follows the editor font, not the density"
+        );
+        assert_eq!(at(13, Compact, 200), at(13, Compact, 100) * 2.0);
+
+        for size in [8, 13, 32] {
+            assert!(
+                at(size, Compact, 100)
+                    <= AppTheme::gitcomet_dark()
+                        .with_appearance(crate::appearance::Appearance {
+                            editor_font_size_px: size,
+                            ..crate::appearance::Appearance::default()
+                        })
+                        .editor_row_height(100),
+                "the chevron must never outgrow its row at {size}px"
+            );
+        }
+    }
     use super::*;
 
     fn collapsed_hunk(has_removals: bool, has_additions: bool) -> CollapsedDiffHunk {
@@ -3552,6 +3732,7 @@ mod tests {
         area: Option<gitcomet_core::domain::DiffArea>,
     ) -> BlameRenderCtx {
         BlameRenderCtx {
+            labels: std::rc::Rc::new(std::cell::RefCell::new(BlameLabelCache::default())),
             lines: std::sync::Arc::new(lines),
             range: None,
             now: std::time::SystemTime::now(),
@@ -3774,7 +3955,13 @@ mod tests {
 
     #[test]
     fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
-        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+        for theme in [
+            AppTheme::gitcomet_dark(),
+            AppTheme::gitcomet_light(),
+            AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+                .expect("Amber Dark theme should load"),
+            AppTheme::from_key("tokyo_night").expect("Tokyo Night theme should load"),
+        ] {
             let text_selection_bg = with_alpha(
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.18 },
@@ -3786,12 +3973,50 @@ mod tests {
             let (remove_bg, _, _) = diff_line_colors(theme, DiffLineKind::Remove);
             let (context_bg, _, _) = diff_line_colors(theme, DiffLineKind::Context);
 
-            // The focused row is the diff palette's own token, not a tint mixed
-            // from the status palette: those greens and reds differ in every
-            // bundled theme, so deriving it there shifted the row's hue the
-            // moment it took focus.
-            assert_eq!(add_focus, theme.colors.diff.added.focused_background);
-            assert_eq!(remove_focus, theme.colors.diff.removed.focused_background);
+            // The focused row is the diff palette's own token flattened onto
+            // the editor surface, not a tint mixed from the status palette.
+            // Canvas-backed rows reuse the result, so it must already be opaque.
+            assert_eq!(
+                add_focus,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.added.focused_background,
+                )
+            );
+            assert_eq!(
+                remove_focus,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.removed.focused_background,
+                )
+            );
+            assert_eq!(
+                add_bg,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.added.background,
+                )
+            );
+            assert_eq!(
+                remove_bg,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.removed.background,
+                )
+            );
+            for background in [
+                add_bg,
+                remove_bg,
+                context_bg,
+                add_focus,
+                remove_focus,
+                neutral_focus,
+            ] {
+                assert_eq!(
+                    background.alpha, 1.0,
+                    "diff row backgrounds passed to the canvas must be opaque"
+                );
+            }
 
             assert_ne!(add_focus, text_selection_bg);
             assert_ne!(remove_focus, text_selection_bg);
@@ -3834,12 +4059,12 @@ mod tests {
     fn collapsed_hunk_headers_use_uniform_diff_row_height() {
         for ui_scale_percent in [75, 100, 125, 150, 200] {
             assert_eq!(
-                collapsed_hunk_header_row_height(ui_scale_percent),
-                diff_row_height(ui_scale_percent)
+                collapsed_hunk_header_row_height(AppTheme::gitcomet_dark(), ui_scale_percent),
+                AppTheme::gitcomet_dark().editor_row_height(ui_scale_percent)
             );
             assert_ne!(
-                collapsed_hunk_header_row_height(ui_scale_percent),
-                diff_hunk_header_height(ui_scale_percent)
+                collapsed_hunk_header_row_height(AppTheme::gitcomet_dark(), ui_scale_percent),
+                diff_hunk_header_height(AppTheme::gitcomet_dark(), ui_scale_percent)
             );
         }
     }

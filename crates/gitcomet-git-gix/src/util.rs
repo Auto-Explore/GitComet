@@ -1,6 +1,7 @@
 use gitcomet_core::auth::askpass::{
-    GIT_COMMAND_TIMEOUT_ENV, append_host_prompt_to_stderr, configure_git_auth_prompt,
-    create_askpass_script, remember_successful_prompt_auth, take_pending_git_auth,
+    GIT_COMMAND_TIMEOUT_ENV, append_host_prompt_to_stderr, append_passphrase_prompt_to_stderr,
+    configure_git_auth_prompt, create_askpass_script, remember_successful_prompt_auth,
+    take_pending_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -9,7 +10,6 @@ use gitcomet_core::git_operation::{
 };
 use gitcomet_core::process::{configure_background_command, git_command};
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
-use std::collections::HashMap;
 use std::io::{self, BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Output, Stdio};
@@ -234,8 +234,15 @@ impl Trace2Monitor {
     }
 
     fn finish(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
         self.done.store(true, Ordering::Release);
         if let Some(handle) = self.handle.take() {
+            // The token also covers completion between the worker's done check
+            // and park, so a short command never waits for the next trace poll.
+            handle.thread().unpark();
             let _ = handle.join();
         }
     }
@@ -243,10 +250,7 @@ impl Trace2Monitor {
 
 impl Drop for Trace2Monitor {
     fn drop(&mut self) {
-        self.done.store(true, Ordering::Release);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        self.stop();
     }
 }
 
@@ -261,7 +265,7 @@ fn trace2_tail_loop(path: &Path, context: &GitOperationContext, done: &AtomicBoo
         return;
     };
     let mut pending = Vec::<u8>::new();
-    let mut hooks = HashMap::<(String, u64), TracedHook>::new();
+    let mut hooks = rustc_hash::FxHashMap::<(String, u64), TracedHook>::default();
     loop {
         let before = pending.len();
         let _ = file.read_to_end(&mut pending);
@@ -272,7 +276,7 @@ fn trace2_tail_loop(path: &Path, context: &GitOperationContext, done: &AtomicBoo
             break;
         }
         if pending.len() == before {
-            thread::sleep(GIT_TRACE2_POLL);
+            thread::park_timeout(GIT_TRACE2_POLL);
         }
     }
 }
@@ -281,7 +285,7 @@ fn parse_trace2_lines(
     pending: &mut Vec<u8>,
     eof: bool,
     context: &GitOperationContext,
-    hooks: &mut HashMap<(String, u64), TracedHook>,
+    hooks: &mut rustc_hash::FxHashMap<(String, u64), TracedHook>,
 ) {
     let consumed = pending
         .iter()
@@ -311,7 +315,7 @@ fn trace2_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
 fn apply_trace2_event(
     value: &serde_json::Value,
     context: &GitOperationContext,
-    hooks: &mut HashMap<(String, u64), TracedHook>,
+    hooks: &mut rustc_hash::FxHashMap<(String, u64), TracedHook>,
 ) {
     let event = value.get("event").and_then(serde_json::Value::as_str);
     let sid = value.get("sid").and_then(serde_json::Value::as_str);
@@ -433,7 +437,12 @@ fn command_may_require_auth(cmd: &Command) -> bool {
                 let _ = args.next();
             }
             value if value.starts_with('-') => {}
-            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit" => {
+            // Network commands need credentials. The remaining commands can
+            // create signatures and, with `gpg.format = ssh`, invoke
+            // `ssh-keygen -Y sign`, which also obtains its passphrase through
+            // askpass.
+            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit"
+            | "commit-tree" | "tag" | "merge" | "rebase" | "cherry-pick" | "revert" | "am" => {
                 return true;
             }
             _ => return false,
@@ -754,10 +763,36 @@ fn terminate_process_tree_and_wait(
 }
 
 fn run_command_with_timeout(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Output> {
+    run_command_with_timeout_auth(cmd, label, timeout, cancellation, true)
+}
+
+/// Read-only network probes must not open auth prompts or consume credentials
+/// staged for a user-initiated command.
+pub(crate) fn run_git_preview_output(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Output> {
+    run_command_with_timeout_auth(
+        cmd,
+        label,
+        Duration::from_secs(30),
+        Some(cancellation),
+        false,
+    )
+}
+
+fn run_command_with_timeout_auth(
     mut cmd: Command,
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
+    allow_auth: bool,
 ) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
@@ -769,7 +804,11 @@ fn run_command_with_timeout(
     )?;
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref());
     let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = take_pending_git_auth();
+        let auth = if allow_auth {
+            take_pending_git_auth()
+        } else {
+            None
+        };
         let script = create_askpass_script().map_err(io_err)?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
@@ -827,6 +866,9 @@ fn run_command_with_timeout(
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+        if !status.success() {
+            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+        }
     }
 
     if cancelled {
@@ -1082,6 +1124,9 @@ where
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+        if !status.success() {
+            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+        }
     }
 
     if cancelled {
@@ -1345,9 +1390,18 @@ pub(crate) fn run_git_capture_cancellable(
     label: &str,
     cancellation: &CancellationToken,
 ) -> Result<String> {
+    let bytes = run_git_capture_bytes_cancellable(cmd, label, cancellation)?;
+    Ok(bytes_to_text_preserving_utf8(&bytes))
+}
+
+pub(crate) fn run_git_capture_bytes_cancellable(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>> {
     let output = run_command_with_timeout(cmd, label, git_command_timeout(), Some(cancellation))?;
     if output.status.success() {
-        Ok(bytes_to_text_preserving_utf8(&output.stdout))
+        Ok(output.stdout)
     } else {
         Err(git_command_failed_error(label, output))
     }
@@ -1456,8 +1510,12 @@ pub(crate) fn parse_git_log_pretty_records_from_reader(reader: impl io::Read) ->
         if raw_record.last() == Some(&b'\x1e') {
             raw_record.pop();
         }
-        let record = bytes_to_text_preserving_utf8(&raw_record);
-        state.push_record(&record, &mut commits);
+        // Valid UTF-8 (the usual case) is parsed in place; only a record
+        // with invalid bytes pays for a repaired copy.
+        match std::str::from_utf8(&raw_record) {
+            Ok(record) => state.push_record(record, &mut commits),
+            Err(_) => state.push_record(&bytes_to_text_preserving_utf8(&raw_record), &mut commits),
+        }
     }
 
     Ok(LogPage {
@@ -1512,7 +1570,7 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
             target: CommitId(sha.into()),
         });
     }
-    branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+    branches.sort_unstable_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
     branches
 }
 
@@ -1713,6 +1771,75 @@ mod tests {
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).expect("make test hook executable");
+    }
+
+    #[test]
+    fn trace2_monitor_finish_and_drop_wake_a_parked_worker() {
+        for finish in [false, true] {
+            let done = Arc::new(AtomicBool::new(false));
+            let worker_done = Arc::clone(&done);
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let handle = thread::spawn(move || {
+                while !worker_done.load(Ordering::Acquire) {
+                    ready_tx.send(()).unwrap();
+                    // A long poll makes the regression independent of tight
+                    // elapsed-time assertions on a loaded CI machine.
+                    thread::park_timeout(Duration::from_secs(30));
+                }
+            });
+            let worker = handle.thread().clone();
+            let monitor = Trace2Monitor {
+                _path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+                done,
+                handle: Some(handle),
+            };
+            ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let (stopped_tx, stopped_rx) = mpsc::channel();
+            let shutdown = thread::spawn(move || {
+                if finish {
+                    monitor.finish();
+                } else {
+                    drop(monitor);
+                }
+                stopped_tx.send(()).unwrap();
+            });
+            let result = stopped_rx.recv_timeout(Duration::from_secs(3));
+            // Clean up promptly even if shutdown failed to wake the worker.
+            worker.unpark();
+            shutdown.join().unwrap();
+            result.expect("trace monitor shutdown must wake its worker");
+        }
+    }
+
+    #[test]
+    fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
+        for finish in [false, true] {
+            let (sender, receiver) = mpsc::channel();
+            let context = GitOperationContext::new("trace drain", move |_, event| {
+                sender.send(event).unwrap();
+            });
+            let mut cmd = Command::new("git");
+            let monitor = Trace2Monitor::start(&mut cmd, Some(&context)).unwrap();
+            std::fs::write(
+                &monitor._path,
+                concat!(
+                    "{\"event\":\"child_start\",\"sid\":\"test\",\"child_id\":1,",
+                    "\"child_class\":\"hook\",\"hook_name\":\"pre-commit\"}\n",
+                    "{\"event\":\"child_exit\",\"sid\":\"test\",\"child_id\":1,\"code\":7}"
+                ),
+            )
+            .unwrap();
+            if finish {
+                monitor.finish();
+            } else {
+                drop(monitor);
+            }
+            let events: Vec<_> = receiver.try_iter().collect();
+            assert!(matches!(events.as_slice(), [
+                GitOperationEvent::HookStarted { name, id },
+                GitOperationEvent::HookFinished { name: finished_name, id: finished_id, exit_code: Some(7), .. },
+            ] if name == "pre-commit" && finished_name == name && finished_id == id));
+        }
     }
 
     #[cfg(unix)]
@@ -2165,6 +2292,29 @@ mod tests {
     }
 
     #[test]
+    fn command_may_require_auth_covers_ssh_signing_commands() {
+        for args in [
+            vec!["commit-tree", "-S", "HEAD^{tree}", "-m", "message"],
+            vec!["tag", "-s", "v1", "HEAD"],
+            vec!["merge", "--no-ff", "topic"],
+            vec!["rebase", "--continue"],
+            vec!["cherry-pick", "abc123"],
+            vec!["revert", "--no-edit", "abc123"],
+            vec!["revert", "--continue"],
+            vec!["commit", "--no-verify", "-F", "MERGE_MSG"],
+            vec!["am", "--3way"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg("/tmp/repo").args(&args);
+            assert!(
+                command_may_require_auth(&cmd),
+                "expected askpass for `git {}`",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
     fn create_askpass_script_writes_expected_content_and_permissions() {
         let askpass = create_askpass_script().expect("askpass script creation");
         assert!(askpass.path().exists());
@@ -2237,6 +2387,39 @@ mod tests {
 
         cmd.get_envs()
             .any(|(k, v)| k == OsStr::new(key) && v.is_none())
+    }
+
+    #[test]
+    fn repository_git_commands_disable_the_ext_protocol() {
+        let cmd = git_workdir_cmd_for(Path::new("repo"));
+        let args = cmd.get_args().collect::<Vec<_>>();
+        assert!(args.windows(2).any(|args| {
+            args == [
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("protocol.ext.allow=never"),
+            ]
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_config_cannot_reenable_the_ext_protocol() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        run_git_test_setup(repo.path(), &["init", "--quiet"]);
+        run_git_test_setup(repo.path(), &["config", "protocol.ext.allow", "always"]);
+
+        let mut cmd = git_workdir_cmd_for(repo.path());
+        // Git's refusal text is translated; assert on the exit status.
+        let output = cmd
+            .env("LC_ALL", "C")
+            .args(["ls-remote", "ext::printf invoked"])
+            .output()
+            .expect("run git");
+        assert!(
+            !output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -2487,6 +2670,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn submodule_byte_capture_stops_an_in_flight_command() {
+        let token = CancellationToken::new();
+        let child_token = token.clone();
+        let handle = thread::spawn(move || {
+            run_git_capture_bytes_cancellable(
+                sleep_command(10),
+                "git synthetic submodule numstat",
+                &child_token,
+            )
+        });
+        thread::sleep(Duration::from_millis(50));
+        let cancelled_at = Instant::now();
+        token.cancel();
+        let error = handle
+            .join()
+            .expect("capture worker")
+            .expect_err("cancelled capture");
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+    }
+
     #[cfg(unix)]
     #[test]
     fn cancellation_after_leader_exit_stops_pipe_holding_descendant() {
@@ -2575,33 +2780,42 @@ mod tests {
     fn process_group_liveness_ignores_unreaped_zombies() {
         use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
 
-        let mut cmd = shell_command("sleep 10");
+        // Replace the shell so waiting for the leader also waits for sleep.
+        // A separate sleep child could still be exiting after the shell is reaped.
+        let mut cmd = shell_command("exec sleep 10");
         configure_git_process_tree(&mut cmd);
         let mut leader = cmd.spawn().expect("synthetic process group should start");
         let group_id = leader.id();
         let pid = Pid::from_raw(group_id as i32).expect("group id should be a valid pid");
 
         let mut zombie = spawn_unreaped_zombie_in_group(group_id);
-        assert!(
-            process_group_has_live_member(pid),
-            "a running leader must count as a live group member"
-        );
+        let leader_was_live = process_group_has_live_member(pid);
 
-        let _ = kill_process_group(pid, Signal::KILL);
-        let _ = leader.wait();
+        let kill_result = kill_process_group(pid, Signal::KILL);
+        let leader_wait_result = leader.wait();
 
         // The zombie still answers the signal probe, which is exactly why the
         // probe alone cannot decide when a process group is finished.
+        let zombie_kept_group_addressable = test_kill_process_group(pid).is_ok();
+        let zombie_group_was_live = process_group_has_live_member(pid);
+
+        // Reap both owned children before assertions so failures do not leak them.
+        let zombie_wait_result = zombie.wait();
+        kill_result.expect("process group should receive KILL");
+        leader_wait_result.expect("process-group leader should be reaped");
+        zombie_wait_result.expect("unreaped zombie should be reaped after observation");
         assert!(
-            test_kill_process_group(pid).is_ok(),
+            leader_was_live,
+            "a running leader must count as a live group member"
+        );
+        assert!(
+            zombie_kept_group_addressable,
             "the unreaped zombie should keep the process group addressable"
         );
         assert!(
-            !process_group_has_live_member(pid),
+            !zombie_group_was_live,
             "a group holding only zombies has nothing left to terminate"
         );
-
-        let _ = zombie.wait();
     }
 
     #[cfg(target_os = "linux")]
@@ -2609,20 +2823,24 @@ mod tests {
     fn process_tree_termination_returns_promptly_past_unreaped_zombies() {
         use rustix::process::{Pid, Signal, kill_process_group};
 
-        let mut cmd = shell_command("sleep 10");
+        // Keep the leader as the only live member so this measures zombie handling.
+        let mut cmd = shell_command("exec sleep 10");
         configure_git_process_tree(&mut cmd);
         let mut child = cmd.spawn().expect("synthetic process group should start");
         let group_id = child.id();
+        let pid = Pid::from_raw(group_id as i32).expect("group id should be a valid pid");
         let mut zombie = spawn_unreaped_zombie_in_group(group_id);
 
         let started = Instant::now();
         let result = terminate_process_tree_and_wait(&mut child);
         let elapsed = started.elapsed();
 
-        if let Some(pid) = Pid::from_raw(group_id as i32) {
-            let _ = kill_process_group(pid, Signal::KILL);
-        }
-        let _ = zombie.wait();
+        let cleanup_result = kill_process_group(pid, Signal::KILL);
+        let leader_wait_result = child.wait();
+        let zombie_wait_result = zombie.wait();
+        cleanup_result.expect("process group should receive cleanup KILL");
+        leader_wait_result.expect("process-group leader should be reaped");
+        zombie_wait_result.expect("unreaped zombie should be reaped after observation");
         result.expect("process-group termination should reap the leader");
 
         assert!(

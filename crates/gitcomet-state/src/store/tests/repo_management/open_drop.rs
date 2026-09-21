@@ -4,7 +4,7 @@ use super::*;
 fn open_repo_sets_opening_and_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let effects = reduce(
         &mut repos,
@@ -33,7 +33,7 @@ fn open_repo_sets_opening_and_emits_effect() {
 fn dropped_repo_stays_provisional_until_the_backend_opens_it() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/dropped-repo");
 
     let effects = reduce(
@@ -66,7 +66,7 @@ fn dropped_repo_stays_provisional_until_the_backend_opens_it() {
 fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/dropped-repo");
 
     reduce(
@@ -112,7 +112,7 @@ fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
 fn bulk_close_skips_provisional_drop_when_recording_recents() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -151,7 +151,7 @@ fn bulk_close_skips_provisional_drop_when_recording_recents() {
 fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/dropped-repo");
 
     reduce(
@@ -201,7 +201,7 @@ fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
 fn operational_error_discards_dropped_tab_and_preserves_existing_recents() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dir = tempfile::tempdir().expect("tempdir");
     let existing = dir.path().join("existing");
     let dropped = dir.path().join("dropped");
@@ -264,7 +264,7 @@ fn operational_error_discards_dropped_tab_and_preserves_existing_recents() {
 fn failed_dropped_repo_restores_the_repo_active_before_the_drop() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let session_dir = tempfile::tempdir().expect("session tempdir");
     let _session_file_override = crate::session::push_test_session_file_path_override(Some(
         session_dir.path().join("session.json"),
@@ -332,7 +332,7 @@ fn failed_dropped_repo_restores_the_repo_active_before_the_drop() {
 fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
     open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
@@ -368,7 +368,7 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
 fn open_repo_allows_same_basename_in_different_folders() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = std::env::temp_dir().join(format!(
         "gitcomet-open-repo-same-basename-test-{}-{}",
@@ -439,7 +439,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
 fn open_repo_refreshes_when_repo_is_already_active() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo");
     state.repos[0].feedback.missing_on_disk = true;
@@ -537,7 +537,7 @@ fn open_repo_uses_builtin_default_history_mode_without_saved_preferences() {
 fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let repo_path = dir.path().join("repo");
@@ -599,7 +599,7 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     reduce(&mut repos, &id_alloc, &mut state, Msg::OpenRepo(repo_path));
 
     assert_eq!(

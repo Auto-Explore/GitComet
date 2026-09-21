@@ -2,6 +2,70 @@ use super::super::*;
 use super::support::*;
 
 #[gpui::test]
+fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
+    use crate::test_support::{painted_control_quads as paint, refresh_and_draw};
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            let state = Arc::clone(&view.state);
+            crate::view::test_support::push_test_state(view, state, cx);
+            view.terminal_preferences.action_bar_terminal_target =
+                ActionBarTerminalTarget::Embedded;
+            view.sync_action_bar_terminal_target(cx);
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    let closed = paint(cx, "terminal");
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
+            view.sync_terminal_indicator_views(cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_ne!(
+        paint(cx, "terminal"),
+        closed,
+        "an open embedded terminal must highlight its toggle"
+    );
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.terminal_preferences.action_bar_terminal_target =
+                ActionBarTerminalTarget::External;
+            view.sync_action_bar_terminal_target(cx);
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_eq!(
+        paint(cx, "terminal"),
+        closed,
+        "the external terminal launcher is momentary"
+    );
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.terminal_preferences.action_bar_terminal_target =
+                ActionBarTerminalTarget::Embedded;
+            view.sync_action_bar_terminal_target(cx);
+            view.close_terminal_tab(repo_id, 0, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_eq!(
+        paint(cx, "terminal"),
+        closed,
+        "closing the last tab must clear the toggle"
+    );
+}
+
+#[gpui::test]
 fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
@@ -166,4 +230,76 @@ fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
         assert_eq!(session.instances[0].session_seq, 80);
         assert_eq!(session.active_index, 0);
     });
+}
+
+/// Both bottom-panel strips and the terminal's own tabs: click targets that
+/// used to sit at a fixed pixel size whatever the density.
+#[gpui::test]
+fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppContext) {
+    use crate::appearance::{Appearance, UiDensity};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
+            this.open_reflog_panel(repo_id, cx);
+            this.active_bottom_panel
+                .insert(repo_id, crate::view::BottomPanelTab::Terminal);
+        })
+    });
+
+    let selectors = [
+        "terminal_tab-0",
+        "terminal_tab_close-0",
+        "bottom_panel_tab_terminal",
+        "bottom_panel_tab_terminal_close",
+        "bottom_panel_tab_reflog",
+    ];
+    let mut per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
+
+    for density in UiDensity::ALL {
+        cx.update(|_window, app| {
+            app.set_global(Appearance {
+                density,
+                ..Appearance::default()
+            });
+            view.update(app, |this, cx| this.notify_font_preferences_changed(cx));
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let mut height = |selector: &'static str| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
+                .size
+                .height
+        };
+        per_density.push(selectors.into_iter().map(&mut height).collect());
+
+        // Both strips are built from `panel_tab`, so they must agree.
+        assert_eq!(
+            height("terminal_tab-0"),
+            height("bottom_panel_tab_terminal")
+        );
+        assert_eq!(
+            height("terminal_tab_close-0"),
+            height("bottom_panel_tab_terminal_close")
+        );
+    }
+
+    for (step, pair) in per_density.windows(2).enumerate() {
+        for (ix, selector) in selectors.into_iter().enumerate() {
+            assert!(
+                pair[1][ix] > pair[0][ix],
+                "{selector} must grow from {:?} to {:?}, stayed {:?}",
+                UiDensity::ALL[step],
+                UiDensity::ALL[step + 1],
+                pair[1][ix]
+            );
+        }
+    }
 }

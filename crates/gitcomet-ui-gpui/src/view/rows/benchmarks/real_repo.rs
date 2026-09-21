@@ -661,8 +661,8 @@ fn load_log_commits(
             .expect("real_repo log load benchmark");
         pages = pages.saturating_add(1);
         let exhausted = page.commits.is_empty();
-        commits.extend(page.commits);
-        cursor = page.next_cursor;
+        commits.extend(page.commits.iter().cloned());
+        cursor = page.next_cursor.clone();
         next_cursor_present = cursor.is_some();
         if exhausted || cursor.is_none() {
             break;

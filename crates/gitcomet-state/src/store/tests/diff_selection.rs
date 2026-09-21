@@ -9,7 +9,7 @@ use gitcomet_core::domain::{
 fn select_diff_sets_loading_and_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -54,7 +54,7 @@ fn select_diff_sets_loading_and_emits_effect() {
 fn select_diff_for_image_sets_loading_and_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -103,7 +103,7 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
 fn select_diff_for_ico_sets_loading_and_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -152,7 +152,7 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
 fn select_diff_for_svg_loads_image_and_text() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -198,7 +198,7 @@ fn select_diff_for_svg_loads_image_and_text() {
 fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -210,12 +210,12 @@ fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("report.json"),
             kind: FileStatusKind::Untracked,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -261,7 +261,7 @@ fn select_diff_for_deleted_file_replaced_by_directory_loads_deleted_preview() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -273,12 +273,12 @@ fn select_diff_for_deleted_file_replaced_by_directory_loads_deleted_preview() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("report.json"),
             kind: FileStatusKind::Deleted,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -330,7 +330,7 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -342,12 +342,12 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: submodule_path,
             kind: FileStatusKind::Modified,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -402,7 +402,7 @@ fn staged_deleted_gitlink_fixture() -> (
     run_git(dir.path(), &["commit", "-q", "-m", "add submodule gitlink"]);
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -416,12 +416,12 @@ fn staged_deleted_gitlink_fixture() -> (
     };
     repo_state.set_open(Loadable::Ready(()));
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        staged: vec![FileStatus {
+        staged: std::sync::Arc::new(vec![FileStatus {
             path: submodule_path,
             kind: FileStatusKind::Deleted,
             conflict: None,
-        }],
-        unstaged: vec![],
+        }]),
+        unstaged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -533,6 +533,70 @@ fn failed_head_change_rebuilds_selected_deleted_gitlink_before_reloading_diff() 
             } if reloaded == &target
         )),
         "a failed HEAD change must reload the selected deletion as a submodule: {effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadDiff {
+                repo_id: RepoId(1),
+                target: reloaded,
+            } if reloaded == &target
+        )),
+        "the deleted gitlink must not fall back to an ordinary patch diff: {effects:?}"
+    );
+}
+
+#[test]
+fn failed_revert_rebuilds_selected_deleted_gitlink() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+    let commit_id =
+        gitcomet_core::domain::CommitId("2222222222222222222222222222222222222222".into());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RevertCommit {
+            repo_id: RepoId(1),
+            commit_id: commit_id.clone(),
+            commit: true,
+            mainline: None,
+            summary: "revert me".to_string(),
+        },
+    );
+    assert!(!state.repos[0].head_gitlink_paths.contains(&submodule_path));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::Revert {
+                commit_id,
+                commit: true,
+                mainline: None,
+                summary: "revert me".to_string(),
+            },
+            result: Err(Error::new(ErrorKind::Backend(
+                "revert: the index has staged changes".to_string(),
+            ))),
+        }),
+    );
+
+    assert!(
+        state.repos[0].head_gitlink_paths.contains(&submodule_path),
+        "a refused revert must restore the retained selection's classification"
     );
     assert!(
         !effects.iter().any(|effect| matches!(
@@ -705,7 +769,7 @@ fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
             .open(dir.path())
             .expect("open repository through backend"),
     );
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -714,12 +778,12 @@ fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
     );
     repo_state.set_open(Loadable::Ready(()));
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        staged: vec![FileStatus {
+        staged: std::sync::Arc::new(vec![FileStatus {
             path: path.clone(),
             kind: FileStatusKind::Deleted,
             conflict: None,
-        }],
-        unstaged: vec![],
+        }]),
+        unstaged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -798,7 +862,7 @@ fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
 fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -868,7 +932,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
 fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -898,7 +962,8 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
                 section: crate::model::InlineSubmoduleDiffSection::Range(
                     gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
                 ),
-            }],
+            }]
+            .into(),
             selected_ix: 0,
         },
     );
@@ -931,7 +996,7 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
 fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -958,7 +1023,8 @@ fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
                 kind: FileStatusKind::Modified,
                 target: target.clone(),
                 section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-            }],
+            }]
+            .into(),
             selected_ix: 0,
         },
     );
@@ -995,7 +1061,7 @@ fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
 fn stale_inline_submodule_file_load_is_ignored() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1025,7 +1091,8 @@ fn stale_inline_submodule_file_load_is_ignored() {
                 section: crate::model::InlineSubmoduleDiffSection::Range(
                     gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
                 ),
-            }],
+            }]
+            .into(),
             selected_ix: 0,
         },
     );
@@ -1060,7 +1127,7 @@ fn stale_inline_submodule_file_load_is_ignored() {
 fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1092,7 +1159,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/first"),
             parent_submodule_path: PathBuf::from("vendor/first"),
-            entries: vec![entry.clone()],
+            entries: vec![entry.clone()].into(),
             selected_ix: 0,
         },
     );
@@ -1125,7 +1192,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/second"),
             parent_submodule_path: PathBuf::from("vendor/second"),
-            entries: vec![entry],
+            entries: vec![entry].into(),
             selected_ix: 0,
         },
     );
@@ -1178,7 +1245,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
 fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remains() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let parent_path = PathBuf::from("vendor/submodule");
     let parent_target = DiffTarget::WorkingTree {
         path: parent_path.clone(),
@@ -1195,12 +1262,12 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         },
     );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: parent_path.clone(),
             kind: FileStatusKind::Modified,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     repo_state.set_submodules(Loadable::Ready(vec![Submodule {
         path: parent_path.clone(),
@@ -1213,6 +1280,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         path: parent_path.clone(),
         mode: SubmoduleDiffSummaryMode::Worktree,
         status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
         commit_id: None,
         parent_commit_id: None,
         checked_out_head: Some(CommitId("old-head".into())),
@@ -1235,7 +1303,8 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
             kind: FileStatusKind::Modified,
             target: inline_target.clone(),
             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-        }],
+        }]
+        .into(),
         selected_ix: 0,
         target: inline_target.clone(),
         rev: 1,
@@ -1266,6 +1335,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
                 path: parent_path,
                 mode: SubmoduleDiffSummaryMode::Worktree,
                 status: Some(SubmoduleStatus::UpToDate),
+                checkout_available: true,
                 commit_id: None,
                 parent_commit_id: None,
                 checked_out_head: Some(CommitId("new-head".into())),
@@ -1319,7 +1389,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
 fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_file() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1376,14 +1446,15 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
         Loadable::NotLoaded
     ));
     assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::LoadDiffPreviewTextFile {
-            repo_id: RepoId(1),
-            target: effect_target,
+    assert!(
+        matches!(effects.as_slice(), [
+        Effect::LoadDiffPreviewTextFile {
+            repo_id: RepoId(1), target: effect_target,
             side: gitcomet_core::domain::DiffPreviewTextSide::Old,
-        }] if effect_target == &target
-    ));
+        },
+    ] if effect_target == &target),
+        "got {effects:?}"
+    );
 
     reduce(
         &mut repos,
@@ -1410,7 +1481,7 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
 fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1422,12 +1493,12 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("index.html"),
             kind: FileStatusKind::Conflicted,
             conflict: Some(FileConflictKind::BothModified),
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -1471,7 +1542,7 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
 fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1483,12 +1554,12 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("icon.svg"),
             kind: FileStatusKind::Conflicted,
             conflict: Some(FileConflictKind::BothModified),
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -1526,7 +1597,7 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
 fn select_diff_for_commit_without_path_only_loads_patch() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1578,7 +1649,7 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
 fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1624,7 +1695,7 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
 fn stage_hunk_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1656,7 +1727,7 @@ fn stage_hunk_emits_effect() {
 fn unstage_hunk_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1688,7 +1759,7 @@ fn unstage_hunk_emits_effect() {
 fn stage_hunk_command_finished_reloads_current_diff() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1734,7 +1805,7 @@ fn stage_hunk_command_finished_reloads_current_diff() {
 fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1841,7 +1912,7 @@ fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
 fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1873,7 +1944,7 @@ fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
 fn clear_diff_selection_resets_diff_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1910,7 +1981,7 @@ fn clear_diff_selection_resets_diff_state() {
 fn diff_loaded_err_records_diagnostic_when_target_matches() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1955,7 +2026,7 @@ fn diff_loaded_err_records_diagnostic_when_target_matches() {
 fn select_diff_bumps_diff_state_rev() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1990,7 +2061,7 @@ fn select_diff_bumps_diff_state_rev() {
 fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2057,7 +2128,7 @@ fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
 fn clear_diff_selection_bumps_diff_state_rev() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2100,7 +2171,7 @@ fn clear_diff_selection_bumps_diff_state_rev() {
 fn select_diff_does_not_bump_unrelated_revs() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2136,7 +2207,7 @@ fn select_diff_does_not_bump_unrelated_revs() {
 fn select_and_clear_diff_are_noops_for_unknown_repo() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let target = DiffTarget::WorkingTree {
         path: PathBuf::from("src/lib.rs"),
@@ -2169,7 +2240,7 @@ fn select_and_clear_diff_are_noops_for_unknown_repo() {
 fn apply_worktree_patch_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2203,7 +2274,7 @@ fn apply_worktree_patch_emits_effect() {
 fn diff_loaded_ok_sets_ready_when_target_matches() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2248,7 +2319,7 @@ fn state_with_loaded_diff_and_blame(
     DiffTarget,
     Arc<Vec<gitcomet_core::services::BlameLine>>,
 ) {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2492,7 +2563,7 @@ fn diff_file_loaded_changed_content_bumps_revs_and_invalidates_blame() {
 fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2600,7 +2671,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
 fn diff_results_are_ignored_for_non_matching_target() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2667,7 +2738,7 @@ fn diff_results_are_ignored_for_non_matching_target() {
 fn open_file_content_sets_diff_target_and_content_preview() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2739,7 +2810,7 @@ fn open_file_content_sets_diff_target_and_content_preview() {
 fn open_file_editor_targets_the_working_tree_from_any_source() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -2797,7 +2868,7 @@ fn open_file_editor_targets_the_working_tree_from_any_source() {
 fn selecting_another_view_leaves_edit_mode() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -2864,7 +2935,7 @@ fn selecting_another_view_leaves_edit_mode() {
 fn exiting_edit_mode_keeps_the_file_on_screen() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -2915,7 +2986,7 @@ fn exiting_edit_mode_keeps_the_file_on_screen() {
 fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3005,7 +3076,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
     // to it rather than a stale cursor left behind by earlier file opens.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3102,7 +3173,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
     // commit.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3173,7 +3244,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
 fn global_nav_enters_and_leaves_a_range_comparison() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3256,7 +3327,7 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
 fn open_file_content_skips_conflict_path_during_browse() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3310,7 +3381,7 @@ fn open_file_content_skips_conflict_path_during_browse() {
 fn clear_diff_selection_resets_content_preview_and_ancillary_fields() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3364,7 +3435,7 @@ fn clear_diff_selection_resets_content_preview_and_ancillary_fields() {
 fn select_conflict_diff_sets_target_and_resets_content_preview() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3424,7 +3495,7 @@ fn select_conflict_diff_sets_target_and_resets_content_preview() {
 fn diff_file_image_loaded_drops_old_side_when_content_preview() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3477,7 +3548,7 @@ fn global_nav_steps_into_and_out_of_edit_mode() {
     // cross the boundary in either direction.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3574,7 +3645,7 @@ fn global_nav_steps_into_and_out_of_edit_mode() {
 fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let worktree_a = PathBuf::from("/tmp/wt/a");
     let worktree_b = PathBuf::from("/tmp/wt/b");
     let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
@@ -3601,7 +3672,8 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
             kind: FileStatusKind::Modified,
             target: inline_target.clone(),
             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-        }],
+        }]
+        .into(),
         selected_ix: 0,
         target: inline_target.clone(),
         rev: 1,
@@ -3665,7 +3737,7 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
 fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let worktree = PathBuf::from("/tmp/wt/a");
     let commit_target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: CommitId("c0".into()),
@@ -3699,7 +3771,8 @@ fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
             kind: FileStatusKind::Modified,
             target: inline_target.clone(),
             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-        }],
+        }]
+        .into(),
         selected_ix: 0,
         target: inline_target,
         rev: 1,
@@ -3757,15 +3830,17 @@ fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
         deleted: 0,
         staged: Vec::new(),
         unstaged: Vec::new(),
+        line_stats: Default::default(),
     };
 
-    for (label, result) in [(
-        "a scan that no longer lists it",
-        Ok(vec![dirty("/tmp/wt/other")]),
-    )] {
+    {
+        let (label, result) = (
+            "a scan that no longer lists it",
+            Ok(vec![dirty("/tmp/wt/other")]),
+        );
         let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -3802,7 +3877,7 @@ fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let selected = PathBuf::from("/tmp/wt/a");
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -3830,6 +3905,7 @@ fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
                 deleted: 0,
                 staged: Vec::new(),
                 unstaged: Vec::new(),
+                line_stats: Default::default(),
             }]),
         }),
     );
@@ -3850,7 +3926,7 @@ fn a_failed_worktree_scan_keeps_the_rows_and_the_selection() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let selected = PathBuf::from("/tmp/wt/a");
     let ready = vec![WorktreeDirtySummary {
         path: selected.clone(),
@@ -3862,6 +3938,7 @@ fn a_failed_worktree_scan_keeps_the_rows_and_the_selection() {
         deleted: 0,
         staged: Vec::new(),
         unstaged: Vec::new(),
+        line_stats: Default::default(),
     }];
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -3923,6 +4000,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
         deleted: 0,
         staged: Vec::new(),
         unstaged: files.iter().map(|name| file(name)).collect(),
+        line_stats: Default::default(),
     };
 
     let open_on = |state: &mut AppState, files: &[&str], selected_ix: usize| {
@@ -3939,7 +4017,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
                 },
                 submodule_repo_path: worktree.clone(),
                 parent_submodule_path: worktree.clone(),
-                entries,
+                entries: entries.into(),
                 selected_ix,
                 target,
                 rev: 1,
@@ -3966,7 +4044,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
     };
 
     let fresh_state = || {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state.repos.push(RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -4050,6 +4128,69 @@ fn a_rescan_reloads_the_open_worktree_patch_even_when_nothing_moved() {
     );
 }
 
+/// A linked worktree is rescanned on a timer, so re-wrapping an identical scan
+/// allocated an entry per changed file on every tick. `Arc::ptr_eq` is how the
+/// test sees the list was left alone, not an invariant readers rely on.
+#[test]
+fn a_rescan_that_moved_nothing_does_not_rebuild_the_worktree_entry_list() {
+    let (mut state, _) = worktree_inline_diff_fixture(&["a.rs", "b.rs"], 1, "side");
+    let before = Arc::clone(
+        &state.repos[0]
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .expect("the diff is open")
+            .entries,
+    );
+
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![worktree_dirty_summary(&["a.rs", "b.rs"], "side")]),
+        }),
+    );
+
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert_eq!(inline.selected_ix, 1);
+    assert!(
+        Arc::ptr_eq(&before, &inline.entries),
+        "an unchanged scan must not rebuild the list"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![worktree_dirty_summary(
+                &["a.rs", "b.rs", "c.rs"],
+                "side",
+            )]),
+        }),
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert_eq!(inline.entries.len(), 3, "a new file joins the list");
+    assert_eq!(inline.selected_ix, 1, "and the open file keeps its row");
+    assert!(
+        !Arc::ptr_eq(&before, &inline.entries),
+        "a scan that did move something must replace the list"
+    );
+}
+
 /// A file that is staged *and* modified again has a row in each half of the
 /// list. Re-resolving by path alone always found the staged one, so every rescan
 /// silently moved a reader of the unstaged half onto the staged copy.
@@ -4073,6 +4214,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
         deleted: 0,
         staged: vec![file.clone()],
         unstaged: vec![file.clone()],
+        line_stats: Default::default(),
     };
 
     let entries = crate::model::worktree_inline_diff_entries(&summary());
@@ -4087,7 +4229,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
         }
     ));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -4103,7 +4245,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
         },
         submodule_repo_path: worktree.clone(),
         parent_submodule_path: worktree.clone(),
-        entries,
+        entries: entries.into(),
         selected_ix: unstaged_ix,
         target,
         rev: 1,
@@ -4204,6 +4346,7 @@ fn worktree_dirty_summary(
                 conflict: None,
             })
             .collect(),
+        line_stats: Default::default(),
     }
 }
 
@@ -4219,7 +4362,7 @@ fn worktree_inline_diff_fixture(
     let entries = crate::model::worktree_inline_diff_entries(&summary);
     let target = entries[selected_ix].target.clone();
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -4235,7 +4378,7 @@ fn worktree_inline_diff_fixture(
         },
         submodule_repo_path: worktree.clone(),
         parent_submodule_path: worktree.clone(),
-        entries,
+        entries: entries.into(),
         selected_ix,
         target,
         rev: 1,
@@ -4259,7 +4402,7 @@ fn worktree_inline_diff_fixture(
 fn reselecting_the_same_worktree_row_is_a_no_op() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/wt/a");
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -4308,7 +4451,7 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     let state_with_open_worktree_diff = || {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -4329,7 +4472,8 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
                     kind: FileStatusKind::Modified,
                     target: inline_target.clone(),
                     section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-                }],
+                }]
+                .into(),
                 selected_ix: 0,
                 target: inline_target.clone(),
                 rev: 1,
@@ -4416,7 +4560,7 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
     };
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -4427,7 +4571,7 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
         origin: crate::model::ForeignDiffOrigin::Submodule,
         submodule_repo_path: submodule_path.clone(),
         parent_submodule_path: submodule_path.clone(),
-        entries: Vec::new(),
+        entries: Vec::new().into(),
         selected_ix: 0,
         target: inline_target.clone(),
         rev: 1,
@@ -4460,7 +4604,7 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
 fn selecting_a_worktree_requests_a_scan_for_its_own_files() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -4502,7 +4646,7 @@ fn selecting_a_worktree_requests_a_scan_for_its_own_files() {
 fn a_scan_with_no_worktree_selected_asks_for_counts_alone() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -4548,7 +4692,7 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
     std::fs::write(dir.path().join(&other), "hello\n").expect("write other");
     run_git(dir.path(), &["add", "other.txt"]);
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus {
-        staged: vec![
+        staged: std::sync::Arc::new(vec![
             FileStatus {
                 path: submodule_path.clone(),
                 kind: FileStatusKind::Deleted,
@@ -4559,8 +4703,8 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
                 kind: FileStatusKind::Added,
                 conflict: None,
             },
-        ],
-        unstaged: vec![],
+        ]),
+        unstaged: std::sync::Arc::new(vec![]),
     })));
 
     // 1. Select the staged submodule deletion -> classified, cached.
@@ -4630,4 +4774,469 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
         )),
         "nav-back to the staged submodule deletion must plan a submodule summary: {effects:?}"
     );
+}
+
+#[test]
+fn file_history_actions_resolve_paths_before_opening_content_or_changes() {
+    let mut repos = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/file-history-actions"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    let commit_id = CommitId("abcdef".into());
+    let path = PathBuf::from("src/main.rs");
+    for content_preview in [true, false] {
+        let msg = if content_preview {
+            Msg::OpenFileAtCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+                path: path.clone(),
+            }
+        } else {
+            Msg::ShowFileChangesAtCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+                path: path.clone(),
+            }
+        };
+        let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert!(
+            matches!(effects.as_slice(), [Effect::OpenFileAtCommit { repo_id: id, commit_id: commit, path: file, content_preview: mode }] if *id == repo_id && commit == &commit_id && file == &path && *mode == content_preview)
+        );
+        assert!(
+            state.repos[0].diff_state.diff_target.is_none(),
+            "navigation waits for path resolution"
+        );
+    }
+}
+
+/// `Arc::make_mut` re-clones the state this lands in on every later dispatch,
+/// so the reducer must share the caller's list rather than copy it.
+#[test]
+fn open_inline_submodule_diff_shares_the_callers_entry_list() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: CommitId("aaaa".into()),
+        to_commit_id: Some(CommitId("bbbb".into())),
+        path: Some(PathBuf::from("src/lib.rs")),
+    };
+    let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> = (0..512)
+        .map(|ix| crate::model::InlineSubmoduleDiffEntry {
+            path: PathBuf::from(format!("src/file_{ix}.rs")),
+            kind: FileStatusKind::Modified,
+            target: target.clone(),
+            section: crate::model::InlineSubmoduleDiffSection::Range(
+                gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
+            ),
+        })
+        .collect();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
+            repo_id: RepoId(1),
+            submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+            parent_submodule_path: PathBuf::from("vendor/submodule"),
+            entries: Arc::clone(&entries),
+            selected_ix: 3,
+        },
+    );
+
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("inline submodule diff should be open");
+    assert_eq!(inline.selected_ix, 3);
+    assert!(
+        Arc::ptr_eq(&entries, &inline.entries),
+        "the reducer must store the caller's entries, not a copy"
+    );
+}
+
+/// The UI caches one prepared row per changed file against this `Arc` and rev,
+/// so a reload that produced the same summary must not invalidate either.
+#[test]
+fn reloading_an_identical_submodule_summary_keeps_the_arc_and_revision() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let summary = || SubmoduleDiffSummary {
+        path: path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("head".into())),
+        ranges: vec![],
+        live_staged: vec![],
+        live_unstaged: vec![SubmoduleInnerChange {
+            path: PathBuf::from("src/lib.rs"),
+            kind: FileStatusKind::Modified,
+            additions: Some(1),
+            deletions: Some(1),
+        }],
+    };
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }]),
+        staged: std::sync::Arc::new(vec![]),
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: path.clone(),
+        recorded_head: CommitId("recorded".into()),
+        checked_out_head: Some(CommitId("head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(target.clone()));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let load = |state: &mut AppState, repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                repo_id: RepoId(1),
+                target: target.clone(),
+                result: Ok(summary()),
+            }),
+        );
+    };
+    let snapshot = |state: &AppState| {
+        let diff_state = &state.repos[0].diff_state;
+        let Loadable::Ready(summary) = &diff_state.submodule_summary else {
+            panic!("summary should be ready");
+        };
+        (Arc::clone(summary), diff_state.submodule_summary_rev)
+    };
+
+    load(&mut state, &mut repos);
+    let (first, first_rev) = snapshot(&state);
+
+    load(&mut state, &mut repos);
+    let (second, second_rev) = snapshot(&state);
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "an identical reload must keep the same Arc"
+    );
+    assert_eq!(first_rev, second_rev, "and the same revision");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(SubmoduleDiffSummary {
+                status: Some(SubmoduleStatus::UpToDate),
+                ..summary()
+            }),
+        }),
+    );
+    let (third, third_rev) = snapshot(&state);
+    assert!(
+        !Arc::ptr_eq(&first, &third),
+        "a changed summary replaces it"
+    );
+    assert_ne!(first_rev, third_rev, "and bumps the revision");
+}
+
+/// The poll behind an idle repository redelivers the same summary every 250ms:
+/// rebuilding the entry list from it is churn, but re-reading the patch is not
+/// -- editing an inner file in place moves nothing in the summary.
+#[test]
+fn reloading_an_identical_submodule_summary_rereads_the_patch_without_rebuilding_entries() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let summary = || SubmoduleDiffSummary {
+        path: path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("head".into())),
+        ranges: vec![],
+        live_staged: vec![],
+        live_unstaged: (0..4)
+            .map(|ix| SubmoduleInnerChange {
+                path: PathBuf::from(format!("src/file_{ix}.rs")),
+                kind: FileStatusKind::Modified,
+                additions: Some(1),
+                deletions: Some(1),
+            })
+            .collect(),
+    };
+    let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> =
+        crate::model::submodule_inline_diff_entries(&summary()).into();
+    let inline_target = entries[2].target.clone();
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }]),
+        staged: std::sync::Arc::new(vec![]),
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: path.clone(),
+        recorded_head: CommitId("recorded".into()),
+        checked_out_head: Some(CommitId("head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(target.clone()));
+    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary()));
+    repo_state.diff_state.submodule_summary_rev = 1;
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Submodule,
+        submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+        parent_submodule_path: path.clone(),
+        entries: Arc::clone(&entries),
+        selected_ix: 2,
+        target: inline_target.clone(),
+        rev: 7,
+        diff_rev: 1,
+        diff: Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+            target: inline_target,
+            lines: Vec::new(),
+        })),
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(summary()),
+        }),
+    );
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [
+                Effect::LoadInlineSubmoduleSelectedDiff { .. },
+                Effect::LoadInlineSubmoduleSelectedDiffFile { .. },
+            ]
+        ),
+        "the open live file must still be re-read, got {effects:?}"
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the inline diff stays open");
+    assert_eq!(inline.selected_ix, 2, "the selection must not move");
+    assert!(
+        Arc::ptr_eq(&entries, &inline.entries),
+        "and its entry list must not be rebuilt"
+    );
+    assert!(
+        matches!(inline.diff, Loadable::Ready(_)),
+        "the patch on screen must stay until the new one lands, got {:?}",
+        inline.diff
+    );
+    assert_eq!(
+        state.repos[0].diff_state.submodule_summary_rev, 1,
+        "the summary itself did not change"
+    );
+    assert_eq!(
+        state.repos[0].diff_state.diff_state_rev, diff_state_rev,
+        "and the re-read owes no repaint of its own"
+    );
+
+    // A changed summary still refreshes the open diff.
+    let mut changed = summary();
+    changed.live_unstaged.remove(0);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(changed),
+        }),
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the inline diff stays open");
+    assert_eq!(inline.selected_ix, 1, "the selected file moved up one row");
+    assert_ne!(inline.rev, 7);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadInlineSubmoduleSelectedDiff { .. })),
+        "a changed summary must still reload the open diff, got {effects:?}"
+    );
+}
+
+/// The other half of the same rule: a range entry is a diff between two fixed
+/// commits, so an identical summary has nothing to re-read for it.
+#[test]
+fn reloading_an_identical_submodule_summary_does_not_re_read_a_range_entry() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let summary = || SubmoduleDiffSummary {
+        path: path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("head".into())),
+        ranges: vec![gitcomet_core::domain::SubmoduleDiffRange {
+            kind: gitcomet_core::domain::SubmoduleDiffRangeKind::StagedPointer,
+            from: Some(CommitId("aaaa".into())),
+            to: Some(CommitId("bbbb".into())),
+            unavailable_reason: None,
+            changes: vec![SubmoduleInnerChange {
+                path: PathBuf::from("src/lib.rs"),
+                kind: FileStatusKind::Modified,
+                additions: Some(1),
+                deletions: Some(1),
+            }],
+        }],
+        live_staged: vec![],
+        live_unstaged: vec![],
+    };
+    let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> =
+        crate::model::submodule_inline_diff_entries(&summary()).into();
+    let inline_target = entries[0].target.clone();
+    assert!(matches!(
+        inline_target,
+        gitcomet_core::domain::DiffTarget::CommitRange { .. }
+    ));
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }]),
+        staged: std::sync::Arc::new(vec![]),
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: path.clone(),
+        recorded_head: CommitId("recorded".into()),
+        checked_out_head: Some(CommitId("head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(target.clone()));
+    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary()));
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Submodule,
+        submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+        parent_submodule_path: path.clone(),
+        entries: Arc::clone(&entries),
+        selected_ix: 0,
+        target: inline_target.clone(),
+        rev: 7,
+        diff_rev: 1,
+        diff: Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+            target: inline_target,
+            lines: Vec::new(),
+        })),
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(summary()),
+        }),
+    );
+
+    assert!(
+        effects.is_empty(),
+        "two fixed commits cannot have changed, got {effects:?}"
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the inline diff stays open");
+    assert_eq!(inline.rev, 7, "the inline generation must not move");
+    assert!(Arc::ptr_eq(&entries, &inline.entries));
 }

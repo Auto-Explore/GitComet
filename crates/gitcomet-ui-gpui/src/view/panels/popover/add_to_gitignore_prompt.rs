@@ -66,7 +66,7 @@ fn scope_picker(
         .gap_2()
         .child(
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Ignore"),
         )
@@ -157,7 +157,7 @@ pub(super) fn panel(
             div()
                 .px_2()
                 .pb_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.status.danger.foreground)
                 .child(format!(
                     "{} has unsaved edits open in the editor. Saving them will overwrite this change.",

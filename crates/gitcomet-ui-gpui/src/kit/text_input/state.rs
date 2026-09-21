@@ -182,7 +182,7 @@ pub(super) struct HighlightEditPatch {
 /// Keeps stale highlights pinned to their tokens between the edit that moved
 /// them and the debounced recompute that catches up.
 ///
-/// Mirrors `WrapState::interpolated_patches`: cheap, synchronous, applied on
+/// Tracks edits cheaply and synchronously, applied on
 /// every edit so rendering gets stale-but-positionally-correct highlights.
 ///
 /// Deliberately one coalesced interval rather than a sorted disjoint list. A
@@ -480,6 +480,7 @@ pub(super) struct UndoSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TextInputStyle {
+    pub(super) menu_theme: AppTheme,
     pub(super) background: Rgba,
     pub(super) border: Rgba,
     pub(super) hover_border: Rgba,
@@ -512,6 +513,7 @@ impl TextInputStyle {
             theme.colors.interaction.focus_ring
         };
         Self {
+            menu_theme: theme,
             background: theme.colors.surface.input,
             border: theme.colors.stroke.control,
             hover_border,
@@ -551,14 +553,6 @@ pub(super) struct PendingWrapJob {
     pub(super) width_key: i32,
     pub(super) line_count: usize,
     pub(super) wrap_columns: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct InterpolatedWrapPatch {
-    pub(super) width_key: i32,
-    pub(super) line_start: usize,
-    pub(super) old_rows: Vec<usize>,
-    pub(super) new_rows: Vec<usize>,
 }
 
 /// The shaped lines a frame actually touches, addressed by absolute line index.
@@ -701,12 +695,15 @@ pub(super) struct WrapState {
     pub(super) cache: Option<WrapCache>,
     pub(super) last_rows: Option<usize>,
     pub(super) row_counts: Vec<usize>,
+    /// Rows measured by shaping or updated after an edit at the current wrap
+    /// metrics. An estimate from a background snapshot must not replace them.
+    pub(super) row_counts_current: Vec<bool>,
     pub(super) row_counts_width: Option<Pixels>,
+    pub(super) row_counts_font: Option<(gpui::Font, Pixels)>,
     pub(super) recompute_sequence: u64,
     pub(super) recompute_requested: bool,
     pub(super) pending_job: Option<PendingWrapJob>,
     pub(super) dirty_ranges: Vec<Range<usize>>,
-    pub(super) interpolated_patches: Vec<InterpolatedWrapPatch>,
 }
 
 impl WrapState {
@@ -715,12 +712,13 @@ impl WrapState {
             cache: None,
             last_rows: None,
             row_counts: Vec::new(),
+            row_counts_current: Vec::new(),
             row_counts_width: None,
+            row_counts_font: None,
             recompute_sequence: 1,
             recompute_requested: false,
             pending_job: None,
             dirty_ranges: Vec::new(),
-            interpolated_patches: Vec::new(),
         }
     }
 }
@@ -749,6 +747,10 @@ impl SelectionState {
 
 pub(super) struct InteractionState {
     pub(super) is_selecting: bool,
+    /// Set by this input's own mouse-down handlers, cleared in the capture
+    /// phase of every press. Read after the press resolves to tell "the user
+    /// clicked me" from "the user clicked away", which is what decides blur.
+    pub(super) took_press: bool,
     /// Fixed document endpoint for the mouse drag in progress. Keyboard
     /// selections can infer their anchor from `range` + `reversed`, but a mouse
     /// drag must not let repeated move handlers or a direction change move it.
@@ -768,15 +770,22 @@ pub(super) struct InteractionState {
     /// the shared scroll handle (used for column↔output scroll sync).
     pub(super) content_width_layout: bool,
     pub(super) pending_cursor_autoscroll: bool,
-    /// Set after a stale-max_offset retry so the next attempt always clears the flag,
-    /// preventing an infinite notify loop when cursor_bottom sits at the viewport edge.
-    pub(super) cursor_autoscroll_retry_exhausted: bool,
+    /// Bounds follow-up frames while the destination's wrapped rows and the
+    /// parent scroll extent catch up with a caret reveal.
+    pub(super) cursor_autoscroll_retries_remaining: u8,
+    /// Waiting for a new parent extent must not spend destination reveals.
+    pub(super) cursor_autoscroll_layout_waits_remaining: u8,
     pub(super) has_focus: bool,
     pub(super) cursor_blink_visible: bool,
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
     pub(super) arrow_up_pressed: bool,
+    pub(super) document_home_pressed: bool,
+    pub(super) document_end_pressed: bool,
+    pub(super) page_up_pressed: bool,
+    pub(super) page_down_pressed: bool,
+
     pub(super) arrow_down_pressed: bool,
     pub(super) tab_pressed: bool,
     pub(super) shift_tab_pressed: bool,
@@ -787,6 +796,7 @@ impl InteractionState {
     pub(super) fn new() -> Self {
         Self {
             is_selecting: false,
+            took_press: false,
             mouse_selection_anchor: None,
             pending_mouse_selection_anchor: None,
             suppress_right_click: false,
@@ -795,13 +805,19 @@ impl InteractionState {
             vertical_scroll_handle: None,
             content_width_layout: false,
             pending_cursor_autoscroll: false,
-            cursor_autoscroll_retry_exhausted: false,
+            cursor_autoscroll_retries_remaining: 0,
+            cursor_autoscroll_layout_waits_remaining: 0,
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
             enter_pressed: false,
             escape_pressed: false,
             arrow_up_pressed: false,
+            document_home_pressed: false,
+            document_end_pressed: false,
+            page_up_pressed: false,
+            page_down_pressed: false,
+
             arrow_down_pressed: false,
             tab_pressed: false,
             shift_tab_pressed: false,
@@ -829,6 +845,9 @@ impl ContentWidthCache {
 }
 
 pub struct TextInput {
+    pub(super) appearance_metrics: crate::appearance::Appearance,
+    pub(super) editor_font: bool,
+    pub(super) editor_line_height: Pixels,
     pub(super) focus_handle: FocusHandle,
     pub(super) content: TextModel,
     pub(super) placeholder: SharedString,
@@ -836,6 +855,8 @@ pub struct TextInput {
     pub(super) multiline: bool,
     pub(super) read_only: bool,
     pub(super) chromeless: bool,
+    /// Read-only labels inherit surrounding typography and size to their text.
+    pub(super) display_text: bool,
     pub(super) soft_wrap: bool,
     pub(super) min_lines: u32,
     pub(super) display_truncation: Option<TextTruncationProfile>,
@@ -855,6 +876,11 @@ pub struct TextInput {
     /// spans ride along with edits elsewhere so they stay accurate between
     /// refreshes by the owner.
     pub(super) protected_ranges: Arc<[Range<usize>]>,
+    /// Which window's selection this input currently owns, if any. Cleared
+    /// remotely when any other surface takes over; see
+    /// [`crate::text_selection_owner`].
+    pub(super) selection_owner: crate::text_selection_owner::SelectionOwnerToken,
+    pub(super) _selection_owner_observer: gpui::Subscription,
 }
 
 #[cfg(test)]

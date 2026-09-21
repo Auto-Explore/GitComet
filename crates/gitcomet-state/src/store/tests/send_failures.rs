@@ -65,11 +65,15 @@ impl GitRepository for ReadyOpenRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
-        Ok(LogPage {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
@@ -137,9 +141,6 @@ impl GitRepository for ReadyOpenRepo {
         Ok(())
     }
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -312,11 +313,15 @@ impl GitRepository for BlockingDiffRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
-        Ok(LogPage {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
@@ -389,9 +394,6 @@ impl GitRepository for BlockingDiffRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Ok(())
     }
@@ -443,7 +445,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
     );
 
     let store = AppStore {
-        state: Arc::new(RwLock::new(Arc::new(AppState::default()))),
+        state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -466,7 +468,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         super::worker_channel::StoreInstanceId::next(),
     );
     let store = AppStore {
-        state: Arc::new(RwLock::new(Arc::new(AppState::default()))),
+        state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -583,7 +585,7 @@ fn closed_receiver_while_store_is_alive_increments_store_event_failure_counter()
     let before = store_event_failure_count();
 
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
     drop(event_rx);
 
     store.dispatch(Msg::DismissBannerError);
@@ -612,7 +614,7 @@ fn dropping_receiver_then_last_store_suppresses_late_open_result_store_event_fai
         started_tx,
         release_rx: Mutex::new(release_rx),
     });
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
 
     store.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/gitcomet-blocking-open")));
     started_rx
@@ -647,7 +649,7 @@ fn switching_away_from_saturated_open_repos_does_not_block_next_open() {
         started_tx,
         release: Arc::clone(&release),
     });
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
 
     store.dispatch(Msg::OpenRepo(repo_a));
     started_rx
@@ -711,7 +713,7 @@ fn switching_and_closing_tabs_do_not_wait_for_blocked_tag_loading() {
         opened_tx,
         tag_blocker,
     });
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
 
     store.dispatch(Msg::RestoreSession {
         open_repos: vec![repo_a, repo_b],
@@ -757,14 +759,16 @@ fn selected_diff_results_after_store_drop_do_not_emit_store_event_failures() {
     let _guard = send_failure_counter_test_lock();
     let before = store_event_failure_count();
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
 
     let repo_id = RepoId(1);
     let spec = RepoSpec {
         workdir: PathBuf::from("/tmp/gitcomet-blocking-diff"),
     };
-    let mut state = AppState::default();
-    state.active_repo = Some(repo_id);
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    };
     state
         .repos
         .push(RepoState::new_opening(repo_id, spec.clone()));

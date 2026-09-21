@@ -55,7 +55,7 @@ fn build_multi_conflict_sides() -> (String, String, String, String) {
 /// brings the two panes onto the same block.
 #[gpui::test]
 fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -253,7 +253,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
 /// autoscroll the whole coupled group to the bottom of the file.
 #[gpui::test]
 fn conflict_resolver_materialized_output_parks_caret_at_the_start(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -377,7 +377,7 @@ fn seed_unresolved_conflict_state(
 /// both survive that, so the sync drags one onto the other and the loser jumps.
 #[gpui::test]
 fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -511,7 +511,7 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
 /// at all: it points at the wrong row.
 #[gpui::test]
 fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -802,7 +802,7 @@ fn assert_conflict_highlight_ranges_are_bounded(
 /// source columns actually paint with.
 #[gpui::test]
 fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -902,7 +902,7 @@ fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui:
 
 #[gpui::test]
 fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1187,7 +1187,7 @@ pub(super) fn resolved_output_placeholder_protected_ranges_for_test(
 fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1288,7 +1288,7 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
 /// that is what this pins.
 #[gpui::test]
 fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1375,7 +1375,7 @@ fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAp
 /// too, simply by moving.
 #[gpui::test]
 fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1548,7 +1548,7 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
 /// wants the one remaining decision back on screen.
 #[gpui::test]
 fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1701,7 +1701,7 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
 /// right to fire on it, and the reset is the user overriding that.
 #[gpui::test]
 fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1787,7 +1787,7 @@ fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2040,7 +2040,7 @@ fn assert_conflict_search_reveals_match(
     repo_id: gitcomet_state::model::RepoId,
     fixture_name: &str,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2234,7 +2234,7 @@ fn conflict_resolver_two_way_search_reveals_match_in_columns_and_output(
 /// instead of being left behind on the row it stepped off.
 #[gpui::test]
 fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2396,7 +2396,7 @@ fn assert_conflict_search_scrolls_sideways(
     fixture_name: &str,
     reveal_whitespace: bool,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

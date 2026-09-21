@@ -536,17 +536,14 @@ fn maybe_record_compat_argv(raw_args: &[OsString], env: &dyn EnvLookup) {
         return;
     };
 
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
     let mut dump = String::new();
     for arg in raw_args {
         dump.push_str(&compat_log_arg_text(arg.as_os_str()));
         dump.push('\n');
     }
 
-    let _ = std::fs::write(path, dump);
+    // A predictable name in a shared temp dir: never follow what is planted there.
+    let _ = gitcomet_core::fs_utils::write_private_file(&path, dump.as_bytes());
 }
 
 pub(super) fn parse_compat_external_mode_with_config(

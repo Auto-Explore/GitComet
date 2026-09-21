@@ -12,11 +12,11 @@ use crate::model::{
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::{DiffTarget, FileConflictKind};
+use gitcomet_core::domain::{DiffTarget, FileConflictKind, Upstream};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget,
+    CheckoutRemoteBranchMode, CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -31,12 +31,14 @@ pub(super) fn checkout_remote_branch(
     remote: String,
     branch: String,
     local_branch: String,
+    mode: CheckoutRemoteBranchMode,
 ) -> Vec<Effect> {
     vec![Effect::CheckoutRemoteBranch {
         repo_id,
         remote,
         branch,
         local_branch,
+        mode,
     }]
 }
 
@@ -66,8 +68,18 @@ pub(super) fn cherry_pick_commit(
 pub(super) fn revert_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
 ) -> Vec<Effect> {
-    vec![Effect::RevertCommit { repo_id, commit_id }]
+    vec![Effect::RevertCommit {
+        repo_id,
+        commit_id,
+        commit,
+        mainline,
+        summary,
+        auth: None,
+    }]
 }
 
 pub(super) fn create_branch(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
@@ -82,19 +94,27 @@ pub(super) fn create_branch_and_checkout(
     repo_id: RepoId,
     name: String,
     target: String,
+    force: bool,
 ) -> Vec<Effect> {
     vec![Effect::CreateBranchAndCheckout {
         repo_id,
         name,
         target,
+        force,
     }]
 }
 
-pub(super) fn rename_branch(repo_id: RepoId, old_name: String, new_name: String) -> Vec<Effect> {
+pub(super) fn rename_branch(
+    repo_id: RepoId,
+    old_name: String,
+    new_name: String,
+    force: bool,
+) -> Vec<Effect> {
     vec![Effect::RenameBranch {
         repo_id,
         old_name,
         new_name,
+        force,
     }]
 }
 
@@ -158,6 +178,7 @@ pub(super) fn add_submodule(
     name: Option<String>,
     force: bool,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::AddSubmodule {
         repo_id,
@@ -167,6 +188,7 @@ pub(super) fn add_submodule(
         name,
         force,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -174,10 +196,12 @@ pub(super) fn add_submodule(
 pub(super) fn update_submodules(
     repo_id: RepoId,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::UpdateSubmodules {
         repo_id,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -186,11 +210,13 @@ pub(super) fn load_submodule(
     repo_id: RepoId,
     path: PathBuf,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::LoadSubmodule {
         repo_id,
         path,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -312,11 +338,7 @@ pub(super) fn fetch_all(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    let prune = state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .is_some_and(|repo_state| repo_state.fetch_prune_deleted_remote_tracking_branches);
+    let prune = state.remote_settings.prune_deleted_remote_branches_on_fetch;
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::FetchAll {
         repo_id,
@@ -353,6 +375,7 @@ pub(super) fn pull(
     vec![Effect::Pull {
         repo_id,
         mode,
+        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     }]
 }
@@ -369,6 +392,7 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
+        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     }]
 }
@@ -379,6 +403,20 @@ pub(super) fn merge_ref(repo_id: RepoId, reference: String) -> Vec<Effect> {
 
 pub(super) fn squash_ref(repo_id: RepoId, reference: String) -> Vec<Effect> {
     vec![Effect::SquashRef { repo_id, reference }]
+}
+
+pub(super) fn push_with_tags(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    request: gitcomet_core::tag_push::TagPushRequest,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::PushWithTags {
+        repo_id,
+        request,
+        auth: None,
+    }]
 }
 
 pub(super) fn push(
@@ -465,7 +503,7 @@ pub(super) fn push_set_upstream(
 pub(super) fn set_upstream_branch(
     repo_id: RepoId,
     branch: String,
-    upstream: String,
+    upstream: Upstream,
 ) -> Vec<Effect> {
     vec![Effect::SetUpstreamBranch {
         repo_id,
@@ -565,7 +603,7 @@ pub(super) fn squash_commits(
         repo_id,
         base: plan.oldest_parent,
         actual_head: plan.actual_head,
-        selected_ids: plan.ordered_ids,
+        selected_ids: Arc::unwrap_or_clone(plan.ordered_ids),
         reword_id: oldest,
         message,
         count,
@@ -722,8 +760,18 @@ pub(super) fn delete_remote_tag(
     }]
 }
 
-pub(super) fn add_remote(repo_id: RepoId, name: String, url: String) -> Vec<Effect> {
-    vec![Effect::AddRemote { repo_id, name, url }]
+pub(super) fn add_remote(
+    repo_id: RepoId,
+    name: String,
+    url: String,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
+) -> Vec<Effect> {
+    vec![Effect::AddRemote {
+        repo_id,
+        name,
+        url,
+        remote_url_policy,
+    }]
 }
 
 pub(super) fn remove_remote(repo_id: RepoId, name: String) -> Vec<Effect> {
@@ -735,12 +783,14 @@ pub(super) fn set_remote_url(
     name: String,
     url: String,
     kind: RemoteUrlKind,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::SetRemoteUrl {
         repo_id,
         name,
         url,
         kind,
+        remote_url_policy,
     }]
 }
 
@@ -965,6 +1015,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -992,6 +1043,26 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     )
 }
 
+/// Mirror of `sequencer_effect_repo`: the commands whose effects are counted
+/// while they run. `sequencer_commands_release_their_count` pairs the two.
+pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::MergeRef { .. }
+            | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
+            | RepoCommandKind::InteractiveCherryPick { .. }
+            | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::MergeAbort
+    )
+}
+
 fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
     matches!(
         command,
@@ -999,6 +1070,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::PullBranch { .. }
             | RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::PushWithTags { .. }
             | RepoCommandKind::Push
             | RepoCommandKind::PushAfterCommit { .. }
             | RepoCommandKind::ForcePush
@@ -1011,6 +1083,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1065,6 +1138,27 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let fetch_like_command = matches!(
+        &command,
+        RepoCommandKind::FetchAll
+            | RepoCommandKind::PruneMergedBranches
+            | RepoCommandKind::Pull { .. }
+            | RepoCommandKind::PullBranch { .. }
+    );
+    let refresh_remote_branches = fetch_like_command
+        || matches!(
+            &command,
+            RepoCommandKind::DeleteRemoteBranch { .. }
+                | RepoCommandKind::DeleteRemoteBranches { .. }
+                | RepoCommandKind::RemoveRemote { .. }
+        );
+    let refresh_synced_tag_metadata = command_succeeded && fetch_like_command;
+    let refresh_remote_tag_metadata = refresh_synced_tag_metadata
+        || command_succeeded
+            && matches!(
+                &command,
+                RepoCommandKind::PushTag { .. } | RepoCommandKind::DeleteRemoteTag { .. }
+            );
     let refresh_tags = command_succeeded
         && matches!(
             &command,
@@ -1079,6 +1173,12 @@ pub(super) fn repo_command_finished(
     };
 
     let mut extra_effects = Vec::new();
+    if refresh_remote_branches && !matches!(repo_state.remote_branches, Loadable::Ready(_)) {
+        // A fetch may have updated or pruned refs even when a later phase failed.
+        // Keep a successful pre-command snapshot visible while it is revalidated;
+        // only repositories without usable data need a loading placeholder.
+        repo_state.set_remote_branches(Loadable::Loading);
+    }
     match &command {
         RepoCommandKind::FetchAll
         | RepoCommandKind::PruneMergedBranches
@@ -1088,7 +1188,8 @@ pub(super) fn repo_command_finished(
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
             repo_state.bump_ops_rev();
         }
-        RepoCommandKind::Push
+        RepoCommandKind::PushWithTags { .. }
+        | RepoCommandKind::Push
         | RepoCommandKind::PushAfterCommit { .. }
         | RepoCommandKind::ForcePush
         | RepoCommandKind::ForcePushWithLease { .. }
@@ -1111,6 +1212,11 @@ pub(super) fn repo_command_finished(
             repo_state.bump_ops_rev();
         }
         _ => {}
+    }
+    if command_touches_sequencer_state(&command) {
+        repo_state.sequencer_actions_in_flight =
+            repo_state.sequencer_actions_in_flight.saturating_sub(1);
+        repo_state.bump_ops_rev();
     }
 
     if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
@@ -1135,6 +1241,7 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::InteractiveRebase { .. }
                     | RepoCommandKind::InteractiveCherryPick { .. }
                     | RepoCommandKind::CherryPick { .. }
+                    | RepoCommandKind::Revert { .. }
                     | RepoCommandKind::MergeAbort
             ) {
                 repo_state.set_diff_target(None);
@@ -1206,6 +1313,20 @@ pub(super) fn repo_command_finished(
         repo_state.set_tags(Loadable::NotLoaded);
         if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
             extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    } else if refresh_synced_tag_metadata && !matches!(repo_state.tags, Loadable::NotLoaded) {
+        repo_state.set_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    }
+    if refresh_remote_tag_metadata && !matches!(repo_state.remote_tags, Loadable::NotLoaded) {
+        repo_state.set_remote_tags(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_TAGS)
+        {
+            extra_effects.push(Effect::LoadRemoteTags { repo_id });
         }
     }
     if matches!(

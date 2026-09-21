@@ -5,7 +5,7 @@ fn reducer_diagnostics_track_dispatches_and_clone_on_write() {
     let before = AppStore::reducer_diagnostics();
 
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
     let held_snapshot = store.snapshot();
 
     store.dispatch(Msg::RestoreSession {

@@ -16,16 +16,12 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(540.0))
-        .child(popover_title("Checkout remote branch"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child(format!("Remote branch: {upstream}")),
-        )
+        .child(popover_title(theme, "Checkout remote branch"))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(
+            theme,
+            format!("Remote branch: {upstream}"),
+        ))
         .child(input_label(theme, "Local branch name"))
         .child(
             div()
@@ -35,14 +31,9 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.create_branch_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button(
                         "checkout_remote_branch_cancel",
@@ -64,7 +55,7 @@ pub(super) fn panel(
                             "Enter",
                         ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
+                        .on_click(theme, cx, |this, _e, _window, cx| {
                             this.submit_checkout_remote_branch(cx);
                         }),
                 ),
