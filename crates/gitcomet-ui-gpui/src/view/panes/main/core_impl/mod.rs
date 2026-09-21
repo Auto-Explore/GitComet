@@ -2048,21 +2048,15 @@ impl MainPaneView {
         true
     }
 
-    /// Stage (or unstage) a whole status selection in one batch, clearing the
-    /// diff selection first because every one of those files is about to move to
-    /// the other section. Same order the context menu uses.
+    /// Stage (or unstage) a whole status selection in one batch, closing only
+    /// the affected diff in this status area.
     pub(in crate::view) fn stage_or_unstage_status_paths(
         &mut self,
         repo_id: RepoId,
         area: DiffArea,
         paths: Vec<std::path::PathBuf>,
     ) {
-        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-        let paths = paths.into();
-        self.store.dispatch(match area {
-            DiffArea::Unstaged => Msg::StagePaths { repo_id, paths },
-            DiffArea::Staged => Msg::UnstagePaths { repo_id, paths },
-        });
+        crate::view::status_actions::stage_or_unstage_paths(&self.store, repo_id, area, paths);
     }
 
     pub(in crate::view) fn clear_status_multi_selection(

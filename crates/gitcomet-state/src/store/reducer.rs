@@ -1356,6 +1356,16 @@ fn reduce_inner(
             diff_selection::select_conflict_diff(state, repo_id, path)
         }
         Msg::ClearDiffSelection { repo_id } => diff_selection::clear_diff_selection(state, repo_id),
+        Msg::ClearDiffSelectionForStatusAction {
+            repo_id,
+            area,
+            paths,
+        } => diff_selection::clear_diff_selection_for_status_action(
+            state,
+            repo_id,
+            area,
+            paths.as_slice(),
+        ),
         Msg::EnsureSidebarData { repo_id, request } => {
             effects::ensure_sidebar_data(state, repo_id, request)
         }

@@ -1208,45 +1208,26 @@ impl PopoverHost {
                 }
                 if used_selection {
                     self.clear_status_multi_selection(repo_id, cx);
-                    self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::StagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area,
-                        },
-                    });
-                    self.store.dispatch(Msg::StagePath { repo_id, path });
                 }
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    DiffArea::Unstaged,
+                    paths,
+                );
             }
             ContextMenuAction::UnstageSelectionOrPath {
                 repo_id,
                 area,
                 path,
             } => {
-                let (paths, used_selection) =
-                    self.take_status_paths_for_action(repo_id, area, &path, cx);
-                if used_selection {
-                    self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::UnstagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area,
-                        },
-                    });
-                    self.store.dispatch(Msg::UnstagePath { repo_id, path });
-                }
+                let (paths, _) = self.take_status_paths_for_action(repo_id, area, &path, cx);
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    DiffArea::Staged,
+                    paths,
+                );
             }
             ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
                 repo_id,

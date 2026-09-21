@@ -608,6 +608,36 @@ pub(super) fn select_conflict_diff(
     start_conflict_target_reload_with_mode(repo_state, &path, ConflictFileLoadMode::CurrentOnly)
 }
 
+pub(super) fn clear_diff_selection_for_status_action(
+    state: &mut AppState,
+    repo_id: RepoId,
+    area: DiffArea,
+    paths: &[std::path::PathBuf],
+) -> Vec<Effect> {
+    let should_close = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| {
+            let diff = &repo.diff_state;
+            !diff.content_preview
+            && !diff.edit_mode
+            // An inline diff is the displayed target, even when its parent
+            // happens to match the status action's path.
+            && diff.inline_submodule_diff.is_none()
+            && matches!(
+                &diff.diff_target,
+                Some(DiffTarget::WorkingTree { path, area: selected_area })
+                    if *selected_area == area && (paths.is_empty() || paths.contains(path))
+            )
+        });
+    if should_close {
+        clear_diff_selection(state, repo_id)
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();

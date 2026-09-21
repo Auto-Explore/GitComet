@@ -1941,6 +1941,161 @@ fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
 }
 
 #[test]
+fn clear_diff_selection_for_status_action_matches_path_area_and_view_mode() {
+    use gitcomet_core::domain::DiffArea;
+
+    for action_area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for selected_area in [DiffArea::Unstaged, DiffArea::Staged] {
+            for paths in [
+                vec![],
+                vec![PathBuf::from("shown.rs")],
+                vec![PathBuf::from("other.rs")],
+            ] {
+                for (content_preview, edit_mode) in [(false, false), (true, false), (true, true)] {
+                    let mut repos = FxHashMap::default();
+                    let id_alloc = AtomicU64::new(2);
+                    let mut state = AppState::test_default();
+                    let mut repo = RepoState::new_opening(
+                        RepoId(1),
+                        RepoSpec {
+                            workdir: PathBuf::from("/tmp/repo"),
+                        },
+                    );
+                    let target = DiffTarget::WorkingTree {
+                        path: PathBuf::from("shown.rs"),
+                        area: selected_area,
+                    };
+                    repo.set_diff_target(Some(target.clone()));
+                    repo.diff_state.content_preview = content_preview;
+                    repo.diff_state.edit_mode = edit_mode;
+                    repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+                        target: target.clone(),
+                        lines: vec![],
+                    }));
+                    let rev = repo.diff_state.diff_state_rev;
+                    state.repos.push(repo);
+                    state.active_repo = Some(RepoId(1));
+
+                    let should_close = !content_preview
+                        && action_area == selected_area
+                        && (paths.is_empty() || paths.contains(&PathBuf::from("shown.rs")));
+                    let effects = reduce(
+                        &mut repos,
+                        &id_alloc,
+                        &mut state,
+                        Msg::ClearDiffSelectionForStatusAction {
+                            repo_id: RepoId(1),
+                            area: action_area,
+                            paths: paths.clone().into(),
+                        },
+                    );
+                    let diff = &state.repos[0].diff_state;
+                    assert!(effects.is_empty());
+                    assert_eq!(
+                        diff.diff_target,
+                        (!should_close).then_some(target),
+                        "action={action_area:?} selected={selected_area:?} paths={paths:?} preview={content_preview} edit={edit_mode}"
+                    );
+                    if should_close {
+                        assert!(matches!(diff.diff, Loadable::NotLoaded));
+                        assert!(diff.diff_state_rev > rev);
+                    } else {
+                        assert!(matches!(diff.diff, Loadable::Ready(_)));
+                        assert_eq!(diff.diff_state_rev, rev);
+                        assert_eq!(diff.content_preview, content_preview);
+                        assert_eq!(diff.edit_mode, edit_mode);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn clear_diff_selection_for_status_action_preserves_historical_foreign_and_other_repo_views() {
+    use gitcomet_core::domain::DiffArea;
+    let working = DiffTarget::WorkingTree {
+        path: "shown.rs".into(),
+        area: DiffArea::Unstaged,
+    };
+    for target in [
+        working.clone(),
+        DiffTarget::Commit {
+            commit_id: CommitId("head".into()),
+            path: Some("shown.rs".into()),
+        },
+        DiffTarget::CommitRange {
+            from_commit_id: CommitId("base".into()),
+            to_commit_id: None,
+            path: Some("shown.rs".into()),
+        },
+    ] {
+        let mut repos = FxHashMap::default();
+        let id_alloc = AtomicU64::new(2);
+        let mut state = AppState::test_default();
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/tmp/repo".into(),
+            },
+        );
+        repo.set_diff_target(Some(target.clone()));
+        state.repos.push(repo);
+        state.active_repo = Some(RepoId(1));
+        // The same path in a different repository never owns this view.
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::ClearDiffSelectionForStatusAction {
+                repo_id: RepoId(2),
+                area: DiffArea::Unstaged,
+                paths: Default::default(),
+            },
+        );
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));
+        if target == working {
+            reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                Msg::OpenInlineSubmoduleDiff {
+                    repo_id: RepoId(1),
+                    origin: crate::model::ForeignDiffOrigin::Submodule,
+                    submodule_repo_path: "/tmp/foreign".into(),
+                    parent_submodule_path: "shown.rs".into(),
+                    entries: vec![crate::model::InlineSubmoduleDiffEntry {
+                        path: "shown.rs".into(),
+                        kind: FileStatusKind::Modified,
+                        target: working.clone(),
+                        section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+                    }]
+                    .into(),
+                    selected_ix: 0,
+                },
+            );
+        }
+        let rev = state.repos[0].diff_state.diff_state_rev;
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::ClearDiffSelectionForStatusAction {
+                repo_id: RepoId(1),
+                area: DiffArea::Unstaged,
+                paths: Default::default(),
+            },
+        );
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));
+        assert_eq!(state.repos[0].diff_state.diff_state_rev, rev);
+        assert_eq!(
+            state.repos[0].diff_state.inline_submodule_diff.is_some(),
+            target == working
+        );
+    }
+}
+
+#[test]
 fn clear_diff_selection_resets_diff_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);

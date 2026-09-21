@@ -666,10 +666,12 @@ impl GitCometView {
                     }
                     return;
                 }
-                self.store.dispatch(Msg::StagePaths {
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
                     repo_id,
-                    paths: paths.into(),
-                });
+                    DiffArea::Unstaged,
+                    paths,
+                );
             }
             "unstage-all" => {
                 if let Some(repo_id) = self.active_repo_id()
@@ -680,10 +682,12 @@ impl GitCometView {
                         .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
                         .unwrap_or_default();
                     if !paths.is_empty() {
-                        self.store.dispatch(Msg::UnstagePaths {
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
                             repo_id,
-                            paths: paths.into(),
-                        });
+                            DiffArea::Staged,
+                            paths,
+                        );
                     }
                 }
             }

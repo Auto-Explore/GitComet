@@ -350,6 +350,11 @@ pub enum Msg {
     ClearDiffSelection {
         repo_id: RepoId,
     },
+    ClearDiffSelectionForStatusAction {
+        repo_id: RepoId,
+        area: DiffArea,
+        paths: RepoPathList,
+    },
     EnsureSidebarData {
         repo_id: RepoId,
         request: SidebarDataRequest,

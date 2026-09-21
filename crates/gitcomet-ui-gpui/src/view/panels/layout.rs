@@ -614,11 +614,12 @@ impl DetailsPaneView {
             }
             DiffArea::Staged => {
                 self.clear_status_multi_selection(repo_id);
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                self.store.dispatch(Msg::UnstagePaths {
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
                     repo_id,
-                    paths: paths.into(),
-                });
+                    DiffArea::Staged,
+                    paths,
+                );
                 cx.notify();
             }
         }
@@ -2926,11 +2927,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .debug_selector(|| "stage_selected_button".to_string())
@@ -2995,13 +2997,15 @@ impl DetailsPaneView {
                 return;
             }
             this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: untracked_paths_for_stage_all.clone(),
-            });
+                DiffArea::Unstaged,
+                untracked_paths_for_stage_all.clone(),
+            );
             cx.notify();
         })
+        .debug_selector(|| "stage_all_untracked_button".to_string())
         .gitcomet_tooltip(theme, "Stage all untracked files".into());
 
         let stage_selected_untracked = components::Button::new(
@@ -3035,11 +3039,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .gitcomet_tooltip(
@@ -3110,6 +3115,7 @@ impl DetailsPaneView {
                 cx,
             );
         })
+        .debug_selector(|| "stage_all_split_unstaged_button".to_string())
         .gitcomet_tooltip(theme, "Stage all unstaged changes".into());
 
         let stage_selected_split_unstaged = components::Button::new(
@@ -3143,11 +3149,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .gitcomet_tooltip(
@@ -3205,13 +3212,15 @@ impl DetailsPaneView {
                 return;
             };
             this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: Default::default(),
-            });
+                DiffArea::Staged,
+                gitcomet_state::msg::RepoPathList::default(),
+            );
             cx.notify();
         })
+        .debug_selector(|| "unstage_all_button".to_string())
         .gitcomet_tooltip(theme, "Unstage all changes".into());
 
         let unstage_selected = components::Button::new(
@@ -3230,13 +3239,15 @@ impl DetailsPaneView {
             if paths.is_empty() {
                 return;
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Staged,
+                paths,
+            );
             cx.notify();
         })
+        .debug_selector(|| "unstage_selected_button".to_string())
         .gitcomet_tooltip(
             theme,
             format!(
