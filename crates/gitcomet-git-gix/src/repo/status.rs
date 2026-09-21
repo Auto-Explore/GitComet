@@ -228,6 +228,7 @@ impl GixRepo {
         if may_have_gitlinks {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
+                &repo,
                 &mut Vec::new(),
                 &mut unstaged,
             )?;
@@ -270,6 +271,7 @@ impl GixRepo {
         if self.may_have_gitlink_status_supplement(&repo, &index_stamp) {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
+                &repo,
                 &mut staged,
                 &mut Vec::new(),
             )?;
@@ -391,7 +393,7 @@ fn finalize_status(
     // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
     // case.
     if may_have_gitlinks {
-        supplement_gitlink_status_from_porcelain(workdir, &mut staged, &mut unstaged)?;
+        supplement_gitlink_status_from_porcelain(workdir, repo, &mut staged, &mut unstaged)?;
     }
 
     sort_and_dedup_status_entries(&mut staged);
@@ -1312,16 +1314,24 @@ fn apply_porcelain_v2_gitlink_status_record(
 
 fn supplement_gitlink_status_from_porcelain(
     workdir: &Path,
+    repo: &gix::Repository,
     staged: &mut Vec<FileStatus>,
     unstaged: &mut Vec<FileStatus>,
 ) -> Result<()> {
     let mut command = git_workdir_cmd_for(workdir);
     command
+        .arg("--literal-pathspecs")
         .arg("--no-optional-locks")
         .arg("status")
         .arg("--porcelain=v2")
         .arg("-z")
         .arg("--ignore-submodules=none");
+    if let Some(paths) = gitlink_status_paths(repo, staged) {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        command.arg("--").args(paths);
+    }
     let output = match run_git_raw_output(command, "git status --porcelain=v2") {
         Ok(output) => output,
         // Gitlink supplementation is best-effort parity glue on top of the primary
@@ -1352,6 +1362,34 @@ fn supplement_gitlink_status_from_porcelain(
     }
 
     Ok(())
+}
+
+fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option<Vec<PathBuf>> {
+    let index = repo.index_or_empty().ok()?;
+    // Collapsed sparse directories can hide gitlinks. Let Git expand them for
+    // the existing complete query instead of treating this as an empty list.
+    if index.is_sparse() {
+        return None;
+    }
+    let mut paths = Vec::new();
+    for entry in index.entries() {
+        if entry.mode == gix::index::entry::Mode::COMMIT {
+            paths.push(path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?);
+        }
+    }
+    // Include staged changes so deleted or replaced gitlinks (no longer in the
+    // index) are still supplemented. The primary gix tree/index pass already
+    // found these paths; avoid another traversal of HEAD here.
+    paths.extend(staged.iter().map(|entry| entry.path.clone()));
+    paths.sort_unstable();
+    paths.dedup();
+    // Leave room for the executable, workdir, options and Windows quoting in
+    // CreateProcess's 32K command line. Large selections keep the full query.
+    let bytes: usize = paths
+        .iter()
+        .map(|path| path.as_os_str().len() * 2 + 3)
+        .sum();
+    (bytes < 16_000).then_some(paths)
 }
 
 #[cfg(test)]

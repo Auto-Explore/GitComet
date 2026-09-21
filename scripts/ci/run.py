@@ -86,8 +86,17 @@ def reject_prerequisite_skips(name, text):
         raise RuntimeError(f"{name}: required Git test did not run: {match.group()}")
 
 
-def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=None, live=True, cancel=None):
+def configure_output():
+    # Redirected Windows streams can default to cp1252, while Cargo/nextest
+    # produce UTF-8. Imported callers (runtime/probes) need the CLI policy too.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and (stream.encoding != "utf-8" or stream.errors != "backslashreplace"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=None, live=True, cancel=None):
     """Keep complete logs, surface runtime skips, and never mask subprocess failures."""
+    configure_output()
     REPORTS.mkdir(parents=True, exist_ok=True)
     if cancel is not None and cancel.is_set():
         raise RuntimeError("test scheduling cancelled")
@@ -105,7 +114,7 @@ def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=N
         # Tail a file instead of blocking on a pipe that a leaked descendant
         # could hold open after its parent exits. Deadlines cover silent hangs.
         reader = stack.enter_context(log_path.open(encoding="utf-8", errors="replace"))
-        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stdout,
+        process = subprocess.Popen(command, cwd=ROOT if cwd is None else cwd, env=env, stdout=stdout,
                                    stderr=log, start_new_session=os.name != "nt")
         try:
             while process.poll() is None:
@@ -173,9 +182,70 @@ def package_names(context):
     return {package["id"]: package["name"] for package in metadata["packages"]}
 
 
-def compile_tests(context, profile):
+def windows_linker_environment():
+    """Discover the MSVC/SDK/Rust linker once, then share it with Cargo's links.
+
+    This environment belongs only to the current Cargo invocation. Do not save
+    it in a disk cache: another toolchain, SDK or target needs fresh discovery.
+    """
+    if os.name != "nt":
+        return None
+    started = time.monotonic()
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GITCOMET_LINKER_")}
+    result = subprocess.run(["cmd.exe", "/d", "/u", "/c", "scripts\\windows\\msvc-linker.cmd",
+                             "--gitcomet-print-env"], cwd=ROOT, env=dict(env),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
+    values = dict(line.split("=", 1) for line in result.stdout.decode("utf-16-le").splitlines() if "=" in line)
+    for source, target in (("LINK_EXE", "EXE"), ("LIB", "LIB"), ("LIBPATH", "LIBPATH"),
+                           ("INCLUDE", "INCLUDE"), ("GITCOMET_TARGET_ARCH", "ARCH")):
+        if not values.get(source):
+            raise RuntimeError(f"Linker bootstrap did not return {source}")
+        env["GITCOMET_LINKER_" + target] = values[source]
+    record("windows-linker-discovery", time.monotonic() - started, 0)
+    return env
+
+
+def prepare_runtime_binaries(context):
+    """Keep static link directories out of Windows' runtime DLL search PATH.
+
+    Cargo metadata includes native static-library directories too. Large
+    workspaces can exceed CMD's inherited PATH limit, breaking nested tools.
+    Keep DLL/executable directories and any directory we cannot inspect.
+    """
+    if os.name != "nt":
+        return
+    directory = paths(context)
+    path = directory / "binaries.json"
+    original = path.read_bytes()
+    metadata = json.loads(original)
+    build = metadata["rust-build-meta"]
+    linked = build.get("linked-paths", [])
+    target = Path(build["target-directory"])
+    removed = []
+    for name in linked:
+        try:
+            runtime_files = any(item.suffix.lower() in (".dll", ".exe", ".com", ".cmd", ".bat")
+                                for item in (target / name).iterdir())
+        except OSError:
+            continue
+        if not runtime_files:
+            removed.append(name)
+    if not removed:
+        return
+    (directory / "binaries-original.json").write_bytes(original)
+    build["linked-paths"] = [name for name in linked if name not in removed]
+    path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+    (directory / "runtime-link-paths.json").write_text(json.dumps({
+        "removed_static_directories": removed,
+        "retained_directories": list(build["linked-paths"]),
+    }, indent=2) + "\n", encoding="utf-8")
+
+
+def compile_tests(context, profile, test_targets=()):
     directory = paths(context)
     selection = CONTEXTS[context]
+    targets = [arg for target in test_targets for arg in ("--test", target)]
     # Metadata cannot select packages, but must use the same feature switches.
     features = selection[1:] if selection[0] == "--workspace" else selection[2:]
     run(f"{context}-metadata", ["cargo", "metadata", "--format-version", "1", "--locked", *features],
@@ -183,10 +253,11 @@ def compile_tests(context, profile):
     run(f"{context}-features", ["cargo", "tree", "--locked", *selection,
         "--edges", "normal,build,dev", "--prefix", "none", "--format", "{p}|{f}"],
         output=directory / "features.txt")
-    run(f"{context}-compile", ["cargo", "nextest", "list", *selection,
+    run(f"{context}-compile", ["cargo", "nextest", "list", *selection, *targets,
         "--locked", "--cargo-profile", profile, "--timings",
         "--list-type", "binaries-only", "--message-format", "json"],
-        output=directory / "binaries.json")
+        output=directory / "binaries.json", env=windows_linker_environment())
+    prepare_runtime_binaries(context)
     run(f"{context}-inventory", ["cargo", "nextest", "list", *reuse_args(context),
         "--message-format", "json", "--ignore-default-filter"], output=directory / "tests.json")
     packages = package_names(context)
@@ -200,7 +271,7 @@ def compile_tests(context, profile):
     if not entries:
         raise RuntimeError(f"No tests discovered for {context}")
     (directory / "coverage.json").write_text(json.dumps({
-        "context": context, "selection": selection, "profile": profile,
+        "context": context, "selection": [*selection, *targets], "profile": profile,
         "rustc": subprocess.check_output(["rustc", "-vV"], text=True),
         "tests": entries,
     }, indent=2) + "\n", encoding="utf-8")
@@ -299,6 +370,7 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
             raise ValueError(f"--{option}-threads must be positive and requires --schedule serial")
     if nextest_profile not in NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
+    prepare_runtime_binaries(context)
     packages = package_names(context)
     suites = inventory(context)["rust-suites"]
     cpus = os.cpu_count() or 1
@@ -378,19 +450,23 @@ def main():
     parser.add_argument("phase", choices=["compile", "test", "doc", "display", "cmd-smoke", "command"])
     parser.add_argument("--context", choices=CONTEXTS, default="workspace")
     parser.add_argument("--cargo-profile", default="ci-test")
+    parser.add_argument("--test-target", action="append", default=[],
+                        help="Compile only this integration target; repeat for multiple smoke targets")
     parser.add_argument("--name", default="command")
     parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
     parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
     parser.add_argument("--ui-threads", type=int, help="Opt-in libtest concurrency experiment (serial schedule only)")
     parser.add_argument("--nextest-profile", choices=NEXTEST_PROFILES, default="ci")
     args, extra = parser.parse_known_args()
+    if args.test_target and args.phase != "compile":
+        parser.error("--test-target requires compile")
     for option in ("nextest", "ui"):
         threads = getattr(args, option + "_threads")
         if threads is not None and (args.phase != "test" or threads < 1 or args.schedule != "serial"):
             parser.error(f"--{option}-threads must be positive and requires test --schedule serial")
     os.chdir(ROOT)
     if args.phase == "compile":
-        compile_tests(args.context, args.cargo_profile)
+        compile_tests(args.context, args.cargo_profile, args.test_target)
     elif args.phase == "test":
         execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads)
     elif args.phase == "doc":
@@ -417,11 +493,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows CI redirects these streams through pipes, which can default to
-    # cp1252 even though Cargo/nextest logs contain UTF-8. Match the log files
-    # and GitHub Actions output so forwarding Unicode cannot abort the suite.
-    for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    configure_output()
     try:
         main()
     except (RuntimeError, subprocess.CalledProcessError) as error:

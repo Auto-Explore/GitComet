@@ -212,6 +212,9 @@ struct Trace2Monitor {
 impl Trace2Monitor {
     fn start(cmd: &mut Command, context: Option<&GitOperationContext>) -> Option<Self> {
         let context = context?.clone();
+        if command_is_known_hook_free(cmd) {
+            return None;
+        }
         let file = tempfile::Builder::new()
             .prefix("gitcomet-trace2-")
             .suffix(".json")
@@ -246,6 +249,43 @@ impl Trace2Monitor {
             let _ = handle.join();
         }
     }
+}
+
+/// Trace2 is only used for hook events. On Windows even a tiny traced command
+/// walks the process ancestry, so avoid enabling it for these known builtins.
+/// Keep unknown programs, global options and subcommands traced: status, for
+/// example, can invoke a configured fsmonitor hook.
+fn command_is_known_hook_free(cmd: &Command) -> bool {
+    // Explicit custom executables may be wrappers that run their own hooks,
+    // even if their file name happens to be git.exe.
+    if cmd.get_program() != "git" {
+        return false;
+    }
+    let mut args = cmd.get_args();
+    while let Some(arg) = args.next() {
+        let Some(arg) = arg.to_str() else {
+            return false;
+        };
+        match arg {
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+                if args.next().is_none() {
+                    return false;
+                }
+            }
+            "--no-optional-locks" | "--no-pager" | "--literal-pathspecs" => {}
+            "remote" => return args.next().is_some_and(|arg| arg == "set-url"),
+            "config" => {
+                return args.next().is_some_and(|arg| {
+                    matches!(
+                        arg.to_str(),
+                        Some("--get" | "--get-all" | "--get-regexp" | "--list" | "get" | "list")
+                    )
+                });
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 impl Drop for Trace2Monitor {
@@ -1614,7 +1654,6 @@ mod tests {
         GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
     };
     use std::process::Command;
-    #[cfg(unix)]
     use std::sync::Mutex;
 
     const GITPY_FOR_EACH_REF_WITH_PATH_COMPONENT: &[u8] =
@@ -1772,7 +1811,6 @@ mod tests {
         shell_command(&format!("Start-Sleep -Seconds {seconds}"))
     }
 
-    #[cfg(unix)]
     fn run_git_test_setup(workdir: &Path, args: &[&str]) {
         let mut cmd = git_workdir_cmd_for(workdir);
         cmd.args(args);
@@ -1785,19 +1823,66 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     fn write_test_hook(workdir: &Path, name: &str, script: &str) {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let hooks = workdir.join(".githooks");
         std::fs::create_dir_all(&hooks).expect("create test hooks directory");
         let path = hooks.join(name);
         std::fs::write(&path, script).expect("write test hook");
-        let mut permissions = std::fs::metadata(&path)
-            .expect("read test hook metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions).expect("make test hook executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(&path)
+                .expect("read test hook metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).expect("make test hook executable");
+        }
+    }
+
+    #[test]
+    fn hook_free_commands_do_not_enable_trace2() {
+        let operation = GitOperationContext::new("test", |_, _| {});
+        for args in [
+            vec![
+                "-c",
+                "protocol.ext.allow=never",
+                "-C",
+                "unicode space é",
+                "remote",
+                "set-url",
+                "--",
+                "origin",
+                "url",
+            ],
+            vec!["--no-optional-locks", "config", "--get", "core.editor"],
+            vec!["config", "get", "user.name"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.args(args);
+            assert!(Trace2Monitor::start(&mut cmd, Some(&operation)).is_none());
+            assert!(!cmd.get_envs().any(|(key, _)| key == "GIT_TRACE2_EVENT"));
+        }
+        for args in [
+            vec!["commit", "-m", "hook"],
+            vec!["status", "--porcelain=v2"],
+            vec!["remote", "update"],
+            vec!["config", "--edit"],
+            vec!["--paginate", "config", "--list"],
+            vec!["--unknown", "config", "--list"],
+            vec!["custom-alias"],
+            vec!["-C"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.args(args);
+            assert!(!command_is_known_hook_free(&cmd));
+            assert!(Trace2Monitor::start(&mut cmd, Some(&operation)).is_some());
+        }
+        let mut wrapper = Command::new("custom-git-wrapper");
+        wrapper.args(["remote", "set-url", "origin", "url"]);
+        assert!(!command_is_known_hook_free(&wrapper));
+        let mut custom_git = Command::new("custom/bin/git.exe");
+        custom_git.args(["remote", "set-url", "origin", "url"]);
+        assert!(!command_is_known_hook_free(&custom_git));
     }
 
     #[test]
@@ -1869,7 +1954,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn operation_context_reports_real_hooks_output_and_exit_codes() {
         let repo = tempfile::tempdir().expect("create test repository");

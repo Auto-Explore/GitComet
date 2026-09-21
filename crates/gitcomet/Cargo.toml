@@ -28,6 +28,7 @@ gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 log = { workspace = true }
+process-wrap = { version = "10.0.0", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
 rustc-hash = { workspace = true }
 rustfs-mimalloc = { workspace = true }
 serde = { workspace = true }

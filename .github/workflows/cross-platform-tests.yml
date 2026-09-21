@@ -200,7 +200,7 @@ jobs:
       - name: Compile original Windows CMD smoke context
         if: success() && runner.os == 'Windows'
         shell: pwsh
-        run: python3 scripts/ci/run.py compile --context app
+        run: python3 scripts/ci/run.py compile --context app --test-target standalone_tool_mode_integration
       - name: Standalone smoke test in CMD
         if: success() && runner.os == 'Windows'
         shell: cmd

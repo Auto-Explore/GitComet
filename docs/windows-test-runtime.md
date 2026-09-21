@@ -1,5 +1,8 @@
 # Windows test execution
 
+For native Windows measurements against `dev` and the reproducible paired
+driver, see [Local Windows performance work](windows-local-performance.md).
+
 ## Follow-up after merge to dev (2026-09-21)
 
 The successful [dev run at 5aa600da](https://github.com/Auto-Explore/GitComet/actions/runs/35517925640)

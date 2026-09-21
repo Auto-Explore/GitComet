@@ -2,10 +2,15 @@
 //! fixtures. `--diagnostics` captures command stages and backend operation counts;
 //! leave it off for latency acceptance. Fixture creation is outside all samples.
 use gitcomet_core::git_operation::{self, GitOperationContext};
+#[cfg(feature = "benchmarks")]
 use gitcomet_core::git_ops_trace;
-use gitcomet_core::process::git_command;
+use gitcomet_core::process::{
+    GitExecutablePreference, git_command, select_git_executable_preference,
+};
 use gitcomet_core::services::{GitBackend, RemoteUrlKind};
-use gitcomet_git_gix::{GixBackend, command_trace};
+use gitcomet_git_gix::GixBackend;
+#[cfg(feature = "benchmarks")]
+use gitcomet_git_gix::command_trace;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -86,7 +91,7 @@ impl Fixture {
         let repo = fixture.root.join("repo");
         fixture.init(&repo);
         fs::write(repo.join("file.txt"), "base\n").unwrap();
-        if kind == "lfs" {
+        if matches!(kind, "lfs" | "mixed") {
             fixture.git(
                 &repo,
                 &["config", "filter.lfs.process", "git-lfs filter-process"],
@@ -103,6 +108,13 @@ impl Fixture {
                     vec![index as u8; 1024],
                 )
                 .unwrap();
+            }
+        }
+        if matches!(kind, "mixed" | "submodule") {
+            let files = repo.join("files");
+            fs::create_dir(&files).unwrap();
+            for index in 0..4000 {
+                fs::write(files.join(format!("file-{index:04}.txt")), "content\n").unwrap();
             }
         }
         fixture.git(&repo, &["add", "."]);
@@ -122,17 +134,49 @@ impl Fixture {
         }
         fixture.git(&repo, &["remote", "add", "origin", URL]);
         fs::write(repo.join("file.txt"), "changed\n").unwrap();
-        if kind == "lfs" {
+        if matches!(kind, "lfs" | "mixed") {
             fs::write(repo.join("asset-000.bin"), "dirty LFS asset\n").unwrap();
         }
         fixture
     }
+
+    fn invalidate_stat_cache(&self) {
+        // Rewriting equal bytes forces content/filter comparisons while leaving
+        // status unchanged. Do this before each mode, outside its timer.
+        let repo = self.root.join("repo");
+        for entry in fs::read_dir(&repo).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|ext| ext == "bin") {
+                let bytes = fs::read(&path).unwrap();
+                fs::write(path, bytes).unwrap();
+            }
+        }
+    }
 }
 
+#[cfg(feature = "benchmarks")]
 fn command_json(command: command_trace::CommandTiming) -> Value {
     json!({"label": command.label, "milliseconds": command.elapsed.as_secs_f64() * 1000.0,
            "stages": command.stages.into_iter().map(|(stage, elapsed)|
                json!({"stage": stage, "milliseconds": elapsed.as_secs_f64() * 1000.0})).collect::<Vec<_>>()})
+}
+
+fn invoke_measured(invoke: impl FnOnce(), diagnostics: bool) -> (Vec<Value>, Option<u64>) {
+    #[cfg(feature = "benchmarks")]
+    if diagnostics {
+        let _capture = git_ops_trace::capture();
+        let (_, commands) = command_trace::capture(invoke);
+        return (
+            commands.into_iter().map(command_json).collect(),
+            Some(git_ops_trace::snapshot().status.calls),
+        );
+    }
+    assert!(
+        !diagnostics,
+        "shared latency driver does not support diagnostics"
+    );
+    invoke();
+    (Vec::new(), None)
 }
 
 fn main() {
@@ -172,6 +216,8 @@ fn main() {
     let mut warmups = 5usize;
     let mut diagnostics = false;
     let mut fixture_kind = String::from("plain");
+    let mut status_state = String::from("warm");
+    let mut git_executable = None;
     let mut profile = String::from("unspecified");
     let mut output = None;
     let mut args = std::env::args().skip(2);
@@ -180,7 +226,11 @@ fn main() {
             "--samples" => samples = args.next().expect("sample count").parse().unwrap(),
             "--warmups" => warmups = args.next().expect("warmup count").parse().unwrap(),
             "--diagnostics" => diagnostics = true,
-            "--fixture" => fixture_kind = args.next().expect("plain|lfs|submodule"),
+            "--fixture" => fixture_kind = args.next().expect("plain|lfs|mixed|submodule"),
+            "--status-state" => status_state = args.next().expect("warm|stale"),
+            "--git-executable" => {
+                git_executable = Some(PathBuf::from(args.next().expect("Git executable")))
+            }
             "--profile-label" => profile = args.next().expect("build profile label"),
             "--output" => output = Some(PathBuf::from(args.next().expect("JSON output path"))),
             _ => panic!("unknown argument: {arg}"),
@@ -189,8 +239,12 @@ fn main() {
     assert!(samples > 0 && samples <= 10_000 && warmups <= 10_000);
     assert!(matches!(
         fixture_kind.as_str(),
-        "plain" | "lfs" | "submodule"
+        "plain" | "lfs" | "mixed" | "submodule"
     ));
+    assert!(matches!(status_state.as_str(), "warm" | "stale"));
+    if let Some(path) = &git_executable {
+        select_git_executable_preference(GitExecutablePreference::Custom(path.clone()));
+    }
     let fixture = Fixture::new(&fixture_kind);
     let path = fixture.root.join("repo");
     let repo = GixBackend.open(&path).unwrap();
@@ -198,7 +252,7 @@ fn main() {
     // file alone must not let a missing LFS/submodule status go unnoticed.
     let mut expected = vec![PathBuf::from("file.txt")];
     match fixture_kind.as_str() {
-        "lfs" => expected.push(PathBuf::from("asset-000.bin")),
+        "lfs" | "mixed" => expected.push(PathBuf::from("asset-000.bin")),
         "submodule" => expected.push(PathBuf::from("child")),
         _ => {}
     }
@@ -239,6 +293,9 @@ fn main() {
                     })
                     % 3;
                 let _scope = (mode == 2).then(|| git_operation::attach(&operation));
+                if action == "status" && status_state == "stale" {
+                    fixture.invalidate_stat_cache();
+                }
                 let invoke = || {
                     if mode == 0 {
                         let args: &[&str] = if action == "remote-set-url" {
@@ -257,21 +314,14 @@ fn main() {
                     }
                 };
                 let started = Instant::now();
-                let (commands, backend_status_calls) = if diagnostics {
-                    let _capture = git_ops_trace::capture();
-                    let (_, commands) = command_trace::capture(invoke);
-                    (commands, Some(git_ops_trace::snapshot().status.calls))
-                } else {
-                    invoke();
-                    (Vec::new(), None)
-                };
+                let (commands, backend_status_calls) = invoke_measured(invoke, diagnostics);
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                 if round >= warmups {
                     measurements[mode].push(json!({"milliseconds": elapsed,
                         "backend_status_calls": backend_status_calls,
                         "raw_git_commands": (mode == 0).then_some(1),
                         "wrapped_commands": (diagnostics && mode != 0).then_some(commands.len()),
-                        "command_timings": commands.into_iter().map(command_json).collect::<Vec<_>>() }));
+                        "command_timings": commands }));
                 }
             }
         }
@@ -290,6 +340,7 @@ fn main() {
     }
     let report = json!({"schema_version": 1, "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH, "profile": profile, "fixture": fixture_kind,
+        "status_state": status_state, "git_executable": git_executable,
         "verified_status_paths": expected,
         "diagnostics": diagnostics, "warmups": warmups,
         "git": String::from_utf8(fixture.git(&path, &["--version"])).unwrap().trim(),

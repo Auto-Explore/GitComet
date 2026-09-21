@@ -29,9 +29,27 @@ spec.loader.exec_module(runner)
 probe_spec = importlib.util.spec_from_file_location("application_probe", Path(__file__).with_name("application-probe.py"))
 application_probe = importlib.util.module_from_spec(probe_spec)
 probe_spec.loader.exec_module(application_probe)
+local_spec = importlib.util.spec_from_file_location("local_performance", Path(__file__).with_name("local-performance.py"))
+local_performance = importlib.util.module_from_spec(local_spec)
+local_spec.loader.exec_module(local_performance)
 
 
 class CacheTests(unittest.TestCase):
+    def test_local_worktree_manifests_do_not_change_cache_keys(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
+            root = Path(directory)
+            (root / "Cargo.toml").write_text('[package]\nname = "fixture"\nversion = "0.1.0"\n')
+            (root / "Cargo.lock").write_text("lock")
+            before = cache.cache_keys("workspace")
+            checkout = root / ".worktrees/baseline"
+            checkout.mkdir(parents=True)
+            manifest = checkout / "Cargo.toml"
+            manifest.write_text('[dependencies]\nother = "1"\n[profile.ci-test]\nopt-level = 3\n')
+            self.assertEqual(before, cache.cache_keys("workspace"))
+            manifest.write_text("not even valid TOML")
+            self.assertEqual(before, cache.cache_keys("workspace"))
+
     def test_dependency_changes_reuse_only_compatible_compiled_bundles(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
                 patch.object(cache, "subprocess") as subprocess_mock, \
@@ -178,6 +196,23 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows runtime DLL search policy")
+    def test_runtime_search_retains_dlls_helpers_and_unreadable_paths(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory) / "reports"):
+            target = Path(directory) / "target"
+            for name, filename in (("static", "native.lib"), ("dynamic", "native.DLL"), ("helper", "tool.exe"), ("batch", "tool.cmd")):
+                (target / name).mkdir(parents=True)
+                (target / name / filename).touch()
+            linked = ["static", "dynamic", "helper", "batch", "missing"]
+            path = runner.paths("workspace") / "binaries.json"
+            path.write_text(json.dumps({"rust-build-meta": {"target-directory": str(target), "linked-paths": linked}}))
+            original = path.read_bytes()
+            runner.prepare_runtime_binaries("workspace")
+            self.assertEqual(set(json.loads(path.read_text())["rust-build-meta"]["linked-paths"]), {"dynamic", "helper", "batch", "missing"})
+            self.assertEqual(path.with_name("binaries-original.json").read_bytes(), original)
+            runner.prepare_runtime_binaries("workspace")
+            self.assertEqual(path.with_name("binaries-original.json").read_bytes(), original)
+
     @staticmethod
     def git_integration_suites():
         targets = {
@@ -371,7 +406,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(timing["returncode"], 7)
             self.assertIn("failure output", (Path(directory) / "failure.log").read_text())
 
-    def test_cli_preserves_unicode_output_with_legacy_stdio_encoding(self):
+    def test_cli_and_imported_runner_preserve_unicode_with_legacy_stdio_encoding(self):
         stdout = "──────── nextest ────────\nPASS 日本語 🦀\n"
         stderr = "diagnostic: 中文 → 🦀\n"
         with tempfile.TemporaryDirectory() as directory:
@@ -380,18 +415,19 @@ class RunnerTests(unittest.TestCase):
             script.parent.mkdir(parents=True)
             script.write_bytes(Path(runner.__file__).read_bytes())
             env = dict(os.environ, PYTHONIOENCODING="cp1252:strict", PYTHONUTF8="0", GITHUB_STEP_SUMMARY="")
-            for code in (0, 7):
-                with self.subTest(child_exit=code):
-                    name = f"unicode-{code}"
+            for code, imported in product((0, 7), (False, True)):
+                with self.subTest(child_exit=code, imported=imported):
+                    name = f"unicode-{code}-{imported}"
                     child = (f"import sys; sys.stdout.buffer.write({stdout.encode('utf-8')!r}); "
                              f"sys.stdout.buffer.flush(); sys.stderr.buffer.write({stderr.encode('utf-8')!r}); "
                              f"sys.stderr.buffer.flush(); sys.exit({code})")
                     # Success exercises log forwarding; failure also exercises
                     # a Unicode command argument in the CLI's error on stderr.
                     extra = ["日本語/🦀.txt"] if code else []
-                    result = subprocess.run(
-                        [sys.executable, str(script), "command", "--name", name, "--",
-                         sys.executable, "-c", child, *extra], env=env,
+                    child_command = [sys.executable, "-c", child, *extra]
+                    invocation = ([sys.executable, "-c", f"import run; run.run({name!r}, {child_command!r})"]
+                                  if imported else [sys.executable, str(script), "command", "--name", name, "--", *child_command])
+                    result = subprocess.run(invocation, env=env, cwd=script.parent,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
                     self.assertEqual(result.returncode, 1 if code else 0,
                                      result.stderr.decode("utf-8", errors="replace"))
@@ -554,6 +590,39 @@ class RuntimeTests(unittest.TestCase):
 
 
 class ApplicationProbeTests(unittest.TestCase):
+    def test_linker_bootstrap_preserves_paths_and_rejects_incomplete_discovery(self):
+        values = "LINK_EXE=C:\\Rust é\\rust-lld.exe\r\nLIB=C:\\SDK é;existing\r\nLIBPATH=C:\\SDK é\r\nINCLUDE=C:\\include é\r\nGITCOMET_TARGET_ARCH=x64\r\n"
+        with patch.object(runner.os, "name", "nt"), \
+                patch.dict(os.environ, {"GITCOMET_LINKER_EXE": "stale", "CUSTOM_VALUE": "keep"}, clear=True), \
+                patch.object(runner, "record"), \
+                patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, values.encode("utf-16-le"), b"")) as process:
+            environment = runner.windows_linker_environment()
+            self.assertEqual(environment["GITCOMET_LINKER_EXE"], "C:\\Rust é\\rust-lld.exe")
+            self.assertEqual(environment["GITCOMET_LINKER_LIB"], "C:\\SDK é;existing")
+            self.assertEqual(environment["CUSTOM_VALUE"], "keep")
+            self.assertNotIn("GITCOMET_LINKER_EXE", process.call_args.kwargs["env"])
+            process.return_value.stdout = "LINK_EXE=incomplete\r\n".encode("utf-16-le")
+            with self.assertRaisesRegex(RuntimeError, "did not return LIB"):
+                runner.windows_linker_environment()
+
+    def test_compile_smoke_target_keeps_feature_metadata_and_selection(self):
+        suite = {"package-id": "app", "testcases": {"help_flag_exits_zero": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "run") as run_mock, \
+                patch.object(runner, "windows_linker_environment", return_value=None), \
+                patch.object(runner, "prepare_runtime_binaries"), \
+                patch.object(runner, "package_names", return_value={"app": "gitcomet"}), \
+                patch.object(runner, "inventory", return_value={"rust-suites": {"smoke": suite}}), \
+                patch.object(runner.subprocess, "check_output", return_value="rust"):
+            runner.compile_tests("app", "ci-test", ["standalone_tool_mode_integration"])
+            calls = {call.args[0]: call.args[1] for call in run_mock.call_args_list}
+            self.assertNotIn("--test", calls["app-metadata"])
+            self.assertNotIn("--test", calls["app-features"])
+            self.assertIn("--test", calls["app-compile"])
+            coverage = json.loads((Path(directory) / "app/coverage.json").read_text())
+            self.assertEqual(coverage["selection"][-2:], ["--test", "standalone_tool_mode_integration"])
+
     def test_failed_probe_retains_failure_record_and_rejects_stale_results(self):
         for failure in ("metadata", "build"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
@@ -587,6 +656,54 @@ class ApplicationProbeTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_local_runtime_sessions_are_separate_from_hosted_acceptance(self):
+        record = dict(platform="win32", machine="AMD64", cpus=12, sha="abc", job="local/test",
+                      os_version="windows", runner_image=None, git="git 2", rust="rust 1",
+                      profile="ci-test", selection=["--workspace"], dirty=True,
+                      machine_id="desktop", source_diff_sha256="candidate",
+                      samples=[dict(success=True, seconds=100, schedule="serial", nextest_threads=12)] * 3)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("first", "second"):
+                (root / name).mkdir()
+                local_performance.write(root / name / "runtime.json", record | dict(local_session=name, measurement_id=name))
+            row, = report.runtime_statistics(root)
+            self.assertTrue(row["local_enough_samples"])
+            self.assertFalse(row["enough_samples"])
+            self.assertEqual(row["local_sessions"], ["first", "second"])
+
+    def test_local_latency_evidence_requires_complete_uninstrumented_sessions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local_performance.write(root / "build.json", {"success": True, "environment": {"host": "local"}})
+            for name in ("first", "second"):
+                output = root / name
+                output.mkdir()
+                pairs = []
+                for pair in range(3):
+                    results = {"baseline": [], "candidate": []}
+                    for label in results:
+                        for fixture, state in local_performance.CASES:
+                            path = output / f"{pair}-{label}-{fixture}-{state}.json"
+                            local_performance.write(path, dict(fixture=fixture, status_state=state, diagnostics=False,
+                                results=[dict(operation="status", mode="backend", median_ms=100 if label == "baseline" else 80,
+                                              p95_ms=110 if label == "baseline" else 90)]))
+                            results[label].append(path.name)
+                    pairs.append(dict(results=results))
+                local_performance.write(output / "session.json", dict(success=True, session=name, measurement_id=name,
+                    environment={"host": "local"}, samples=35, warmups=5, pairs=pairs))
+            rows = local_performance.summarize(root)["results"]
+            self.assertTrue(all(row["passes_local_gate"] for row in rows))
+            session_path = root / "second/session.json"
+            session = json.loads(session_path.read_text())
+            session["samples"] = 7
+            local_performance.write(session_path, session)
+            self.assertTrue(all(not row["passes_local_gate"] for row in local_performance.summarize(root)["results"]))
+            session["success"] = False
+            local_performance.write(session_path, session)
+            with self.assertRaisesRegex(ValueError, "Failed session"):
+                local_performance.summarize(root)
+
     def test_trace2_keeps_nested_processes_and_incomplete_exits(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trace.jsonl"

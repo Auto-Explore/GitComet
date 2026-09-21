@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import platform
+from pathlib import Path
 import subprocess
 
 import run as runner
@@ -14,6 +15,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profiles", nargs="+", choices=("ci-test", "release"), default=["ci-test", "release"])
     parser.add_argument("--samples", type=int, default=35)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--fixtures", nargs="+", choices=("plain", "lfs", "mixed", "submodule"),
+                        default=["plain", "lfs", "submodule"])
+    parser.add_argument("--status-state", choices=("warm", "stale"), default="warm")
+    parser.add_argument("--git-executable", type=Path)
+    parser.add_argument("--latency-only", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.samples <= 10_000:
         parser.error("--samples must be between 1 and 10000")
@@ -23,14 +30,16 @@ def main():
     ) if os.environ.get(name) or (name == "GITCOMET_TEST_SYNC_TRACE" and name in os.environ)]
     if instrumentation:
         parser.error(f"Disable external instrumentation/worker overrides for comparable probes: {instrumentation}")
-    directory = runner.REPORTS / "application-probe"
+    directory = args.output or runner.REPORTS / "application-probe"
     # Refuse to combine fresh results with stale successes after a failure.
     directory.mkdir(parents=True, exist_ok=False)
     metadata = dict(
         runner_image=os.environ.get("ImageVersion"),
         job="/".join(os.environ.get(key, "local") for key in
                      ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "RUNNER_NAME")),
-        profiles=args.profiles, samples=args.samples, success=False,
+        profiles=args.profiles, samples=args.samples, fixtures=args.fixtures,
+        status_state=args.status_state, git_executable=str(args.git_executable) if args.git_executable else None,
+        success=False,
     )
     original_reports = runner.REPORTS
     try:
@@ -55,12 +64,14 @@ def main():
             if len(artifacts) != 1:
                 raise RuntimeError("Expected exactly one application probe executable")
             binary = artifacts[0]["executable"]
-            for fixture in ("plain", "lfs", "submodule"):
-                for diagnostics in (False, True):
+            for fixture in args.fixtures:
+                for diagnostics in ((False,) if args.latency_only else (False, True)):
                     name = f"{profile}-{fixture}-{'diagnostics' if diagnostics else 'latency'}"
                     runner.run(f"application-probe-{name}", [
                         binary, "--fixture", fixture, "--samples", str(args.samples),
                         "--profile-label", profile, "--output", str(directory / f"{name}.json"),
+                        "--status-state", args.status_state,
+                        *(["--git-executable", str(args.git_executable.resolve())] if args.git_executable else []),
                         *(["--diagnostics"] if diagnostics else []),
                     ], timeout=600, live=False)
         metadata["success"] = True

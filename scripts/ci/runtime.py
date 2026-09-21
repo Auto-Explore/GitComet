@@ -2,6 +2,7 @@
 """Repeat execution of already compiled tests, retaining every coverage report."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import uuid
 import run as runner
 
 
-def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None):
+def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None, session=None):
     if samples < 1 or any(value is not None and (value < 1 or schedule != "serial")
                           for value in (threads, ui_threads)):
         raise ValueError("positive samples/threads required; threads requires serial")
@@ -38,6 +39,9 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
     build = json.loads(coverage.read_text(encoding="utf-8")) if coverage.exists() else {}
     metadata = {
         "measurement_id": str(uuid.uuid4()),
+        "machine_id": platform.node(), "local_session": session,
+        "source_diff_sha256": hashlib.sha256(subprocess.check_output(
+            ["git", "diff", "--binary", "HEAD"], cwd=runner.ROOT, text=True, encoding="utf-8").encode()).hexdigest(),
         "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=runner.ROOT, text=True).strip(),
         "dirty": bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=runner.ROOT)),
         "platform": sys.platform, "machine": platform.machine(), "cpus": os.cpu_count(),
@@ -85,8 +89,13 @@ def main():
     parser.add_argument("--nextest-threads", type=int)
     parser.add_argument("--ui-threads", type=int)
     parser.add_argument("--nextest-profile", choices=runner.NEXTEST_PROFILES, default="ci")
+    parser.add_argument("--session", help="Independent local measurement session identifier")
+    parser.add_argument("--checkout", type=Path, help="Use this checkout's compiled inventory with the current driver")
     args = parser.parse_args()
-    measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads)
+    if args.checkout:
+        runner.ROOT = args.checkout.resolve()
+        runner.REPORTS = runner.ROOT / "target/ci-reports"
+    measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads, args.session)
 
 
 if __name__ == "__main__":
