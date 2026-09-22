@@ -1378,7 +1378,7 @@ pub enum InternalMsg {
         repo_id: RepoId,
         target: DiffTarget,
         side: DiffPreviewTextSide,
-        result: Result<Option<PathBuf>, Error>,
+        result: Result<Option<DiffPreviewTextFile>, Error>,
     },
     SubmoduleSummaryLoaded {
         repo_id: RepoId,

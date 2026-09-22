@@ -263,7 +263,8 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.is_reportable() || operation.status.is_active() || operation.output_bytes == 0 {
+        if !operation.is_reportable() || operation.status.is_active() || operation.output_bytes == 0
+        {
             continue;
         }
         total = total.saturating_sub(operation.output_bytes);
@@ -408,6 +409,46 @@ mod tests {
         );
 
         assert!(repo.feedback.hook_activity.is_empty());
+    }
+
+    /// An explicit `git lfs fetch` runs no hook; its progress alone must keep
+    /// the entry visible, or a long download would vanish from the panel.
+    #[test]
+    fn transfer_progress_is_shown_and_kept_without_hooks() {
+        let mut repo = repo_state();
+        let operation_id = GitOperationId(12);
+        started(
+            &mut repo,
+            operation_id,
+            "LFS fetch".to_string(),
+            Some("all refs".to_string()),
+            SystemTime::UNIX_EPOCH,
+        );
+        apply_event(
+            &mut repo,
+            operation_id,
+            GitOperationEvent::TransferProgress(gitcomet_core::git_operation::TransferProgress {
+                direction: "download".into(),
+                files_done: 2,
+                files_total: 4,
+                bytes_done: 1_000_000,
+                bytes_total: 8_000_000,
+                name: "a.bin".into(),
+            }),
+        );
+        assert_eq!(
+            repo.feedback.hook_activity[0].latest_line,
+            "LFS download 2/4 files · 1 MB of 8 MB"
+        );
+
+        finished(
+            &mut repo,
+            operation_id,
+            GitOperationOuterOutcome::Succeeded,
+            Duration::from_millis(10),
+        );
+        assert_eq!(repo.feedback.hook_activity.len(), 1);
+        assert!(repo.feedback.hook_activity[0].transfer.is_some());
     }
 
     #[test]

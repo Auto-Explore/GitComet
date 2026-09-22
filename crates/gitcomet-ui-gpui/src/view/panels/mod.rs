@@ -325,6 +325,13 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    RunLargeFileCommand {
+        repo_id: RepoId,
+        command: gitcomet_core::large_files::LargeFileCommand,
+    },
+    LoadLfsLocks {
+        repo_id: RepoId,
+    },
     FetchAll {
         repo_id: RepoId,
     },

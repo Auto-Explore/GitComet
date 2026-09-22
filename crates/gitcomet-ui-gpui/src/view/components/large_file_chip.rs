@@ -15,11 +15,14 @@ pub enum LargeFileChipTone {
     Unknown,
 }
 
-pub fn large_file_chip_label(state: &LargeFileState) -> (&'static str, LargeFileChipTone) {
-    let label = if state.pointer.is_lfs() {
-        "LFS"
-    } else {
-        "annex"
+pub fn large_file_chip_label(
+    state: &LargeFileState,
+    locked: bool,
+) -> (&'static str, LargeFileChipTone) {
+    let label = match (state.pointer.is_lfs(), locked) {
+        (true, true) => "LFS locked",
+        (true, false) => "LFS",
+        (false, _) => "annex",
     };
     let tone = match state.in_local_store {
         _ if state.content_missing() => LargeFileChipTone::Missing,
@@ -31,9 +34,14 @@ pub fn large_file_chip_label(state: &LargeFileState) -> (&'static str, LargeFile
 
 /// Small text chip naming the extension that manages a file. Missing content
 /// uses the warning colour so un-downloaded files stand out in a long list.
-pub fn large_file_chip(theme: AppTheme, scale: impl Into<UiScale>, state: &LargeFileState) -> Div {
+pub fn large_file_chip(
+    theme: AppTheme,
+    scale: impl Into<UiScale>,
+    state: &LargeFileState,
+    locked: bool,
+) -> Div {
     let scale = scale.into();
-    let (label, tone) = large_file_chip_label(state);
+    let (label, tone) = large_file_chip_label(state, locked);
     let color = match tone {
         LargeFileChipTone::Missing => theme.colors.status.warning.foreground,
         LargeFileChipTone::Present | LargeFileChipTone::Unknown => {
@@ -83,20 +91,30 @@ mod tests {
     fn label_names_the_extension_and_tone_follows_presence() {
         use LargeFileChipTone::*;
         assert_eq!(
-            large_file_chip_label(&state(true, Some(true), None)),
+            large_file_chip_label(&state(true, Some(true), None), true),
+            ("LFS locked", Present)
+        );
+        assert_eq!(
+            large_file_chip_label(&state(true, Some(true), None), false),
             ("LFS", Present)
         );
         assert_eq!(
-            large_file_chip_label(&state(true, Some(false), Some(LargeFileWorktree::Pointer))),
+            large_file_chip_label(
+                &state(true, Some(false), Some(LargeFileWorktree::Pointer)),
+                false
+            ),
             ("LFS", Missing)
         );
         // Content checked out in the worktree is not missing even if the store lacks it.
         assert_eq!(
-            large_file_chip_label(&state(true, Some(false), Some(LargeFileWorktree::Content))),
+            large_file_chip_label(
+                &state(true, Some(false), Some(LargeFileWorktree::Content)),
+                false
+            ),
             ("LFS", Present)
         );
         assert_eq!(
-            large_file_chip_label(&state(false, None, None)),
+            large_file_chip_label(&state(false, None, None), false),
             ("annex", Unknown)
         );
     }

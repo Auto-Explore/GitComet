@@ -917,7 +917,7 @@ pub(super) fn diff_preview_text_file_loaded(
     repo_id: RepoId,
     target: DiffTarget,
     side: DiffPreviewTextSide,
-    result: std::result::Result<Option<std::path::PathBuf>, Error>,
+    result: std::result::Result<Option<DiffPreviewTextFile>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
@@ -932,9 +932,7 @@ pub(super) fn diff_preview_text_file_loaded(
             .diff_preview_text_file_rev
             .wrapping_add(1);
         repo_state.diff_state.diff_preview_text_file = match result {
-            Ok(path) => {
-                Loadable::Ready(path.map(|path| Arc::new(DiffPreviewTextFile { path, side })))
-            }
+            Ok(preview) => Loadable::Ready(preview.map(Arc::new)),
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())

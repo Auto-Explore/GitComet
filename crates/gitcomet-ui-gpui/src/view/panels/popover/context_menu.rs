@@ -23,6 +23,7 @@ mod file_browser_folder;
 pub(super) mod file_history_commit;
 mod history_branch_filter;
 mod history_refs;
+mod large_file;
 mod mergetool_settings;
 mod pinned_section;
 mod previous_commit_messages;
@@ -1309,6 +1310,13 @@ impl PopoverHost {
             }
             ContextMenuAction::LaunchMergetool { repo_id, path } => {
                 self.store.dispatch(Msg::LaunchMergetool { repo_id, path });
+            }
+            ContextMenuAction::RunLargeFileCommand { repo_id, command } => {
+                self.store
+                    .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+            }
+            ContextMenuAction::LoadLfsLocks { repo_id } => {
+                self.store.dispatch(Msg::LoadLfsLocks { repo_id });
             }
             ContextMenuAction::FetchAll { repo_id } => {
                 self.store.dispatch(Msg::FetchAll { repo_id });

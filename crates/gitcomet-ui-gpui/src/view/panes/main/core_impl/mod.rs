@@ -1337,6 +1337,13 @@ impl MainPaneView {
         self.state.active_repo
     }
 
+    /// Whether Git can run `git lfs` / `git annex`.
+    pub(in crate::view) fn large_file_tools(
+        &self,
+    ) -> &gitcomet_core::large_file_tools::LargeFileToolsState {
+        &self.state.large_file_tools
+    }
+
     pub(in crate::view) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)

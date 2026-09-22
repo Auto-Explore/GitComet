@@ -261,6 +261,16 @@ pub(super) fn schedule_clone_repo(
         }
 
         let mut cmd = build_clone_command(&url, &dest);
+        // git-lfs is silent on a non-terminal stderr; its progress file is the
+        // only sign of life while a large checkout downloads.
+        let lfs_progress = tempfile::Builder::new()
+            .prefix("gitcomet-clone-lfs-progress-")
+            .tempfile()
+            .ok()
+            .map(|file| file.into_temp_path());
+        if let Some(path) = lfs_progress.as_ref() {
+            cmd.env("GIT_LFS_PROGRESS", path.as_os_str());
+        }
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
@@ -364,10 +374,21 @@ pub(super) fn schedule_clone_repo(
 
         let timeout = git_command_timeout();
         let mut timed_out = false;
+        let mut lfs_progress_len = 0u64;
         let status = loop {
             match active_clone.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
+                    if let Some(len) = lfs_progress
+                        .as_ref()
+                        .and_then(|path| fs::metadata(path).ok())
+                        .map(|metadata| metadata.len())
+                        .filter(|len| *len != lfs_progress_len)
+                    {
+                        lfs_progress_len = len;
+                        let millis = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        last_activity.fetch_max(millis, Ordering::Relaxed);
+                    }
                     let idle = start.elapsed().saturating_sub(Duration::from_millis(
                         last_activity.load(Ordering::Relaxed),
                     ));

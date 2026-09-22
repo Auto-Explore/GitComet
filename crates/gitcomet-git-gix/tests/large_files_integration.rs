@@ -549,6 +549,7 @@ fn lfs_track_writes_attributes_and_converts_existing_files() {
         &repo,
         gitcomet_core::large_files::LargeFileCommand::LfsTrack {
             patterns: vec!["*.blend".into()],
+            filename: false,
             lockable: true,
             renormalize: vec![PathBuf::from("scene.blend")],
         },
@@ -592,5 +593,397 @@ fn lfs_install_local_configures_filters_and_hooks() {
             .unwrap()
             .lfs
             .filter_configured
+    );
+}
+
+#[test]
+fn lfs_first_tracking_stages_new_attributes_with_the_pointer() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    configure_lfs_filters(repo);
+    fs::write(
+        repo.join("scene.blend"),
+        b"scene previously stored in Git\n",
+    )
+    .unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-qm", "ordinary file"]);
+    run_lfs(
+        repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsTrack {
+            patterns: vec!["*.blend".into()],
+            filename: false,
+            lockable: false,
+            renormalize: vec!["scene.blend".into()],
+        },
+    );
+    let names = git(repo, &["diff", "--cached", "--name-only"]);
+    assert!(
+        names.lines().any(|name| name == ".gitattributes"),
+        "attributes must accompany the pointer: {names}"
+    );
+    assert!(git(repo, &["show", ":scene.blend"]).starts_with("version https://git-lfs"));
+}
+
+#[test]
+fn lfs_tracking_a_literal_filename_does_not_track_a_glob_match() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_lfs_repo(repo);
+    let selected = "project [1].blend";
+    let other = "project 1.blend";
+    for name in [selected, other] {
+        fs::write(repo.join(name), "ordinary file\n").unwrap();
+    }
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-qm", "unmanaged files"]);
+    fs::write(repo.join(other), "unstaged changes must stay unstaged\n").unwrap();
+    run_lfs(
+        repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsTrack {
+            patterns: vec![format!("/{selected}")],
+            filename: true,
+            lockable: false,
+            renormalize: vec![selected.into()],
+        },
+    );
+    let attributes = git(repo, &["check-attr", "filter", "--", selected, other]);
+    assert!(
+        attributes.contains("project [1].blend: filter: lfs"),
+        "{attributes}"
+    );
+    assert!(
+        attributes.contains("project 1.blend: filter: unspecified"),
+        "{attributes}"
+    );
+    assert!(git(repo, &["show", &format!(":{selected}")]).starts_with("version https://git-lfs"));
+    assert_eq!(
+        git(repo, &["show", &format!(":{other}")]),
+        "ordinary file\n"
+    );
+}
+
+/// Three revisions ensure a historical download cannot pass by fetching HEAD.
+fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
+    let repo = root.join("source");
+    init_lfs_repo(&repo);
+    fs::write(repo.join("a.bin"), "middle version\n").unwrap();
+    git(&repo, &["add", "a.bin"]);
+    git(&repo, &["commit", "-qm", "middle"]);
+    let middle = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    fs::write(repo.join("a.bin"), "current version\n").unwrap();
+    git(&repo, &["add", "a.bin"]);
+    git(&repo, &["commit", "-qm", "current"]);
+    let remote = root.join("remote.git");
+    git(root, &["init", "-q", "--bare", remote.to_str().unwrap()]);
+    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+    git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
+            remote: "origin".into(),
+        },
+    );
+    let clone = root.join("clone");
+    git(
+        root,
+        &[
+            "clone",
+            "-q",
+            "--branch",
+            "main",
+            &file_url(&remote),
+            clone.to_str().unwrap(),
+        ],
+    );
+    configure_lfs_filters(&clone);
+    (clone, middle)
+}
+
+#[test]
+fn lfs_explicit_download_overrides_fetch_exclusions() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = clone_lfs_history(dir.path());
+    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsPull {
+            paths: vec!["a.bin".into()],
+        },
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a.bin")).unwrap(),
+        "current version\n"
+    );
+    assert_eq!(
+        git(&repo, &["config", "lfs.fetchexclude"]).trim(),
+        "*.bin",
+        "the override must not change user configuration"
+    );
+}
+
+#[test]
+fn lfs_diff_download_fetches_both_historical_sides_without_checkout() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, middle) = clone_lfs_history(dir.path());
+    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    let before = fs::read(repo.join("a.bin")).unwrap();
+    let target = DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId(middle.into()),
+        path: Some("a.bin".into()),
+    };
+    let opened = GixBackend.open(&repo).unwrap();
+    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    assert_eq!(
+        diff.old_large.unwrap().content,
+        LargeFileContent::MissingLocally
+    );
+    assert_eq!(
+        diff.new_large.unwrap().content,
+        LargeFileContent::MissingLocally
+    );
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+            target: target.clone(),
+        },
+    );
+    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    assert_eq!(
+        source_text(diff.old_source.as_ref()).as_deref(),
+        Some("large file contents\n")
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("middle version\n")
+    );
+    assert_eq!(
+        fs::read(repo.join("a.bin")).unwrap(),
+        before,
+        "history downloads must not check out the current file"
+    );
+}
+
+#[test]
+fn lfs_added_and_deleted_previews_show_payloads() {
+    if !git_lfs_available() {
+        return;
+    }
+    use gitcomet_core::domain::DiffPreviewTextSide;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_lfs_repo(repo);
+    fs::write(repo.join("new.bin"), "new content\n").unwrap();
+    git(repo, &["add", "new.bin"]);
+    git(repo, &["rm", "a.bin"]);
+    let opened = GixBackend.open(repo).unwrap();
+    for (path, side, expected) in [
+        ("new.bin", DiffPreviewTextSide::New, "new content\n"),
+        ("a.bin", DiffPreviewTextSide::Old, "large file contents\n"),
+    ] {
+        let target = DiffTarget::WorkingTree {
+            path: path.into(),
+            area: DiffArea::Staged,
+        };
+        let preview = opened
+            .diff_preview_text_file(&target, side)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            preview.large_file.as_ref().unwrap().content,
+            LargeFileContent::Available
+        );
+        assert_eq!(
+            fs::read_to_string(preview.path).unwrap(),
+            expected,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn lfs_missing_images_do_not_send_pointer_text_to_the_decoder() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_lfs_repo(repo);
+    fs::write(
+        repo.join(".gitattributes"),
+        "*.png filter=lfs diff=lfs merge=lfs -text\n",
+    )
+    .unwrap();
+    fs::write(repo.join("pic.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-qm", "image"]);
+    fs::remove_dir_all(repo.join(".git/lfs/objects")).unwrap();
+    let target = DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
+        path: Some("pic.png".into()),
+    };
+    let opened = GixBackend.open(repo).unwrap();
+    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    assert_eq!(
+        image.new_large.as_ref().unwrap().content,
+        LargeFileContent::MissingLocally
+    );
+    assert!(
+        image.new.is_none(),
+        "missing image bytes must be described by the card instead of decoded as an image"
+    );
+}
+
+#[test]
+fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = clone_lfs_history(dir.path());
+    let root = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD~2"]).trim().into());
+    let head = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let before = fs::read(repo.join("a.bin")).unwrap();
+    let opened = GixBackend.open(&repo).unwrap();
+    let root_target = DiffTarget::Commit {
+        commit_id: root.clone(),
+        path: Some("a.bin".into()),
+    };
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+            target: root_target.clone(),
+        },
+    );
+    let preview = opened
+        .diff_preview_text_file(
+            &root_target,
+            gitcomet_core::domain::DiffPreviewTextSide::New,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(preview.path).unwrap(),
+        "large file contents\n"
+    );
+    let range = DiffTarget::CommitRange {
+        from_commit_id: root,
+        to_commit_id: Some(head),
+        path: Some("a.bin".into()),
+    };
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+            target: range.clone(),
+        },
+    );
+    let diff = opened.diff_file_text(&range).unwrap().unwrap();
+    assert_eq!(
+        source_text(diff.old_source.as_ref()).as_deref(),
+        Some("large file contents\n")
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("current version\n")
+    );
+    assert_eq!(fs::read(repo.join("a.bin")).unwrap(), before);
+}
+
+#[test]
+fn lfs_images_use_the_image_size_limit_instead_of_the_text_limit() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_lfs_repo(repo);
+    fs::write(
+        repo.join(".gitattributes"),
+        "*.png filter=lfs diff=lfs merge=lfs -text\n",
+    )
+    .unwrap();
+    let mut bytes = vec![0; 17 * 1024 * 1024];
+    bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    fs::write(repo.join("large.png"), &bytes).unwrap();
+    git(repo, &["add", "."]);
+    let opened = GixBackend.open(repo).unwrap();
+    let target = DiffTarget::WorkingTree {
+        path: "large.png".into(),
+        area: DiffArea::Staged,
+    };
+    let text = opened.diff_file_text(&target).unwrap().unwrap();
+    assert!(matches!(
+        text.new_large.unwrap().content,
+        LargeFileContent::TooLarge { .. }
+    ));
+    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    assert_eq!(
+        image.new_large.unwrap().content,
+        LargeFileContent::Available
+    );
+    assert_eq!(image.new.unwrap(), bytes);
+}
+
+#[test]
+fn lfs_named_checkout_treats_glob_characters_literally() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_lfs_repo(&repo);
+    for name in ["a[1].bin", "a1.bin"] {
+        fs::write(repo.join(name), format!("{name} content\n")).unwrap();
+    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "named files"]);
+    let remote = dir.path().join("remote.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+    git(&repo, &["push", "-q", "-u", "origin", "HEAD:main"]);
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
+            remote: "origin".into(),
+        },
+    );
+    for name in ["a[1].bin", "a1.bin"] {
+        fs::write(
+            repo.join(name),
+            git(&repo, &["show", &format!("HEAD:{name}")]),
+        )
+        .unwrap();
+    }
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsPull {
+            paths: vec!["a[1].bin".into()],
+        },
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a[1].bin")).unwrap(),
+        "a[1].bin content\n"
+    );
+    assert!(
+        fs::read_to_string(repo.join("a1.bin"))
+            .unwrap()
+            .starts_with("version https://git-lfs"),
+        "only the named file may be checked out"
     );
 }

@@ -5294,6 +5294,42 @@ fn large_file_command_runs_as_a_local_action_and_lock_changes_reload_locks() {
 }
 
 #[test]
+fn lfs_download_reloads_a_selected_historical_diff() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let target = DiffTarget::Commit {
+        commit_id: CommitId("abc123".into()),
+        path: Some("a.bin".into()),
+    };
+    state.repos[0].set_diff_target(Some(target.clone()));
+    state.repos[0].set_selected_commit(Some(CommitId("abc123".into())));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LargeFile {
+                command: LargeFileCommand::LfsFetchAll,
+            },
+            result: Ok(CommandOutput::default()),
+        }),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiffFile { target: t, .. } if t == &target)),
+        "downloaded objects must invalidate the historical content cache: {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(effect,
+            Effect::LoadCommitDetails { commit_id, .. } if commit_id.as_ref() == "abc123"
+        )),
+        "the commit details chips must refresh too"
+    );
+}
+
+#[test]
 fn lockable_patterns_load_locks_once_and_failures_stay_quiet() {
     let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
     let mut support = gitcomet_core::large_files::LargeFileSupport::default();

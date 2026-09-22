@@ -189,6 +189,13 @@ impl GitCometView {
                 .map(|mode| host.push_with_tags_unavailable(mode)),
             remote_web_page_unavailable: repo
                 .and_then(|repo| remote_web_request(repo).unavailable_reason()),
+            git_lfs_missing: self.state.large_file_tools.git_lfs.is_not_found(),
+            repo_uses_lfs: repo.is_some_and(|repo| {
+                matches!(
+                    &repo.large_file_support,
+                    gitcomet_state::model::Loadable::Ready(support) if support.lfs.in_use()
+                )
+            }),
         }
     }
 
@@ -342,6 +349,25 @@ impl GitCometView {
             "fetch-all" => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::FetchAll { repo_id });
+                }
+            }
+            "lfs-download-all" | "lfs-fetch-all" | "lfs-prune" | "lfs-fsck" | "lfs-install" => {
+                use gitcomet_core::large_files::LargeFileCommand as C;
+                let command = match command_id {
+                    "lfs-download-all" => C::LfsPull { paths: Vec::new() },
+                    "lfs-fetch-all" => C::LfsFetchAll,
+                    "lfs-prune" => C::LfsPrune,
+                    "lfs-fsck" => C::LfsFsck,
+                    _ => C::LfsInstall,
+                };
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store
+                        .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+                }
+            }
+            "lfs-refresh-locks" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::LoadLfsLocks { repo_id });
                 }
             }
             "previous-repo-tab" => {

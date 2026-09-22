@@ -583,9 +583,9 @@ fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
         .unwrap()
         .expect("preview text file for committed added file");
 
-    assert!(preview_path.is_file());
+    assert!(preview_path.path.is_file());
     assert_eq!(
-        fs::read_to_string(&preview_path).expect("read committed added preview text file"),
+        fs::read_to_string(&preview_path.path).expect("read committed added preview text file"),
         "one\ntwo"
     );
 }
@@ -627,9 +627,9 @@ fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
         .unwrap()
         .expect("preview text file for committed deleted file");
 
-    assert!(preview_path.is_file());
+    assert!(preview_path.path.is_file());
     assert_eq!(
-        fs::read_to_string(&preview_path).expect("read committed deleted preview text file"),
+        fs::read_to_string(&preview_path.path).expect("read committed deleted preview text file"),
         "one\ntwo"
     );
 }
@@ -666,9 +666,9 @@ fn diff_preview_text_file_staged_deleted_file_returns_head_blob_path() {
         .unwrap()
         .expect("preview text file for staged deleted file");
 
-    assert!(preview_path.is_file());
+    assert!(preview_path.path.is_file());
     assert_eq!(
-        fs::read_to_string(&preview_path).expect("read staged deleted preview text file"),
+        fs::read_to_string(&preview_path.path).expect("read staged deleted preview text file"),
         "one\n"
     );
 }
@@ -1735,7 +1735,7 @@ fn diff_file_text_for_symlink_uses_link_text_not_target_bytes() {
         .diff_preview_text_file(&target, gitcomet_core::domain::DiffPreviewTextSide::New)
         .unwrap()
         .expect("preview path for a symlink");
-    assert_eq!(fs::read_to_string(preview).unwrap(), "b.txt");
+    assert_eq!(fs::read_to_string(preview.path).unwrap(), "b.txt");
 
     let image = opened
         .diff_file_image(&target)

@@ -1038,15 +1038,29 @@ pub(crate) fn run_git_preview_output(
 }
 
 fn run_command_with_timeout_auth(
-    mut cmd: Command,
+    cmd: Command,
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
 ) -> Result<Output> {
+    run_command_with_timeout_auth_stdin(cmd, label, timeout, cancellation, allow_auth, None)
+}
+
+fn run_command_with_timeout_auth_stdin(
+    mut cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+    allow_auth: bool,
+    stdin: Option<Stdio>,
+) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
+    if let Some(stdin) = stdin {
+        cmd.stdin(stdin);
+    }
     let operation = git_operation::current();
     reject_cancelled_command(
         cancellation,
@@ -1634,15 +1648,44 @@ pub(crate) use gitcomet_core::process::bytes_to_text_preserving_utf8;
 
 pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
     let output = run_git_checked_output(cmd, label)?;
+    Ok(command_output(label, output))
+}
+
+/// Feed a small request through a file so the ordinary authenticated command
+/// runner retains its cancellation, output and LFS-progress monitoring.
+pub(crate) fn run_git_with_input_output(
+    cmd: Command,
+    label: &str,
+    input: &[u8],
+) -> Result<CommandOutput> {
+    use std::io::{Seek as _, Write as _};
+    let mut file = tempfile::tempfile().map_err(io_err)?;
+    file.write_all(input).map_err(io_err)?;
+    file.rewind().map_err(io_err)?;
+    let output = run_command_with_timeout_auth_stdin(
+        cmd,
+        label,
+        git_command_timeout(),
+        None,
+        true,
+        Some(Stdio::from(file)),
+    )?;
+    if !output.status.success() {
+        return Err(git_command_failed_error(label, output));
+    }
+    Ok(command_output(label, output))
+}
+
+fn command_output(label: &str, output: Output) -> CommandOutput {
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-    Ok(CommandOutput {
+    CommandOutput {
         command: label.to_string(),
         stdout,
         stderr,
         exit_code,
-    })
+    }
 }
 
 pub(crate) fn run_git_capture(cmd: Command, label: &str) -> Result<String> {

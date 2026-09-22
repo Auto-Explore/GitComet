@@ -1119,7 +1119,7 @@ impl PopoverHost {
             .find(|repo| repo.id == repo_id)
             .into_iter()
             .flat_map(|repo| repo.feedback.hook_activity.iter())
-            .filter(|operation| operation.has_hooks() && operation.status.is_active())
+            .filter(|operation| operation.is_reportable() && operation.status.is_active())
             .map(|operation| (repo_id, operation.id))
             .collect::<Vec<_>>();
         let _ = self.root_view.update(cx, |root, cx| {
@@ -2634,14 +2634,14 @@ impl PopoverHost {
                     let selected = operation_id
                         .filter(|requested| {
                             operations.iter().any(|operation| {
-                                operation.id == *requested && operation.has_hooks()
+                                operation.id == *requested && operation.is_reportable()
                             })
                         })
                         .or_else(|| {
                             operations
                                 .iter()
                                 .rev()
-                                .find(|operation| operation.has_hooks())
+                                .find(|operation| operation.is_reportable())
                                 .map(|operation| operation.id)
                         });
                     self.hook_activity_selected = selected;

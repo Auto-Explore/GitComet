@@ -271,15 +271,15 @@ impl super::GixRepo {
         ))
     }
 
-    /// Real bytes for an image side whose git form is an LFS pointer or annex
-    /// link, when present here. `None` leaves the side as it was.
-    pub(super) fn large_file_image_bytes(
+    /// Describe managed images even when their bytes cannot be loaded. Pointer
+    /// text must never reach the image decoder.
+    pub(super) fn large_file_image_side(
         &self,
         repo: &gix::Repository,
         git_form: &[u8],
         logical_path: &Path,
         max_bytes: u64,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(LargeFileSide, Option<Vec<u8>>)> {
         if git_form.len() as u64 > MAX_POINTER_BYTES || !may_be_pointer(git_form) {
             return None;
         }
@@ -294,12 +294,41 @@ impl super::GixRepo {
                 .join(logical_path)
                 .parent()?
                 .join(gix::path::try_from_byte_slice(target).ok()?),
-            (LargeFilePointer::Annex(_), None) => return None,
+            (LargeFilePointer::Annex(_), None) => {
+                return Some((
+                    LargeFileSide {
+                        pointer: classified.pointer,
+                        content: LargeFileContent::Unknown,
+                    },
+                    None,
+                ));
+            }
         };
-        if std::fs::metadata(&path).ok()?.len() > max_bytes {
-            return None;
-        }
-        std::fs::read(path).ok()
+        let (content, bytes) = match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() > max_bytes => {
+                (LargeFileContent::TooLarge { bytes: meta.len() }, None)
+            }
+            Ok(meta) if meta.is_file() => match std::fs::read(path) {
+                Ok(bytes) if bytes.len() as u64 <= max_bytes => {
+                    (LargeFileContent::Available, Some(bytes))
+                }
+                Ok(bytes) => (
+                    LargeFileContent::TooLarge {
+                        bytes: bytes.len() as u64,
+                    },
+                    None,
+                ),
+                Err(_) => (LargeFileContent::MissingLocally, None),
+            },
+            _ => (LargeFileContent::MissingLocally, None),
+        };
+        Some((
+            LargeFileSide {
+                pointer: classified.pointer,
+                content,
+            },
+            bytes,
+        ))
     }
 
     pub(super) fn large_file_support_impl(

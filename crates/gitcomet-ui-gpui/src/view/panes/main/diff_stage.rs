@@ -21,6 +21,8 @@ impl MainPaneView {
             || self.is_conflict_resolver_active()
             || self.is_inline_submodule_diff_active()
             || self.is_markdown_preview_active()
+            // The displayed payload lines do not address the stored pointer.
+            || self.has_large_file_text_diff()
         {
             return None;
         }

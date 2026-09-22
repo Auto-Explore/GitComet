@@ -964,7 +964,7 @@ pub trait GitRepository: Send + Sync {
         &self,
         _target: &DiffTarget,
         _side: DiffPreviewTextSide,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<DiffPreviewTextFile>> {
         Err(Error::new(ErrorKind::Unsupported(
             "preview text file loading is not implemented for this backend",
         )))
@@ -974,7 +974,7 @@ pub trait GitRepository: Send + Sync {
         target: &DiffTarget,
         side: DiffPreviewTextSide,
         cancellation: &CancellationToken,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<DiffPreviewTextFile>> {
         cancellation.check_cancelled()?;
         let result = self.diff_preview_text_file(target, side)?;
         cancellation.check_cancelled()?;

@@ -30,6 +30,7 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         output_bytes: output.len(),
         output_truncated: false,
         latest_line: "checking file 79".to_string(),
+        transfer: None,
     }
 }
 
@@ -43,6 +44,45 @@ fn hook_activity_state_for_two_repos(
         active_repo: Some(active_repo),
         ..AppState::test_default()
     })
+}
+
+#[gpui::test]
+fn lfs_transfer_without_hooks_opens_activity_and_shows_progress(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(729);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("lfs-transfer"),
+        &CommitId("729".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let mut operation = running_hook_activity(729);
+    operation.hooks.clear();
+    operation.label = "LFS fetch".into();
+    operation.transfer = Some(gitcomet_core::git_operation::TransferProgress {
+        direction: "download".into(),
+        files_done: 1,
+        files_total: 2,
+        bytes_done: 1_000_000,
+        bytes_total: 8_000_000,
+        name: "a.bin".into(),
+    });
+    operation.latest_line = operation.transfer.as_ref().unwrap().summary();
+    repo.feedback.hook_activity = vec![operation];
+    repo.feedback.hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("hook_activity_panel").is_some(),
+        "transfers should open activity without a hook"
+    );
+    let input = activity_text(cx, &view, "detail_729_transfer");
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        "LFS download 1/2 files · 1 MB of 8 MB"
+    );
 }
 
 fn activity_text(

@@ -57,51 +57,86 @@ impl MainPaneView {
         })
     }
 
-    /// The file diff, explained by a card when either side is a Git LFS or
-    /// git-annex pointer: the card replaces a pointer diff when content is
-    /// missing and sits above the real diff when it is here.
-    pub(super) fn render_selected_file_diff(
-        &mut self,
-        theme: AppTheme,
-        window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let large_sides = match self.rendered_file_diff_loadable() {
-            Some(Loadable::Ready(Some(file)))
-                if file.old_large.is_some() || file.new_large.is_some() =>
-            {
-                Some((file.old_large.clone(), file.new_large.clone()))
-            }
-            _ => None,
-        };
-        let Some((old, new)) = large_sides else {
-            return self.render_selected_file_diff_body(theme, window, cx);
-        };
-        if !gitcomet_core::large_files::large_file_sides_show_content(old.as_ref(), new.as_ref()) {
-            return crate::view::large_file_card::large_file_card(
-                theme,
-                old.as_ref(),
-                new.as_ref(),
-                false,
-            );
+    /// Metadata also travels through the image and single-side preview paths,
+    /// which deliberately do not load a text diff.
+    pub(super) fn rendered_large_file_sides(
+        &self,
+        image: bool,
+    ) -> (
+        Option<gitcomet_core::large_files::LargeFileSide>,
+        Option<gitcomet_core::large_files::LargeFileSide>,
+    ) {
+        if image {
+            return match self.rendered_file_image_diff_loadable() {
+                Some(Loadable::Ready(Some(file))) => {
+                    (file.old_large.clone(), file.new_large.clone())
+                }
+                _ => (None, None),
+            };
         }
-        let body = self.render_selected_file_diff_body(theme, window, cx);
-        div()
-            .size_full()
-            .min_h(px(0.0))
-            .flex()
-            .flex_col()
-            .child(crate::view::large_file_card::large_file_card(
-                theme,
-                old.as_ref(),
-                new.as_ref(),
-                true,
-            ))
-            .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body))
-            .into_any_element()
+        if !self.is_inline_submodule_diff_active()
+            && let Some(repo) = self.active_repo()
+            && let Loadable::Ready(Some(preview)) = &repo.diff_state.diff_preview_text_file
+            && preview.large_file.is_some()
+        {
+            return match preview.side {
+                gitcomet_core::domain::DiffPreviewTextSide::Old => {
+                    (preview.large_file.clone(), None)
+                }
+                gitcomet_core::domain::DiffPreviewTextSide::New => {
+                    (None, preview.large_file.clone())
+                }
+            };
+        }
+        match self.rendered_file_diff_loadable() {
+            Some(Loadable::Ready(Some(file))) => (file.old_large.clone(), file.new_large.clone()),
+            _ => (None, None),
+        }
     }
 
-    fn render_selected_file_diff_body(
+    /// "Download content" for an LFS file whose content is not here; `None`
+    /// for annex files (their commands come later) or without a repo.
+    pub(super) fn large_file_download_button(
+        &mut self,
+        theme: AppTheme,
+        old: Option<&gitcomet_core::large_files::LargeFileSide>,
+        new: Option<&gitcomet_core::large_files::LargeFileSide>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        use gitcomet_core::large_files::LargeFileContent;
+        let missing_lfs = [old, new]
+            .into_iter()
+            .flatten()
+            .any(|side| side.pointer.is_lfs() && side.content == LargeFileContent::MissingLocally);
+        let repo = self.active_repo()?;
+        let repo_id = repo.id;
+        let target = self.rendered_diff_target()?.clone();
+        if !missing_lfs || self.is_inline_submodule_diff_active() {
+            return None;
+        }
+        let tool_missing = self.large_file_tools().git_lfs.is_not_found();
+        let label = if tool_missing {
+            "Download content (install git-lfs)"
+        } else {
+            "Download content"
+        };
+        Some(
+            components::Button::new("large_file_card_download", label)
+                .style(components::ButtonStyle::Filled)
+                .disabled(tool_missing)
+                .on_click(theme, cx, move |this, _e, _w, _cx| {
+                    this.store.dispatch(Msg::RunLargeFileCommand {
+                        repo_id,
+                        command: gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+                            target: target.clone(),
+                        },
+                    });
+                })
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn render_selected_file_diff(
         &mut self,
         theme: AppTheme,
         window: &mut gpui::Window,

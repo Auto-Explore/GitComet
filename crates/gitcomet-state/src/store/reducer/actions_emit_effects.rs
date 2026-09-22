@@ -1312,6 +1312,34 @@ pub(super) fn repo_command_finished(
     {
         extra_effects.push(effect);
     }
+    // Object-store changes do not modify Git history, but do change the
+    // contents and presence metadata of an already selected historical diff.
+    if command_succeeded
+        && matches!(
+            &command,
+            RepoCommandKind::LargeFile {
+                command: gitcomet_core::large_files::LargeFileCommand::LfsPull { .. }
+                    | gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff { .. }
+                    | gitcomet_core::large_files::LargeFileCommand::LfsFetchAll
+                    | gitcomet_core::large_files::LargeFileCommand::LfsPrune
+                    | gitcomet_core::large_files::LargeFileCommand::LfsFsck
+            }
+        )
+    {
+        if let Some(target) = repo_state.diff_state.diff_target.clone() {
+            let load_plan = selected_diff_load_plan(repo_state, &target);
+            apply_selected_diff_load_plan_state_with_reload_mode(
+                repo_state,
+                load_plan,
+                DiffReloadMode::KeepLoaded,
+            );
+            repo_state.bump_diff_state_rev();
+            extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+        }
+        if let Some(commit_id) = repo_state.history_state.selected_commit.clone() {
+            extra_effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
+        }
+    }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
         if repo_state

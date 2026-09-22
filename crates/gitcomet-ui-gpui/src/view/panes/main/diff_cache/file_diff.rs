@@ -1978,6 +1978,9 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     let new_line_starts = Arc::clone(&new_source.line_starts);
     let old_line_count = old_source.line_count();
     let new_line_count = new_source.line_count();
+    // Git's patch describes the stored pointer, while these sources contain
+    // the resolved payload. Its line numbers cannot align the payload diff.
+    let patch_diff = patch_diff.filter(|_| file.old_large.is_none() && file.new_large.is_none());
     let plan = Arc::new(if let Some(patch_diff) = patch_diff {
         build_file_diff_plan_from_patch(patch_diff, old_line_count, new_line_count)
     } else {
@@ -2464,6 +2467,49 @@ mod tests {
             }
             other => panic!("expected a message error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolved_lfs_diff_uses_content_changes_instead_of_pointer_hunks() {
+        use gitcomet_core::domain::{Diff, DiffArea, DiffTarget, FileDiffText};
+        use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+        let old = (1..=10)
+            .map(|i| format!("line {i:02}\n"))
+            .collect::<String>();
+        let new = old.replace("line 08", "edit 08");
+        let side = |byte| LargeFileSide {
+            pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer {
+                oid: gitcomet_core::lfs::LfsOid([byte; 32]),
+                size: 80,
+            }),
+            content: LargeFileContent::Available,
+        };
+        let target = DiffTarget::WorkingTree {
+            path: "data.bin".into(),
+            area: DiffArea::Unstaged,
+        };
+        let patch = Diff::from_unified(
+            target,
+            &format!(
+                "diff --git a/data.bin b/data.bin\n--- a/data.bin\n+++ b/data.bin\n@@ -1,3 +1,3 @@\n version https://git-lfs.github.com/spec/v1\n-oid sha256:{}\n+oid sha256:{}\n size 80\n",
+                "01".repeat(32),
+                "02".repeat(32)
+            ),
+        );
+        let file = FileDiffText::new("data.bin".into(), Some(old), Some(new))
+            .with_large_sides(Some(side(1)), Some(side(2)));
+        let rebuilt = build_file_diff_cache_rebuild_with_patch(
+            &file,
+            Path::new("/tmp"),
+            Some(&patch),
+            DiffWhitespaceMode::Show,
+        )
+        .unwrap();
+        assert_eq!(
+            rebuilt.row_provider.change_blocks(),
+            vec![7..8],
+            "only payload line 8 changed"
+        );
     }
 
     #[test]

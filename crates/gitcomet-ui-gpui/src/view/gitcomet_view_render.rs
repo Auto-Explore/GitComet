@@ -175,7 +175,7 @@ impl Render for GitCometView {
                         .iter()
                         .find(|operation| operation.id == operation_id)
                 })
-                .is_some_and(GitHookOperation::has_hooks);
+                .is_some_and(GitHookOperation::is_reportable);
 
             if !operation_exists {
                 self.set_hook_activity_dialog_repo(None, cx);

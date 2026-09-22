@@ -533,6 +533,7 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: preview_source_path,
                     side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                    large_file: None,
                 }),
             ));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
@@ -633,6 +634,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                 Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: preview_source_path,
                     side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                    large_file: None,
                 }),
             ));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);

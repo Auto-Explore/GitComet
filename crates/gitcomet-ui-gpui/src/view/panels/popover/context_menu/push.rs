@@ -61,6 +61,16 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
                 .insert(ix, super::super::tag_push::tooltip(request, preview).into());
         }
     }
+    let upstream = super::active_branch_tracking_upstream_name(this);
+    let remote = upstream
+        .as_deref()
+        .and_then(|name| name.split_once('/'))
+        .map(|(remote, _)| remote);
+    model.items.extend(super::large_file::push_items(
+        &this.state,
+        this.active_repo(),
+        remote,
+    ));
     // Last, and fenced off: the one entry here that rewrites published history
     // should not sit under a cursor aimed at the ordinary pushes above it.
     model.items.push(ContextMenuItem::Separator);

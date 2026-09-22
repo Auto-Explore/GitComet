@@ -306,6 +306,7 @@ impl DetailsPaneView {
             repo.unstaged_line_stats_rev.hash(&mut hasher);
             // Large-file chips also arrive after the list.
             repo.large_files_rev.hash(&mut hasher);
+            repo.lfs_locks_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.log_rev.hash(&mut hasher);

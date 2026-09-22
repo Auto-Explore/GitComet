@@ -2402,7 +2402,12 @@ impl DetailsPaneView {
                             ),
                     )
                     .when_some(f.large_file.as_ref(), |row, state| {
-                        row.child(components::large_file_chip(theme, ui_scale_percent, state))
+                        row.child(components::large_file_chip(
+                            theme,
+                            ui_scale_percent,
+                            state,
+                            false,
+                        ))
                     })
                     .when(f.additions.is_some() || f.deletions.is_some(), |row| {
                         row.child(div().flex_none().child(components::diff_stat(
@@ -2902,7 +2907,12 @@ impl DetailsPaneView {
                             ),
                     )
                     .when_some(f.large_file.as_ref(), |row, state| {
-                        row.child(components::large_file_chip(theme, ui_scale_percent, state))
+                        row.child(components::large_file_chip(
+                            theme,
+                            ui_scale_percent,
+                            state,
+                            false,
+                        ))
                     })
                     .when(f.additions.is_some() || f.deletions.is_some(), |row| {
                         row.child(div().flex_none().child(components::diff_stat(

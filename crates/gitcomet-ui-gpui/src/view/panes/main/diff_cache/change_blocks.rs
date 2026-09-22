@@ -100,7 +100,7 @@ impl MainPaneView {
         }
     }
 
-    fn file_diff_row_change_sides(&self, row_ix: usize) -> DiffChangeSides {
+    pub(super) fn file_diff_row_change_sides(&self, row_ix: usize) -> DiffChangeSides {
         use gitcomet_core::domain::DiffLineKind as DK;
         match self.diff_view {
             DiffViewMode::Inline => match self.file_diff_inline_visual_kind(row_ix) {

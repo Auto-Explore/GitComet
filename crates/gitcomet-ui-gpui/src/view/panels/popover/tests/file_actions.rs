@@ -1236,6 +1236,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                 Loadable::Ready(Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: workdir.join(&path),
                     side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                    large_file: None,
                 })));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 
@@ -1702,4 +1703,155 @@ fn copy_path_mnemonic_selects_the_relative_entry_in_every_menu(cx: &mut gpui::Te
             });
         });
     });
+}
+
+fn lfs_status_menu_labels(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    repo_id: RepoId,
+    path: &std::path::Path,
+    configure: impl FnOnce(&mut RepoState, &mut AppState),
+) -> Vec<(String, bool)> {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_lfs_status_menu_{}",
+        std::process::id(),
+        repo_id.0
+    ));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.to_path_buf(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                DiffArea::Unstaged,
+            );
+            let mut state = (*app_state_with_repo(repo.clone(), repo_id)).clone();
+            let mut repo = state.repos.remove(0);
+            configure(&mut repo, &mut state);
+            state.repos.insert(0, repo);
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.to_path_buf(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("status file menu");
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label, disabled, ..
+                } => Some((label.to_string(), *disabled)),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+fn lfs_support(lockable: bool) -> gitcomet_core::large_files::LargeFileSupport {
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.lfs.filter_configured = true;
+    support
+        .lfs
+        .tracked_patterns
+        .push(gitcomet_core::large_files::LfsTrackedPattern {
+            pattern: "*.psd".into(),
+            lockable,
+            source: std::path::PathBuf::from(".gitattributes"),
+        });
+    support
+}
+
+fn lfs_row(missing: bool, lockable: bool) -> gitcomet_core::large_files::UncommittedLargeFiles {
+    let mut files = gitcomet_core::large_files::UncommittedLargeFiles::default();
+    files.unstaged.insert(
+        std::path::PathBuf::from("art/hero.psd"),
+        gitcomet_core::large_files::LargeFileState {
+            pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+                gitcomet_core::lfs::LfsPointer {
+                    oid: gitcomet_core::lfs::LfsOid([4; 32]),
+                    size: 10,
+                },
+            ),
+            in_local_store: Some(!missing),
+            worktree: Some(if missing {
+                gitcomet_core::large_files::LargeFileWorktree::Pointer
+            } else {
+                gitcomet_core::large_files::LargeFileWorktree::Content
+            }),
+            lockable,
+        },
+    );
+    files
+}
+
+/// Row entries follow the row: download for missing content, lock for
+/// lockable files, track for plain files; nothing in a repo without LFS.
+#[gpui::test]
+fn status_file_menu_offers_git_lfs_entries_by_row_state(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let psd = std::path::Path::new("art/hero.psd");
+    let has =
+        |labels: &[(String, bool)], wanted: &str| labels.iter().any(|(label, _)| label == wanted);
+
+    let plain_repo = lfs_status_menu_labels(cx, &view, RepoId(81), psd, |_, _| {});
+    assert!(
+        !plain_repo.iter().any(|(label, _)| label.contains("LFS")),
+        "{plain_repo:?}"
+    );
+
+    let missing = lfs_status_menu_labels(cx, &view, RepoId(82), psd, |repo, _| {
+        repo.large_file_support = Loadable::Ready(Arc::new(lfs_support(true)));
+        repo.uncommitted_large_files = Arc::new(lfs_row(true, true));
+    });
+    assert!(has(&missing, "Download LFS content"), "{missing:?}");
+    assert!(has(&missing, "Lock file"), "{missing:?}");
+
+    let locked = lfs_status_menu_labels(cx, &view, RepoId(83), psd, |repo, _| {
+        repo.large_file_support = Loadable::Ready(Arc::new(lfs_support(true)));
+        repo.uncommitted_large_files = Arc::new(lfs_row(false, true));
+        repo.lfs_locks = Loadable::Ready(Arc::new(vec![gitcomet_core::large_files::LfsLock {
+            id: "1".into(),
+            path: psd.to_path_buf(),
+            owner: Some("alice".into()),
+            locked_at: None,
+        }]));
+    });
+    assert!(has(&locked, "Unlock (locked by alice)"), "{locked:?}");
+    assert!(!has(&locked, "Download LFS content"));
+
+    let untracked_type = lfs_status_menu_labels(
+        cx,
+        &view,
+        RepoId(84),
+        std::path::Path::new("scene.blend"),
+        |repo, state| {
+            repo.large_file_support = Loadable::Ready(Arc::new(lfs_support(false)));
+            state.large_file_tools.git_lfs =
+                gitcomet_core::large_file_tools::ToolAvailability::NotFound {
+                    detail: "Git cannot run `git lfs`.".into(),
+                };
+        },
+    );
+    assert!(
+        untracked_type.iter().any(|(label, disabled)| label
+            == "Track *.blend in Git LFS (install git-lfs)"
+            && *disabled),
+        "missing tool lists the entry disabled: {untracked_type:?}"
+    );
 }

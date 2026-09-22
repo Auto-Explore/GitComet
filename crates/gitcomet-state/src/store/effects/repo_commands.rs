@@ -1,6 +1,6 @@
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
-use gitcomet_core::domain::Upstream;
+use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
@@ -39,6 +39,16 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
     };
     match command {
         C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
+        C::LfsFetchForDiff { target } => match target {
+            DiffTarget::WorkingTree { path, .. }
+            | DiffTarget::Commit {
+                path: Some(path), ..
+            }
+            | DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => path.display().to_string(),
+            _ => "selected revisions".to_string(),
+        },
         C::LfsUnlock { paths: p, force } => {
             format!("{}{}", paths(p), if *force { " · force" } else { "" })
         }

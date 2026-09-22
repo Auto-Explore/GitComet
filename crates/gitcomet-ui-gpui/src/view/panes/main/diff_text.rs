@@ -2807,7 +2807,8 @@ impl MainPaneView {
                 })
             });
 
-        let allow_patch_actions = allow_apply && !is_file_preview;
+        let allow_patch_actions =
+            allow_apply && !is_file_preview && !self.has_large_file_text_diff();
 
         let selection = text_selection
             .or_else(|| self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b))))

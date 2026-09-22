@@ -366,6 +366,31 @@ pub(super) fn model(
         });
     }
 
+    if let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) {
+        let paths = if use_selection {
+            this.details_pane
+                .read(cx)
+                .status_multi_selection
+                .get(&repo_id)
+                .map(|sel| sel.selected_paths_for_area(area).to_vec())
+                .unwrap_or_default()
+        } else {
+            vec![path.to_path_buf()]
+        };
+        let is_untracked = matches!(
+            repo.status_entry_for_path(area, path).map(|s| s.kind),
+            Some(gitcomet_core::domain::FileStatusKind::Untracked)
+        );
+        items.extend(super::large_file::status_file_items(
+            &this.state,
+            repo,
+            area,
+            path,
+            &paths,
+            is_untracked,
+        ));
+    }
+
     items.push(ContextMenuItem::Separator);
     // The working-tree file is referenced by the current branch: a permalink
     // points at the last committed version, which is what reviewers can open.

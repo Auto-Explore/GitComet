@@ -11,7 +11,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let repo_id = active_repo_id.unwrap_or(RepoId(0));
     let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
 
-    ContextMenuModel::new(vec![
+    let mut model = ContextMenuModel::new(vec![
         ContextMenuItem::Header(
             super::action_menu_title("Pull", tracking_branch_name.as_deref()).into(),
         ),
@@ -78,5 +78,10 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             disabled: repo_disabled,
             action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),
         },
-    ])
+    ]);
+    model.items.extend(super::large_file::pull_items(
+        &this.state,
+        this.active_repo(),
+    ));
+    model
 }

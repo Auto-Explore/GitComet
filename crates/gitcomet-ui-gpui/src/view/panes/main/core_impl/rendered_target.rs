@@ -40,6 +40,11 @@ impl MainPaneView {
         }
     }
 
+    pub(in crate::view) fn has_large_file_text_diff(&self) -> bool {
+        matches!(self.rendered_file_diff_loadable(), Some(Loadable::Ready(Some(file)))
+            if file.old_large.is_some() || file.new_large.is_some())
+    }
+
     pub(in crate::view) fn rendered_file_diff_rev(&self) -> u64 {
         self.active_inline_submodule_diff()
             .map(|inline| inline.diff_file_rev)

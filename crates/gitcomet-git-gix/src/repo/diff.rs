@@ -11,8 +11,8 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::{
-    Diff, DiffArea, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
-    FileDiffTextSource,
+    Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    FileDiffText, FileDiffTextSource,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
@@ -505,6 +505,50 @@ impl GixRepo {
         &self,
         target: &DiffTarget,
         side: DiffPreviewTextSide,
+    ) -> Result<Option<DiffPreviewTextFile>> {
+        let Some(path) = self.diff_preview_text_file_path_impl(target, side)? else {
+            return Ok(None);
+        };
+        let logical_path = match target {
+            DiffTarget::WorkingTree { path, .. }
+            | DiffTarget::Commit {
+                path: Some(path), ..
+            }
+            | DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => path,
+            _ => return Ok(None),
+        };
+        let worktree = side == DiffPreviewTextSide::New
+            && matches!(
+                target,
+                DiffTarget::WorkingTree {
+                    area: DiffArea::Unstaged,
+                    ..
+                } | DiffTarget::CommitRange {
+                    to_commit_id: None,
+                    ..
+                }
+            );
+        let source = FileDiffTextSource::new(path.clone());
+        let (large_file, path) =
+            match self.large_file_side(&self.repo(), &source, logical_path, worktree) {
+                Some((large, replacement)) => {
+                    (Some(large), replacement.map_or(path, |source| source.path))
+                }
+                None => (None, path),
+            };
+        Ok(Some(DiffPreviewTextFile {
+            path,
+            side,
+            large_file,
+        }))
+    }
+
+    fn diff_preview_text_file_path_impl(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
     ) -> Result<Option<std::path::PathBuf>> {
         match target {
             DiffTarget::WorkingTree { path, area } => {
@@ -668,11 +712,15 @@ impl GixRepo {
         // when it is here, so both sides decode.
         let repo = self.repo();
         let logical = to_repo_path(&image.path, &self.spec.workdir)?;
-        for side in [&mut image.old, &mut image.new] {
-            if let Some(bytes) = side.as_deref().and_then(|git_form| {
-                self.large_file_image_bytes(&repo, git_form, &logical, MAX_IMAGE_DIFF_SIDE_BYTES)
+        for (side, metadata) in [
+            (&mut image.old, &mut image.old_large),
+            (&mut image.new, &mut image.new_large),
+        ] {
+            if let Some((large, bytes)) = side.as_deref().and_then(|git_form| {
+                self.large_file_image_side(&repo, git_form, &logical, MAX_IMAGE_DIFF_SIDE_BYTES)
             }) {
-                *side = Some(bytes);
+                *side = bytes;
+                *metadata = Some(large);
             }
         }
         Ok(Some(image))
@@ -710,6 +758,7 @@ impl GixRepo {
                                     path: path.clone(),
                                     old: ours,
                                     new: theirs,
+                                    ..Default::default()
                                 }));
                             }
                         };
@@ -743,6 +792,7 @@ impl GixRepo {
                     path: path.clone(),
                     old,
                     new,
+                    ..Default::default()
                 }))
             }
             DiffTarget::Commit { commit_id, path } => {
@@ -766,6 +816,7 @@ impl GixRepo {
                     path: path.clone(),
                     old,
                     new,
+                    ..Default::default()
                 }))
             }
             DiffTarget::CommitRange {
@@ -800,6 +851,7 @@ impl GixRepo {
                     path: path.clone(),
                     old,
                     new,
+                    ..Default::default()
                 }))
             }
         }
@@ -1623,7 +1675,10 @@ fn io_err_to_error(error: std::io::Error) -> Error {
     Error::new(ErrorKind::Io(error.kind()))
 }
 
-fn gix_first_parent_optional(repo: &gix::Repository, commit: &str) -> Result<Option<String>> {
+pub(super) fn gix_first_parent_optional(
+    repo: &gix::Repository,
+    commit: &str,
+) -> Result<Option<String>> {
     let Some(commit_id) = gix_revision_id_optional(repo, commit)? else {
         return Ok(None);
     };

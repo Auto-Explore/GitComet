@@ -7476,3 +7476,216 @@ fn missing_lfs_content_shows_the_large_file_card(cx: &mut gpui::TestAppContext) 
         "the card must explain a pointer-only file"
     );
 }
+
+#[gpui::test]
+fn lfs_preview_and_image_cards_do_not_require_a_text_diff(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::{
+        DiffPreviewTextFile, DiffPreviewTextSide, FileDiffImage, FileStatusKind,
+    };
+    use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let side = LargeFileSide {
+        pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer {
+            oid: gitcomet_core::lfs::LfsOid([9; 32]),
+            size: 4_200_000,
+        }),
+        content: LargeFileContent::MissingLocally,
+    };
+    for (index, (name, status, preview_side)) in [
+        ("added.txt", FileStatusKind::Added, DiffPreviewTextSide::New),
+        (
+            "deleted.txt",
+            FileStatusKind::Deleted,
+            DiffPreviewTextSide::Old,
+        ),
+        (
+            "image.png",
+            FileStatusKind::Modified,
+            DiffPreviewTextSide::New,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = PathBuf::from(name);
+        let repo_id = gitcomet_state::model::RepoId(890 + index as u64);
+        let preview_path = dir.path().join("cached-pointer");
+        std::fs::write(
+            &preview_path,
+            "version https://git-lfs.github.com/spec/v1\n",
+        )
+        .unwrap();
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, dir.path());
+                set_test_file_status(
+                    &mut repo,
+                    path.clone(),
+                    status,
+                    gitcomet_core::domain::DiffArea::Staged,
+                );
+                if name.ends_with(".png") {
+                    repo.diff_state.diff_file_image =
+                        Loadable::Ready(Some(Arc::new(FileDiffImage {
+                            path: path.clone(),
+                            new_large: Some(side.clone()),
+                            ..Default::default()
+                        })));
+                } else {
+                    repo.diff_state.diff_preview_text_file =
+                        Loadable::Ready(Some(Arc::new(DiffPreviewTextFile {
+                            path: preview_path.clone(),
+                            side: preview_side,
+                            large_file: Some(side.clone()),
+                        })));
+                    repo.diff_state.diff_preview_text_file_rev = 1;
+                }
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+        assert!(
+            cx.debug_bounds("large_file_card").is_some(),
+            "{name} needs the metadata card"
+        );
+        assert!(
+            cx.debug_bounds("large_file_card_download").is_some(),
+            "{name} needs a download action"
+        );
+    }
+}
+
+#[gpui::test]
+fn lfs_payload_diff_disables_pointer_patch_actions(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let repo_id = gitcomet_state::model::RepoId(894);
+            let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+            let path = PathBuf::from("data.txt");
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let side = LargeFileSide {
+                pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer {
+                    oid: gitcomet_core::lfs::LfsOid([9; 32]),
+                    size: 12,
+                }),
+                content: LargeFileContent::Available,
+            };
+            repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path,
+                    Some("old\n".into()),
+                    Some("new\n".into()),
+                )
+                .with_large_sides(Some(side.clone()), Some(side)),
+            )));
+            repo.diff_state.diff_file_rev = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            assert_eq!(this.main_pane.read(cx).diff_stage_gutter_area(), None);
+        });
+    });
+}
+
+#[gpui::test]
+fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let old: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    let new = old
+        .replace("line 8\n", "changed 8\n")
+        .replace("line 22\n", "changed 22\n");
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let repo_id = gitcomet_state::model::RepoId(895);
+            let mut repo = opening_repo_state(repo_id, dir.path());
+            let path = PathBuf::from("data.txt");
+            set_test_file_status(&mut repo, path.clone(), gitcomet_core::domain::FileStatusKind::Modified, gitcomet_core::domain::DiffArea::Unstaged);
+            let side = LargeFileSide {
+                pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer {
+                    oid: gitcomet_core::lfs::LfsOid([9; 32]), size: 240,
+                }), content: LargeFileContent::Available,
+            };
+            repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff::from_unified(
+                repo.diff_state.diff_target.clone().unwrap(),
+                "@@ -1,3 +1,3 @@\n version https://git-lfs.github.com/spec/v1\n-oid sha256:old\n+oid sha256:new\n size 240\n",
+            )));
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+                path, Some(old), Some(new)
+            ).with_large_sides(Some(side.clone()), Some(side)))));
+            repo.diff_state.diff_file_rev = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    for mode in [DiffViewMode::Split, DiffViewMode::Inline] {
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                pane.diff_content_mode = DiffContentMode::Collapsed;
+                pane.diff_view = mode;
+                pane.reset_collapsed_diff_projection(true);
+                cx.notify();
+            });
+        });
+        wait_for_main_pane_condition(
+            cx,
+            &view,
+            "LFS payload hunks are visible",
+            |pane| {
+                pane.is_collapsed_diff_projection_active()
+                    && !pane.collapsed_diff_visible_rows.is_empty()
+            },
+            |pane| {
+                format!(
+                    "rows={:?}, inflight={:?}",
+                    pane.collapsed_diff_visible_rows, pane.file_diff_cache_inflight
+                )
+            },
+        );
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                assert_eq!(
+                    pane.collapsed_diff_hunks.len(),
+                    2,
+                    "two payload hunks, not one pointer hunk"
+                );
+                let headers: Vec<_> = pane
+                    .collapsed_diff_hunks
+                    .iter()
+                    .map(|hunk| {
+                        pane.collapsed_diff_hunk_header_display(hunk.src_ix)
+                            .unwrap()
+                            .to_string()
+                    })
+                    .collect();
+                assert_eq!(headers, ["-5,7 +5,7", "-19,7 +19,7"]);
+                assert_eq!(pane.collapsed_change_blocks().len(), 2);
+                assert_eq!(pane.diff_stage_gutter_area(), None);
+                let first = pane.collapsed_diff_hunks[0].src_ix;
+                pane.collapsed_diff_reveal_hunk_up(first, cx);
+                assert_eq!(
+                    pane.collapsed_diff_hunk_header_display(first)
+                        .unwrap()
+                        .as_ref(),
+                    "-1,11 +1,11"
+                );
+            });
+        });
+    }
+}

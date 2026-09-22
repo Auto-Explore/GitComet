@@ -1808,12 +1808,11 @@ impl MainPaneView {
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
-        let is_image_diff_loaded = wants_file_diff
+        let is_image_diff_loaded = (wants_file_diff || wants_collapsed_diff)
             && self
                 .rendered_file_image_diff_loadable()
                 .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
-        let is_image_diff_view = wants_file_diff
-            && is_image_diff_loaded
+        let is_image_diff_view = is_image_diff_loaded
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
@@ -2273,7 +2272,31 @@ impl MainPaneView {
                     .child(controls),
             );
 
-        let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
+        let (old_large, new_large) = if !is_file_editor
+            && !is_conflict_resolver
+            && !is_conflict_compare
+            && (!has_submodule_summary || inline_submodule_diff_active)
+        {
+            self.rendered_large_file_sides(is_image_diff_view)
+        } else {
+            (None, None)
+        };
+        let has_large_file = old_large.is_some() || new_large.is_some();
+        let show_large_file_content = gitcomet_core::large_files::large_file_sides_show_content(
+            old_large.as_ref(),
+            new_large.as_ref(),
+        );
+        let body: AnyElement = if has_large_file && !show_large_file_content {
+            let action =
+                self.large_file_download_button(theme, old_large.as_ref(), new_large.as_ref(), cx);
+            crate::view::large_file_card::large_file_card(
+                theme,
+                old_large.as_ref(),
+                new_large.as_ref(),
+                false,
+                action,
+            )
+        } else if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)
         } else if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
@@ -3172,6 +3195,24 @@ impl MainPaneView {
                     }
                 },
             }
+        };
+        let body = if has_large_file && show_large_file_content {
+            div()
+                .size_full()
+                .min_h(px(0.0))
+                .flex()
+                .flex_col()
+                .child(crate::view::large_file_card::large_file_card(
+                    theme,
+                    old_large.as_ref(),
+                    new_large.as_ref(),
+                    true,
+                    None,
+                ))
+                .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body))
+                .into_any_element()
+        } else {
+            body
         };
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.prune_diff_text_layout_cache();

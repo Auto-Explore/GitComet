@@ -549,6 +549,7 @@ fn render_status_rows_for_section(
                     large_file: repo
                         .large_file_state(section.diff_area(), &entry.path)
                         .cloned(),
+                    locked: repo.lfs_lock_for(&entry.path).is_some(),
                 },
                 entry,
                 path_display,
@@ -619,6 +620,8 @@ struct StatusRowCtx {
     line_stats: Option<gitcomet_core::domain::LineStats>,
     /// Set when Git LFS or git-annex manages the path.
     large_file: Option<gitcomet_core::large_files::LargeFileState>,
+    /// An LFS lock is held on the path.
+    locked: bool,
 }
 
 /// Stage/Unstage a whole folder, revealed at the row's right edge on hover.
@@ -723,6 +726,7 @@ fn status_row(
         submodule_status,
         line_stats,
         large_file,
+        locked,
     } = ctx;
     let ix = row_ix;
     let scaled_px = crate::ui_scale::scaler(ui_scale);
@@ -948,7 +952,7 @@ fn status_row(
         )
         .when_some(large_file, |row, state| {
             row.child(
-                components::large_file_chip(theme, ui_scale, &state)
+                components::large_file_chip(theme, ui_scale, &state, locked)
                     .debug_selector(move || format!("status_row_large_file_{ix}")),
             )
         })

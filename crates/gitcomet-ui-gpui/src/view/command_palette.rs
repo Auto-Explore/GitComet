@@ -45,6 +45,10 @@ pub(crate) enum Needs {
     RemoteWebPage,
     MacOs,
     Linux,
+    /// Git can run `git lfs`.
+    GitLfsTool,
+    /// Git can run `git lfs` and the repository uses it.
+    GitLfsRepo,
 }
 
 /// The app state commands are enabled against, taken from the root view.
@@ -62,7 +66,13 @@ pub(crate) struct PaletteContext {
     pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
     /// Why no remote can be opened in a browser, from `remote_web_request`.
     pub(crate) remote_web_page_unavailable: Option<&'static str>,
+    /// Git cannot run `git lfs`.
+    pub(crate) git_lfs_missing: bool,
+    /// The active repository tracks or stores Git LFS files.
+    pub(crate) repo_uses_lfs: bool,
 }
+
+const GIT_LFS_MISSING: &str = "Install Git LFS where Git can find it first";
 
 /// Why a command with `needs` cannot run under `ctx`, or `None` when it can.
 pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&'static str> {
@@ -102,6 +112,14 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
             .then_some("Only available on Linux"),
+        Needs::GitLfsTool => ctx.git_lfs_missing.then_some(GIT_LFS_MISSING),
+        Needs::GitLfsRepo => {
+            if ctx.git_lfs_missing {
+                Some(GIT_LFS_MISSING)
+            } else {
+                (!ctx.repo_uses_lfs).then_some("This repository does not use Git LFS")
+            }
+        }
     }
 }
 
@@ -745,6 +763,60 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "remove-submodule"       - Remove Submodule
     // TODO: "remove-worktree"        - Remove Worktree
     // TODO: "discard-all"        - Discard All Changes (Working Copy)
+    CommandEntry {
+        id: "lfs-download-all",
+        label: "Download All LFS Content",
+        shortcut: Shortcut::None,
+        category: "Git LFS",
+        keywords: "lfs pull large files smudge",
+        requires_repo: true,
+        needs: Needs::GitLfsRepo,
+    },
+    CommandEntry {
+        id: "lfs-fetch-all",
+        label: "Fetch LFS Objects for All Refs",
+        shortcut: Shortcut::None,
+        category: "Git LFS",
+        keywords: "lfs fetch large files",
+        requires_repo: true,
+        needs: Needs::GitLfsRepo,
+    },
+    CommandEntry {
+        id: "lfs-prune",
+        label: "Prune Old LFS Objects",
+        shortcut: Shortcut::None,
+        category: "Git LFS",
+        keywords: "lfs prune cleanup disk space",
+        requires_repo: true,
+        needs: Needs::GitLfsRepo,
+    },
+    CommandEntry {
+        id: "lfs-fsck",
+        label: "Check LFS Objects",
+        shortcut: Shortcut::None,
+        category: "Git LFS",
+        keywords: "lfs fsck verify integrity",
+        requires_repo: true,
+        needs: Needs::GitLfsRepo,
+    },
+    CommandEntry {
+        id: "lfs-refresh-locks",
+        label: "Refresh LFS Locks",
+        shortcut: Shortcut::None,
+        category: "Git LFS",
+        keywords: "lfs locks lockable",
+        requires_repo: true,
+        needs: Needs::GitLfsRepo,
+    },
+    CommandEntry {
+        id: "lfs-install",
+        label: "Enable Git LFS in This Repository",
+        shortcut: Shortcut::None,
+        category: "Git LFS",
+        keywords: "lfs install setup hooks filters",
+        requires_repo: true,
+        needs: Needs::GitLfsTool,
+    },
 ];
 
 /// A palette entry that survived filtering, plus the label byte positions the
@@ -1456,6 +1528,34 @@ fn fuzzy_subsequence_match(label: &str, query: &str) -> Option<(i32, Vec<usize>)
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn git_lfs_commands_explain_missing_tool_and_unused_repo() {
+        let ctx = PaletteContext {
+            has_active_repo: true,
+            git_lfs_missing: true,
+            ..Default::default()
+        };
+        assert!(
+            unavailable_reason(Needs::GitLfsTool, &ctx)
+                .unwrap()
+                .contains("Install Git LFS")
+        );
+        let ctx = PaletteContext {
+            has_active_repo: true,
+            ..Default::default()
+        };
+        assert_eq!(unavailable_reason(Needs::GitLfsTool, &ctx), None);
+        assert_eq!(
+            unavailable_reason(Needs::GitLfsRepo, &ctx),
+            Some("This repository does not use Git LFS")
+        );
+        let ctx = PaletteContext {
+            repo_uses_lfs: true,
+            ..ctx
+        };
+        assert_eq!(unavailable_reason(Needs::GitLfsRepo, &ctx), None);
+    }
     use super::*;
 
     #[test]

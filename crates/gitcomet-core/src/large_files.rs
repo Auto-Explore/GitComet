@@ -178,6 +178,10 @@ pub enum LargeFileCommand {
     LfsPull {
         paths: Vec<PathBuf>,
     },
+    /// Fetch the versions displayed by a diff, without checking out files.
+    LfsFetchForDiff {
+        target: crate::domain::DiffTarget,
+    },
     /// Download objects for every ref without touching the worktree.
     LfsFetchAll,
     /// Upload every local object to the remote.
@@ -200,6 +204,8 @@ pub enum LargeFileCommand {
     /// Track patterns in `.gitattributes`, then re-add files so they become pointers.
     LfsTrack {
         patterns: Vec<String>,
+        /// Treat each argument as a literal filename rather than a glob.
+        filename: bool,
         lockable: bool,
         renormalize: Vec<PathBuf>,
     },
@@ -209,7 +215,7 @@ impl LargeFileCommand {
     /// Short name for activity rows and the command log.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::LfsPull { .. } => "LFS download",
+            Self::LfsPull { .. } | Self::LfsFetchForDiff { .. } => "LFS download",
             Self::LfsFetchAll => "LFS fetch",
             Self::LfsPushAll { .. } => "LFS push",
             Self::LfsPrune => "LFS prune",
@@ -226,6 +232,7 @@ impl LargeFileCommand {
         matches!(
             self,
             Self::LfsPull { .. }
+                | Self::LfsFetchForDiff { .. }
                 | Self::LfsFetchAll
                 | Self::LfsPushAll { .. }
                 | Self::LfsLock { .. }
@@ -251,7 +258,9 @@ pub struct LfsLock {
 /// Escape a repository path for git-lfs `--include`, which takes
 /// comma-separated gitignore-style patterns. A comma cannot be escaped.
 pub fn lfs_include_pattern(path: &std::path::Path) -> Option<String> {
-    let text = path.to_str()?.replace('\\', "/");
+    let text = path.to_str()?;
+    #[cfg(windows)]
+    let text = text.replace('\\', "/");
     if text.contains(',') || text.is_empty() {
         return None;
     }
@@ -283,6 +292,11 @@ mod command_tests {
             Some("/art/\\[v2\\] \\*.psd")
         );
         assert_eq!(lfs_include_pattern(Path::new("a,b.bin")), None);
+        #[cfg(unix)]
+        assert_eq!(
+            lfs_include_pattern(Path::new(r"a\b.bin")).as_deref(),
+            Some(r"/a\\b.bin")
+        );
     }
 
     #[test]

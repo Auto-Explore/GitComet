@@ -1629,6 +1629,7 @@ mod tests {
             path: Path::new("images/sample.ico").to_path_buf(),
             old: Some(bytes.clone()),
             new: Some(bytes),
+            ..Default::default()
         };
 
         let rebuild = build_file_image_diff_cache_rebuild(&file, Path::new("/tmp"));
@@ -1648,11 +1649,13 @@ mod tests {
             path: Path::new("image.png").to_path_buf(),
             old: Some(vec![1, 2, 3]),
             new: Some(vec![4, 5, 6]),
+            ..Default::default()
         };
         let changed = gitcomet_core::domain::FileDiffImage {
             path: Path::new("image.png").to_path_buf(),
             old: Some(vec![1, 2, 3, 4]),
             new: Some(vec![4, 5, 6]),
+            ..Default::default()
         };
 
         assert_ne!(
@@ -1668,6 +1671,7 @@ mod tests {
             path: Path::new("images/sample.png").to_path_buf(),
             old: Some(vec![1, 2, 3]),
             new: Some(vec![4, 5, 6]),
+            ..Default::default()
         };
 
         let rebuild = build_file_image_diff_cache_rebuild(&file, temp_dir.path());
@@ -1774,6 +1778,7 @@ mod tests {
             path: Path::new("images/sample.png").to_path_buf(),
             old: Some(bytes.clone()),
             new: Some(bytes),
+            ..Default::default()
         };
 
         let rebuild = build_file_image_diff_cache_rebuild(&file, Path::new("/tmp"));
@@ -1789,6 +1794,7 @@ mod tests {
             path: Path::new("images/sample.svg").to_path_buf(),
             old: Some(svg.clone()),
             new: Some(svg),
+            ..Default::default()
         };
 
         let rebuild = build_file_image_diff_cache_rebuild(&file, Path::new("/tmp"));
@@ -1805,6 +1811,7 @@ mod tests {
             path: Path::new("images/sample.svg").to_path_buf(),
             old: Some(solid_rect_svg(4096, 2048)),
             new: Some(solid_rect_svg(2048, 4096)),
+            ..Default::default()
         };
 
         let rebuild = build_file_image_diff_cache_rebuild(&file, Path::new("/tmp"));
@@ -1836,6 +1843,7 @@ mod tests {
             path: Path::new("images/sample.svg").to_path_buf(),
             old: Some(b"<not-valid-svg-old>".to_vec()),
             new: Some(b"<not-valid-svg-new>".to_vec()),
+            ..Default::default()
         };
 
         let rebuild = build_file_image_diff_cache_rebuild(&file, Path::new("/tmp"));

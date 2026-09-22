@@ -617,6 +617,7 @@ pub enum DiffPreviewTextSide {
 pub struct DiffPreviewTextFile {
     pub path: PathBuf,
     pub side: DiffPreviewTextSide,
+    pub large_file: Option<crate::large_files::LargeFileSide>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -872,11 +873,13 @@ impl FileDiffText {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FileDiffImage {
     pub path: PathBuf,
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
+    pub old_large: Option<crate::large_files::LargeFileSide>,
+    pub new_large: Option<crate::large_files::LargeFileSide>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

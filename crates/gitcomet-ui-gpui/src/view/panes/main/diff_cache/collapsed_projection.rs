@@ -128,6 +128,64 @@ impl MainPaneView {
             return;
         }
 
+        if self.has_large_file_text_diff() {
+            // The Git patch addresses pointer lines. Build payload hunks from
+            // the content diff, with the usual three lines of context.
+            let blocks = match self.diff_view {
+                DiffViewMode::Inline => self
+                    .file_diff_inline_row_provider
+                    .as_ref()
+                    .map(|p| p.change_blocks()),
+                DiffViewMode::Split => self
+                    .file_diff_row_provider
+                    .as_ref()
+                    .map(|p| p.change_blocks()),
+            }
+            .unwrap_or_default();
+            let (_, _, total_rows) = self.current_file_diff_line_to_row_maps();
+            for block in blocks {
+                let start = block.start.saturating_sub(3);
+                let end = block.end.saturating_add(3).min(total_rows);
+                let mut added = false;
+                let mut removed = false;
+                for row in block.clone() {
+                    let sides = self.file_diff_row_change_sides(row);
+                    added |= sides.added;
+                    removed |= sides.removed;
+                    if added && removed {
+                        break;
+                    }
+                }
+                if let Some(previous) = self.collapsed_diff_hunks.last_mut()
+                    && start <= previous.base_row_end_exclusive
+                {
+                    previous.base_row_end_exclusive = end;
+                    previous.has_additions |= added;
+                    previous.has_removals |= removed;
+                } else {
+                    // Only a stable key for expansion state; patch actions are
+                    // unavailable on managed payloads.
+                    let src_ix = block.start;
+                    let reveal = self
+                        .collapsed_diff_reveals
+                        .get(&src_ix)
+                        .copied()
+                        .unwrap_or_default();
+                    self.collapsed_diff_hunks.push(CollapsedDiffHunk {
+                        src_ix,
+                        base_row_start: start,
+                        base_row_end_exclusive: end,
+                        has_additions: added,
+                        has_removals: removed,
+                        reveal_up_lines: reveal.up_lines,
+                        reveal_down_lines: reveal.down_lines,
+                    });
+                }
+            }
+            self.reindex_collapsed_diff_hunks();
+            return;
+        }
+
         for src_ix in 0..self.patch_diff_row_len() {
             let click_kind = self
                 .diff_click_kinds
@@ -562,13 +620,19 @@ impl MainPaneView {
                 .min(total_rows.saturating_sub(hunk.base_row_end_exclusive))
                 > 0
         };
-        if !has_revealed_above && !has_revealed_below {
+        let managed = self.has_large_file_text_diff();
+        if !managed && !has_revealed_above && !has_revealed_below {
             return None;
         }
 
-        let parsed = self.patch_diff_row(src_ix).and_then(|line| {
-            crate::view::diff_utils::parse_unified_hunk_header_for_display(line.text.as_ref())
-        })?;
+        let (old_start, new_start) = if managed {
+            (0, 0)
+        } else {
+            let parsed = self.patch_diff_row(src_ix).and_then(|line| {
+                crate::view::diff_utils::parse_unified_hunk_header_for_display(line.text.as_ref())
+            })?;
+            (parsed.old_start_line, parsed.new_start_line)
+        };
         let mut old_min = None;
         let mut old_max = None;
         let mut new_min = None;
@@ -632,11 +696,11 @@ impl MainPaneView {
         };
         visit_rows(hunk.base_row_end_exclusive..trailing_end, true, self);
 
-        has_revealed_context.then(|| {
+        (managed || has_revealed_context).then(|| {
             format!(
                 "{} {}",
-                format_range('-', parsed.old_start_line, old_min, old_max),
-                format_range('+', parsed.new_start_line, new_min, new_max)
+                format_range('-', old_start, old_min, old_max),
+                format_range('+', new_start, new_min, new_max)
             )
             .into()
         })

@@ -831,6 +831,15 @@ fn operation_detail(
                                 )),
                         ),
                 )
+                .when_some(operation.transfer.as_ref(), |header, transfer| {
+                    header.child(text(
+                        this,
+                        format!("detail_{}_transfer", operation_id.0),
+                        transfer.summary(),
+                        TextSection::Detail,
+                        cx,
+                    ))
+                })
                 .when_some(operation.context.clone(), |header, context| {
                     header.child(
                         div()
@@ -908,7 +917,7 @@ pub(super) fn panel(
                 repo.feedback
                     .hook_activity
                     .iter()
-                    .filter(|operation| operation.has_hooks())
+                    .filter(|operation| operation.is_reportable())
                     .rev()
                     .cloned()
                     .collect::<Vec<_>>(),
@@ -1026,7 +1035,7 @@ pub(super) fn panel(
             .child(text(
                 this,
                 "empty",
-                "No Git hooks have run in this repository during this session.",
+                "No Git hooks or LFS transfers have run in this repository during this session.",
                 TextSection::Detail,
                 cx,
             ))

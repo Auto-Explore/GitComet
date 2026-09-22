@@ -10,7 +10,11 @@ fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKin
     match operation.status {
         GitHookOperationStatus::Succeeded => (
             components::ToastKind::Success,
-            format!("{}: Git hooks passed", operation.label),
+            if operation.has_hooks() {
+                format!("{}: Git hooks passed", operation.label)
+            } else {
+                format!("{} completed", operation.label)
+            },
         ),
         GitHookOperationStatus::SucceededWithHookFailure => {
             let hook = failed_hook.unwrap_or("post-operation");
@@ -39,7 +43,11 @@ fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKin
         ),
         GitHookOperationStatus::TimedOut => (
             components::ToastKind::Error,
-            format!("{} timed out while running Git hooks", operation.label),
+            if operation.has_hooks() {
+                format!("{} timed out while running Git hooks", operation.label)
+            } else {
+                format!("{} timed out", operation.label)
+            },
         ),
         GitHookOperationStatus::Running | GitHookOperationStatus::Cancelling => {
             (components::ToastKind::Success, String::new())
@@ -273,7 +281,7 @@ impl GitCometView {
                 repo.feedback
                     .hook_activity
                     .iter()
-                    .filter(|operation| operation.has_hooks() && operation.status.is_active())
+                    .filter(|operation| operation.is_reportable() && operation.status.is_active())
                     .cloned()
                     .map(move |operation| (repo.id, operation))
             })
@@ -303,7 +311,7 @@ impl GitCometView {
                             .iter()
                             .find(|previous| previous.id == operation.id)
                     })
-                    .is_some_and(|previous| previous.has_hooks() && previous.status.is_active())
+                    .is_some_and(|previous| previous.is_reportable() && previous.status.is_active())
             })
             .map(|(repo_id, operation)| (*repo_id, operation.id, operation.time))
             .collect::<Vec<_>>();
@@ -557,6 +565,7 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            transfer: None,
         }
     }
 

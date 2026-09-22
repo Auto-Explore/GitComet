@@ -625,6 +625,7 @@ fn added_file_preview_text_file_materializes_and_uses_prepared_syntax_highlighti
                 Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: preview_source_path.clone(),
                     side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                    large_file: None,
                 }),
             ));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
@@ -739,6 +740,7 @@ fn deleted_file_preview_text_file_materializes_and_uses_prepared_syntax_highligh
                 Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: preview_source_path.clone(),
                     side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                    large_file: None,
                 }),
             ));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
@@ -1837,6 +1839,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                 Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: preview_source_path.clone(),
                     side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                    large_file: None,
                 }),
             ));
             repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -2169,6 +2172,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
                 Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: preview_abs_path.clone(),
                     side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                    large_file: None,
                 }),
             ));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);

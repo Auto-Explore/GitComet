@@ -81,6 +81,7 @@ pub(in crate::view) fn large_file_card(
     old: Option<&LargeFileSide>,
     new: Option<&LargeFileSide>,
     as_header: bool,
+    action: Option<AnyElement>,
 ) -> AnyElement {
     let title = large_file_card_title(old, new);
     let mut body = div()
@@ -127,6 +128,9 @@ pub(in crate::view) fn large_file_card(
                 .text_color(theme.colors.foreground.secondary)
                 .child(message),
         );
+    }
+    if let Some(action) = action {
+        body = body.child(div().pt_1().flex().child(action));
     }
     if as_header {
         div()

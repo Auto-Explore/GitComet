@@ -3,10 +3,10 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
-    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
-    UpstreamDivergence, Worktree,
+    DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry,
+    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -945,7 +945,7 @@ impl GitRepository for GixRepo {
         &self,
         target: &DiffTarget,
         side: DiffPreviewTextSide,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<DiffPreviewTextFile>> {
         self.diff_preview_text_file_impl(target, side)
     }
 
