@@ -295,7 +295,7 @@ type RefMetadataCache =
 /// an object read per ref, so a page request whose fingerprint matches skips
 /// that entirely.
 /// Identity of a file as it sat on disk when we last read it. Inode and ctime
-/// (Unix only) detect replacements and edits that keep length and mtime, but
+/// (or Windows file ID and ChangeTime) detect replacements and edits that keep length and mtime, but
 /// rapid writes can share even the same ctime. Verification memos must exclude
 /// racy stamps before recording them. `None` where those fields are unavailable,
 /// which disables the memo rather than weakening it.
@@ -303,8 +303,17 @@ type RefMetadataCache =
 struct DiskFileStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
-    inode: u64,
+    device: u64,
+    inode: u128,
     ctime_nanos: i128,
+    #[cfg(windows)]
+    journal_version: (u64, i64),
+}
+
+struct DiskFileStampGuard {
+    stamp: DiskFileStamp,
+    #[cfg(windows)]
+    _handle: gitcomet_win32_window_utils::FileIdentityGuard,
 }
 
 impl DiskFileStamp {
@@ -314,13 +323,14 @@ impl DiskFileStamp {
         metadata.is_file().then(|| Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
-            inode: metadata.ino(),
+            device: metadata.dev(),
+            inode: u128::from(metadata.ino()),
             ctime_nanos: i128::from(metadata.ctime()) * 1_000_000_000
                 + i128::from(metadata.ctime_nsec()),
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn from_metadata(_metadata: &std::fs::Metadata) -> Option<Self> {
         None
     }
@@ -328,8 +338,30 @@ impl DiskFileStamp {
     /// Stamp of the regular file at `path`; `None` for symlinks, non-files and
     /// platforms without the fields above.
     fn read(path: &Path) -> Option<Self> {
+        Self::acquire(path).map(|guard| guard.stamp)
+    }
+
+    #[cfg(not(windows))]
+    fn acquire(path: &Path) -> Option<DiskFileStampGuard> {
         let metadata = std::fs::symlink_metadata(path).ok()?;
-        Self::from_metadata(&metadata)
+        Self::from_metadata(&metadata).map(|stamp| DiskFileStampGuard { stamp })
+    }
+
+    #[cfg(windows)]
+    fn acquire(path: &Path) -> Option<DiskFileStampGuard> {
+        let handle = gitcomet_win32_window_utils::FileIdentityGuard::try_open(path).ok()??;
+        let identity = handle.identity();
+        Some(DiskFileStampGuard {
+            stamp: Self {
+                len: identity.len,
+                modified: identity.modified,
+                device: identity.volume,
+                inode: identity.file_id,
+                ctime_nanos: identity.change_unix_nanos,
+                journal_version: (identity.journal_id, identity.usn),
+            },
+            _handle: handle,
+        })
     }
 
     /// A stamp is unsafe to memoize while a subsequent write could still get
@@ -349,11 +381,26 @@ impl DiskFileStamp {
         !mtime_is_old || !ctime_is_old
     }
 
-    fn read_for_verification_memo(path: &Path) -> Option<Self> {
+    fn acquire_for_verification_memo(path: &Path) -> Option<DiskFileStampGuard> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
         let now = std::time::SystemTime::now();
-        Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
+        Self::acquire(path).filter(|guard| !guard.stamp.is_racy_at(now))
+    }
+
+    fn acquire_for_verification_recording(path: &Path) -> Option<DiskFileStampGuard> {
+        let guard = Self::acquire_for_verification_memo(path)?;
+        #[cfg(windows)]
+        let guard = {
+            let mut guard = guard;
+            if !guard._handle.seal_for_reuse() {
+                return None;
+            }
+            let identity = guard._handle.identity();
+            guard.stamp.journal_version = (identity.journal_id, identity.usn);
+            guard
+        };
+        Some(guard)
     }
 }
 
@@ -910,6 +957,16 @@ impl GitRepository for GixRepo {
         self.diff_file_text_impl(target)
     }
 
+    fn diff_file_text_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        let result = self.diff_file_text_impl_cancellable(target, cancellation);
+        cancellation.check_cancelled()?;
+        result
+    }
+
     fn diff_preview_text_file(
         &self,
         target: &DiffTarget,
@@ -920,6 +977,27 @@ impl GitRepository for GixRepo {
 
     fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         self.diff_file_image_impl(target)
+    }
+
+    fn diff_file_image_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        let result = self.diff_file_image_impl_cancellable(target, cancellation);
+        cancellation.check_cancelled()?;
+        result
+    }
+
+    fn diff_preview_text_file_cancellable(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<PathBuf>> {
+        let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
+        cancellation.check_cancelled()?;
+        result
     }
 
     fn conflict_file_stages(&self, path: &Path) -> Result<Option<ConflictFileStages>> {
@@ -1583,8 +1661,11 @@ mod tests {
         let stamp = DiskFileStamp {
             len: 15,
             modified: Some(now - Duration::from_secs(2)),
+            device: 1,
             inode: 1,
             ctime_nanos: 98_000_000_000,
+            #[cfg(windows)]
+            journal_version: (1, 1),
         };
         assert!(!stamp.is_racy_at(now), "an aged stamp permits memoization");
         for (description, candidate) in [

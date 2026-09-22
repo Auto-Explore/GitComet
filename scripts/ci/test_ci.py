@@ -1,6 +1,8 @@
 """Regression coverage for failure propagation, inventory accounting, and cache isolation."""
 
 import copy
+import hashlib
+import http.client
 from contextlib import redirect_stderr, redirect_stdout
 from functools import partial
 import importlib.util
@@ -35,9 +37,83 @@ local_spec.loader.exec_module(local_performance)
 ui_spec = importlib.util.spec_from_file_location("ui_responsiveness", Path(__file__).with_name("ui-responsiveness.py"))
 ui_responsiveness = importlib.util.module_from_spec(ui_spec)
 ui_spec.loader.exec_module(ui_responsiveness)
+lfs_spec = importlib.util.spec_from_file_location("lfs_performance", Path(__file__).with_name("lfs-performance.py"))
+lfs_performance = importlib.util.module_from_spec(lfs_spec)
+lfs_spec.loader.exec_module(lfs_performance)
+
+
+class LfsFixtureTests(unittest.TestCase):
+    def test_server_verifies_upload_hashes_and_download_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            payload = b"verified data"
+            oid = hashlib.sha256(payload).hexdigest()
+            with lfs_performance.server_at(Path(directory) / "objects", {oid: len(payload)}, 0) as server:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+                connection.request("POST", "/locks/verify", body=b'{"ref":{"name":"fixture"}}')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 404)
+                self.assertTrue(response.will_close)
+                response.read()
+                connection.request("PUT", "/objects/" + oid, body=b"corrupt! data")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 422)
+                response.read()
+                connection.request("PUT", "/objects/" + oid, body=payload)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                response.read()
+                connection.request("GET", "/objects/" + oid)
+                response = connection.getresponse()
+                self.assertEqual(response.read(), payload)
+                connection.request("GET", "/objects/" + "f" * 64)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 404)
+                response.read()
+                connection.close()
+            self.assertEqual([r["success"] for r in server.records], [False, True, True])
+
+    def test_cleanup_cannot_leave_its_disposable_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(ValueError):
+                lfs_performance.remove_owned(root, root)
+            with self.assertRaises(ValueError):
+                lfs_performance.remove_owned(root, root / "..")
 
 
 class UiMeasurementTests(unittest.TestCase):
+    def test_histograms_weight_raw_samples_and_ignore_empty_buckets(self):
+        result = ui_responsiveness.histogram_distribution([(1_000_000, 99), (100_000_000, 1), (0, 0)])
+        self.assertEqual(result["count"], 100)
+        self.assertEqual(result["p95"], 1)
+        self.assertEqual(result["max"], 100)
+
+    def test_actions_require_same_window_render_and_report_coalescing(self):
+        records = [
+            {"event": "action", "kind": "typing", "phase": "begin", "id": 1, "at_ms": 10},
+            {"event": "action", "phase": "applied", "id": 1, "at_ms": 11},
+            {"event": "action", "phase": "rendered", "id": 1, "at_ms": 12, "detail": {"window": "A"}},
+            {"event": "submit", "window": "B", "start_ms": 13},
+            {"event": "submit", "window": "A", "start_ms": 17},
+            {"event": "action", "kind": "typing", "phase": "begin", "id": 2, "at_ms": 11},
+        ]
+        group = ui_responsiveness.action_summary(records, 0, 20)["typing"]
+        self.assertEqual(group["handling_to_submit_ms"]["p95"], 7)
+        self.assertEqual(group["unwitnessed"], 1)
+        self.assertEqual(group["submitted"], 1)
+
+    def test_initial_search_is_measured_separately_from_warm_queries(self):
+        records = [
+            {"event": "action", "kind": "diff_search", "phase": "begin", "id": 1, "at_ms": 10},
+            {"event": "action", "phase": "applied", "id": 1, "at_ms": 700,
+             "detail": {"query_bytes": 5, "matches": 100, "target": "b.txt"}},
+            {"event": "action", "phase": "rendered", "id": 1, "at_ms": 701, "detail": {"window": "A"}},
+            {"event": "submit", "window": "A", "start_ms": 705},
+        ]
+        self.assertEqual(ui_responsiveness.initial_search_summary(records, 1000)["p50"], 695)
+        with self.assertRaisesRegex(ValueError, "initial search"):
+            ui_responsiveness.initial_search_summary(records, 600)
+
     def test_raw_frames_are_aligned_and_submission_is_not_display_latency(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -33,8 +33,9 @@ use gitcomet_core::process::write_stderr_line;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::Write as _;
-use std::sync::{Mutex, OnceLock};
+use std::io::{BufWriter, Write as _};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ENABLED_ENV: &str = "GITCOMET_UI_PROBE";
@@ -52,17 +53,24 @@ const SLOW_FRAME: Duration = Duration::from_millis(16);
 
 struct ProbeLog {
     started: Instant,
-    file: Option<Mutex<File>>,
-    jsonl: Option<Mutex<File>>,
+    writer: mpsc::SyncSender<ProbeRecord>,
+    jsonl: bool,
+    dropped: AtomicU64,
 }
+
+enum ProbeRecord {
+    Text(String),
+    Json(Value),
+}
+static NEXT_ACTION: AtomicU64 = AtomicU64::new(1);
 
 /// `None` until [`start_if_enabled`] runs with the probe switched on.
 static LOG: OnceLock<ProbeLog> = OnceLock::new();
 
-fn open_log(variable: &str) -> Option<Mutex<File>> {
+fn open_log(variable: &str) -> Option<File> {
     let path = std::env::var_os(variable).filter(|path| !path.is_empty())?;
     match OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(file) => Some(Mutex::new(file)),
+        Ok(file) => Some(file),
         Err(error) => {
             write_stderr_line(format_args!(
                 "ui-probe: cannot open {variable}={path:?}: {error}"
@@ -73,15 +81,77 @@ fn open_log(variable: &str) -> Option<Mutex<File>> {
 }
 
 fn write_json(records: &[Value]) {
-    let Some(file) = LOG.get().and_then(|log| log.jsonl.as_ref()) else {
+    let Some(log) = LOG.get().filter(|log| log.jsonl) else {
         return;
     };
-    let mut file = file.lock().unwrap_or_else(|error| error.into_inner());
     for record in records {
-        if serde_json::to_writer(&mut *file, record).is_err() || file.write_all(b"\n").is_err() {
-            break;
+        if log
+            .writer
+            .try_send(ProbeRecord::Json(record.clone()))
+            .is_err()
+        {
+            log.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+fn probe_writer(rx: mpsc::Receiver<ProbeRecord>, file: Option<File>, jsonl: Option<File>) {
+    let mut file = file.map(BufWriter::new);
+    let mut jsonl = jsonl.map(BufWriter::new);
+    let result = (|| -> std::io::Result<()> {
+        while let Ok(first) = rx.recv() {
+            for record in std::iter::once(first).chain(rx.try_iter().take(255)) {
+                match record {
+                    ProbeRecord::Text(text) => {
+                        write_stderr_line(format_args!("{text}"));
+                        if let Some(file) = file.as_mut() {
+                            writeln!(file, "{text}")?;
+                        }
+                    }
+                    ProbeRecord::Json(value) => {
+                        if let Some(file) = jsonl.as_mut() {
+                            serde_json::to_writer(&mut *file, &value)?;
+                            file.write_all(b"\n")?;
+                        }
+                    }
+                }
+            }
+            if let Some(file) = file.as_mut() {
+                file.flush()?;
+            }
+            if let Some(file) = jsonl.as_mut() {
+                file.flush()?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        write_stderr_line(format_args!("ui-probe writer failed: {error}"));
+    }
+}
+
+/// A diagnostic action starts at application handling, not at hardware input.
+pub(crate) fn begin_action(kind: &'static str) -> u64 {
+    let Some(log) = LOG.get().filter(|log| log.jsonl) else {
+        return 0;
+    };
+    let id = NEXT_ACTION.fetch_add(1, Ordering::Relaxed);
+    write_json(&[
+        json!({"event":"action", "kind":kind, "phase":"begin", "id":id,
+        "at_ms":milliseconds(log.started.elapsed())}),
+    ]);
+    id
+}
+
+pub(crate) fn action_phase(id: u64, phase: &'static str, detail: impl FnOnce() -> Value) {
+    if id == 0 {
+        return;
+    }
+    let Some(log) = LOG.get() else {
+        return;
+    };
+    write_json(&[json!({"event":"action", "phase":phase, "id":id,
+        "at_ms":milliseconds(log.started.elapsed()), "detail":detail()})]);
 }
 
 fn milliseconds(duration: Duration) -> f64 {
@@ -111,11 +181,8 @@ fn log_line(text: &str) {
         return;
     };
     let stamped = format!("[+{:8.3}s] {text}", log.started.elapsed().as_secs_f64());
-    write_stderr_line(format_args!("{stamped}"));
-    if let Some(file) = &log.file {
-        let mut file = file.lock().unwrap_or_else(|error| error.into_inner());
-        let line = format!("{stamped}\n");
-        let _ = file.write_all(line.as_bytes());
+    if log.writer.try_send(ProbeRecord::Text(stamped)).is_err() {
+        log.dropped.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -169,6 +236,15 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
 
     let file = open_log(LOG_PATH_ENV);
     let jsonl = open_log(JSONL_PATH_ENV);
+    let jsonl_enabled = jsonl.is_some();
+    let (writer, records) = mpsc::sync_channel(8192);
+    if std::thread::Builder::new()
+        .name("ui-probe-writer".into())
+        .spawn(move || probe_writer(records, file, jsonl))
+        .is_err()
+    {
+        return;
+    }
     let started = Instant::now();
     let unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -177,8 +253,9 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     if LOG
         .set(ProbeLog {
             started,
-            file,
-            jsonl,
+            writer,
+            jsonl: jsonl_enabled,
+            dropped: AtomicU64::new(0),
         })
         .is_err()
     {
@@ -191,7 +268,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     // Do not turn on process-wide frame collection until a collector and the
     // pinger that drives it are both guaranteed to exist.
     gpui::profiler::set_trace_enabled(true);
-    write_json(&[json!({"event": "start", "version": 1, "unix_ms": unix_ms,
+    write_json(&[json!({"event": "start", "version": 2, "unix_ms": unix_ms,
         "pid": std::process::id(), "os": std::env::consts::OS,
         "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis()})]);
 
@@ -238,9 +315,10 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
             }
 
             let frames = frame_collector.collect_unseen();
-            if LOG.get().is_some_and(|log| log.jsonl.is_some()) {
+            if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
                 records.push(json!({"event": "interval", "at_ms": milliseconds(now.duration_since(started)),
+                    "records_dropped": LOG.get().map(|log| log.dropped.load(Ordering::Relaxed)).unwrap_or(0),
                     "wall_ms": milliseconds(now.duration_since(interval_started)), "main_cpu_percent": main_cpu_pct,
                     "wake_ms": wake_latencies.iter().copied().map(milliseconds).collect::<Vec<_>>() }));
                 cx.update(|app| {
@@ -261,8 +339,10 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
                             previous_input.insert(handle.window_id(), snapshot);
                             records.push(json!({"event": "input_interval", "window": format!("{:?}", handle.window_id()),
                                 "at_ms": milliseconds(now.duration_since(started)), "count": latency.len(),
+                                "wall_ms": milliseconds(now.duration_since(interval_started)),
                                 "p95_ms": if latency.is_empty() { None } else { Some(latency.value_at_quantile(0.95) as f64 / 1e6) },
                                 "max_ms": if latency.is_empty() { None } else { Some(latency.max() as f64 / 1e6) },
+                                "histogram_ns": latency.iter_recorded().map(|value| (value.value_iterated_to(), value.count_since_last_iteration())).collect::<Vec<_>>(),
                                 "mid_draw_events_dropped": dropped}));
                         });
                     }

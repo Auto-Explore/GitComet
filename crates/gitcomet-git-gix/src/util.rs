@@ -153,6 +153,50 @@ type ActivityOutputAggregator = (
     Option<thread::JoinHandle<()>>,
 );
 
+/// The deadline belongs to the oldest buffered byte, not the latest arrival.
+/// Resetting a receive timeout on every chunk starves progress updates while
+/// a filter or transfer produces a steady stream smaller than the byte limit.
+#[derive(Default)]
+struct ActivityOutputBuffer {
+    chunks: Vec<GitOutputChunk>,
+    bytes: usize,
+    deadline: Option<Instant>,
+}
+
+impl ActivityOutputBuffer {
+    fn push(&mut self, stream: GitOutputStream, text: String, now: Instant) {
+        if text.is_empty() {
+            return;
+        }
+        self.deadline.get_or_insert(now + GIT_ACTIVITY_OUTPUT_FLUSH);
+        self.bytes = self.bytes.saturating_add(text.len());
+        if let Some(last) = self.chunks.last_mut()
+            && last.stream == stream
+        {
+            last.text.push_str(&text);
+        } else {
+            self.chunks.push(GitOutputChunk { stream, text });
+        }
+    }
+
+    fn wait(&self, now: Instant) -> Duration {
+        self.deadline
+            .map(|deadline| deadline.saturating_duration_since(now))
+            .unwrap_or(GIT_ACTIVITY_OUTPUT_FLUSH)
+    }
+
+    fn ready(&self, now: Instant) -> bool {
+        self.bytes >= GIT_ACTIVITY_OUTPUT_BATCH_BYTES
+            || self.deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    fn take(&mut self) -> Vec<GitOutputChunk> {
+        self.bytes = 0;
+        self.deadline = None;
+        std::mem::take(&mut self.chunks)
+    }
+}
+
 fn start_activity_output_aggregator(
     context: Option<&GitOperationContext>,
 ) -> ActivityOutputAggregator {
@@ -161,37 +205,28 @@ fn start_activity_output_aggregator(
     };
     let (sender, receiver) = mpsc::channel::<(GitOutputStream, String)>();
     let handle = thread::spawn(move || {
-        let mut chunks = Vec::<GitOutputChunk>::new();
-        let mut bytes = 0usize;
+        let mut buffer = ActivityOutputBuffer::default();
         loop {
-            match receiver.recv_timeout(GIT_ACTIVITY_OUTPUT_FLUSH) {
+            match receiver.recv_timeout(buffer.wait(Instant::now())) {
                 Ok((stream, text)) => {
-                    bytes = bytes.saturating_add(text.len());
-                    if let Some(last) = chunks.last_mut()
-                        && last.stream == stream
-                    {
-                        last.text.push_str(&text);
-                    } else {
-                        chunks.push(GitOutputChunk { stream, text });
-                    }
-                    if bytes < GIT_ACTIVITY_OUTPUT_BATCH_BYTES {
+                    buffer.push(stream, text, Instant::now());
+                    if !buffer.ready(Instant::now()) {
                         continue;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) if chunks.is_empty() => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) if buffer.chunks.is_empty() => continue,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) if chunks.is_empty() => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) if buffer.chunks.is_empty() => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     context.emit(GitOperationEvent::Output {
-                        chunks: std::mem::take(&mut chunks),
+                        chunks: buffer.take(),
                     });
                     break;
                 }
             }
             context.emit(GitOperationEvent::Output {
-                chunks: std::mem::take(&mut chunks),
+                chunks: buffer.take(),
             });
-            bytes = 0;
         }
     });
     (Some(sender), Some(handle))
@@ -1644,6 +1679,79 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_progress_deadline_survives_continuous_small_chunks() {
+        let start = Instant::now();
+        let mut buffer = ActivityOutputBuffer::default();
+        for ms in [0, 20, 40, 60, 80] {
+            buffer.push(
+                GitOutputStream::Stderr,
+                "progress\r".into(),
+                start + Duration::from_millis(ms),
+            );
+            assert!(!buffer.ready(start + Duration::from_millis(ms)));
+        }
+        assert_eq!(
+            buffer.wait(start + Duration::from_millis(90)),
+            Duration::from_millis(10)
+        );
+        buffer.push(
+            GitOutputStream::Stderr,
+            "still transferring\r".into(),
+            start + GIT_ACTIVITY_OUTPUT_FLUSH,
+        );
+        assert!(buffer.ready(start + GIT_ACTIVITY_OUTPUT_FLUSH));
+        let chunks = buffer.take();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].text.ends_with("still transferring\r"));
+        assert!(!buffer.ready(start + Duration::from_secs(1)));
+        assert_eq!(
+            buffer.wait(start + Duration::from_secs(1)),
+            GIT_ACTIVITY_OUTPUT_FLUSH
+        );
+    }
+
+    #[test]
+    fn activity_progress_flushes_large_output_and_preserves_stream_order() {
+        let start = Instant::now();
+        let mut buffer = ActivityOutputBuffer::default();
+        buffer.push(GitOutputStream::Stdout, "out".into(), start);
+        buffer.push(GitOutputStream::Stderr, "err".into(), start);
+        buffer.push(
+            GitOutputStream::Stdout,
+            "x".repeat(GIT_ACTIVITY_OUTPUT_BATCH_BYTES - 6),
+            start,
+        );
+        assert!(buffer.ready(start));
+        let chunks = buffer.take();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].stream, GitOutputStream::Stdout);
+        assert_eq!(chunks[1].stream, GitOutputStream::Stderr);
+        assert_eq!(chunks[2].stream, GitOutputStream::Stdout);
+    }
+
+    #[test]
+    fn activity_output_drains_final_partial_batch_on_disconnect() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let context = GitOperationContext::new("output", move |_, event| {
+            if let GitOperationEvent::Output { chunks } = event {
+                captured.lock().unwrap().extend(chunks);
+            }
+        });
+        let (sender, handle) = start_activity_output_aggregator(Some(&context));
+        sender
+            .as_ref()
+            .unwrap()
+            .send((GitOutputStream::Stderr, "final λ\r".into()))
+            .unwrap();
+        drop(sender);
+        join_activity_output_aggregator(handle);
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].text, "final λ\r");
+    }
     use gitcomet_core::auth::askpass::{
         GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV, GITCOMET_ASKPASS_PROMPT_LOG_ENV, PromptAuth,
     };

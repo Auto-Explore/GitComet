@@ -2,6 +2,16 @@ use super::shaping::with_alpha;
 use super::*;
 use palette::IntoColor;
 
+/// Content changes only. Focus, caret, selection and highlight notifications
+/// must not cause owners to materialize and compare the entire text again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TextInputChanged {
+    pub model_id: u64,
+    pub revision: u64,
+}
+
+impl gpui::EventEmitter<TextInputChanged> for TextInput {}
+
 // Text or display-mode changes always clear shaped-row caches, so cache keys
 // only need the line index.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -845,6 +855,7 @@ impl ContentWidthCache {
 }
 
 pub struct TextInput {
+    pub(super) probe_action: u64,
     pub(super) appearance_metrics: crate::appearance::Appearance,
     pub(super) editor_font: bool,
     pub(super) editor_line_height: Pixels,

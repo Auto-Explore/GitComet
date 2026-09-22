@@ -4,6 +4,48 @@ use super::state::*;
 use super::wrap::*;
 use super::*;
 
+#[gpui::test]
+fn content_events_exclude_focus_selection_and_identical_replacements(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::sync::Mutex;
+    let (input, cx) = multiline_input(cx);
+    let changes = Arc::new(Mutex::new(Vec::new()));
+    let sink = changes.clone();
+    let _subscription = cx.update(|_, app| {
+        app.subscribe(&input, move |_, event: &TextInputChanged, _| {
+            sink.lock().unwrap().push(*event);
+        })
+    });
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("hello", cx);
+            input.set_selected_range(1..3, false, window, cx);
+            window.focus(&input.focus_handle(), cx);
+            cx.notify();
+            input.replace_utf8_range(0..5, "hello", cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(changes.lock().unwrap().len(), 1);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(Some(0..5), "world", window, cx);
+            input.undo(&Undo, window, cx);
+            input.redo(&Redo, window, cx);
+            input.replace_and_mark_text_in_range(Some(0..5), "猫", Some(0..1), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    let changes = changes.lock().unwrap();
+    assert_eq!(
+        changes.len(),
+        5,
+        "typing/paste, undo, redo and IME each emit one content change"
+    );
+    assert!(changes.windows(2).all(|events| events[0] != events[1]));
+}
+
 #[test]
 fn mask_text_preserves_length_and_newlines() {
     let input = "a\nb\r\nc";

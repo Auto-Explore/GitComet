@@ -4060,8 +4060,8 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert!(
-            pane.diff_search_matches.is_empty(),
-            "expected match recompute to wait for the search debounce"
+            !pane.diff_search_worker_running,
+            "background search should finish without a debounce timer"
         );
     });
     wait_for_diff_search_debounce(cx);
@@ -4088,7 +4088,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::TestAppContext) {
+fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -4154,10 +4154,7 @@ fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::Test
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
-        assert!(
-            pane.diff_search_matches.is_empty(),
-            "expected F3 to navigate before the debounce has recomputed matches"
-        );
+        assert_eq!(pane.diff_search_matches.len(), 2);
     });
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
@@ -6135,3 +6132,65 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
 mod hook_activity;
 mod status_selection;
 mod window_and_file_actions;
+
+#[gpui::test]
+fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70541);
+    let commit_id = CommitId("1122334455667741".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_query_edit",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.rebuild_diff_cache(cx);
+            pane.ensure_diff_visible_indices();
+            pane.diff_search_active = true;
+            for query in ["absent", "old", "new"] {
+                let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                pane.diff_search_schedule_query_recompute(previous, cx);
+                assert!(
+                    pane.diff_search_matches.is_empty(),
+                    "UI callback must not synchronously scan"
+                );
+            }
+            pane.diff_search_next_match();
+            assert!(pane.diff_search_worker_running);
+            assert_eq!(pane.diff_search_pending_navigation, 1);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "new");
+        assert_eq!(pane.diff_search_matches.len(), 2);
+        assert_eq!(pane.diff_search_match_ix, Some(1));
+        assert!(!pane.diff_search_worker_running);
+        assert!(pane.diff_search_pending_previous_query.is_none());
+    });
+}

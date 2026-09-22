@@ -47,16 +47,23 @@ public static class GitCometUiScenario {
         PostMessage(window, 0x20a, new IntPtr(delta << 16), XY(point.X, point.Y));
     }
     public static void MouseUp() { mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
+    static void FocusOwnedWindow(IntPtr window) {
+        for (int attempt = 0; attempt < 15; attempt++) {
+            SetForegroundWindow(window);
+            Thread.Sleep(50);
+            if (GetForegroundWindow() == window) return;
+        }
+        throw new InvalidOperationException("Cannot focus the owned test window");
+    }
     public static void BeginGesture(IntPtr window, int x, int y) {
-        SetForegroundWindow(window);
+        FocusOwnedWindow(window);
         SetCursorPos(x, y);
         // Real nonclient hit testing enters the OS-owned modal loop. The event
         // monitor rejects a client-area click that did not start a gesture.
         mouse_event(2, 0, 0, 0, UIntPtr.Zero);
     }
     public static void FocusBranchFilter(IntPtr window) {
-        SetForegroundWindow(window);
-        if (GetForegroundWindow() != window) throw new InvalidOperationException("Cannot focus the owned test window");
+        FocusOwnedWindow(window);
         PostMessage(window, 0x201, new IntPtr(1), XY(40, 85));
         PostMessage(window, 0x202, IntPtr.Zero, XY(40, 85));
         // Posted tab selection must be painted before native input hit-tests
@@ -71,6 +78,22 @@ public static class GitCometUiScenario {
         if (GetForegroundWindow() != window) throw new InvalidOperationException("Typing requires the owned foreground window");
         keybd_event(8, 0, 0, UIntPtr.Zero);
         keybd_event(8, 0, 2, UIntPtr.Zero);
+    }
+
+    public static void ClickAt(IntPtr window, int x, int y) {
+        FocusOwnedWindow(window);
+        Point point = new Point { X = x, Y = y }; ClientToScreen(window, ref point);
+        SetCursorPos(point.X, point.Y);
+        mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static void ControlKey(IntPtr window, byte key) {
+        if (GetForegroundWindow() != window) throw new InvalidOperationException("Input requires the owned foreground window");
+        keybd_event(17, 0, 0, UIntPtr.Zero);
+        keybd_event(key, 0, 0, UIntPtr.Zero);
+        keybd_event(key, 0, 2, UIntPtr.Zero);
+        keybd_event(17, 0, 2, UIntPtr.Zero);
     }
 
     public static void Capture(IntPtr window, string path) {

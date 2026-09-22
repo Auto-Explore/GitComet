@@ -10,6 +10,11 @@ use std::thread;
 
 type Task = Box<dyn FnOnce() + Send + 'static>;
 
+/// One replaceable queue entry. Already-running work owns its cancellation
+/// token; obsolete requests that haven't started release their captures here.
+#[derive(Clone, Default)]
+pub(super) struct LatestTaskSlot(Arc<std::sync::Mutex<Option<Task>>>);
+
 static WORKER_TASK_PANICS: AtomicU64 = AtomicU64::new(0);
 
 /// Mirrors [`super::send_diagnostics::send_failure_count`] so a recovered task
@@ -93,6 +98,28 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
 }
 
 impl TaskExecutor {
+    pub(super) fn spawn_latest(&self, slot: &LatestTaskSlot, task: impl FnOnce() + Send + 'static) {
+        let context = mergetool_trace::current_capture_context();
+        let task: Task = Box::new(move || {
+            let _trace = context.as_ref().map(mergetool_trace::attach_capture);
+            task();
+        });
+        let already_queued = slot
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(task)
+            .is_some();
+        if !already_queued {
+            let slot = slot.clone();
+            self.spawn(move || {
+                let task = slot.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(task) = task {
+                    task();
+                }
+            });
+        }
+    }
     #[cfg_attr(feature = "test-support", allow(dead_code))]
     pub(super) fn new(threads: usize) -> Self {
         let (tx, rx) = mpsc::channel::<Task>();
@@ -183,6 +210,31 @@ impl TaskExecutor {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn latest_slot_replaces_pending_work_without_blocking_other_slots() {
+        let executor = TaskExecutor::new(1);
+        let (release_tx, release_rx) = mpsc::channel();
+        executor.spawn(move || {
+            release_rx.recv().unwrap();
+        });
+        let slot = LatestTaskSlot::default();
+        let (done_tx, done_rx) = mpsc::channel();
+        for value in 0..100 {
+            let tx = done_tx.clone();
+            executor.spawn_latest(&slot, move || {
+                tx.send(value).unwrap();
+            });
+        }
+        let other = LatestTaskSlot::default();
+        executor.spawn_latest(&other, move || {
+            done_tx.send(100).unwrap();
+        });
+        release_tx.send(()).unwrap();
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 99);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 100);
+        assert!(done_rx.recv_timeout(Duration::from_secs(5)).is_err());
+    }
 
     #[test]
     fn worker_keeps_serving_tasks_after_one_panics() {

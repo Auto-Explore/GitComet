@@ -1,4 +1,6 @@
 use std::ptr::null;
+mod file_identity;
+pub use file_identity::{FileIdentity, FileIdentityGuard};
 use std::sync::OnceLock;
 use std::time::Duration;
 

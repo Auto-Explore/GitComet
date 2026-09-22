@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::RepoId;
-use super::executor::TaskExecutor;
+use super::executor::{LatestTaskSlot, TaskExecutor};
 use super::repo_load_trace;
 use super::worker_channel::StoreWorkerSender;
 
@@ -36,6 +36,8 @@ pub(super) struct RepoTaskToken {
     /// replacement to start at all — but stopping it must not disturb the
     /// repository's other loads, which share [`Self::cancellation`].
     log_cancellation: Arc<Mutex<CancellationToken>>,
+    selected_diff: Arc<Mutex<Option<(DiffTarget, u64, CancellationToken)>>>,
+    selected_diff_slots: [LatestTaskSlot; 5],
 }
 
 impl RepoTaskToken {
@@ -44,6 +46,8 @@ impl RepoTaskToken {
             load_epoch,
             cancellation: CancellationToken::new(),
             log_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
+            selected_diff: Arc::new(Mutex::new(None)),
+            selected_diff_slots: std::array::from_fn(|_| LatestTaskSlot::default()),
         }
     }
 
@@ -58,6 +62,30 @@ impl RepoTaskToken {
         let next = CancellationToken::new();
         *slot = next.clone();
         next
+    }
+
+    fn selected_diff_cancellation(&self, target: &DiffTarget, revision: u64) -> CancellationToken {
+        let mut slot = self.selected_diff.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((previous, previous_rev, token)) = slot.as_ref() {
+            if previous == target && *previous_rev == revision && !token.is_cancelled() {
+                return token.clone();
+            }
+            token.cancel();
+        }
+        let token = CancellationToken::new().with_parent(self.cancellation.clone());
+        *slot = Some((target.clone(), revision, token.clone()));
+        token
+    }
+
+    pub(super) fn cancel_stale_selected_diff(&self, selected: Option<(&DiffTarget, u64)>) {
+        let mut slot = self.selected_diff.lock().unwrap_or_else(|e| e.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|(target, revision, _)| selected != Some((target, *revision)))
+            && let Some((_, _, token)) = slot.take()
+        {
+            token.cancel();
+        }
     }
 
     /// Cancels every task running under this token, log walks included.
@@ -2300,17 +2328,19 @@ pub(super) fn schedule_effect(
             load_file_image,
         } => {
             if let Some((target, target_rev)) = selected_diff_target(thread_state, repo_id)
-                && let Some((msg_tx, cancellation)) =
+                && let Some((msg_tx, _)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
+                let cancellation =
+                    repo_task_tokens[&repo_id].selected_diff_cancellation(&target, target_rev);
                 repo_load::schedule_load_selected_diff(
                     executor,
+                    &repo_task_tokens[&repo_id].selected_diff_slots,
                     repos,
                     Arc::clone(thread_state),
                     msg_tx,
                     repo_id,
-                    target,
-                    target_rev,
+                    (target, target_rev),
                     cancellation,
                     repo_load::SelectedDiffLoadOptions {
                         load_patch_diff,
@@ -2975,6 +3005,35 @@ pub(super) fn schedule_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selecting_a_new_diff_cancels_only_the_previous_diff() {
+        let token = RepoTaskToken::new(1);
+        let a = DiffTarget::WorkingTree {
+            path: "a".into(),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        };
+        let b = DiffTarget::WorkingTree {
+            path: "b".into(),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        };
+        let first = token.selected_diff_cancellation(&a, 1);
+        let same = token.selected_diff_cancellation(&a, 1);
+        assert!(!first.is_cancelled());
+        let log = token.take_over_log();
+        let next = token.selected_diff_cancellation(&b, 2);
+        assert!(first.is_cancelled());
+        assert!(same.is_cancelled());
+        assert!(!next.is_cancelled());
+        assert!(!token.cancellation.is_cancelled());
+        assert!(!log.is_cancelled());
+        token.cancel_stale_selected_diff(None);
+        assert!(next.is_cancelled());
+        let last = token.selected_diff_cancellation(&a, 3);
+        token.cancel();
+        assert!(last.is_cancelled());
+        assert!(log.is_cancelled());
+    }
 
     #[test]
     fn abort_clone_repo_does_not_require_available_git() {

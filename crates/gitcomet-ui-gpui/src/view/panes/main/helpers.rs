@@ -3321,6 +3321,17 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_search_match_ix: Option<usize>,
     pub(in crate::view) diff_search_debounce_seq: u64,
     pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
+    pub(in crate::view) diff_search_worker_running: bool,
+    pub(in crate::view) diff_search_pending_finalize: super::diff_search::DiffSearchFinalizeMode,
+    pub(in crate::view) diff_search_cancellation:
+        Option<gitcomet_core::services::CancellationToken>,
+    pub(in crate::view) diff_search_document: Option<(
+        super::diff_search::SearchDocumentKey,
+        Arc<super::diff_search::SearchDocument>,
+    )>,
+    pub(in crate::view) diff_search_pending_navigation: isize,
+    pub(in crate::view) diff_search_probe_action: u64,
+    pub(in crate::view) diff_search_probe_render: u64,
     pub(in crate::view) diff_search_scroll: ScrollHandle,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,

@@ -2245,6 +2245,7 @@ name = "gitcomet-git-gix"
 version = "0.2.5"
 dependencies = [
  "gitcomet-core",
+ "gitcomet-win32-window-utils",
  "gix",
  "lru",
  "memchr",

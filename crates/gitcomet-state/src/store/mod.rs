@@ -190,6 +190,21 @@ impl WorkerLoopContext<'_> {
             let app_state = make_mut_state_with_diagnostics(&mut app_state);
             let reduce_started = Instant::now();
             let effects = reduce_with(app_state, repos, id_alloc);
+            // Cancel as soon as the reducer changes/clears a selection, even
+            // when the replacement does not need a backend diff load.
+            for (repo_id, token) in self.repo_task_tokens.iter() {
+                let selected = app_state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == *repo_id)
+                    .and_then(|repo| {
+                        repo.diff_state
+                            .diff_target
+                            .as_ref()
+                            .map(|target| (target, repo.diff_state.diff_target_rev))
+                    });
+                token.cancel_stale_selected_diff(selected);
+            }
             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
             effects
         };

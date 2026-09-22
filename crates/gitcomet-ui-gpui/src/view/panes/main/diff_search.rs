@@ -8,12 +8,12 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::time::Duration;
+mod background;
+pub(in crate::view) use background::{SearchDocument, SearchDocumentKey};
 
 const FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES: usize = 32 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_WINDOW_BYTES: usize = 256 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES: usize = 64 * 1024;
-const DIFF_SEARCH_QUERY_DEBOUNCE_MS: u64 = 150;
 const MAX_UTF8_CHAR_BYTES: usize = 4;
 const DIFF_SEARCH_TRIGRAM_MIN_QUERY_BYTES: usize = 3;
 /// Ceiling on the editor's match list. The other views are bounded by their row
@@ -40,6 +40,7 @@ pub(in crate::view) struct DiffSearchMatcher {
     options: DiffSearchOptions,
     regex: Option<Regex>,
     regex_error: Option<String>,
+    cancellation: Option<gitcomet_core::services::CancellationToken>,
 }
 
 impl DiffSearchMatcher {
@@ -63,6 +64,7 @@ impl DiffSearchMatcher {
             options,
             regex,
             regex_error,
+            cancellation: None,
         }
     }
 
@@ -201,13 +203,16 @@ impl DiffSearchMatcher {
     }
 
     fn find_range_at_or_after(&self, haystack: &str, start_at: usize) -> Option<Range<usize>> {
-        if self.is_empty() || self.regex_error.is_some() {
+        if self.is_empty() || self.regex_error.is_some() || self.is_cancelled() {
             return None;
         }
 
         if let Some(regex) = self.regex.as_ref() {
             let mut search_start = start_at.min(haystack.len());
             loop {
+                if self.is_cancelled() {
+                    return None;
+                }
                 let m = regex.find_at(haystack, search_start)?;
                 let range = m.start()..m.end();
                 if !range.is_empty() && self.range_has_requested_boundaries(haystack, range.clone())
@@ -223,6 +228,12 @@ impl DiffSearchMatcher {
         } else {
             self.find_literal_ascii_case_insensitive_from(haystack, start_at)
         }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
     }
 
     fn range_has_requested_boundaries(&self, haystack: &str, range: Range<usize>) -> bool {
@@ -325,7 +336,7 @@ pub(in crate::view) enum DiffSearchQueryReuse {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DiffSearchFinalizeMode {
+pub(in crate::view) enum DiffSearchFinalizeMode {
     ScrollToFirst,
     PreserveCurrent {
         previous_match_ix: Option<usize>,
@@ -1335,7 +1346,7 @@ pub(in crate::view) fn file_editor_search_ranges(
     let mut line_matches: Vec<Range<usize>> = Vec::new();
     for row in 0..snapshot.line_count() {
         let remaining = max_matches - found.len();
-        if remaining == 0 {
+        if remaining == 0 || matcher.is_cancelled() {
             break;
         }
         let line_range = snapshot.line_range(row);
@@ -1522,9 +1533,39 @@ impl MainPaneView {
     pub(in super::super::super) fn diff_search_cancel_pending_query_recompute(&mut self) {
         self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
         self.diff_search_pending_previous_query = None;
+        if let Some(token) = &self.diff_search_cancellation {
+            token.cancel();
+        }
+        self.diff_search_document = None;
+        self.diff_search_pending_navigation = 0;
+        self.diff_search_probe_render = 0;
     }
 
-    pub(super) fn diff_search_schedule_query_recompute(
+    pub(in crate::view) fn diff_search_schedule_query_recompute(
+        &mut self,
+        previous_query: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.diff_search_pending_finalize = DiffSearchFinalizeMode::ScrollToFirst;
+        self.diff_search_queue_recompute(previous_query, cx);
+    }
+
+    pub(super) fn diff_search_schedule_preserving_current(&mut self, cx: &mut gpui::Context<Self>) {
+        // A previous edit already cleared the displayed matches while its
+        // worker runs. Further edits must retain that worker's resume anchor.
+        if self.diff_search_match_ix.is_some()
+            || !(self.diff_search_worker_running
+                || self.diff_search_pending_previous_query.is_some())
+        {
+            self.diff_search_pending_finalize = DiffSearchFinalizeMode::preserve_current(
+                self.diff_search_match_ix,
+                self.diff_search_current_match_visible_ix(),
+            );
+        }
+        self.diff_search_queue_recompute(self.diff_search_query.clone(), cx);
+    }
+
+    fn diff_search_queue_recompute(
         &mut self,
         previous_query: SharedString,
         cx: &mut gpui::Context<Self>,
@@ -1539,25 +1580,17 @@ impl MainPaneView {
         if self.diff_search_pending_previous_query.is_none() {
             self.diff_search_pending_previous_query = Some(previous_query);
         }
+        self.diff_search_probe_action = crate::ui_probe::begin_action("diff_search");
+        self.diff_search_probe_render = 0;
         self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
-        let seq = self.diff_search_debounce_seq;
-
-        cx.spawn(
-            async move |view: gpui::WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(DIFF_SEARCH_QUERY_DEBOUNCE_MS))
-                    .await;
-                let _ = view.update(cx, |this, cx| {
-                    if this.diff_search_debounce_seq != seq {
-                        return;
-                    }
-                    if this.diff_search_flush_pending_query_recompute() {
-                        cx.notify();
-                    }
-                });
-            },
-        )
-        .detach();
+        self.diff_search_pending_navigation = 0;
+        if let Some(token) = &self.diff_search_cancellation {
+            token.cancel();
+        }
+        self.diff_search_matches.clear();
+        self.diff_search_match_ix = None;
+        self.file_editor_search_clear();
+        self.diff_search_start_background(cx);
     }
 
     pub(super) fn diff_search_flush_pending_query_recompute(&mut self) -> bool {
@@ -1604,6 +1637,29 @@ impl MainPaneView {
     }
 
     fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
+        self.diff_search_scan_current_view_synchronously(matcher);
+        // Exercise the immutable worker input against the established scanner
+        // in the existing view fixtures (wrapping, conflicts, Markdown, editor).
+        #[cfg(test)]
+        {
+            let actual = self.capture_search_document().search(
+                matcher.query(),
+                matcher.options,
+                gitcomet_core::services::CancellationToken::new(),
+            );
+            assert_eq!(
+                actual.matches,
+                self.diff_search_matches,
+                "background search rows for {:?}",
+                matcher.query()
+            );
+            if self.is_file_editor_active() {
+                assert_eq!(actual.editor_ranges, self.file_editor_search_matches);
+            }
+        }
+    }
+
+    fn diff_search_scan_current_view_synchronously(&mut self, matcher: &DiffSearchMatcher) {
         // Ahead of everything else: the arms below dispatch on
         // `is_file_preview_active()`, which stays true in edit mode, and that is
         // what had the search counting the stale pre-edit preview text.
@@ -2490,6 +2546,12 @@ impl MainPaneView {
             return;
         }
 
+        if self.diff_search_worker_running || self.diff_search_pending_previous_query.is_some() {
+            self.diff_search_pending_navigation =
+                self.diff_search_pending_navigation.saturating_sub(1);
+            return;
+        }
+
         self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
@@ -2511,6 +2573,12 @@ impl MainPaneView {
 
     pub(in super::super::super) fn diff_search_next_match(&mut self) {
         if !self.diff_search_active {
+            return;
+        }
+
+        if self.diff_search_worker_running || self.diff_search_pending_previous_query.is_some() {
+            self.diff_search_pending_navigation =
+                self.diff_search_pending_navigation.saturating_add(1);
             return;
         }
 
@@ -2827,19 +2895,21 @@ fn conflict_resolver_visible_match_indices_with_matcher(
                 split_row_index,
                 two_way_split_projection,
             } = ctx.two_way_rows;
-            let rows = (0..two_way_split_projection.visible_len()).filter_map(|visible_ix| {
-                let (source_row, _conflict_ix) = two_way_split_projection.get(visible_ix)?;
-                let row = split_row_index.row_at(ctx.marker_segments, source_row)?;
-                Some((
-                    visible_ix,
-                    row.old
-                        .as_ref()
-                        .map(|text| Cow::Owned(text.as_ref().to_string())),
-                    row.new
-                        .as_ref()
-                        .map(|text| Cow::Owned(text.as_ref().to_string())),
-                ))
-            });
+            let rows = (0..two_way_split_projection.visible_len())
+                .take_while(|_| !matcher.is_cancelled())
+                .filter_map(|visible_ix| {
+                    let (source_row, _conflict_ix) = two_way_split_projection.get(visible_ix)?;
+                    let row = split_row_index.row_at(ctx.marker_segments, source_row)?;
+                    Some((
+                        visible_ix,
+                        row.old
+                            .as_ref()
+                            .map(|text| Cow::Owned(text.as_ref().to_string())),
+                        row.new
+                            .as_ref()
+                            .map(|text| Cow::Owned(text.as_ref().to_string())),
+                    ))
+                });
             collect_split_stream_match_visible_rows(rows, matcher, &mut out);
         }
     }
@@ -2957,14 +3027,18 @@ fn search_three_way_via_spans_with_matcher(
     let mut theirs_rows = Vec::new();
     let mut summary_rows = Vec::new();
 
-    for span in projection.spans() {
+    for span in projection
+        .spans()
+        .iter()
+        .take_while(|_| !matcher.is_cancelled())
+    {
         match *span {
             conflict_resolver::ThreeWayVisibleSpan::Lines {
                 visible_start,
                 source_line_start,
                 len,
             } => {
-                for i in 0..len {
+                for i in (0..len).take_while(|_| !matcher.is_cancelled()) {
                     let visible_ix = visible_start + i;
                     // section 30: rows are aligned; translate per side.
                     let row = source_line_start + i;

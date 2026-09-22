@@ -68,18 +68,23 @@ impl SelectedDiffLoadGuard {
 
 fn spawn_with_selected_diff_guard(
     executor: &TaskExecutor,
+    slot: &super::super::executor::LatestTaskSlot,
     repos: &RepoMap,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     guard: SelectedDiffLoadGuard,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender, SelectedDiffLoadGuard) + Send + 'static,
 ) -> bool {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        if !guard.is_current() {
+    let Some(repo) = repos.get(&repo_id).cloned() else {
+        return false;
+    };
+    executor.spawn_latest(slot, move || {
+        if msg_tx.is_cancelled() || !guard.is_current() {
             return;
         }
         task(repo, msg_tx, guard);
-    })
+    });
+    true
 }
 
 #[cfg(test)]
@@ -2106,21 +2111,78 @@ pub(super) fn schedule_load_diff_file_image(
 
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
+    slots: &[super::super::executor::LatestTaskSlot; 5],
     repos: &RepoMap,
     thread_state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    target: DiffTarget,
-    target_rev: u64,
+    selection: (DiffTarget, u64),
     cancellation: CancellationToken,
     options: SelectedDiffLoadOptions,
 ) {
+    let (target, target_rev) = selection;
     let guard = SelectedDiffLoadGuard::new(thread_state, repo_id, target.clone(), target_rev);
+    if options.load_patch_diff {
+        let target = target.clone();
+        let msg_tx = msg_tx.clone();
+        let guard = guard.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            &slots[0],
+            repos,
+            repo_id,
+            msg_tx,
+            guard,
+            move |repo, msg_tx, guard| {
+                // UI consumes this parsed diff through paged/lazy row adapters.
+                let result = repo.diff_parsed_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
+    if options.load_file_text {
+        let target = target.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            &slots[4],
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_file_text_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
     if options.load_submodule_summary {
         let target = target.clone();
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
+            &slots[1],
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2146,6 +2208,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
+            &slots[2],
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2171,6 +2234,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
+            &slots[3],
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2186,55 +2250,6 @@ pub(super) fn schedule_load_selected_diff(
                         repo_id,
                         target,
                         side,
-                        result,
-                    }),
-                );
-            },
-        );
-    }
-    if options.load_file_text {
-        let target = target.clone();
-        let cancellation = cancellation.clone();
-        spawn_with_selected_diff_guard(
-            executor,
-            repos,
-            repo_id,
-            msg_tx.clone(),
-            guard.clone(),
-            move |repo, msg_tx, guard| {
-                let result = repo.diff_file_text_cancellable(&target, &cancellation);
-                if !guard.is_current() {
-                    return;
-                }
-                send_or_log(
-                    &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
-                        repo_id,
-                        target,
-                        result,
-                    }),
-                );
-            },
-        );
-    }
-    if options.load_patch_diff {
-        spawn_with_selected_diff_guard(
-            executor,
-            repos,
-            repo_id,
-            msg_tx,
-            guard,
-            move |repo, msg_tx, guard| {
-                // UI consumes this parsed diff through paged/lazy row adapters.
-                let result = repo.diff_parsed_cancellable(&target, &cancellation);
-                if !guard.is_current() {
-                    return;
-                }
-                send_or_log(
-                    &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
-                        repo_id,
-                        target,
                         result,
                     }),
                 );

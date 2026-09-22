@@ -5,6 +5,11 @@ The branch baseline is `dev`; `main` is not a performance baseline. Measurements
 below compare frozen binaries that differ in one optimization at a time. They
 do not establish results on Linux, macOS, Windows ARM64, or hosted CI runners.
 
+The follow-up [interaction and LFS investigation](windows-interaction-performance.md)
+covers background diff search, source reuse, typing notifications, Git progress
+and the additional Windows measurement fixtures. It keeps the GPUI patch below
+deferred.
+
 Machine: Ryzen 5 3600 (12 logical CPUs), Radeon RX 5700 XT, driver
 32.0.21045.5002, 1920 × 1080 at 60 Hz, Windows 10 build 19045. Python 3.14.7,
 Rust 1.98.1, Git for Windows 2.53.0, nextest 0.9.145.
@@ -59,8 +64,9 @@ The JSONL clock anchor aligns raw frame events with scenario boundaries. The
 summary excludes boundary frames and computes percentiles from raw samples.
 It never substitutes zero latency for a phase with no draws or averages
 interval p95 values into a purported frame p95. Wake statistics use intervals
-entirely inside a scenario. Input interval percentiles remain diagnostic data
-in the raw log; they are not pooled into the frame statistics.
+entirely inside a scenario. Probe version 2 merges the raw input histogram
+buckets with their counts, and adds rendered text/search witnesses. It never
+averages interval percentiles into a combined input percentile.
 
 **Submission is not display completion.** It measures CPU/platform work, not
 the moment a pixel reaches the display. Use [PresentMon](https://github.com/GameTechDev/PresentMon)

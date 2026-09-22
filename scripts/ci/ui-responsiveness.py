@@ -2,9 +2,11 @@
 """Measure frozen Windows GUI binaries in alternating pairs, or summarize a capture."""
 
 import argparse
+import bisect
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import platform
 import statistics
@@ -13,7 +15,7 @@ import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
-SCENARIOS = ("idle", "move", "resize", "native-move", "native-resize", "hover", "scroll", "click", "typing")
+SCENARIOS = ("idle", "move", "resize", "native-move", "native-resize", "hover", "scroll", "click", "typing", "commit-typing", "file-search")
 
 
 def distribution(values):
@@ -22,6 +24,79 @@ def distribution(values):
         return {"count": 0, "mean": None, "p50": None, "p95": None, "max": None}
     return {"count": len(values), "mean": statistics.mean(values), "p50": statistics.median(values),
             "p95": values[math.ceil(len(values) * .95) - 1], "max": values[-1]}
+
+
+def histogram_distribution(buckets):
+    """Merge raw HDR buckets; never take a percentile of interval percentiles."""
+    totals = {}
+    for value, count in buckets:
+        if count < 0 or value < 0:
+            raise ValueError("Invalid latency histogram")
+        if count:
+            totals[value] = totals.get(value, 0) + count
+    count = sum(totals.values())
+    if not count:
+        return distribution([])
+    ordered = sorted(totals.items())
+    def quantile(fraction):
+        remaining = math.ceil(count * fraction)
+        for value, frequency in ordered:
+            remaining -= frequency
+            if remaining <= 0:
+                return value / 1e6
+    return {"count": count, "mean": sum(v * n for v, n in ordered) / count / 1e6,
+            "p50": quantile(.5), "p95": quantile(.95), "max": ordered[-1][0] / 1e6}
+
+
+def action_summary(records, begin, end):
+    """Correlate model/render witnesses with submission of the same window.
+
+    Starts are application handling times, not hardware input timestamps.
+    Clicks have acceptance witnesses only and are reported separately.
+    """
+    actions, submissions = {}, {}
+    for record in records:
+        if record["event"] == "action":
+            actions.setdefault(record["id"], {})[record["phase"]] = record
+        elif record["event"] == "submit":
+            submissions.setdefault(record.get("window"), []).append(record["start_ms"])
+    for times in submissions.values():
+        times.sort()
+    output = {}
+    for phases in actions.values():
+        start = phases.get("begin")
+        if start is None or not begin <= start["at_ms"] <= end:
+            continue
+        group = output.setdefault(start["kind"], {"started": 0, "applied": 0, "rendered": 0,
+                                                "submitted": 0, "latencies": []})
+        group["started"] += 1
+        group["applied"] += "applied" in phases
+        group["rendered"] += "rendered" in phases
+        witness = phases.get("rendered") if start["kind"] != "click" else phases.get("accepted")
+        if witness is None:
+            continue
+        times = submissions.get(witness.get("detail", {}).get("window"), [])
+        index = bisect.bisect_left(times, witness["at_ms"])
+        if index < len(times) and times[index] <= end:
+            group["submitted"] += 1
+            group["latencies"].append(times[index] - start["at_ms"])
+    for kind, group in output.items():
+        group["handling_to_submit_ms"] = distribution(group.pop("latencies"))
+        group["unwitnessed"] = group["started"] - group["submitted"]
+        group["witness"] = "acceptance only" if kind == "click" else "model revision rendered"
+    return output
+
+
+def initial_search_summary(records, phase_start):
+    seeds = {r["id"] for r in records if r["event"] == "action" and r["phase"] == "applied"
+             and r["at_ms"] < phase_start and r.get("detail", {}).get("query_bytes") == 5
+             and r["detail"].get("matches") == 100 and "b.txt" in (r["detail"].get("target") or "")}
+    selected = [r for r in records if r["event"] == "submit"
+                or (r["event"] == "action" and r["id"] in seeds)]
+    result = action_summary(selected, 0, phase_start).get("diff_search", {})
+    if result.get("submitted") != 1:
+        raise ValueError("Expected one witnessed initial search before the warm-query phase")
+    return result["handling_to_submit_ms"]
 
 
 def summarize(directory):
@@ -38,6 +113,8 @@ def summarize(directory):
     if capture["probe"] and len(anchors) != 1:
         raise ValueError(f"Expected one probe clock anchor: {directory}")
     anchor = anchors[0]["unix_ms"] if anchors else 0
+    if any(record.get("records_dropped", 0) for record in records):
+        raise ValueError(f"Probe lost records: {directory}")
     phases = {}
     for phase in capture["phases"]:
         # Require complete frames within the phase, excluding its first/last
@@ -50,7 +127,7 @@ def summarize(directory):
         selected = [record for record in records if record["event"] in ("draw", "submit")
                     and begin <= anchor + record["start_ms"] <= anchor + record["at_ms"] <= end]
         draws = [record for record in selected if record["event"] == "draw"]
-        if capture["probe"] and phase["name"] == "typing" and len(draws) < phase["actions"] / 3:
+        if capture["probe"] and phase["name"] in ("typing", "commit-typing", "file-search") and len(draws) < phase["actions"] / 3:
             raise ValueError(f"Typing did not produce enough UI updates; verify filter focus: {directory}")
         intervals = [record for record in records if record["event"] == "interval"
                      and begin <= anchor + record["at_ms"] - record["wall_ms"]
@@ -67,7 +144,30 @@ def summarize(directory):
             "slow_frames": sum(record["duration_ms"] > 1000 / 60 for record in draws),
             "wake_ms": distribution(value for interval in intervals for value in interval["wake_ms"]),
             "native_starts": phase["native_starts"], "native_ends": phase["native_ends"],
+            "semantic_actions": action_summary(records, begin - anchor, end - anchor),
+            "input_ms": histogram_distribution(bucket for record in records
+                if record["event"] == "input_interval" and "wall_ms" in record
+                and begin <= anchor + record["at_ms"] - record["wall_ms"] <= anchor + record["at_ms"] <= end
+                for bucket in record.get("histogram_ns", [])),
         }
+        if capture["probe"] and phase["name"] in ("typing", "commit-typing"):
+            actions = phases[phase["name"]]["semantic_actions"].get("typing", {})
+            if actions.get("submitted", 0) < phase["actions"] / 3:
+                raise ValueError(f"Missing text revision witnesses; verify input focus: {directory}")
+        if capture["probe"] and phase["name"] == "file-search":
+            # Report the first query too: priming a slow index must not hide a
+            # cold-search regression behind fast repeated queries.
+            phases[phase["name"]]["initial_query_ms"] = initial_search_summary(
+                records, phase["start_unix_ms"] - anchor)
+            actions = phases[phase["name"]]["semantic_actions"].get("diff_search", {})
+            if actions.get("submitted", 0) < phase["actions"] / 3:
+                raise ValueError(f"Missing query result witnesses; verify file/search focus: {directory}")
+            correct = [record for record in records if record["event"] == "action" and record["phase"] == "applied"
+                       and begin <= anchor + record["at_ms"] <= end
+                       and record.get("detail", {}).get("query_bytes") == 6
+                       and record["detail"].get("matches") == 100 and "b.txt" in (record["detail"].get("target") or "")]
+            if not correct:
+                raise ValueError(f"Expected needle to match 100 rows in b.txt; wrong fixture or stale results: {directory}")
     result = {"binary_sha256": capture["sha256"].lower(), "probe": capture["probe"], "gpu": capture["gpu"],
               "environment": {key: capture.get(key) for key in ("gpu", "repository_sha", "input_rate", "d3d_validation",
                                                                   "harness_ps1_sha256", "harness_cs_sha256")},
@@ -85,9 +185,12 @@ def ps_quote(value):
 def compare(samples, scenarios):
     comparisons = {}
     metrics = {f"{metric}.{quantile}": (metric, quantile)
-               for metric in ("draw_ms", "submit_ms", "dirty_to_draw_ms", "wake_ms")
+               for metric in ("draw_ms", "submit_ms", "dirty_to_draw_ms", "wake_ms", "input_ms", "initial_query_ms")
                for quantile in ("p50", "p95")}
     metrics.update({metric: (metric,) for metric in ("process_cpu_cores", "actions_per_second")})
+    for kind in ("typing", "diff_search", "click"):
+        for quantile in ("p50", "p95"):
+            metrics[f"{kind}_handling_to_submit_ms.{quantile}"] = ("semantic_actions", kind, "handling_to_submit_ms", quantile)
     for scenario in scenarios:
         comparisons[scenario] = {}
         for label, keys in metrics.items():
@@ -98,7 +201,7 @@ def compare(samples, scenarios):
                     if sample["variant"] == variant:
                         value = sample["summary"]["phases"][scenario]
                         for key in keys:
-                            value = value[key]
+                            value = value.get(key) if isinstance(value, dict) else None
                         values.append(value)
                 medians[variant] = statistics.median(values) if values and all(v is not None for v in values) else None
             base, candidate = medians["baseline"], medians["candidate"]
@@ -136,7 +239,7 @@ def measure(args):
         raise ValueError("Positive pairs and 2..120 seconds required")
     if len(args.scenarios) != len(set(args.scenarios)):
         raise ValueError("Scenarios must be unique")
-    native = any(name in ("native-move", "native-resize", "typing") for name in args.scenarios)
+    native = any(name in ("native-move", "native-resize", "typing", "commit-typing", "file-search") for name in args.scenarios)
     if native and not args.native_gestures:
         raise ValueError("Native scenarios require --native-gestures on an idle desktop")
     repository = args.repository.resolve()
@@ -189,9 +292,31 @@ def measure(args):
         (args.output / "session.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
+def create_fixture(path):
+    """100,000 rows per file; exactly 100 rows contain the complete needle."""
+    path = path.resolve()
+    path.mkdir(parents=True, exist_ok=False)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0",
+               GIT_AUTHOR_DATE="2020-01-01T00:00:00Z", GIT_COMMITTER_DATE="2020-01-01T00:00:00Z")
+    def git(*arguments):
+        subprocess.run(["git", "-C", str(path), *arguments], env=env, capture_output=True, check=True)
+    git("init", "-q", "-b", "fixture")
+    for key, value in {"user.name":"Probe", "user.email":"probe@example.invalid", "core.autocrlf":"false", "commit.gpgsign":"false"}.items():
+        git("config", key, value)
+    for name in ("a.txt", "b.txt"):
+        with (path / name).open("w", encoding="utf-8", newline="\n") as output:
+            for row in range(100_000):
+                output.write(f"row {row:06}: " + ("needle" if row % 1000 == 0 else "plain content") + "\n")
+    git("add", ".")
+    git("commit", "-qm", "UI performance fixture")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    fixture = commands.add_parser("fixture")
+    fixture.add_argument("directory", type=Path)
     summary = commands.add_parser("summarize")
     summary.add_argument("directory", type=Path)
     combined = commands.add_parser("report")
@@ -208,7 +333,9 @@ def main():
     paired.add_argument("--reverse", action="store_true")
     paired.add_argument("--d3d-validation", choices=("auto", "on", "off"), default="auto")
     args = parser.parse_args()
-    if args.command == "summarize":
+    if args.command == "fixture":
+        create_fixture(args.directory)
+    elif args.command == "summarize":
         print(json.dumps(summarize(args.directory), indent=2))
     elif args.command == "report":
         print(json.dumps(report_sessions(args.directories), indent=2))

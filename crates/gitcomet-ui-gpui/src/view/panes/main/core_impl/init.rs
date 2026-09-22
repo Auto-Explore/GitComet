@@ -239,7 +239,8 @@ impl MainPaneView {
             );
             input
         });
-        let diff_search_subscription = cx.observe(&diff_search_input, |this, input, cx| {
+        let mut search_input_snapshot = diff_search_input.read(cx).text_snapshot();
+        let diff_search_subscription = cx.observe(&diff_search_input, move |this, input, cx| {
             if input.update(cx, |input, _| input.take_enter_pressed()) {
                 if this.diff_search_active {
                     this.diff_search_next_match();
@@ -247,6 +248,11 @@ impl MainPaneView {
                 }
                 return;
             }
+            let snapshot = input.read(cx).text_snapshot();
+            if snapshot == search_input_snapshot {
+                return;
+            }
+            search_input_snapshot = snapshot;
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.diff_search_query != next {
                 let previous_query = this.diff_search_query.clone();
@@ -427,6 +433,14 @@ impl MainPaneView {
             diff_search_match_ix: None,
             diff_search_debounce_seq: 0,
             diff_search_pending_previous_query: None,
+            diff_search_worker_running: false,
+            diff_search_pending_finalize:
+                super::super::diff_search::DiffSearchFinalizeMode::ScrollToFirst,
+            diff_search_cancellation: None,
+            diff_search_document: None,
+            diff_search_pending_navigation: 0,
+            diff_search_probe_action: 0,
+            diff_search_probe_render: 0,
             diff_search_scroll,
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,

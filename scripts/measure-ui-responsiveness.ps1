@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [Parameter(Mandatory)][string]$Repository,
     [Parameter(Mandatory)][string]$Binary,
-    [ValidateSet('idle','move','resize','native-move','native-resize','hover','scroll','click','typing')]
+    [ValidateSet('idle','move','resize','native-move','native-resize','hover','scroll','click','typing','commit-typing','file-search')]
     [string[]]$Scenarios = @('idle','move','resize','hover','scroll','click'),
     [ValidateRange(2,120)][int]$SecondsPerScenario = 5,
     [ValidateRange(2,120)][int]$WarmupSeconds = 6,
@@ -10,10 +10,11 @@ param(
     [ValidateSet('auto','on','off')][string]$D3DValidation = 'auto',
     [switch]$NativeGestures,
     [switch]$CaptureScreenshots,
+    [string]$LfsTransferReport,
     [switch]$NoProbe
 )
 $ErrorActionPreference = 'Stop'
-if (($CaptureScreenshots -or $Scenarios -contains 'native-move' -or $Scenarios -contains 'native-resize' -or $Scenarios -contains 'typing') -and -not $NativeGestures) {
+if (($CaptureScreenshots -or @($Scenarios | Where-Object { $_ -in @('native-move','native-resize','typing','commit-typing','file-search') }).Count -gt 0) -and -not $NativeGestures) {
     throw 'Native scenarios temporarily control the pointer/focus; pass -NativeGestures on an idle desktop.'
 }
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
@@ -27,7 +28,7 @@ New-Item -ItemType Directory -Path $outputDir | Out-Null
 if (-not ('GitCometUiScenario' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'windows/ui-responsiveness.cs') -ReferencedAssemblies System.Drawing }
 [void][GitCometUiScenario]::SetProcessDPIAware()
 $environmentBefore = @{}
-foreach ($name in @('LOCALAPPDATA','GITCOMET_SESSION_FILE','GITCOMET_DISABLE_SESSION_PERSIST','GITCOMET_UI_PROBE','GITCOMET_UI_PROBE_LOG','GITCOMET_UI_PROBE_JSONL','GPUI_D3D_DEBUG')) {
+foreach ($name in @('LOCALAPPDATA','GITCOMET_SESSION_FILE','GITCOMET_DISABLE_SESSION_PERSIST','GITCOMET_UI_PROBE','GITCOMET_UI_PROBE_LOG','GITCOMET_UI_PROBE_JSONL','GPUI_D3D_DEBUG','GIT_CONFIG_GLOBAL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS','GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE')) {
     $environmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $savedCursor = [GitCometUiScenario+Point]::new()
@@ -48,6 +49,12 @@ try {
     $env:GITCOMET_UI_PROBE_LOG = Join-Path $outputDir 'ui.log'
     $env:GITCOMET_UI_PROBE_JSONL = Join-Path $outputDir 'frames.jsonl'
     $env:GPUI_D3D_DEBUG = $D3DValidation
+    $env:GIT_CONFIG_NOSYSTEM = '1'
+    $env:GIT_CONFIG_GLOBAL = Join-Path $outputDir 'gitconfig'
+    [IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL, '')
+    foreach ($name in @('GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS','GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE')) {
+        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+    }
     $sessionJson = @{
         version=3;open_repos=@($Repository);active_repo=$Repository
         window_width=1200;window_height=800;ui_scale_percent=100
@@ -92,6 +99,57 @@ try {
             Start-Sleep -Milliseconds 100
         }
         if ($phase -eq 'typing') { [GitCometUiScenario]::FocusBranchFilter($window); Start-Sleep -Milliseconds 300 }
+        if ($phase -eq 'commit-typing') { [GitCometUiScenario]::ClickAt($window,950,703); Start-Sleep -Milliseconds 300 }
+        if ($LfsTransferReport -and $phase -eq 'commit-typing') {
+            [GitCometUiScenario]::ClickAt($window,482,54)
+            # Hook activity opens automatically. Minimize it after the transfer
+            # starts so the same commit input remains available during upload.
+            $uploadDeadline = [DateTime]::UtcNow.AddSeconds(15)
+            $uploadStarted = $false
+            do {
+                try {
+                    $upload = Get-Content -Raw -LiteralPath $LfsTransferReport | ConvertFrom-Json
+                    $uploadStarted = @($upload.requests).Count -gt 0
+                } catch { $uploadStarted = $false }
+                if (-not $uploadStarted) { Start-Sleep -Milliseconds 100 }
+            } while (-not $uploadStarted -and [DateTime]::UtcNow -lt $uploadDeadline)
+            if (-not $uploadStarted) { throw 'GUI push did not start an LFS upload' }
+            [GitCometUiScenario]::ClickAt($window,992,85)
+            Start-Sleep -Milliseconds 300
+            [GitCometUiScenario]::ClickAt($window,950,703)
+        }
+        if ($phase -eq 'file-search') {
+            # Use the dedicated fixture's Files tab and second root file (b.txt).
+            # The analyzer requires query-result witnesses; a missed click fails.
+            [GitCometUiScenario]::ClickAt($window,100,85)
+            Start-Sleep -Milliseconds 350
+            [GitCometUiScenario]::ClickAt($window,115,185)
+            Start-Sleep -Milliseconds 1500
+            [GitCometUiScenario]::ControlKey($window,70)
+            Start-Sleep -Milliseconds 350
+            foreach ($character in 'needl'.ToCharArray()) {
+                [void][GitCometUiScenario]::PostMessage($window,0x102,[IntPtr]([int]$character),[IntPtr]1)
+            }
+            # Prime the document/search cache before the warm-query phase.
+            # The analyzer measures this initial query separately too.
+            # Requiring its result also establishes focus without guessing
+            # whether the target has finished loading on a slow machine.
+            if ($NoProbe) { Start-Sleep -Milliseconds 2500 }
+            else {
+                $searchDeadline = [DateTime]::UtcNow.AddSeconds(25)
+                $searchReady = $false
+                do {
+                    if (Test-Path -LiteralPath $env:GITCOMET_UI_PROBE_JSONL) {
+                        $searchReady = [bool](Get-Content -LiteralPath $env:GITCOMET_UI_PROBE_JSONL | Where-Object {
+                            $_ -match '"query_bytes":5' -and $_ -match '"matches":100[,}]'
+                        } | Select-Object -First 1)
+                    }
+                    if (-not $searchReady) { Start-Sleep -Milliseconds 100 }
+                } while (-not $searchReady -and [DateTime]::UtcNow -lt $searchDeadline)
+                if (-not $searchReady) { throw 'Initial search did not find the expected 100 rows' }
+                Start-Sleep -Milliseconds 300
+            }
+        }
         $started = $clock.Elapsed.TotalSeconds; $startedUtc = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $app.Refresh(); $cpuBefore = $app.TotalProcessorTime.TotalSeconds
         $api = [Collections.Generic.List[double]]::new(); $actions = 0; $next = $started
@@ -110,13 +168,23 @@ try {
                         [void][GitCometUiScenario]::PostMessage($window,0x201,[IntPtr]1,[GitCometUiScenario]::XY($x,85))
                         [void][GitCometUiScenario]::PostMessage($window,0x202,[IntPtr]::Zero,[GitCometUiScenario]::XY($x,85))
                     }
-                    'typing' {
+                    { $_ -in @('typing','commit-typing') } {
                         if ($actions%8 -eq 7) { [GitCometUiScenario]::Backspace($window) }
                         else { [void][GitCometUiScenario]::PostMessage($window,0x102,[IntPtr](97+($actions%7)),[IntPtr]1) }
                     }
+                    'file-search' {
+                        # One ordered message queue even while the UI is busy.
+                        # Native Ctrl+A can overtake posted character messages.
+                        if ($actions%2 -eq 1) {
+                            [void][GitCometUiScenario]::PostMessage($window,0x100,[IntPtr]8,[IntPtr]1)
+                            [void][GitCometUiScenario]::PostMessage($window,0x101,[IntPtr]8,[IntPtr]1)
+                        } else {
+                            [void][GitCometUiScenario]::PostMessage($window,0x102,[IntPtr]101,[IntPtr]1)
+                        }
+                    }
                 }
                 $api.Add($operation.Elapsed.TotalMilliseconds); $actions++
-                $period = if ($phase -eq 'click') { 0.3 } elseif ($phase -eq 'typing') { 0.1 } else { 1.0/$InputRate }
+                $period = if ($phase -in @('click','file-search')) { 0.3 } elseif ($phase -in @('typing','commit-typing')) { 0.1 } else { 1.0/$InputRate }
                 # Do not deliver a catch-up burst when the target was blocked.
                 $next = [Math]::Max(($next+$period),$clock.Elapsed.TotalSeconds)
             }
@@ -133,7 +201,21 @@ try {
         Write-Output ("{0}: {1} actions, CPU {2:N3}s, valid={3}" -f $phase,$actions,$cpu,$valid)
         if (-not $valid) { throw "Native scenario did not complete a verified move/resize: $phase" }
         if ($CaptureScreenshots) { [GitCometUiScenario]::Capture($window, (Join-Path $outputDir ($phase + '.png'))) }
-        if ($phase -eq 'typing') { [void][GitCometUiScenario]::PostMessage($window,0x100,[IntPtr]27,[IntPtr]1) }
+        if ($phase -in @('typing','commit-typing','file-search')) { [void][GitCometUiScenario]::PostMessage($window,0x100,[IntPtr]27,[IntPtr]1) }
+    }
+    if ($LfsTransferReport) {
+        $transferDeadline = [DateTime]::UtcNow.AddSeconds(35)
+        $transfer = $null
+        do {
+            try { $transfer = Get-Content -Raw -LiteralPath $LfsTransferReport | ConvertFrom-Json } catch { $transfer = $null }
+            if ($transfer -and $transfer.complete -and $transfer.hashes_verified) { break }
+            Start-Sleep -Milliseconds 200
+        } while ([DateTime]::UtcNow -lt $transferDeadline)
+        if (-not $transfer -or -not $transfer.complete -or -not $transfer.hashes_verified) { throw 'GUI LFS push did not complete with verified payloads' }
+        $typingPhase = $phases | Where-Object name -eq 'commit-typing' | Select-Object -First 1
+        $overlap = @($transfer.requests | Where-Object { $_.start_unix_ms -lt $typingPhase.end_unix_ms -and $_.end_unix_ms -gt $typingPhase.start_unix_ms })
+        if ($overlap.Count -lt 2) { throw 'Typing did not overlap the real LFS transfer' }
+        [IO.File]::WriteAllText((Join-Path $outputDir 'lfs-transfer.json'), ($transfer | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
     }
     # Drain the final probe interval before shutdown.
     Start-Sleep -Milliseconds 1300

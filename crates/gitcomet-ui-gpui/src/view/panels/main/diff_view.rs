@@ -1135,13 +1135,13 @@ impl MainPaneView {
         window.focus(&focus, cx);
     }
 
-    fn refresh_diff_search_after_option_change(&mut self) {
+    fn refresh_diff_search_after_option_change(&mut self, cx: &mut gpui::Context<Self>) {
         let query = self.diff_search_query.clone();
         self.invalidate_diff_text_query_overlay_cache(query.as_ref(), self.diff_search_options);
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
         self.diff_search_cancel_pending_query_recompute();
-        self.diff_search_recompute_matches_and_scroll_to_first();
+        self.diff_search_schedule_query_recompute(self.diff_search_query.clone(), cx);
     }
 
     fn set_diff_search_options(
@@ -1152,7 +1152,7 @@ impl MainPaneView {
     ) {
         if self.diff_search_options != next {
             self.diff_search_options = next;
-            self.refresh_diff_search_after_option_change();
+            self.refresh_diff_search_after_option_change(cx);
         }
         self.focus_diff_search_input(window, cx);
         cx.notify();
