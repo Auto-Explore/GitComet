@@ -664,6 +664,11 @@ fn open_initial_gitcomet_windows_after_workspace_initialization(
 
     let requested_repository = launch.view_config.initial_path.clone();
     let restored_any_workspace = !restorable_workspaces.is_empty();
+    // Empty customized workspaces open on Home; a command-line path still
+    // belongs in one of those rather than a further window.
+    let restored_any_repository = restorable_workspaces
+        .iter()
+        .any(|workspace| !workspace.repositories.is_empty());
     if !restored_any_workspace {
         let mut initial_launch = launch.clone();
         initial_launch.view_config.workspace = WorkspaceBootstrap::Empty;
@@ -697,10 +702,10 @@ fn open_initial_gitcomet_windows_after_workspace_initialization(
             backend,
             BrowserOpenRequest {
                 path: Some(path),
-                // With no restored workspace, the one empty startup window is the
+                // With no restored repository, the startup window is the
                 // natural destination even when future forwarded opens are
                 // configured to create new windows.
-                target: if restored_any_workspace {
+                target: if restored_any_repository {
                     launch.browser_open_target
                 } else {
                     BrowserOpenTarget::ExistingWindow
@@ -1809,6 +1814,10 @@ where
     let Some(workspace) = crate::workspaces::workspace(cx.borrow(), target_workspace) else {
         return true;
     };
+    if workspace.repositories.is_empty() {
+        // Only customized workspaces persist while empty; the move fills it.
+        return false;
+    }
     let duplicate_owner = workspace
         .active_repository
         .as_deref()
@@ -2232,8 +2241,14 @@ fn activate_or_open_workspace(
         .filter(|active| workspace.repositories.contains(active))
         .or_else(|| workspace.repositories.first().cloned());
 
-    if workspace.repositories.is_empty() {
-        crate::workspaces::discard_workspace(cx, workspace_id);
+    if workspace.repositories.is_empty()
+        && (!workspace.is_customized() || duplicate_owner.is_some())
+    {
+        // A customized workspace keeps its identity even when its repositories
+        // are already open elsewhere; an anonymous one has nothing left to keep.
+        if !workspace.is_customized() {
+            crate::workspaces::discard_workspace(cx, workspace_id);
+        }
         if let Some((owner, path)) = duplicate_owner {
             focus_existing_repository_window(cx, &owner, &path);
             cx.activate(true);
@@ -2317,7 +2332,9 @@ fn move_repository_to_workspace(
     let _ = source.view.update(cx, |view, cx| {
         view.detach_repo_for_move(repo_id, cx);
     });
-    if source.repo_paths.len() == 1 {
+    let source_is_customized = crate::workspaces::workspace_for_window(cx, source_window_id)
+        .is_some_and(|workspace| workspace.is_customized());
+    if source.repo_paths.len() == 1 && !source_is_customized {
         crate::workspaces::discard_workspace_for_window(cx, source_window_id);
         let _ = source.handle.update(cx, |_root, window, _cx| {
             window.remove_window();
@@ -4897,6 +4914,95 @@ mod tests {
         });
         repo_counts.sort_unstable();
         assert_eq!(repo_counts, vec![0, 0, 1]);
+    }
+
+    #[gpui::test]
+    fn moving_the_last_repository_out_of_a_customized_workspace_keeps_the_window(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+        let source_window_id = cx.update(|window, app| {
+            crate::workspaces::initialize_for_test(app, Vec::new());
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle().window_id()
+        });
+        seed_worktree_repo(cx, &store, view.clone());
+        let snapshot = store.snapshot();
+        let repo = snapshot.repos.first().expect("source repo");
+        let (repo_id, path) = (repo.id, repo.spec.workdir.clone());
+        let source_workspace = cx.cx.update(|app| {
+            crate::workspaces::workspace_for_window(app, source_window_id)
+                .expect("the seeded repository makes the window durable")
+                .id
+        });
+        cx.cx
+            .update(|app| crate::workspaces::set_workspace_name(app, source_workspace, "Alpha"));
+
+        cx.update(|_window, app| {
+            view.update(app, |_view, cx| {
+                move_repository_to_workspace_from_view(
+                    cx,
+                    source_window_id,
+                    repo_id,
+                    path.clone(),
+                    None,
+                );
+            });
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.cx.update(|app| {
+                for entry in gitcomet_window_entries(app) {
+                    let _ = entry.view.update(app, |view, cx| {
+                        crate::view::test_support::sync_store_snapshot(view, cx);
+                    });
+                }
+            });
+            cx.run_until_parked();
+            let settled = cx.cx.update(|app| {
+                let entries = gitcomet_window_entries(app);
+                entries.iter().any(|entry| {
+                    entry.handle.window_id() != source_window_id
+                        && entry.repo_paths.as_ref() == [path.clone()]
+                }) && entries.iter().any(|entry| {
+                    entry.handle.window_id() == source_window_id && entry.repo_paths.is_empty()
+                })
+            });
+            if settled {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the repository to leave the customized workspace"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let (source_open, kept) = cx.cx.update(|app| {
+            (
+                app.windows()
+                    .iter()
+                    .any(|window| window.window_id() == source_window_id),
+                crate::workspaces::workspace_for_window(app, source_window_id),
+            )
+        });
+        assert!(
+            source_open,
+            "a customized workspace keeps its window on Home"
+        );
+        let kept = kept.expect("the window still belongs to its workspace");
+        assert_eq!(kept.id, source_workspace);
+        assert_eq!(kept.custom_name.as_deref(), Some("Alpha"));
+        assert!(kept.repositories.is_empty());
     }
 
     #[gpui::test]

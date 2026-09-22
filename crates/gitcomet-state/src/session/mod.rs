@@ -241,10 +241,17 @@ pub fn load_from_path(path: &Path) -> UiSession {
 
     let workspaces = parse_workspaces(file.workspaces.unwrap_or_default());
     let (legacy_open_repos, legacy_active_repo) = parse_repos(file.open_repos, file.active_repo);
-    let restored_workspace = workspaces
-        .iter()
-        .filter(|workspace| workspace.restore_on_launch)
-        .max_by_key(|workspace| workspace.last_activation_order);
+    // Prefer a workspace with repositories so an empty customized one cannot
+    // blank the legacy projection.
+    let restorable = || {
+        workspaces
+            .iter()
+            .filter(|workspace| workspace.restore_on_launch)
+    };
+    let restored_workspace = restorable()
+        .filter(|workspace| !workspace.repositories.is_empty())
+        .max_by_key(|workspace| workspace.last_activation_order)
+        .or_else(|| restorable().max_by_key(|workspace| workspace.last_activation_order));
     let (open_repos, active_repo) = restored_workspace.map_or_else(
         || {
             if workspaces.is_empty() {

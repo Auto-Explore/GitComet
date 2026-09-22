@@ -3152,6 +3152,85 @@ fn first_current_write_preserves_one_v3_backup() {
 }
 
 #[test]
+fn empty_customized_workspace_round_trips() {
+    let path = unique_session_test_dir("workspace-empty-customized").join("session.json");
+    let mut named = Workspace::new(Vec::new());
+    named.custom_name = Some("Client work".to_string());
+    let mut colored = Workspace::new(Vec::new());
+    colored.color = Some(WorkspaceColor::Green);
+    let mut themed = Workspace::new(Vec::new());
+    themed.theme_mode = Some("tokyo_night".to_string());
+
+    persist_workspaces_to_path(&[named.clone(), colored.clone(), themed.clone()], &path)
+        .expect("persist workspaces");
+    let loaded = load_from_path(&path);
+
+    assert_eq!(loaded.workspaces, vec![named, colored, themed]);
+    assert!(loaded.workspaces.iter().all(Workspace::is_customized));
+}
+
+#[test]
+fn empty_anonymous_workspace_is_dropped_on_persist() {
+    let path = unique_session_test_dir("workspace-empty-anonymous").join("session.json");
+    let mut blank_name = Workspace::new(Vec::new());
+    blank_name.custom_name = Some("   ".to_string());
+    assert!(
+        !blank_name.is_customized(),
+        "a blank name is not a customization"
+    );
+    let kept = Workspace::new(vec![PathBuf::from("/work/a")]);
+
+    persist_workspaces_to_path(
+        &[Workspace::new(Vec::new()), blank_name, kept.clone()],
+        &path,
+    )
+    .expect("persist workspaces");
+
+    assert_eq!(load_from_path(&path).workspaces, vec![kept]);
+}
+
+#[test]
+fn legacy_projection_skips_empty_workspaces() {
+    let path = unique_session_test_dir("workspace-projection-empty").join("session.json");
+    let mut with_repos = Workspace::new(vec![PathBuf::from("/work/a")]);
+    with_repos.last_activation_order = 1;
+    with_repos.layout.sidebar_width = Some(300);
+    let mut empty = Workspace::new(Vec::new());
+    empty.custom_name = Some("Later".to_string());
+    // Most recently activated, so it would win the election without the filter.
+    empty.last_activation_order = 2;
+
+    persist_workspaces_to_path(&[with_repos.clone(), empty], &path).expect("persist workspaces");
+    let written: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read session")).expect("parse session");
+    assert_eq!(written["open_repos"], serde_json::json!(["/work/a"]));
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.open_repos, with_repos.repositories);
+    assert_eq!(loaded.sidebar_width, Some(300));
+}
+
+#[test]
+fn theme_mode_and_timestamps_round_trip() {
+    let path = unique_session_test_dir("workspace-theme-timestamps").join("session.json");
+    let mut workspace = Workspace::new(vec![PathBuf::from("/work/a")]);
+    assert!(
+        workspace.created_at.is_some(),
+        "new workspaces record creation time"
+    );
+    workspace.theme_mode = Some("  sunset_veil  ".to_string());
+    workspace.last_opened_at = Some(1_800_000_000);
+
+    persist_workspaces_to_path(std::slice::from_ref(&workspace), &path)
+        .expect("persist workspaces");
+    let loaded = load_from_path(&path).workspaces.remove(0);
+
+    assert_eq!(loaded.theme_mode.as_deref(), Some("sunset_veil"));
+    assert_eq!(loaded.created_at, workspace.created_at);
+    assert_eq!(loaded.last_opened_at, Some(1_800_000_000));
+}
+
+#[test]
 fn v4_window_groups_key_loads_as_workspaces_and_rewrites_as_v5() {
     let path = unique_session_test_dir("workspace-v4-migration").join("session.json");
     fs::create_dir_all(path.parent().expect("session dir")).expect("create session dir");

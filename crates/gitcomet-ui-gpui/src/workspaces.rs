@@ -48,6 +48,28 @@ impl WorkspaceManager {
         self.next_activation_order = self.next_activation_order.saturating_add(1);
         order
     }
+
+    /// Make `workspace_id` the frontmost workspace and stamp its open time.
+    fn activate(&mut self, workspace_id: WorkspaceId) -> bool {
+        self.active_workspace = Some(workspace_id);
+        let order = self.allocate_activation_order();
+        let Some(index) = self.workspace_index(workspace_id) else {
+            return false;
+        };
+        let workspace = &mut self.workspaces[index];
+        workspace.last_activation_order = order;
+        workspace.last_opened_at = Some(session::unix_time_now());
+        true
+    }
+
+    /// Focus can arrive while a window is still empty and has no workspace
+    /// mapping. Replay it once the window gains a workspace so the previously
+    /// focused one is not mistaken for the frontmost.
+    fn replay_focus(&mut self, window_id: WindowId, workspace_id: WorkspaceId) -> bool {
+        self.focused_window == Some(window_id)
+            && self.active_workspace != Some(workspace_id)
+            && self.activate(workspace_id)
+    }
 }
 
 pub(crate) fn initialize(cx: &mut App, workspaces: Vec<Workspace>) {
@@ -80,7 +102,8 @@ where
 
 /// Synchronize durable workspace membership with one normal window and return the
 /// workspace identity the view should retain. Empty ephemeral windows remain
-/// identity-less; an empty durable window deletes its workspace.
+/// identity-less; an empty window deletes an anonymous workspace but keeps a
+/// customized one (the window then shows Home inside it).
 pub(crate) fn sync_window<C>(
     cx: &mut C,
     window_id: WindowId,
@@ -100,6 +123,24 @@ where
             if repositories.is_empty() {
                 let workspace_id = requested_workspace_id
                     .or_else(|| manager.window_workspaces.get(&window_id).copied());
+                if let Some(workspace_id) = workspace_id
+                    && let Some(index) = manager.workspace_index(workspace_id)
+                    && manager.workspaces[index].is_customized()
+                {
+                    manager.window_workspaces.insert(window_id, workspace_id);
+                    let workspace = &mut manager.workspaces[index];
+                    let mut changed = !workspace.repositories.is_empty()
+                        || workspace.active_repository.is_some()
+                        || !workspace.restore_on_launch;
+                    workspace.repositories.clear();
+                    workspace.active_repository = None;
+                    workspace.restore_on_launch = true;
+                    changed |= manager.replay_focus(window_id, workspace_id);
+                    return (
+                        Some(workspace_id),
+                        (changed && manager.persist_to_disk).then(|| manager.workspaces.clone()),
+                    );
+                }
                 manager.window_workspaces.remove(&window_id);
                 if manager.focused_window == Some(window_id) {
                     manager.active_workspace = None;
@@ -151,20 +192,7 @@ where
                 changed = true;
             }
 
-            // Focus can arrive while a new window is still empty and therefore
-            // has no workspace mapping. Replay it when the first repository makes
-            // the window durable so the previously focused workspace is no longer
-            // mistaken for the frontmost one.
-            if manager.focused_window == Some(window_id)
-                && manager.active_workspace != Some(workspace_id)
-            {
-                manager.active_workspace = Some(workspace_id);
-                let order = manager.allocate_activation_order();
-                if let Some(index) = manager.workspace_index(workspace_id) {
-                    manager.workspaces[index].last_activation_order = order;
-                    changed = true;
-                }
-            }
+            changed |= manager.replay_focus(window_id, workspace_id);
 
             (
                 Some(workspace_id),
@@ -191,10 +219,7 @@ where
         if manager.active_workspace == Some(workspace_id) {
             return None;
         }
-        manager.active_workspace = Some(workspace_id);
-        let order = manager.allocate_activation_order();
-        let index = manager.workspace_index(workspace_id)?;
-        manager.workspaces[index].last_activation_order = order;
+        manager.activate(workspace_id).then_some(())?;
         manager.persist_to_disk.then(|| manager.workspaces.clone())
     });
     persist_if_changed(changed_workspaces);
@@ -226,8 +251,9 @@ where
 }
 
 /// Remove a live window and its durable workspace entirely. This is used when a
-/// repository move empties the source window: unlike an explicit user close,
-/// there is no workspace left to recover from the picker.
+/// repository move empties the source window of an anonymous workspace: unlike
+/// an explicit user close, there is nothing left to recover. Callers keep a
+/// customized workspace (and its window) instead.
 pub(crate) fn discard_workspace_for_window<C>(cx: &mut C, window_id: WindowId)
 where
     C: BorrowAppContext,
@@ -279,13 +305,13 @@ where
     persist_if_changed(changed_workspaces);
 }
 
-/// Change the visual identity of one durable window workspace. This applies to
-/// both live and recoverable workspaces; the caller is responsible for repainting
-/// any live window that currently owns the workspace.
-pub(crate) fn set_workspace_color<C>(
+/// Apply `edit` to one workspace, live or recoverable, and persist on change.
+/// A workspace left empty and uncustomized is removed, matching what
+/// `sync_window` would do. Callers repaint any live window that owns it.
+fn update_workspace<C>(
     cx: &mut C,
     workspace_id: WorkspaceId,
-    color: Option<session::WorkspaceColor>,
+    edit: impl FnOnce(&mut Workspace) -> bool,
 ) -> bool
 where
     C: BorrowAppContext,
@@ -298,10 +324,19 @@ where
             let Some(index) = manager.workspace_index(workspace_id) else {
                 return (false, None);
             };
-            if manager.workspaces[index].color == color {
+            if !edit(&mut manager.workspaces[index]) {
                 return (false, None);
             }
-            manager.workspaces[index].color = color;
+            let workspace = &manager.workspaces[index];
+            if workspace.repositories.is_empty() && !workspace.is_customized() {
+                manager.workspaces.remove(index);
+                manager
+                    .window_workspaces
+                    .retain(|_, mapped| *mapped != workspace_id);
+                if manager.active_workspace == Some(workspace_id) {
+                    manager.active_workspace = None;
+                }
+            }
             (
                 true,
                 manager.persist_to_disk.then(|| manager.workspaces.clone()),
@@ -309,6 +344,56 @@ where
         });
     persist_if_changed(changed_workspaces);
     changed
+}
+
+fn replace_if_changed<T: PartialEq>(slot: &mut T, value: T) -> bool {
+    if *slot == value {
+        return false;
+    }
+    *slot = value;
+    true
+}
+
+pub(crate) fn set_workspace_color<C>(
+    cx: &mut C,
+    workspace_id: WorkspaceId,
+    color: Option<session::WorkspaceColor>,
+) -> bool
+where
+    C: BorrowAppContext,
+{
+    update_workspace(cx, workspace_id, |workspace| {
+        replace_if_changed(&mut workspace.color, color)
+    })
+}
+
+/// A blank name clears it, falling back to the automatic name.
+#[allow(dead_code)] // Wired up by the Settings workspaces page.
+pub(crate) fn set_workspace_name<C>(cx: &mut C, workspace_id: WorkspaceId, name: &str) -> bool
+where
+    C: BorrowAppContext,
+{
+    let name = Some(name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    update_workspace(cx, workspace_id, |workspace| {
+        replace_if_changed(&mut workspace.custom_name, name)
+    })
+}
+
+/// `None` follows the app theme; otherwise a `theme_mode` key.
+#[allow(dead_code)] // Wired up by the per-workspace theme override.
+pub(crate) fn set_workspace_theme_mode<C>(
+    cx: &mut C,
+    workspace_id: WorkspaceId,
+    theme_mode: Option<String>,
+) -> bool
+where
+    C: BorrowAppContext,
+{
+    update_workspace(cx, workspace_id, |workspace| {
+        replace_if_changed(&mut workspace.theme_mode, theme_mode)
+    })
 }
 
 pub(crate) fn update_window_environment<C>(
@@ -477,6 +562,79 @@ mod tests {
 
     fn path(value: &str) -> PathBuf {
         PathBuf::from(value)
+    }
+
+    #[gpui::test]
+    fn customized_workspace_survives_losing_its_last_repository(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, _| gpui::Empty);
+        cx.update(|cx| initialize_for_test(cx, Vec::new()));
+        let id = cx.update(|cx| {
+            sync_window(cx, window.window_id(), None, vec![path("/repos/a")], None)
+                .expect("durable workspace")
+        });
+        cx.update(|cx| assert!(set_workspace_name(cx, id, "  Client work ")));
+
+        let kept = cx.update(|cx| sync_window(cx, window.window_id(), Some(id), Vec::new(), None));
+
+        assert_eq!(kept, Some(id), "the window keeps its customized workspace");
+        let workspace = cx
+            .update(|cx| workspace_for_window(cx, window.window_id()))
+            .expect("still mapped to the window");
+        assert_eq!(workspace.custom_name.as_deref(), Some("Client work"));
+        assert!(workspace.repositories.is_empty());
+        assert!(workspace.restore_on_launch);
+    }
+
+    #[gpui::test]
+    fn clearing_the_last_customization_of_an_empty_workspace_removes_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let window = cx.add_window(|_, _| gpui::Empty);
+        cx.update(|cx| initialize_for_test(cx, Vec::new()));
+        let id = cx.update(|cx| {
+            sync_window(cx, window.window_id(), None, vec![path("/repos/a")], None)
+                .expect("durable workspace")
+        });
+        cx.update(|cx| {
+            assert!(set_workspace_theme_mode(cx, id, Some("tokyo_night".into())));
+            assert!(
+                !set_workspace_theme_mode(cx, id, Some("tokyo_night".into())),
+                "an unchanged value reports no change"
+            );
+        });
+        cx.update(|cx| sync_window(cx, window.window_id(), Some(id), Vec::new(), None));
+        assert!(cx.update(|cx| workspace(cx, id)).is_some());
+
+        cx.update(|cx| assert!(set_workspace_theme_mode(cx, id, None)));
+
+        assert!(cx.update(|cx| workspace(cx, id)).is_none());
+        assert!(
+            cx.update(|cx| workspace_for_window(cx, window.window_id()))
+                .is_none()
+        );
+    }
+
+    #[gpui::test]
+    fn focusing_a_window_stamps_its_workspace_open_time(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, _| gpui::Empty);
+        cx.update(|cx| initialize_for_test(cx, Vec::new()));
+        let id = cx.update(|cx| {
+            sync_window(cx, window.window_id(), None, vec![path("/repos/a")], None)
+                .expect("durable workspace")
+        });
+        assert_eq!(
+            cx.update(|cx| workspace(cx, id)).unwrap().last_opened_at,
+            None
+        );
+
+        cx.update(|cx| mark_window_active(cx, window.window_id()));
+
+        assert!(
+            cx.update(|cx| workspace(cx, id))
+                .unwrap()
+                .last_opened_at
+                .is_some()
+        );
     }
 
     #[gpui::test]

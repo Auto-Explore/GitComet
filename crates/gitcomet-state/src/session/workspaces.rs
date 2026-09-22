@@ -89,6 +89,28 @@ pub struct Workspace {
     pub last_activation_order: u64,
     pub layout: WorkspaceLayout,
     pub placement: PortableWindowPlacement,
+    /// Theme override in the global `theme_mode` key space; None follows the app.
+    pub theme_mode: Option<String>,
+    /// Unix seconds.
+    pub created_at: Option<u64>,
+    /// Unix seconds; bumped whenever the workspace's window gains focus.
+    pub last_opened_at: Option<u64>,
+}
+
+pub fn unix_time_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+fn is_customized_parts(
+    custom_name: Option<&str>,
+    color: Option<WorkspaceColor>,
+    theme_mode: Option<&str>,
+) -> bool {
+    custom_name.is_some_and(|name| !name.trim().is_empty())
+        || color.is_some()
+        || theme_mode.is_some_and(|mode| !mode.trim().is_empty())
 }
 
 impl Workspace {
@@ -104,7 +126,20 @@ impl Workspace {
             last_activation_order: 0,
             layout: WorkspaceLayout::default(),
             placement: PortableWindowPlacement::default(),
+            theme_mode: None,
+            created_at: Some(unix_time_now()),
+            last_opened_at: None,
         }
+    }
+
+    /// Personalized workspaces outlive their last repository; anonymous ones
+    /// are deleted with it.
+    pub fn is_customized(&self) -> bool {
+        is_customized_parts(
+            self.custom_name.as_deref(),
+            self.color,
+            self.theme_mode.as_deref(),
+        )
     }
 
     pub fn display_name(&self) -> String {
@@ -148,6 +183,22 @@ pub(super) struct WorkspaceFile {
     pub(super) last_activation_order: u64,
     pub(super) layout: WorkspaceLayout,
     pub(super) placement: PortableWindowPlacement,
+    #[serde(default)]
+    pub(super) theme_mode: Option<String>,
+    #[serde(default)]
+    pub(super) created_at: Option<u64>,
+    #[serde(default)]
+    pub(super) last_opened_at: Option<u64>,
+}
+
+impl WorkspaceFile {
+    fn is_customized(&self) -> bool {
+        is_customized_parts(
+            self.custom_name.as_deref(),
+            self.color,
+            self.theme_mode.as_deref(),
+        )
+    }
 }
 
 pub fn persist_workspaces(workspaces: &[Workspace]) -> io::Result<()> {
@@ -167,9 +218,10 @@ pub fn persist_workspaces_to_path(workspaces: &[Workspace], path: &Path) -> io::
         // progress and for diagnostics/performance tooling that still reads
         // the old single-window fields. Closed workspaces must not leak into this
         // projection or they would be restored by an older launch path.
+        // An empty (customized) workspace must not blank the projection.
         let projected = stored_workspaces
             .iter()
-            .filter(|workspace| workspace.restore_on_launch)
+            .filter(|workspace| workspace.restore_on_launch && !workspace.repositories.is_empty())
             .max_by_key(|workspace| workspace.last_activation_order);
         if let Some(workspace) = projected {
             file.open_repos.clone_from(&workspace.repositories);
@@ -200,8 +252,9 @@ pub(super) fn parse_workspaces(workspaces: Vec<WorkspaceFile>) -> Vec<Workspace>
         if !seen_ids.insert(workspace.id) {
             continue;
         }
+        let customized = workspace.is_customized();
         let repositories = parse_path_list(workspace.repositories);
-        if repositories.is_empty() {
+        if repositories.is_empty() && !customized {
             continue;
         }
         let active_repository = workspace
@@ -221,6 +274,9 @@ pub(super) fn parse_workspaces(workspaces: Vec<WorkspaceFile>) -> Vec<Workspace>
             last_activation_order: workspace.last_activation_order,
             layout: workspace.layout,
             placement: workspace.placement,
+            theme_mode: workspace.theme_mode.and_then(non_empty_string),
+            created_at: workspace.created_at,
+            last_opened_at: workspace.last_opened_at,
         });
     }
     parsed
@@ -240,7 +296,7 @@ pub(super) fn workspaces_to_file(workspaces: &[Workspace]) -> Vec<WorkspaceFile>
                 .map(|path| path_storage_key(path))
                 .collect(),
         );
-        if repositories.is_empty() {
+        if repositories.is_empty() && !workspace.is_customized() {
             continue;
         }
         let active_repository = workspace
@@ -261,6 +317,9 @@ pub(super) fn workspaces_to_file(workspaces: &[Workspace]) -> Vec<WorkspaceFile>
             last_activation_order: workspace.last_activation_order,
             layout: workspace.layout.clone(),
             placement: workspace.placement.clone(),
+            theme_mode: workspace.theme_mode.clone().and_then(non_empty_string),
+            created_at: workspace.created_at,
+            last_opened_at: workspace.last_opened_at,
         });
     }
     stored
@@ -286,6 +345,9 @@ pub(super) fn legacy_workspace_from_projection(file: &UiSessionFile) -> Option<W
             untracked_height: file.untracked_height,
         },
         placement: PortableWindowPlacement::default(),
+        theme_mode: None,
+        created_at: None,
+        last_opened_at: None,
     })
 }
 
