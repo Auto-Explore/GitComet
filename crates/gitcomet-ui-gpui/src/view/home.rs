@@ -699,6 +699,15 @@ impl GitCometView {
                             )
                             .child(
                                 div()
+                                    .id("home_tagline")
+                                    .debug_selector(|| "home_tagline".to_string())
+                                    .mt(scaled_px(-8.0))
+                                    .text_size(theme.ui_text(14.0))
+                                    .text_color(colors.muted)
+                                    .child("Fastest Open Source Git GUI"),
+                            )
+                            .child(
+                                div()
                                     .flex()
                                     .flex_wrap()
                                     .gap(scaled_px(10.0))

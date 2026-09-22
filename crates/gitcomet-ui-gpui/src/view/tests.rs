@@ -3587,6 +3587,7 @@ fn home_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppConte
     for selector in [
         "repository_entry_screen",
         "home_title",
+        "home_tagline",
         "home_open_repo_action",
         "home_clone_repo_action",
         "home_init_repo_action",
