@@ -61,12 +61,25 @@ pub struct SavedWindowFrame {
     pub height: u32,
 }
 
+/// Window edges a tiling window manager had snapped to when last captured.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct SavedWindowTiling {
+    pub top: bool,
+    pub left: bool,
+    pub right: bool,
+    pub bottom: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PortableWindowPlacement {
     pub normal_frame: Option<SavedWindowFrame>,
     pub captured_visible_frame: Option<SavedWindowFrame>,
     pub display_id: Option<String>,
     pub state: SavedWindowState,
+    /// Diagnostic only: tiling and snapping belong to the window manager and
+    /// cannot be requested back, so restore uses the last frame instead.
+    #[serde(default)]
+    pub tiled: Option<SavedWindowTiling>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]

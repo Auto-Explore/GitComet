@@ -896,6 +896,19 @@ where
     };
     let reported_frame = frame_from_bounds(window.window_bounds().get_bounds());
     let normal_frame = captured_normal_frame(state, reported_frame, previous);
+    let tiled = match window.window_decorations() {
+        gpui::Decorations::Client { tiling }
+            if tiling.top || tiling.left || tiling.right || tiling.bottom =>
+        {
+            Some(session::SavedWindowTiling {
+                top: tiling.top,
+                left: tiling.left,
+                right: tiling.right,
+                bottom: tiling.bottom,
+            })
+        }
+        _ => None,
+    };
     session::PortableWindowPlacement {
         normal_frame: Some(normal_frame),
         captured_visible_frame: display
@@ -905,6 +918,7 @@ where
             .as_ref()
             .and_then(|display| display_uuid(display.as_ref())),
         state,
+        tiled,
     }
 }
 
@@ -1986,8 +2000,19 @@ pub(crate) fn mark_workspace_closed_from_view<T>(
     crate::workspaces::mark_window_closed(cx, window_id);
 }
 
+/// Record the window's latest pane layout before it closes; the debounced
+/// write may still be pending.
+fn flush_workspace_environment_for(cx: &mut App, window_id: gpui::WindowId) {
+    if let Some(entry) = normal_gitcomet_window_by_id(cx, window_id) {
+        let _ = entry
+            .view
+            .update(cx, |view, cx| view.flush_workspace_environment(cx));
+    }
+}
+
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
+        flush_workspace_environment_for(cx, window.window_id());
         crate::workspaces::mark_window_closed(cx, window.window_id());
         mark_clean_shutdown_if_last_window(cx);
         let _ = window.update(cx, |_root, window, _cx| {
@@ -2009,6 +2034,7 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
         })
         .unwrap_or(false);
     if !handled {
+        flush_workspace_environment_for(cx, window_id);
         crate::workspaces::mark_window_closed(cx, window_id);
         mark_clean_shutdown_if_last_window(cx);
         window.remove_window();
@@ -4074,6 +4100,7 @@ mod tests {
             captured_visible_frame: None,
             display_id: None,
             state: session::SavedWindowState::Windowed,
+            tiled: None,
         };
         let fallback_size = size(px(900.0), px(650.0));
         let min_size = size(px(820.0), px(560.0));
@@ -5136,6 +5163,38 @@ mod tests {
             assert_eq!(adopted.id, id);
             assert!(adopted.repositories.is_empty());
         });
+    }
+
+    #[gpui::test]
+    fn closing_the_active_window_saves_a_layout_change_the_debounce_has_not_written(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let mut workspace = session::Workspace::new(Vec::new());
+        workspace.custom_name = Some("Layout".to_string());
+        let id = workspace.id;
+        let (view, cx, window_id) = empty_window_for_adoption(cx, vec![workspace]);
+        cx.update(|window, app| {
+            open_workspace_in_window(app, window_id, id);
+            window.activate_window();
+        });
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                crate::view::test_support::set_sidebar_width_for_test(view, px(333.0), cx);
+            });
+        });
+
+        cx.update(|_window, app| close_active_window(app));
+
+        let saved = cx
+            .cx
+            .update(|app| crate::workspaces::workspace(app, id))
+            .expect("a customized workspace outlives its window");
+        assert_eq!(saved.layout.sidebar_width, Some(333));
+        assert!(
+            !saved.restore_on_launch,
+            "an explicit close is not restored"
+        );
     }
 
     #[gpui::test]

@@ -3220,6 +3220,12 @@ fn theme_mode_and_timestamps_round_trip() {
     );
     workspace.theme_mode = Some("  sunset_veil  ".to_string());
     workspace.last_opened_at = Some(1_800_000_000);
+    workspace.placement.tiled = Some(SavedWindowTiling {
+        left: true,
+        top: true,
+        bottom: true,
+        right: false,
+    });
 
     persist_workspaces_to_path(std::slice::from_ref(&workspace), &path)
         .expect("persist workspaces");
@@ -3228,6 +3234,7 @@ fn theme_mode_and_timestamps_round_trip() {
     assert_eq!(loaded.theme_mode.as_deref(), Some("sunset_veil"));
     assert_eq!(loaded.created_at, workspace.created_at);
     assert_eq!(loaded.last_opened_at, Some(1_800_000_000));
+    assert_eq!(loaded.placement.tiled, workspace.placement.tiled);
 }
 
 #[test]

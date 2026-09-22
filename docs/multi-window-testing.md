@@ -4,15 +4,19 @@ This document is the release test plan for GitComet's multi-window support. It c
 
 ## Expected behavior
 
-- A new window starts empty and does not create a saved workspace until its first repository is added.
+- A new window starts empty on the Home page (Open, Clone, Initialize, saved workspaces, recent repositories) and does not create a saved workspace until its first repository is added.
 - Every non-empty window is an independent workspace with its own active tab and layout.
 - Quitting GitComet restores every window that was open at quit time on the next launch.
 - Closing a window before quitting keeps its workspace recoverable in the repository picker but does not restore it automatically.
-- Closing the final repository in a window removes the empty workspace. Moving the final repository out closes the empty source window.
+- Closing the final repository in a window removes an anonymous empty workspace. Moving the final repository out closes the empty source window.
+- A customized workspace (a name, a title-bar color, or a theme override) outlives its last repository: its window stays open on Home, keeps its title-bar chip, and the empty workspace is saved and restored until it is deleted in Settings.
 - Saved windowed bounds, display, maximized state, fullscreen state, and relative stacking order are restored when possible. Bounds are rebased and clamped when the saved display is missing or smaller.
+- Tiled or snapped placement (tiling window managers, Windows Snap) is owned by the window manager and cannot be requested back. The tiled edges are recorded for diagnostics and the window reopens at its last frame.
 - `gitcomet <repository>` sends the request to the running browser process. The default target is the active window; the General setting can instead request a new window. A repository already open in any window is focused instead of duplicated.
 - Zoom remains available through menus and shortcuts but is not shown in individual window footers because it is process-wide.
 - Right-clicking a workspace in the repository picker exposes its title-bar color. The choice is per workspace, survives closing/relaunching, and **Default** returns to the theme-derived color.
+- **Settings › Workspaces** renames a workspace, sets its title-bar color and an optional theme override, opens it, or deletes it. A theme override applies only to that workspace's window; changing the app theme leaves overridden windows alone.
+- **Open Workspace** (`Ctrl/Cmd+Shift+R`, the command palette, the app menu) lists only workspaces. From an empty window the chosen workspace opens in that window; otherwise its own window is focused or opened.
 - On Linux and FreeBSD, **Follow system** uses the desktop button layout and hides minimize/maximize while tiled. Explicit Show/Hide modes override that behavior. macOS keeps native traffic lights.
 
 ## Automated coverage
@@ -27,6 +31,9 @@ cargo test -p gitcomet-ui-gpui --lib window_controls::tests
 cargo test -p gitcomet-ui-gpui --lib review_regression -- --test-threads=1
 cargo test -p gitcomet-ui-gpui --lib app::tests::new_window_shortcuts_open_new_windows
 cargo test -p gitcomet-ui-gpui --lib app::tests::moving_the_only_repository_to_a_new_window_closes_the_source
+cargo test -p gitcomet-ui-gpui --lib settings_window::tests::workspaces
+cargo test -p gitcomet-ui-gpui --lib view::tests::home
+cargo test -p gitcomet-ui-gpui --lib workspace_theme_override
 ```
 
 Before merge, run the broad regression gates:
@@ -101,6 +108,15 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 4. On Linux/FreeBSD, test floating and tiled states with **Follow system**, including a desktop layout that places/reorders buttons on the left. Verify side and order are preserved, then test explicit Show and Hide. Hide must leave Close available.
 5. On Windows, verify minimize, maximize/restore, close, title dragging, and double-click maximize in Show and Hide modes.
 6. On macOS, verify native traffic lights and fullscreen remain functional, the workspace color applies to GitComet's content title bar, and the custom controls setting does not replace native chrome.
+
+### 5a. Workspaces, Home, and Open Workspace
+
+1. Launch with no session. Verify Home shows Open, Clone, and Initialize, empty Workspaces and Recent repositories lists, and the app menu in the title bar. Drop a repository folder on Home and verify it opens.
+2. Open A and B in one window. In **Settings › Workspaces** verify that workspace is preselected; rename it, pick a title-bar color, and choose a theme different from the app theme. Verify only that window re-themes and its title and chip update. Change the app theme and verify the overridden window keeps its theme while other windows follow.
+3. Close B, then A. Verify the window stays on Home with the workspace's name and chip. Quit and relaunch; verify the empty workspace reopens on Home. Delete it in Settings and verify it disappears everywhere.
+4. Close a window holding C and D. From a new empty window, choose that workspace on Home and verify C and D open in the same window (no second window) with the saved pane layout, while the window keeps its own position.
+5. Press `Ctrl/Cmd+Shift+R` with nothing focused, type a repository name, and press Enter. Verify only workspaces are listed and filtering matches the repositories they hold. Repeat from the command palette and the app menu.
+6. Resize the sidebar and immediately close the window with `Ctrl/Cmd+Shift+W`. Recover the workspace and verify the new width was kept.
 
 ### 6. Session migration and failure recovery
 
