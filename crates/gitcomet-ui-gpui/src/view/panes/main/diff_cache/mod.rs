@@ -501,6 +501,14 @@ impl MainPaneView {
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
+                    // Rows swapped in place keep every key the visible-rows pass
+                    // checks when a line changed without adding one (a modify
+                    // row), so its scrollbar markers would keep marking the old
+                    // rows. Recompute them against the new ones.
+                    if this.diff_visible_is_file_view && !this.is_collapsed_diff_projection_active()
+                    {
+                        this.diff_scrollbar_markers_cache = this.compute_diff_scrollbar_markers();
+                    }
                     this.clear_diff_text_projected_highlights();
                     // The rows just changed under their own indices. On the
                     // clearing path `reset_file_diff_cache_data` already did

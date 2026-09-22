@@ -58,6 +58,33 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    /// Whether the action can rewrite files in the checkout (index-only and
+    /// ref-only actions cannot).
+    pub fn writes_worktree(self) -> bool {
+        match self {
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash => true,
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DropStash => false,
+        }
+    }
+
     pub(crate) fn hook_activity_label(self) -> &'static str {
         match self {
             Self::CheckoutBranch | Self::CheckoutRemoteBranch | Self::CheckoutCommit => "Checkout",

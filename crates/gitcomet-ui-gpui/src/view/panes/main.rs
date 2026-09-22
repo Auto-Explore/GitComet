@@ -25,7 +25,9 @@ pub(in crate::view) use diff_search::{
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl MainPaneView`.
 pub(in crate::view) use core_impl::MainPaneInit;
-pub(in crate::view) use file_disk::{DiskIdentity, DiskSurface, FileDiskNotice, FileDiskSeen};
+pub(in crate::view) use file_disk::{
+    DiskCheckCause, DiskIdentity, DiskSurface, FileDiskNotice, FileDiskSeen,
+};
 #[cfg(test)]
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::*;

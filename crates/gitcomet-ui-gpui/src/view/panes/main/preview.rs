@@ -48,6 +48,8 @@ struct IndexedWorktreePreview {
     source_text: Option<SharedString>,
     /// Taken before the read, so a write during it reads as a change.
     stamp: DiskStamp,
+    /// Of the materialized text, computed here on the read's thread.
+    content_hash: Option<u64>,
 }
 
 #[inline]
@@ -120,7 +122,7 @@ fn validate_utf8_chunk_streaming(
 /// past the ceiling this re-reads the file plainly rather than refusing it.
 pub(super) fn read_worktree_file_for_editing(
     path: &std::path::Path,
-) -> Result<(SharedString, DiskStamp), String> {
+) -> Result<(SharedString, DiskStamp, u64), String> {
     let len = std::fs::metadata(path)
         .map_err(|e| match e.kind() {
             // Reachable from a commit's file list: the editor always opens the
@@ -141,13 +143,16 @@ pub(super) fn read_worktree_file_for_editing(
     }
     let indexed = index_utf8_worktree_preview_file(path)?;
     let stamp = indexed.stamp;
-    if let Some(text) = indexed.source_text {
-        return Ok((text, stamp));
+    if let (Some(text), Some(hash)) = (indexed.source_text, indexed.content_hash) {
+        return Ok((text, stamp, hash));
     }
     // Between the parse ceiling and the editor's own limit the indexer stops
     // materializing, so read it plainly. Already validated as UTF-8 above.
     std::fs::read_to_string(path)
-        .map(|text| (SharedString::from(text), stamp))
+        .map(|text| {
+            let hash = disk_content_hash(text.as_bytes());
+            (SharedString::from(text), stamp, hash)
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -237,6 +242,9 @@ fn index_utf8_worktree_preview_file(
         .transpose()
         .map_err(|_| "File is not valid UTF-8; binary preview is not supported.".to_string())?
         .map(SharedString::from);
+    let content_hash = source_text
+        .as_ref()
+        .map(|text| disk_content_hash(text.as_bytes()));
 
     Ok(IndexedWorktreePreview {
         source_len,
@@ -244,6 +252,7 @@ fn index_utf8_worktree_preview_file(
         line_flags: Arc::from(line_flags),
         source_text,
         stamp,
+        content_hash,
     })
 }
 
@@ -1747,13 +1756,8 @@ impl MainPaneView {
                 }
                 match result {
                     Ok(preview) => {
-                        this.worktree_preview_disk = DiskIdentity::loaded(
-                            preview.stamp,
-                            preview
-                                .source_text
-                                .as_ref()
-                                .map(|text| disk_content_hash(text.as_bytes())),
-                        );
+                        this.worktree_preview_disk =
+                            DiskIdentity::loaded(preview.stamp, preview.content_hash);
                         if let Some(source_text) = preview.source_text {
                             this.set_worktree_preview_ready_materialized_source(
                                 display_path.clone(),

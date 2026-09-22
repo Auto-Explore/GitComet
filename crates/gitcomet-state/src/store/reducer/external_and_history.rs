@@ -842,7 +842,9 @@ fn finish_repo_action(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
-        repo_state.bump_local_worktree_write_rev();
+        if action.writes_worktree() {
+            repo_state.bump_local_worktree_write_rev();
+        }
         match completion {
             RepoActionCompletion::Succeeded => {
                 repo_state.feedback.last_error = None;

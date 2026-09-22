@@ -3518,6 +3518,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_disk_notice: Option<FileDiskNotice>,
     /// Generation of the last disk check, so a superseded check is dropped.
     pub(in crate::view) file_disk_check_seq: u64,
+    /// Why the check in flight was started, if one is.
+    pub(in crate::view) file_disk_check_in_flight: Option<DiskCheckCause>,
     /// The surface on screen and the repo revisions it was last read or
     /// checked at. `None` until a read lands, so bumps that predate the read
     /// never fire a check.

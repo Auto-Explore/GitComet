@@ -1697,7 +1697,10 @@ pub struct RepoState {
     /// exists instead of selecting the dropped tab's neighbour.
     external_drop_previous_active_repo: Option<RepoId>,
     pub loads_in_flight: RepoLoadsInFlight,
+    /// Fetches and prunes as well as pulls.
     pub pull_in_flight: u32,
+    /// The pulls among `pull_in_flight`: those also merge into the checkout.
+    pub worktree_pull_in_flight: u32,
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
     pub local_actions_in_flight: u32,
@@ -1828,6 +1831,7 @@ impl RepoState {
             external_drop_previous_active_repo: None,
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
+            worktree_pull_in_flight: 0,
             push_in_flight: 0,
             worktrees_in_flight: 0,
             local_actions_in_flight: 0,
@@ -2880,12 +2884,15 @@ impl RepoState {
         self.local_worktree_write_rev = self.local_worktree_write_rev.wrapping_add(1);
     }
 
-    /// A GitComet-run git command that may write worktree files is still
-    /// running. Push and worktree listing never touch the checkout.
+    /// A long-running GitComet git command that writes the checkout is still
+    /// going: merge/rebase/reset family, a pull, or a commit whose hooks may
+    /// rewrite files. Its watcher flush can arrive before it finishes. Not
+    /// fetch, push, staging or our own editor save — counting those would pass
+    /// off another program's edit as ours. Short commands (checkout, discard,
+    /// stash) finish before the debounced flush and need no entry here.
     pub fn git_operation_in_flight(&self) -> bool {
-        self.local_actions_in_flight > 0
-            || self.sequencer_actions_in_flight > 0
-            || self.pull_in_flight > 0
+        self.sequencer_actions_in_flight > 0
+            || self.worktree_pull_in_flight > 0
             || self.commit_in_flight > 0
     }
 
@@ -4031,18 +4038,20 @@ mod tests {
         let mut repo = new_repo();
         assert!(!repo.git_operation_in_flight());
         for set in [
-            |repo: &mut RepoState| repo.local_actions_in_flight = 1,
             |repo: &mut RepoState| repo.sequencer_actions_in_flight = 1,
-            |repo: &mut RepoState| repo.pull_in_flight = 1,
+            |repo: &mut RepoState| repo.worktree_pull_in_flight = 1,
             |repo: &mut RepoState| repo.commit_in_flight = 1,
         ] {
             let mut repo = new_repo();
             set(&mut repo);
             assert!(repo.git_operation_in_flight());
         }
-        // Push and worktree listing never touch the checkout.
+        // A fetch, a push, staging, an editor save: none writes the checkout
+        // behind the user's back.
+        repo.pull_in_flight = 1;
         repo.push_in_flight = 1;
         repo.worktrees_in_flight = 1;
+        repo.local_actions_in_flight = 1;
         assert!(!repo.git_operation_in_flight());
     }
 

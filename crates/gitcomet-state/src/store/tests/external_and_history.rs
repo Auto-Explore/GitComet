@@ -4407,7 +4407,7 @@ fn external_worktree_change_bumps_worktree_change_rev() {
 }
 
 #[test]
-fn repo_action_finished_bumps_local_worktree_write_rev() {
+fn repo_action_finished_bumps_local_worktree_write_rev_only_for_checkout_writers() {
     let (mut repos, id_alloc, mut state) = open_repo_showing_working_tree_file();
     let rev = |state: &AppState| state.repos[0].local_worktree_write_rev;
     let before = rev(&state);
@@ -4422,10 +4422,6 @@ fn repo_action_finished_bumps_local_worktree_write_rev() {
         },
     );
     assert_eq!(rev(&state), before, "dispatching moves nothing on disk yet");
-    assert!(
-        state.repos[0].git_operation_in_flight(),
-        "while it runs, a disk change is the command's"
-    );
 
     for result in [Ok(()), Err(Error::new(ErrorKind::Cancelled))] {
         let expected = rev(&state) + 1;
@@ -4445,15 +4441,37 @@ fn repo_action_finished_bumps_local_worktree_write_rev() {
             "a failed command may still have written"
         );
     }
+
+    // Staging touches the index only.
+    let staged = rev(&state);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: RepoId(1),
+            action: RepoActionKind::StagePath,
+            result: Ok(()),
+        }),
+    );
+    assert_eq!(rev(&state), staged);
     assert_eq!(state.repos[0].worktree_change_rev, 0);
 }
 
 #[test]
-fn repo_command_finished_bumps_local_worktree_write_rev() {
+fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writers() {
     let (mut repos, id_alloc, mut state) = open_repo_showing_working_tree_file();
     let rev = |state: &AppState| state.repos[0].local_worktree_write_rev;
+    let finish = |command: RepoCommandKind| {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command,
+            result: Ok(CommandOutput::empty_success("git")),
+        })
+    };
     let before = rev(&state);
 
+    // Our own editor save is recognized by its bytes, not credited to git.
     reduce(
         &mut repos,
         &id_alloc,
@@ -4465,36 +4483,55 @@ fn repo_command_finished_bumps_local_worktree_write_rev() {
             stage: false,
         },
     );
-    assert_eq!(rev(&state), before);
-    assert!(state.repos[0].git_operation_in_flight());
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id: RepoId(1),
-            command: RepoCommandKind::SaveWorktreeFile {
-                path: PathBuf::from("a.txt"),
-                stage: false,
-            },
-            result: Ok(CommandOutput::empty_success("save")),
-        }),
-    );
-    assert_eq!(rev(&state), before + 1);
     assert!(!state.repos[0].git_operation_in_flight());
-
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id: RepoId(1),
-            command: RepoCommandKind::Pull {
-                mode: PullMode::Default,
-            },
-            result: Ok(CommandOutput::empty_success("git pull")),
+        finish(RepoCommandKind::SaveWorktreeFile {
+            path: PathBuf::from("a.txt"),
+            stage: false,
         }),
     );
-    assert_eq!(rev(&state), before + 2);
+    assert_eq!(rev(&state), before);
+
+    // A fetch runs for seconds and never touches the checkout.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::FetchAll { repo_id: RepoId(1) },
+    );
+    assert!(state.repos[0].pull_in_flight > 0);
+    assert!(!state.repos[0].git_operation_in_flight());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        finish(RepoCommandKind::FetchAll),
+    );
+    assert_eq!(rev(&state), before);
+
+    // A pull does, and its flush can arrive while it is still running.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Default,
+        },
+    );
+    assert!(state.repos[0].git_operation_in_flight());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        finish(RepoCommandKind::Pull {
+            mode: PullMode::Default,
+        }),
+    );
+    assert!(!state.repos[0].git_operation_in_flight());
+    assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
+    assert_eq!(rev(&state), before + 1);
 }

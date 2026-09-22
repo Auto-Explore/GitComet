@@ -13,7 +13,7 @@
 //! still there when the user comes back. Only the text and caret are stashed —
 //! `TextInput`'s undo stack does not leave the widget.
 
-use super::file_disk::{DiskCheckCause, DiskIdentity, DiskSurface, disk_content_hash};
+use super::file_disk::{DiskCheckCause, DiskIdentity, DiskSurface};
 use super::*;
 use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
@@ -538,6 +538,9 @@ impl MainPaneView {
                 self.file_editor_stash.remove(&(repo_id, path.clone()));
                 self.file_editor_loading = false;
                 self.file_editor_disk = stashed.disk;
+                // A read of this file still in flight describes the disk, not
+                // the buffer being handed back; it must not land over it.
+                self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
                 self.apply_file_editor_text(
                     stashed.text,
                     Some(stashed.cursor),
@@ -587,6 +590,14 @@ impl MainPaneView {
         self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
         let seq = self.file_editor_reread_seq;
         let revs = self.current_file_disk_revs();
+        // A re-read of the file on screen (not a first load into a blank
+        // buffer) must not replace text typed while it ran.
+        let text_at_start = (!self.file_editor_loading).then(|| {
+            self.file_editor_input.read_with(cx, |input, _| {
+                let snapshot = input.text_snapshot();
+                (snapshot.model_id(), snapshot.revision())
+            })
+        });
         cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
             let read = {
                 let absolute = absolute.clone();
@@ -607,11 +618,22 @@ impl MainPaneView {
                 {
                     return;
                 }
+                let typed_since = text_at_start.is_some_and(|start| {
+                    this.file_editor_input.read_with(cx, |input, _| {
+                        let snapshot = input.text_snapshot();
+                        (snapshot.model_id(), snapshot.revision()) != start
+                    })
+                });
+                if typed_since {
+                    // The keystrokes win. If the disk still disagrees, the
+                    // check raises the notice again.
+                    this.spawn_file_disk_check(DiskCheckCause::WorktreeChanged, cx);
+                    return;
+                }
                 this.file_editor_loading = false;
                 match result {
-                    Ok((text, stamp)) => {
-                        this.file_editor_disk =
-                            DiskIdentity::loaded(stamp, Some(disk_content_hash(text.as_bytes())));
+                    Ok((text, stamp, hash)) => {
+                        this.file_editor_disk = DiskIdentity::loaded(stamp, Some(hash));
                         // A retry after a failed read (the file came back).
                         this.file_editor_error = None;
                         // Compared as text, not by fingerprint: the buffer's
@@ -768,7 +790,7 @@ impl MainPaneView {
     }
 
     /// Restart the quiet-period timer that auto-save writes on.
-    fn schedule_file_editor_autosave(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn schedule_file_editor_autosave(&mut self, cx: &mut gpui::Context<Self>) {
         if !crate::ui_runtime::current().uses_cursor_blink() {
             // Headless/test runtimes have no timer to wait on; the caller's
             // explicit save path covers them.
@@ -782,7 +804,12 @@ impl MainPaneView {
                 .await;
             let _ = view.update(cx, |this, cx| {
                 this.file_editor_autosave = None;
-                if this.auto_save_file_edits && this.file_editor_dirty {
+                // Not while "File changed on disk" is asking: writing now
+                // would answer it for the user. Dismissing reschedules.
+                if this.auto_save_file_edits
+                    && this.file_editor_dirty
+                    && !this.file_disk_notice_awaits_editor()
+                {
                     this.save_file_editor_buffer(cx);
                 }
             });
@@ -805,6 +832,9 @@ impl MainPaneView {
         if self.file_editor_loading || !self.file_editor_dirty {
             return;
         }
+        // Every caller that gets here on purpose (button, Ctrl+S, Save all)
+        // is the user keeping their edits over the other program's.
+        self.answer_file_disk_notice_by_saving();
         let snapshot = self
             .file_editor_input
             .read_with(cx, |input, _| input.text_snapshot());
@@ -841,8 +871,7 @@ impl MainPaneView {
         self.file_editor_first_dirty_line = None;
         // The disk check must not mistake this write for someone else's,
         // whether it looks before or after the bytes land.
-        self.file_editor_disk
-            .note_pending_write(disk_content_hash(contents.as_bytes()));
+        self.file_editor_disk.note_pending_write(contents.clone());
         // Only the newest clean entry is worth keeping — it exists solely so a
         // write that fails leaves the text somewhere recoverable. Without this
         // every file saved in a session held a full copy of its contents alive
@@ -928,7 +957,9 @@ impl MainPaneView {
         if self.file_editor_loading || self.file_editor_key.is_none() || !self.file_editor_dirty {
             return;
         }
-        if self.auto_save_file_edits {
+        // With "File changed on disk" open the buffer is kept, not written:
+        // leaving the file is not an answer to the question.
+        if self.auto_save_file_edits && !self.file_disk_notice_awaits_editor() {
             self.save_file_editor_buffer(cx);
         } else {
             self.stash_current_file_editor_buffer(cx);

@@ -1397,7 +1397,6 @@ impl MainPaneView {
         cx.notify();
     }
 
-    /// The explicit "Save" button, shown while editing with auto-save off.
     /// The "File changed on disk" strip, when the notice names the surface on
     /// screen. Sits between the toolbar and the body; the body itself is left
     /// exactly as it was, which is the point.
@@ -1454,9 +1453,17 @@ impl MainPaneView {
                 .id("file_disk_notice")
                 .debug_selector(|| "file_disk_notice".to_string())
                 .mx_2()
-                .mt_2()
+                .mt_1()
                 .px_2()
                 .py_1()
+                // One row: message left, buttons right. The buttons drop below
+                // only once the pane is too narrow for both.
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap_x_3()
+                .gap_y_1()
                 // Neutral panel, status colour in the border — same reasoning
                 // as the crash banner and the toasts.
                 .bg(if theme.is_dark {
@@ -1471,45 +1478,48 @@ impl MainPaneView {
                     theme.colors.status.warning.border
                 })
                 .rounded(px(theme.radii.panel))
+                .text_size(theme.ui_text(13.0))
                 .child(
                     div()
+                        .debug_selector(|| "file_disk_notice_text".to_string())
+                        .flex_1()
+                        .min_w(px(200.0))
                         .flex()
-                        .flex_col()
-                        .gap_1()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_x_2()
                         .child(
                             div()
-                                .text_size(theme.ui_text(14.0))
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .child("File changed on disk"),
                         )
                         .child(
                             div()
-                                .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(format!("{actor} {verb} {name}.")),
                         )
                         .when(discards_edits, |d| {
                             d.child(
                                 div()
-                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Reloading discards your unsaved edits."),
                             )
-                        })
-                        .child(
-                            div()
-                                .pt_1()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(reload_button)
-                                .child(dismiss_button),
-                        ),
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(reload_button)
+                        .child(dismiss_button),
                 )
                 .into_any_element(),
         )
     }
 
+    /// The explicit "Save" button, shown while editing with auto-save off.
     fn file_editor_save_button(
         &self,
         theme: AppTheme,
