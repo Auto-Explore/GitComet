@@ -513,12 +513,35 @@ mod badges {
         );
     }
 
+    /// Every density must fit: Comfortable and Spacious widen every control.
+    const ALL_DENSITIES: [crate::appearance::UiDensity; 3] = crate::appearance::UiDensity::ALL;
+
     #[gpui::test]
-    fn tracked_branch_actions_stay_reachable_at_supported_narrow_widths(
+    fn tracked_branch_actions_stay_reachable_at_supported_narrow_widths_compact(
         cx: &mut gpui::TestAppContext,
     ) {
-        // Measures Compact layout; a fresh session now defaults to Comfortable.
-        cx.update(crate::appearance::pin_compact_for_test);
+        assert_tracked_branch_actions_reachable(cx, ALL_DENSITIES[0]);
+    }
+
+    #[gpui::test]
+    fn tracked_branch_actions_stay_reachable_at_supported_narrow_widths_comfortable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        assert_tracked_branch_actions_reachable(cx, ALL_DENSITIES[1]);
+    }
+
+    #[gpui::test]
+    fn tracked_branch_actions_stay_reachable_at_supported_narrow_widths_spacious(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        assert_tracked_branch_actions_reachable(cx, ALL_DENSITIES[2]);
+    }
+
+    fn assert_tracked_branch_actions_reachable(
+        cx: &mut gpui::TestAppContext,
+        density: crate::appearance::UiDensity,
+    ) {
+        cx.update(|app| crate::appearance::pin_density_for_test(app, density));
         let repo_id = RepoId(1);
         let mut repo = repo_with_upstream(repo_id);
         let branch = "feature/current-with-a-representative-name".to_string();
@@ -539,8 +562,19 @@ mod badges {
         let (_view, cx) = draw_with_repo(cx, repo, repo_id);
 
         // Exercise compact mode and one pixel beyond each responsive
-        // breakpoint, where a label expansion is most likely to overflow.
-        for width in [820.0, 961.0, 1121.0, 1401.0] {
+        // breakpoint (they move out at roomier densities), where a label
+        // expansion is most likely to overflow.
+        let [compact_max, condensed_max] =
+            crate::view::panels::action_bar_breakpoints(crate::appearance::Appearance {
+                density,
+                ..crate::appearance::Appearance::default()
+            });
+        for width in [
+            820.0,
+            961.0,
+            compact_max.floor() + 1.0,
+            condensed_max.floor() + 1.0,
+        ] {
             cx.simulate_resize(gpui::size(gpui::px(width), gpui::px(560.0)));
             redraw(cx);
             let viewport = cx.update(|window, _app| window.viewport_size());
@@ -548,7 +582,7 @@ mod badges {
             let right_group = cx.debug_bounds("right_action_group").expect("right group");
             assert!(
                 left_group.right() <= right_group.left(),
-                "action groups must not overlap at {width}px: {left_group:?}, {right_group:?}"
+                "action groups must not overlap at {width}px {density:?}: {left_group:?}, {right_group:?}"
             );
             for selector in [
                 "global_nav",
@@ -584,7 +618,7 @@ mod badges {
                 assert!(
                     bounds.left() >= containing_group.left()
                         && bounds.right() <= containing_group.right(),
-                    "{selector} must not be clipped by its action group at {width}px: {bounds:?} outside {containing_group:?}"
+                    "{selector} must not be clipped by its action group at {width}px {density:?}: {bounds:?} outside {containing_group:?}"
                 );
             }
         }
@@ -592,8 +626,16 @@ mod badges {
 
     #[gpui::test]
     fn merge_controls_stay_reachable_at_the_minimum_window_width(cx: &mut gpui::TestAppContext) {
-        // Measures Compact layout; a fresh session now defaults to Comfortable.
-        cx.update(crate::appearance::pin_compact_for_test);
+        for density in ALL_DENSITIES {
+            assert_merge_controls_reachable(cx, density);
+        }
+    }
+
+    fn assert_merge_controls_reachable(
+        cx: &mut gpui::TestAppContext,
+        density: crate::appearance::UiDensity,
+    ) {
+        cx.update(|app| crate::appearance::pin_density_for_test(app, density));
         let repo_id = RepoId(1);
         let mut repo = repo_with_upstream(repo_id);
         repo.merge_commit_message = Loadable::Ready(Some("Merge topic".to_string()));
@@ -605,7 +647,7 @@ mod badges {
         let controls = cx.debug_bounds("merge_controls").expect("merge controls");
         assert!(
             controls.left() >= left_group.left() && controls.right() <= left_group.right(),
-            "merge controls must not be clipped at minimum width: {controls:?} outside {left_group:?}"
+            "merge controls must not be clipped at minimum width ({density:?}): {controls:?} outside {left_group:?}"
         );
     }
 

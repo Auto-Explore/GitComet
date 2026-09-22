@@ -155,8 +155,16 @@ impl Appearance {
 
     /// Places a per-element (compact, comfortable) pair on the density ramp.
     /// Each element's own delta was measured, so scaling it keeps that intent.
+    /// Rounded to whole design pixels: Spacious's 1.6 step would otherwise
+    /// put rows and gaps on sub-pixel sizes (a 36.8 px history row).
     pub(crate) fn ramp(self, compact: f32, comfortable: f32) -> f32 {
-        compact + (comfortable - compact) * self.density.step()
+        (compact + (comfortable - compact) * self.density.step()).round()
+    }
+
+    /// Position on the density ramp (Compact 0, Comfortable 1, Spacious 1.6),
+    /// for callers that scale by a factor rather than size in pixels.
+    pub(crate) fn density_step(self) -> f32 {
+        self.density.step()
     }
 
     pub(crate) fn row_height(self, compact: f32, comfortable: f32) -> f32 {
@@ -194,7 +202,15 @@ pub(crate) fn initialize(session: &UiSession, cx: &mut App) {
 /// the view's own initialization (Comfortable for a fresh session) is skipped.
 #[cfg(test)]
 pub(crate) fn pin_compact_for_test(cx: &mut App) {
-    cx.set_global(Appearance::default());
+    pin_density_for_test(cx, UiDensity::Compact);
+}
+
+#[cfg(test)]
+pub(crate) fn pin_density_for_test(cx: &mut App, density: UiDensity) {
+    cx.set_global(Appearance {
+        density,
+        ..Appearance::default()
+    });
     cx.set_global(AppearanceInitialized(true));
 }
 
@@ -301,6 +317,27 @@ mod tests {
             "the neutral baseline"
         );
         assert_eq!(UiDensity::PREFERENCE_DEFAULT, UiDensity::Comfortable);
+    }
+
+    #[test]
+    fn every_density_sizes_controls_in_whole_design_pixels() {
+        // Spacious's 1.6 step put the history row at 36.8 px, which left
+        // scroll anchors a fraction of a pixel off and rows on sub-pixel edges.
+        for density in UiDensity::ALL {
+            let metrics = Appearance {
+                density,
+                ..Appearance::default()
+            };
+            for (compact, comfortable) in [(24.0, 32.0), (2.0, 6.0), (4.0, 6.0), (10.0, 12.0)] {
+                let size = metrics.ramp(compact, comfortable);
+                assert_eq!(
+                    size.fract(),
+                    0.0,
+                    "{density:?} ramp({compact}, {comfortable}) = {size}"
+                );
+                assert!(size >= compact, "{density:?} never shrinks below Compact");
+            }
+        }
     }
 
     #[test]

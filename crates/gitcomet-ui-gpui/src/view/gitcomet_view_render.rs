@@ -29,9 +29,10 @@ impl Render for GitCometView {
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
         self.last_window_size = next_window_size;
+        let metrics = crate::appearance::current(cx);
         if window_width_changed
-            && action_bar_density(previous_window_width, self.ui_scale_percent)
-                != action_bar_density(next_window_size.width, self.ui_scale_percent)
+            && action_bar_density(previous_window_width, self.ui_scale_percent, metrics)
+                != action_bar_density(next_window_size.width, self.ui_scale_percent, metrics)
         {
             // The action bar chooses compact labels at narrow widths. It is
             // normally mounted through a cached view, so explicitly invalidate
