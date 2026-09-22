@@ -1772,7 +1772,7 @@ pub(crate) fn repository_move_target_is_noop<C>(
     target_group: Option<session::WindowGroupId>,
 ) -> bool
 where
-    C: BorrowAppContext,
+    C: std::borrow::BorrowMut<App>,
 {
     let Some(target_group) = target_group else {
         return false;
@@ -1801,7 +1801,7 @@ where
         return target.handle.window_id() == source_window_id;
     }
 
-    let Some(group) = crate::window_groups::group(cx, target_group) else {
+    let Some(group) = crate::window_groups::group(cx.borrow(), target_group) else {
         return true;
     };
     let duplicate_owner = group

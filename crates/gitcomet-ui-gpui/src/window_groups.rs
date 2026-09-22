@@ -428,30 +428,32 @@ pub(crate) fn rebase_window_frame(
     }
 }
 
-pub(crate) fn group_for_window<C>(cx: &mut C, window_id: WindowId) -> Option<SavedWindowGroup>
-where
-    C: BorrowAppContext,
-{
-    cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
-        let id = manager.window_groups.get(&window_id)?;
-        manager.groups.iter().find(|group| group.id == *id).cloned()
-    })
+/// Read-only view of the manager. Reads must not go through
+/// `update_default_global`: gpui notifies every global observer on each lease,
+/// and the title bar reads the manager per frame, so a leasing read plus an
+/// observer is a repaint loop.
+fn manager(cx: &App) -> Option<&WindowGroupManager> {
+    cx.try_global::<WindowGroupManager>()
 }
 
-pub(crate) fn groups<C>(cx: &mut C) -> Vec<SavedWindowGroup>
-where
-    C: BorrowAppContext,
-{
-    cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| manager.groups.clone())
+pub(crate) fn group_for_window(cx: &App, window_id: WindowId) -> Option<SavedWindowGroup> {
+    let manager = manager(cx)?;
+    let id = manager.window_groups.get(&window_id)?;
+    manager.groups.iter().find(|group| group.id == *id).cloned()
 }
 
-pub(crate) fn group<C>(cx: &mut C, id: WindowGroupId) -> Option<SavedWindowGroup>
-where
-    C: BorrowAppContext,
-{
-    cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
-        manager.groups.iter().find(|group| group.id == id).cloned()
-    })
+pub(crate) fn groups(cx: &App) -> Vec<SavedWindowGroup> {
+    manager(cx)
+        .map(|manager| manager.groups.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) fn group(cx: &App, id: WindowGroupId) -> Option<SavedWindowGroup> {
+    manager(cx)?
+        .groups
+        .iter()
+        .find(|group| group.id == id)
+        .cloned()
 }
 
 #[cfg(test)]
@@ -460,6 +462,58 @@ mod tests {
 
     fn path(value: &str) -> PathBuf {
         PathBuf::from(value)
+    }
+
+    #[gpui::test]
+    fn reads_do_not_notify_global_observers(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let window = cx.add_window(|_, _| gpui::Empty);
+        cx.update(|cx| initialize_for_test(cx, Vec::new()));
+        let group_id = cx.update(|cx| {
+            sync_window(
+                cx,
+                window.window_id(),
+                None,
+                vec![path("/repos/a")],
+                Some(path("/repos/a")),
+            )
+            .expect("durable group")
+        });
+        cx.run_until_parked();
+
+        let notifications = Rc::new(Cell::new(0usize));
+        let counter = Rc::clone(&notifications);
+        let _subscription = cx.update(|cx| {
+            cx.observe_global::<WindowGroupManager>(move |_cx| {
+                counter.set(counter.get() + 1);
+            })
+        });
+
+        cx.update(|cx| {
+            for _ in 0..8 {
+                let _ = groups(cx);
+                let _ = group(cx, group_id);
+                let _ = group_for_window(cx, window.window_id());
+            }
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 0, "reads must not lease the global");
+
+        cx.update(|cx| {
+            assert!(set_group_color(
+                cx,
+                group_id,
+                Some(session::WindowGroupColor::Blue)
+            ));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            1,
+            "a mutation still notifies observers"
+        );
     }
 
     #[gpui::test]
@@ -490,7 +544,7 @@ mod tests {
         });
 
         assert_ne!(first_id, second_id);
-        let groups = cx.update(groups);
+        let groups = cx.update(|cx| groups(cx));
         assert_eq!(groups.len(), 2);
         assert_eq!(
             groups
@@ -588,7 +642,7 @@ mod tests {
             cx.update(|cx| sync_window(cx, window.window_id(), None, Vec::new(), None)),
             None
         );
-        assert!(cx.update(groups).is_empty());
+        assert!(cx.update(|cx| groups(cx)).is_empty());
 
         let group_id = cx
             .update(|cx| {
@@ -609,7 +663,7 @@ mod tests {
             }),
             None
         );
-        assert!(cx.update(groups).is_empty());
+        assert!(cx.update(|cx| groups(cx)).is_empty());
     }
 
     #[gpui::test]
@@ -652,7 +706,7 @@ mod tests {
         // focus was forgotten, active_group still says "first" and suppresses
         // this activation update.
         cx.update(|cx| mark_window_active(cx, first.window_id()));
-        let groups = cx.update(groups);
+        let groups = cx.update(|cx| groups(cx));
         let activation = |id| {
             groups
                 .iter()
