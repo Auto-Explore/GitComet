@@ -509,7 +509,7 @@ pub struct PickerPromptItemPart {
 
 type OnSelectFn<V> =
     dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static;
-type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
+pub type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
 /// Section-header and right-click handlers are supplied as ready-made
 /// `cx.listener` closures rather than as `render` arguments, so they can be
 /// stored on the (view-agnostic) builder instead of widening every `render`
@@ -926,34 +926,12 @@ impl PickerPrompt {
                     })
                     .when(is_selected, |row| {
                         row.when_some(selected_hint.clone(), |row, hint| {
-                            row.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_w(scaled_px(34.0))
-                                    .h(ui_scale.row_height(
-                                        PICKER_HINT_PILL_HEIGHT_PX,
-                                        PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX,
-                                    ))
-                                    .px(scaled_px(6.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(scaled_px(4.0))
-                                    .bg(with_alpha(
-                                        theme.colors.foreground.primary,
-                                        if theme.is_dark { 0.06 } else { 0.035 },
-                                    ))
-                                    .font_family(
-                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                    )
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(hint),
-                            )
+                            row.child(selected_hint_pill(theme, ui_scale, hint))
                         })
                     })
                     .when_some(row_group.clone(), |row, row_group| {
                         row.child(remove_row_button(
+                            "picker_prompt_item_remove",
                             theme,
                             ui_scale,
                             original_index,
@@ -1667,7 +1645,36 @@ fn picker_item_line<V: 'static>(
 /// close affordance: hidden until the row is hovered (or carries the keyboard
 /// selection) and tinted with the danger colour.
 #[allow(clippy::too_many_arguments)]
-fn remove_row_button<V: 'static>(
+/// The keycap-style hint ("Enter") a list shows on its selected row.
+pub fn selected_hint_pill(theme: AppTheme, ui_scale: UiScale, hint: SharedString) -> gpui::Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
+    div()
+        .flex_shrink_0()
+        .min_w(scaled_px(34.0))
+        .h(ui_scale.row_height(
+            PICKER_HINT_PILL_HEIGHT_PX,
+            PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX,
+        ))
+        .px(scaled_px(6.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(scaled_px(4.0))
+        .bg(with_alpha(
+            theme.colors.foreground.primary,
+            if theme.is_dark { 0.06 } else { 0.035 },
+        ))
+        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+        .text_size(theme.ui_text(12.0))
+        .text_color(theme.colors.foreground.secondary)
+        .child(hint)
+}
+
+/// A row's hover-revealed remove cross. `id_prefix` names its element id and
+/// debug selector (`{id_prefix}_{index}`); the row must set `.group(row_group)`.
+#[allow(clippy::too_many_arguments)]
+pub fn remove_row_button<V: 'static>(
+    id_prefix: &'static str,
     theme: AppTheme,
     ui_scale: UiScale,
     index: usize,
@@ -1684,8 +1691,8 @@ fn remove_row_button<V: 'static>(
     let host_for_hover = tooltip_host;
 
     div()
-        .id(("picker_prompt_item_remove", index))
-        .debug_selector(move || format!("picker_prompt_item_remove_{index}"))
+        .id((id_prefix, index))
+        .debug_selector(move || format!("{id_prefix}_{index}"))
         .flex_shrink_0()
         .flex()
         .items_center()

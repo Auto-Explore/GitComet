@@ -517,6 +517,8 @@ mod badges {
     fn tracked_branch_actions_stay_reachable_at_supported_narrow_widths(
         cx: &mut gpui::TestAppContext,
     ) {
+        // Measures Compact layout; a fresh session now defaults to Comfortable.
+        cx.update(crate::appearance::pin_compact_for_test);
         let repo_id = RepoId(1);
         let mut repo = repo_with_upstream(repo_id);
         let branch = "feature/current-with-a-representative-name".to_string();
@@ -590,6 +592,8 @@ mod badges {
 
     #[gpui::test]
     fn merge_controls_stay_reachable_at_the_minimum_window_width(cx: &mut gpui::TestAppContext) {
+        // Measures Compact layout; a fresh session now defaults to Comfortable.
+        cx.update(crate::appearance::pin_compact_for_test);
         let repo_id = RepoId(1);
         let mut repo = repo_with_upstream(repo_id);
         repo.merge_commit_message = Loadable::Ready(Some("Merge topic".to_string()));

@@ -11,6 +11,7 @@ use gpui::{ScrollStrategy, Stateful, UniformListScrollHandle, uniform_list};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 const HOME_MAX_WIDTH_PX: f32 = 960.0;
 /// Rows a list shows before it scrolls; also the Page Up/Down step.
@@ -296,18 +297,84 @@ impl GitCometView {
         window.focus(&focus, cx);
     }
 
+    fn remove_home_workspace(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
+        crate::workspaces::discard_workspace(cx, id);
+        self.sync_home_rows(cx);
+        cx.notify();
+    }
+
+    /// Drop a repository from Home: forget it and, if pinned, unpin it too,
+    /// since a pin would otherwise keep it listed.
+    fn remove_home_repository(&mut self, path: &Path, cx: &mut gpui::Context<Self>) {
+        if self.home_pinned_repos.iter().any(|pinned| pinned == path) {
+            let _ = session::remove_pinned_repo(path);
+            self.home_pinned_repos.retain(|pinned| pinned != path);
+        }
+        let _ = session::remove_recent_repo(path);
+        self.home_recent_repos.retain(|recent| recent != path);
+        self.sync_home_rows(cx);
+        cx.notify();
+    }
+
+    /// The Enter pill (selected row only) and the remove cross, which shows on
+    /// hover and stays visible on the selected row for keyboard users.
+    fn home_row_trailing(
+        &self,
+        row_group: SharedString,
+        index: usize,
+        selected: bool,
+        remove: Option<(
+            &'static str,
+            SharedString,
+            Arc<components::OnRemoveFn<Self>>,
+        )>,
+        cx: &gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::from_percent(self.ui_scale_percent);
+        let mut trailing = Vec::new();
+        if selected {
+            trailing.push(
+                components::selected_hint_pill(theme, ui_scale, "Enter".into())
+                    .debug_selector(|| "home_enter_hint".to_string())
+                    .into_any_element(),
+            );
+        }
+        if let Some((id_prefix, tooltip, on_remove)) = remove {
+            trailing.push(
+                components::remove_row_button(
+                    id_prefix,
+                    theme,
+                    ui_scale,
+                    index,
+                    row_group,
+                    selected,
+                    Some(tooltip),
+                    Some(self.tooltip_host.downgrade()),
+                    on_remove,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        trailing
+    }
+
     fn home_row(
         &self,
         id: SharedString,
         leading: AnyElement,
         text: (String, String),
         selected: bool,
+        trailing: Vec<AnyElement>,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
         let (title, detail) = text;
         let debug_id = id.clone();
+        let group = id.clone();
         let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         div()
+            .group(group)
             .id(id)
             .debug_selector(move || debug_id.to_string())
             .relative()
@@ -362,6 +429,7 @@ impl GitCometView {
                             .child(detail),
                     ),
             )
+            .children(trailing)
     }
 
     fn render_home_workspace_rows(
@@ -404,11 +472,27 @@ impl GitCometView {
                 } else {
                     format!("{state} · {count} · {names}")
                 };
+                let row_id: SharedString = format!("home_workspace_{id}").into();
+                let selected = this.home_selected == Some(ix);
+                // A workspace open in another window would reappear at once.
+                let remove = (!crate::workspaces::is_open_in_a_window(cx, id)).then(|| {
+                    let on_remove: Arc<components::OnRemoveFn<Self>> =
+                        Arc::new(move |this: &mut Self, _ix, _window, cx| {
+                            this.remove_home_workspace(id, cx);
+                        });
+                    (
+                        "home_workspace_remove",
+                        SharedString::from("Delete workspace"),
+                        on_remove,
+                    )
+                });
+                let trailing = this.home_row_trailing(row_id.clone(), ix, selected, remove, cx);
                 this.home_row(
-                    format!("home_workspace_{id}").into(),
+                    row_id,
                     dot,
                     (workspace.display_name(), detail),
-                    this.home_selected == Some(ix),
+                    selected,
+                    trailing,
                     theme,
                 )
                 .on_activate(
@@ -462,7 +546,25 @@ impl GitCometView {
                 .into_any_element();
                 let row_id: SharedString =
                     format!("home_recent_{}", session::path_storage_key(&path)).into();
-                this.home_row(row_id, badge, (name, detail), selected, theme)
+                let pinned = this.home_pinned_repos.contains(&path);
+                let remove_path = path.clone();
+                let on_remove: Arc<components::OnRemoveFn<Self>> =
+                    Arc::new(move |this: &mut Self, _ix, _window, cx| {
+                        this.remove_home_repository(&remove_path, cx);
+                    });
+                let tooltip = if pinned {
+                    "Unpin and remove from recent repositories"
+                } else {
+                    "Remove from recent repositories"
+                };
+                let trailing = this.home_row_trailing(
+                    row_id.clone(),
+                    ix,
+                    selected,
+                    Some(("home_recent_remove", tooltip.into(), on_remove)),
+                    cx,
+                );
+                this.home_row(row_id, badge, (name, detail), selected, trailing, theme)
                     .on_activate(
                         false,
                         controls::ControlActivation::PreserveFocus,

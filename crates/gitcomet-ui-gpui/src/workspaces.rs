@@ -592,6 +592,16 @@ pub(crate) fn workspaces(cx: &App) -> Vec<Workspace> {
         .unwrap_or_default()
 }
 
+/// Whether a live window currently holds this workspace.
+pub(crate) fn is_open_in_a_window(cx: &App, id: WorkspaceId) -> bool {
+    manager(cx).is_some_and(|manager| {
+        manager
+            .window_workspaces
+            .values()
+            .any(|mapped| *mapped == id)
+    })
+}
+
 /// The workspace of the most recently focused window, if any.
 pub(crate) fn active_workspace_id(cx: &App) -> Option<WorkspaceId> {
     manager(cx)?.active_workspace

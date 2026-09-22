@@ -5567,6 +5567,8 @@ fn assert_diff_search_scrolls_sideways(
 
 #[gpui::test]
 fn diff_search_scrolls_sideways_to_a_match_far_along_a_long_line(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     assert_diff_search_scrolls_sideways(
         cx,
         gitcomet_state::model::RepoId(9141),

@@ -25,7 +25,11 @@ pub(super) struct AppearancePreferences {
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
-            metrics: crate::appearance::Appearance::default(),
+            // What a fresh session resolves to, not the neutral baseline.
+            metrics: crate::appearance::Appearance {
+                density: crate::appearance::UiDensity::PREFERENCE_DEFAULT,
+                ..crate::appearance::Appearance::default()
+            },
             theme_mode: ThemeMode::default(),
             ui_scale_percent: 100,
             date_time_format: DateTimeFormat::YmdHm,

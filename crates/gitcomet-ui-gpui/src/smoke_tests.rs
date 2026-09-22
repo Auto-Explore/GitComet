@@ -2427,6 +2427,8 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
 
 #[gpui::test]
 fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
@@ -2482,6 +2484,8 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();

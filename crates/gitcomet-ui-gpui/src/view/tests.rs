@@ -5734,6 +5734,8 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
 /// regression back to that.
 #[gpui::test]
 fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -6639,4 +6641,97 @@ fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
         cx.debug_bounds(row_selector(49)).is_some(),
         "the selection scrolls into view"
     );
+}
+
+#[gpui::test]
+fn home_selected_row_shows_the_enter_hint(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let alpha = named_saved_workspace("Alpha", "/work/a");
+    let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
+    let repo_row: &'static str = format!(
+        "home_recent_{}",
+        gitcomet_state::session::path_storage_key(Path::new("/work/c"))
+    )
+    .leak();
+    let (_view, cx) = home_view_with(cx, vec![alpha], vec![PathBuf::from("/work/c")]);
+
+    let hint = cx
+        .debug_bounds("home_enter_hint")
+        .expect("Enter hint on the selection");
+    let row = cx.debug_bounds(alpha_row).expect("first row");
+    assert!(
+        row.contains(&hint.center()),
+        "the hint sits on the selected row"
+    );
+
+    press(cx, "down");
+    let hint = cx
+        .debug_bounds("home_enter_hint")
+        .expect("hint follows the selection");
+    assert!(
+        cx.debug_bounds(repo_row)
+            .expect("repo row")
+            .contains(&hint.center())
+    );
+}
+
+#[gpui::test]
+fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(
+        cx,
+        Vec::new(),
+        vec![PathBuf::from("/work/c"), PathBuf::from("/work/d")],
+    );
+    // The selected row keeps its cross visible without hovering.
+    let cross = cx
+        .debug_bounds("home_recent_remove_0")
+        .expect("remove cross on the selected repository");
+    cx.simulate_click(cross.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let recents = cx.update(|_window, app| view.read(app).home_recent_repos.clone());
+    assert_eq!(recents, vec![PathBuf::from("/work/d")]);
+    assert_eq!(home_selected(&view, cx), Some(0), "a row stays selected");
+}
+
+#[gpui::test]
+fn home_cross_deletes_a_saved_workspace_but_not_an_open_one(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let saved = named_saved_workspace("Saved", "/work/a");
+    let saved_id = saved.id;
+    let mut open = named_saved_workspace("Open elsewhere", "/work/b");
+    open.restore_on_launch = true;
+    let open_id = open.id;
+    let (_view, cx) = home_view_with(cx, vec![open, saved], Vec::new());
+    let other = cx.cx.add_window(|_, _| gpui::Empty);
+    cx.cx.update(|app| {
+        crate::workspaces::sync_window(
+            app,
+            other.window_id(),
+            Some(open_id),
+            vec!["/work/b".into()],
+            None,
+        );
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    // Rows: the open workspace first (index 0, selected), then the saved one.
+    assert!(
+        cx.debug_bounds("home_workspace_remove_0").is_none(),
+        "a workspace open in another window cannot be removed from here"
+    );
+    press(cx, "down");
+    let cross = cx
+        .debug_bounds("home_workspace_remove_1")
+        .expect("remove cross on the saved workspace");
+    cx.simulate_click(cross.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert!(crate::workspaces::workspace(app, saved_id).is_none());
+        assert!(crate::workspaces::workspace(app, open_id).is_some());
+    });
 }

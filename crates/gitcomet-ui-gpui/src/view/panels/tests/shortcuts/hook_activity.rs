@@ -657,6 +657,8 @@ fn hook_activity_dialog_only_suppresses_completion_for_its_own_repository(
 fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     cx: &mut gpui::TestAppContext,
 ) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
