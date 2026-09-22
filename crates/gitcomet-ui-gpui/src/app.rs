@@ -2196,18 +2196,12 @@ fn activate_gitcomet_window(cx: &mut App, window: gpui::AnyWindowHandle) {
     });
 }
 
-fn activate_or_open_workspace(
+/// Drop repositories a live window already owns from a saved workspace and
+/// report the live owner of its active (or first) repository.
+fn reconcile_workspace_against_live_windows(
     cx: &mut App,
-    workspace_id: session::WorkspaceId,
-) -> Option<GitCometWindowEntry> {
-    if let Some(window) = gitcomet_window_entries(cx).into_iter().find(|entry| {
-        entry.view_mode == GitCometViewMode::Normal && entry.workspace_id == Some(workspace_id)
-    }) {
-        activate_gitcomet_window(cx, window.handle);
-        return Some(window);
-    }
-
-    let mut workspace = crate::workspaces::workspace(cx, workspace_id)?;
+    mut workspace: session::Workspace,
+) -> (session::Workspace, Option<(GitCometWindowEntry, PathBuf)>) {
     let live_windows: Vec<_> = gitcomet_window_entries(cx)
         .into_iter()
         .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
@@ -2240,21 +2234,89 @@ fn activate_or_open_workspace(
         .active_repository
         .filter(|active| workspace.repositories.contains(active))
         .or_else(|| workspace.repositories.first().cloned());
+    (workspace, duplicate_owner)
+}
 
-    if workspace.repositories.is_empty()
-        && (!workspace.is_customized() || duplicate_owner.is_some())
+/// A workspace whose repositories all live elsewhere: focus their owner. A
+/// customized workspace keeps its identity; an anonymous one is discarded.
+/// Returns `None` when there is still something to open.
+fn settle_fully_owned_workspace(
+    cx: &mut App,
+    workspace: &session::Workspace,
+    duplicate_owner: &Option<(GitCometWindowEntry, PathBuf)>,
+) -> Option<Option<GitCometWindowEntry>> {
+    if !workspace.repositories.is_empty()
+        || (workspace.is_customized() && duplicate_owner.is_none())
     {
-        // A customized workspace keeps its identity even when its repositories
-        // are already open elsewhere; an anonymous one has nothing left to keep.
-        if !workspace.is_customized() {
-            crate::workspaces::discard_workspace(cx, workspace_id);
-        }
-        if let Some((owner, path)) = duplicate_owner {
-            focus_existing_repository_window(cx, &owner, &path);
-            cx.activate(true);
-            return Some(owner);
-        }
         return None;
+    }
+    if !workspace.is_customized() {
+        crate::workspaces::discard_workspace(cx, workspace.id);
+    }
+    let Some((owner, path)) = duplicate_owner.clone() else {
+        return Some(None);
+    };
+    focus_existing_repository_window(cx, &owner, &path);
+    cx.activate(true);
+    Some(Some(owner))
+}
+
+/// Open a workspace from a window: an empty window adopts it in place (no
+/// second window); otherwise focus its owner or open a new window.
+pub(crate) fn open_workspace_in_window(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+    workspace_id: session::WorkspaceId,
+) {
+    let entries = gitcomet_window_entries(cx);
+    if let Some(owner) = entries.iter().find(|entry| {
+        entry.view_mode == GitCometViewMode::Normal && entry.workspace_id == Some(workspace_id)
+    }) {
+        activate_gitcomet_window(cx, owner.handle);
+        return;
+    }
+    let Some(target) =
+        normal_gitcomet_window_by_id(cx, window_id).filter(|target| target.repo_paths.is_empty())
+    else {
+        let _ = activate_or_open_workspace(cx, workspace_id);
+        return;
+    };
+    let Some(workspace) = crate::workspaces::workspace(cx, workspace_id) else {
+        return;
+    };
+    let (workspace, duplicate_owner) = reconcile_workspace_against_live_windows(cx, workspace);
+    if settle_fully_owned_workspace(cx, &workspace, &duplicate_owner).is_some() {
+        return;
+    }
+    if target
+        .workspace_id
+        .is_some_and(|current| current != workspace_id)
+    {
+        crate::workspaces::release_window_workspace(cx, window_id);
+    }
+    let _ = target
+        .view
+        .update(cx, |view, cx| view.adopt_workspace(workspace, cx));
+    activate_gitcomet_window(cx, target.handle);
+    cx.activate(true);
+}
+
+fn activate_or_open_workspace(
+    cx: &mut App,
+    workspace_id: session::WorkspaceId,
+) -> Option<GitCometWindowEntry> {
+    if let Some(window) = gitcomet_window_entries(cx).into_iter().find(|entry| {
+        entry.view_mode == GitCometViewMode::Normal && entry.workspace_id == Some(workspace_id)
+    }) {
+        activate_gitcomet_window(cx, window.handle);
+        return Some(window);
+    }
+
+    let workspace = crate::workspaces::workspace(cx, workspace_id)?;
+    let (workspace, duplicate_owner) = reconcile_workspace_against_live_windows(cx, workspace);
+
+    if let Some(settled) = settle_fully_owned_workspace(cx, &workspace, &duplicate_owner) {
+        return settled;
     }
 
     let backend = cx
@@ -4914,6 +4976,130 @@ mod tests {
         });
         repo_counts.sort_unstable();
         assert_eq!(repo_counts, vec![0, 0, 1]);
+    }
+
+    fn empty_window_for_adoption(
+        cx: &mut gpui::TestAppContext,
+        workspaces: Vec<session::Workspace>,
+    ) -> (
+        gpui::Entity<GitCometView>,
+        &mut gpui::VisualTestContext,
+        gpui::WindowId,
+    ) {
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let window_id = cx.update(|window, app| {
+            crate::workspaces::initialize_for_test(app, workspaces);
+            install_app_shortcuts_for_test(app, backend);
+            let _ = window.draw(app);
+            window.window_handle().window_id()
+        });
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                crate::view::test_support::sync_store_snapshot(view, cx)
+            });
+        });
+        (view, cx, window_id)
+    }
+
+    #[gpui::test]
+    fn adopting_a_workspace_into_an_empty_window_does_not_open_a_second_window(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let repositories = vec![PathBuf::from("/tmp/adopt-a"), PathBuf::from("/tmp/adopt-b")];
+        let mut workspace = session::Workspace::new(repositories.clone());
+        workspace.restore_on_launch = false;
+        let id = workspace.id;
+        let (_view, cx, window_id) = empty_window_for_adoption(cx, vec![workspace]);
+
+        cx.update(|_window, app| open_workspace_in_window(app, window_id, id));
+
+        cx.cx.update(|app| {
+            assert_eq!(
+                app.windows().len(),
+                1,
+                "adoption must reuse the empty window"
+            );
+            let adopted = crate::workspaces::workspace_for_window(app, window_id)
+                .expect("the window now belongs to the workspace");
+            assert_eq!(adopted.id, id);
+            // The store has not reduced the restore yet; the snapshot taken
+            // during adoption must not have emptied (and so deleted) it.
+            assert_eq!(adopted.repositories, repositories);
+            assert!(adopted.restore_on_launch);
+        });
+    }
+
+    #[gpui::test]
+    fn opening_a_workspace_owned_by_another_window_leaves_this_window_empty(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let mut workspace = session::Workspace::new(vec![PathBuf::from("/tmp/adopt-owned")]);
+        // Test views do not auto-restore repositories; a name keeps the owner's
+        // workspace alive while its window stays empty.
+        workspace.custom_name = Some("Owned".to_string());
+        let id = workspace.id;
+        let (_view, cx, window_id) = empty_window_for_adoption(cx, vec![workspace.clone()]);
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let config = crate::view::GitCometViewConfig {
+            workspace: WorkspaceBootstrap::Saved(Box::new(workspace)),
+            ..crate::view::GitCometViewConfig::normal(None)
+        };
+        let owner = cx.cx.add_window(|window, cx| {
+            GitCometView::new_with_config(store, events, config, window, cx)
+        });
+        cx.cx.update(|app| {
+            let any_owner: gpui::AnyWindowHandle = owner.into();
+            let _ = any_owner.update(app, |_root, window, cx| {
+                let _ = window.draw(cx);
+            });
+            let _ = owner.update(app, |view, _window, cx| {
+                crate::view::test_support::sync_store_snapshot(view, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.cx.update(|app| {
+                normal_gitcomet_window_by_id(app, owner.window_id()).and_then(|e| e.workspace_id)
+            }),
+            Some(id),
+            "the owner window registers the workspace"
+        );
+
+        cx.update(|_window, app| open_workspace_in_window(app, window_id, id));
+
+        cx.cx.update(|app| {
+            assert!(crate::workspaces::workspace_for_window(app, window_id).is_none());
+            assert_eq!(
+                crate::workspaces::workspace_for_window(app, owner.window_id()).map(|w| w.id),
+                Some(id)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn adopting_an_empty_customized_workspace_keeps_the_window_on_home(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let mut workspace = session::Workspace::new(Vec::new());
+        workspace.custom_name = Some("Later".to_string());
+        workspace.restore_on_launch = false;
+        let id = workspace.id;
+        let (_view, cx, window_id) = empty_window_for_adoption(cx, vec![workspace]);
+
+        cx.update(|_window, app| open_workspace_in_window(app, window_id, id));
+
+        cx.cx.update(|app| {
+            assert_eq!(app.windows().len(), 1);
+            let adopted = crate::workspaces::workspace_for_window(app, window_id).expect("adopted");
+            assert_eq!(adopted.id, id);
+            assert!(adopted.repositories.is_empty());
+        });
     }
 
     #[gpui::test]

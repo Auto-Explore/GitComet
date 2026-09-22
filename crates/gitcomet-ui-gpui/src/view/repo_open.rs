@@ -315,6 +315,57 @@ impl GitCometView {
         self.pending_repo_open_active = Some(path.to_path_buf());
     }
 
+    /// Take `workspace` as this (empty) window's workspace. The window keeps
+    /// its own placement; layout, repositories, colour and theme come along.
+    pub(crate) fn adopt_workspace(
+        &mut self,
+        workspace: session::Workspace,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let layout = workspace.layout.clone();
+        let scale = self.ui_scale();
+        if let Some(width) = layout.sidebar_width {
+            self.set_sidebar_width_from_pixels(scale.px(width as f32));
+        }
+        if let Some(width) = layout.details_width {
+            self.set_details_width_from_pixels(scale.px(width as f32));
+        }
+        self.details_pane.update(cx, |pane, _cx| {
+            if let Some(height) = layout.change_tracking_height {
+                pane.set_change_tracking_height_from_pixels(Some(scale.px(height as f32)));
+            }
+            if let Some(height) = layout.untracked_height {
+                pane.set_untracked_height_from_pixels(Some(scale.px(height as f32)));
+            }
+        });
+        self.set_sidebar_collapsed(layout.sidebar_collapsed, cx);
+        self.clamp_pane_widths_to_window();
+
+        self.workspace_id = Some(workspace.id);
+        self.persisted_workspace_repo_paths
+            .clone_from(&workspace.repositories);
+        self.persisted_workspace_active_repository
+            .clone_from(&workspace.active_repository);
+        if !workspace.repositories.is_empty() {
+            // Pending bootstrap keeps the saved membership through snapshots
+            // taken before the store has reduced the restore.
+            self.startup_repo_bootstrap_pending = true;
+            if self.state.git_runtime.is_available() {
+                self.store.dispatch(Msg::RestoreSession {
+                    open_repos: workspace.repositories,
+                    active_repo: workspace.active_repository,
+                });
+            } else {
+                self.deferred_repo_bootstrap = Some(DeferredRepoBootstrap::RestoreSession {
+                    open_repos: workspace.repositories,
+                    active_repo: workspace.active_repository,
+                });
+            }
+        }
+        self.sync_workspace_and_registry(cx);
+        self.workspace_changed(cx);
+    }
+
     fn queue_repo_open_until_git_recovers(&mut self, path: std::path::PathBuf) {
         let push_unique = |paths: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf| {
             if !paths.contains(&path) {

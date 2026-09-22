@@ -250,6 +250,31 @@ where
     persist_if_changed(changed_workspaces);
 }
 
+/// Unmap a window from its workspace and mark that workspace closed, keeping
+/// focus bookkeeping. Used when a Home window adopts a different workspace.
+pub(crate) fn release_window_workspace<C>(cx: &mut C, window_id: WindowId)
+where
+    C: BorrowAppContext,
+{
+    let changed_workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
+        if !manager.enabled {
+            return None;
+        }
+        let workspace_id = manager.window_workspaces.remove(&window_id)?;
+        if manager.active_workspace == Some(workspace_id) {
+            manager.active_workspace = None;
+        }
+        let index = manager.workspace_index(workspace_id)?;
+        let workspace = &mut manager.workspaces[index];
+        if !workspace.restore_on_launch {
+            return None;
+        }
+        workspace.restore_on_launch = false;
+        manager.persist_to_disk.then(|| manager.workspaces.clone())
+    });
+    persist_if_changed(changed_workspaces);
+}
+
 /// Remove a live window and its durable workspace entirely. This is used when a
 /// repository move empties the source window of an anonymous workspace: unlike
 /// an explicit user close, there is nothing left to recover. Callers keep a

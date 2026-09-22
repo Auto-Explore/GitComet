@@ -731,7 +731,15 @@ pub(super) fn activate(
     match entry {
         RepoPickerEntry::Workspace(workspace_id) => {
             this.close_popover(cx);
-            crate::app::activate_workspace_from_view(cx, workspace_id);
+            let root_view = this.root_view.clone();
+            cx.defer(move |cx| {
+                let Ok(window_id) =
+                    root_view.read_with(cx, |root, _| root.window_handle.window_id())
+                else {
+                    return;
+                };
+                crate::app::open_workspace_in_window(cx, window_id, workspace_id);
+            });
         }
         RepoPickerEntry::Open(repo_id) => {
             this.store.dispatch(Msg::SetActiveRepo { repo_id });
