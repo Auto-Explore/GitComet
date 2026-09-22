@@ -1353,6 +1353,7 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
             .expect("set mtime");
     };
     age_out(&file);
+    let clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
@@ -1360,11 +1361,12 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
         .expect("source")
         .expect("file exists");
-    assert_eq!(repo.worktree_source_memo.lock().expect("memo").len(), 1);
+    // The first read creates the cache file; only a read that finds it settled memoizes.
     let second = repo
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
         .expect("source again")
         .expect("file exists");
+    assert_eq!(repo.worktree_source_memo.lock().expect("memo").len(), 1);
     assert_eq!(first.path, second.path);
     assert_eq!(first.identity, second.identity);
 
@@ -1383,6 +1385,7 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
     );
 
     // A freshly written file (within the racy window) is served but not memoized.
+    drop(clock);
     std::fs::write(&file, "fresh\n").expect("fresh write");
     let fresh = repo
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
@@ -1522,6 +1525,7 @@ fn assert_attribute_source_invalidates_memo(index_only: bool) {
         .unwrap()
         .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30))
         .unwrap();
+    let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
     let repo = open_repo(tmp.path());
     let read_source = |repo: &GixRepo| {
         let source = repo
@@ -1530,6 +1534,8 @@ fn assert_attribute_source_invalidates_memo(index_only: bool) {
             .expect("exists");
         fs::read(source.path).unwrap()
     };
+    assert_eq!(read_source(&repo), b"one\r\ntwo\r\n");
+    // The first read creates the cache file; the second finds it settled and memoizes.
     assert_eq!(read_source(&repo), b"one\r\ntwo\r\n");
     // DiskFileStamp has no inode/ctime off Unix, so nothing is memoized there.
     if cfg!(unix) {

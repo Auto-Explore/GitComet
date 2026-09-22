@@ -1461,19 +1461,20 @@ impl GixRepo {
         blob_id: gix::ObjectId,
         cancellation: &CancellationToken,
     ) -> bool {
-        let guard = DiskFileStamp::acquire_for_verification_memo(cache_path);
-        let stamp = guard.as_ref().map(|guard| guard.stamp);
-        if let Some(stamp) = stamp
-            && self
-                .preview_blob_verified
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .get(cache_path)
-                .is_some_and(|verified| verified.file == stamp && verified.blob_id == blob_id)
+        // Scoped so the Windows handle closes before the recording guard opens.
         {
-            return true;
+            let guard = DiskFileStamp::acquire_for_verification_memo(cache_path);
+            if let Some(stamp) = guard.as_ref().map(|guard| guard.stamp)
+                && self
+                    .preview_blob_verified
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(cache_path)
+                    .is_some_and(|verified| verified.file == stamp && verified.blob_id == blob_id)
+            {
+                return true;
+            }
         }
-        drop(guard);
         let guard = DiskFileStamp::acquire_for_verification_recording(cache_path);
         let stamp = guard.as_ref().map(|guard| guard.stamp);
         let matches = cached_preview_blob_matches(repo, cache_path, blob_id, cancellation);

@@ -385,7 +385,7 @@ impl DiskFileStamp {
     fn acquire_for_verification_memo(path: &Path) -> Option<DiskFileStampGuard> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
-        let now = std::time::SystemTime::now();
+        let now = racy_check_now();
         Self::acquire(path).filter(|guard| !guard.stamp.is_racy_at(now))
     }
 
@@ -405,6 +405,39 @@ impl DiskFileStamp {
             guard
         };
         Some(guard)
+    }
+}
+
+fn racy_check_now() -> std::time::SystemTime {
+    let now = std::time::SystemTime::now();
+    #[cfg(test)]
+    let now = now + RACY_CLOCK_SKEW.with(std::cell::Cell::get);
+    now
+}
+
+// Tests cannot backdate ctime, so they move the racy-check clock forward instead.
+#[cfg(test)]
+thread_local! {
+    static RACY_CLOCK_SKEW: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+#[cfg(test)]
+pub(crate) struct RacyClockSkew(());
+
+#[cfg(test)]
+impl RacyClockSkew {
+    /// Makes every stamp taken on this thread look `skew` older until dropped.
+    pub(crate) fn set(skew: std::time::Duration) -> Self {
+        RACY_CLOCK_SKEW.with(|cell| cell.set(skew));
+        Self(())
+    }
+}
+
+#[cfg(test)]
+impl Drop for RacyClockSkew {
+    fn drop(&mut self) {
+        RACY_CLOCK_SKEW.with(|cell| cell.set(std::time::Duration::ZERO));
     }
 }
 
