@@ -165,12 +165,12 @@ impl Workspace {
             return name.to_string();
         }
 
-        let active = self
-            .active_repository
-            .as_ref()
-            .filter(|active| self.repositories.contains(active))
-            .or_else(|| self.repositories.first());
-        let base = active
+        // The first tab in the strip, not the active one: following the
+        // active tab would rename the workspace (and resize its title-bar
+        // chip, shifting the tabs) every time the user switches repository.
+        let base = self
+            .repositories
+            .first()
             .and_then(|path| path.file_name())
             .and_then(OsStr::to_str)
             .filter(|name| !name.is_empty())

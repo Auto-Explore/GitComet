@@ -2948,17 +2948,21 @@ fn persist_ui_settings_round_trips_window_controls_mode() {
 }
 
 #[test]
-fn saved_workspace_automatic_name_uses_active_repository_and_count() {
-    let mut group = Workspace::new(vec![
+fn saved_workspace_automatic_name_uses_the_first_repository_and_count() {
+    let mut workspace = Workspace::new(vec![
         PathBuf::from("/work/alpha"),
         PathBuf::from("/work/beta"),
         PathBuf::from("/work/gamma"),
     ]);
-    group.active_repository = Some(PathBuf::from("/work/beta"));
-    assert_eq!(group.display_name(), "beta +2");
+    assert_eq!(workspace.display_name(), "alpha +2");
 
-    group.custom_name = Some("  Client work  ".to_string());
-    assert_eq!(group.display_name(), "Client work");
+    // Switching tabs must not rename the workspace: the name sets the width
+    // of its title-bar chip, and the repository tabs sit beside it.
+    workspace.active_repository = Some(PathBuf::from("/work/beta"));
+    assert_eq!(workspace.display_name(), "alpha +2");
+
+    workspace.custom_name = Some("  Client work  ".to_string());
+    assert_eq!(workspace.display_name(), "Client work");
 }
 
 #[test]
