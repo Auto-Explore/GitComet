@@ -889,6 +889,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         }],
     }));
     state.repos.push(repo_state);
@@ -1430,6 +1431,7 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
                     is_submodule: false,
                     additions: None,
                     deletions: None,
+                    large_file: None,
                 }],
             }),
         }),

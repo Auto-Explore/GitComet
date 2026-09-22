@@ -1855,6 +1855,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     }],
                 },
             ));

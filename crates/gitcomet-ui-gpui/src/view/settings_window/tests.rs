@@ -3485,3 +3485,33 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 
     assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
 }
+
+#[test]
+fn large_file_tool_rows_report_found_missing_and_detecting() {
+    use gitcomet_core::large_file_tools::{LargeFileToolsState, ToolAvailability};
+    let tools = LargeFileToolsState {
+        git_lfs: ToolAvailability::Available {
+            version: Some("git-lfs/3.8.0 (GitHub; linux amd64)".into()),
+        },
+        git_annex: ToolAvailability::NotFound {
+            detail: "Git cannot run `git annex`.".into(),
+        },
+    };
+    let lfs = git_lfs_info(Some(&tools));
+    assert_eq!(lfs.status, SigningToolStatus::Found);
+    assert_eq!(
+        lfs.version_display.as_ref(),
+        "git-lfs/3.8.0 (GitHub; linux amd64)"
+    );
+    let annex = git_annex_info(Some(&tools));
+    assert_eq!(annex.status, SigningToolStatus::NotFound);
+    assert!(
+        annex
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Install git-annex where Git can find it")),
+        "{:?}",
+        annex.detail
+    );
+    assert_eq!(git_lfs_info(None).status, SigningToolStatus::Detecting);
+}

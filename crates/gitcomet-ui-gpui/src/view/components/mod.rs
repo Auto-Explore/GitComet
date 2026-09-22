@@ -5,6 +5,7 @@ mod containers;
 mod context_menu;
 mod diff_stat;
 mod interactive_row;
+mod large_file_chip;
 mod modal;
 mod panel_tab;
 mod picker_prompt;
@@ -41,6 +42,9 @@ pub use context_menu::{
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
+pub use large_file_chip::large_file_chip;
+#[allow(unused_imports)]
+pub use large_file_chip::{LargeFileChipTone, large_file_chip_label};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_tab_text_color};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the

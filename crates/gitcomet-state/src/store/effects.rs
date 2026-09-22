@@ -341,6 +341,7 @@ fn send_unavailable_git_effect_result(
                 repo_id,
                 generation,
                 result: Err(git_unavailable_error(runtime)),
+                large_files: None,
             },
         )),
         Effect::LoadStatus { repo_id } => {
@@ -440,6 +441,21 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::RunLargeFileCommand {
+            repo_id, command, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile { command },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LoadLfsLocks { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::LoadFileHistory {
             repo_id,
             path,
@@ -485,6 +501,12 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadLargeFileSupport { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::LargeFileSupportLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadFileBrowser { repo_id, source } => {
             send(Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
                 repo_id,
@@ -1691,6 +1713,7 @@ pub(super) fn schedule_effect(
             repo_id,
             generation,
             status,
+            large_files,
         } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -1702,6 +1725,7 @@ pub(super) fn schedule_effect(
                     repo_id,
                     generation,
                     status,
+                    large_files,
                     cancellation,
                 );
             }
@@ -1895,6 +1919,26 @@ pub(super) fn schedule_effect(
                 executor, repos, msg_tx, repo_id, patterns,
             )
         }
+        Effect::RunLargeFileCommand {
+            repo_id,
+            command,
+            auth,
+        } => repo_commands::schedule_large_file_command(
+            executor, repos, msg_tx, repo_id, command, auth,
+        ),
+        Effect::LoadLfsLocks { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_lfs_locks(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
         Effect::LoadFileHistory {
             repo_id,
             path,
@@ -1971,6 +2015,19 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_submodules(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadLargeFileSupport { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_large_file_support(
                     metadata_executor,
                     repos,
                     msg_tx,

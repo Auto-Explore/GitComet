@@ -753,6 +753,7 @@ pub(super) fn append_ready_line_stats_effect(
             staged.len(),
             unstaged.len()
         );
+        let large_files = repo_state.large_file_support_active();
         effects.push_effect(Effect::LoadUncommittedLineStats {
             repo_id,
             generation,
@@ -760,6 +761,7 @@ pub(super) fn append_ready_line_stats_effect(
                 staged: std::sync::Arc::clone(staged),
                 unstaged: std::sync::Arc::clone(unstaged),
             }),
+            large_files,
         });
     }
 }
@@ -1331,6 +1333,7 @@ fn summarize_command(
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::AppendGitignorePatterns { .. } => "Update .gitignore",
+            RepoCommandKind::LargeFile { command } => command.label(),
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. }
             | RepoCommandKind::RemoveWorktree { .. }
@@ -1526,6 +1529,7 @@ fn summarize_command(
         // The worker skips the write when every pattern is already there, and
         // announcing "Added …" for a run that changed nothing would send the
         // user looking for a file that has not moved.
+        RepoCommandKind::LargeFile { command } => format!("{}: done", command.label()),
         RepoCommandKind::AppendGitignorePatterns { patterns } => {
             if output.stdout.trim() == gitcomet_core::gitignore::NOTHING_TO_ADD {
                 "Already in .gitignore; nothing added".to_string()

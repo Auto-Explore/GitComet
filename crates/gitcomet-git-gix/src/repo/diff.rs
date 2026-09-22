@@ -161,6 +161,31 @@ impl GixRepo {
         )
     }
 
+    /// Attach Git LFS / git-annex descriptions to a text diff, swapping each
+    /// side to its real content when that is here.
+    fn with_large_file_sides(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+        repo_path: &Path,
+        mut old: Option<FileDiffTextSource>,
+        mut new: Option<FileDiffTextSource>,
+        new_is_worktree: bool,
+    ) -> FileDiffText {
+        let describe = |source: &mut Option<FileDiffTextSource>, worktree: bool| {
+            let (side, replacement) =
+                self.large_file_side(repo, source.as_ref()?, repo_path, worktree)?;
+            if let Some(replacement) = replacement {
+                *source = Some(replacement);
+            }
+            Some(side)
+        };
+        let old_large = describe(&mut old, false);
+        let new_large = describe(&mut new, new_is_worktree);
+        FileDiffText::new_sources(path.to_path_buf(), old, new)
+            .with_large_sides(old_large, new_large)
+    }
+
     fn file_diff_source_from_blob_id(
         &self,
         blob_id: gix::ObjectId,
@@ -207,13 +232,53 @@ impl GixRepo {
         self.cached_git_normalized_worktree_file_source(repo, path)
     }
 
+    /// Symlinks skip the filter pipeline: git stores the link text verbatim.
+    fn symlink_worktree_file_source(
+        &self,
+        path: &Path,
+        target: &[u8],
+    ) -> Result<FileDiffTextSource> {
+        let mut tmp_file =
+            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+        tmp_file.write_all(target).map_err(io_err_to_error)?;
+        tmp_file.flush().map_err(io_err_to_error)?;
+        let mut content_hasher = FxHasher::default();
+        target.hash(&mut content_hasher);
+        let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
+        let cache_path = worktree_git_cache_path(path, &identity);
+        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        Ok(FileDiffTextSource::with_identity(
+            cache_path,
+            format!("worktree-git:{identity}"),
+        ))
+    }
+
+    /// The file handed to "open this side": the worktree file itself, or for
+    /// a symlink the cached link text, which is what `git show` would print.
+    fn worktree_preview_path_optional(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+    ) -> Result<Option<std::path::PathBuf>> {
+        match worktree_entry_optional(&self.spec.workdir, path) {
+            Some(WorktreeEntry::Regular(full)) => Ok(Some(full)),
+            Some(WorktreeEntry::Symlink { .. }) => Ok(self
+                .cached_git_normalized_worktree_file_source(repo, path)?
+                .map(|source| source.path)),
+            None => Ok(None),
+        }
+    }
+
     pub(super) fn cached_git_normalized_worktree_file_source(
         &self,
         repo: &gix::Repository,
         path: &Path,
     ) -> Result<Option<FileDiffTextSource>> {
-        let full = match worktree_file_path_optional(&self.spec.workdir, path) {
-            Some(full) => full,
+        let full = match worktree_entry_optional(&self.spec.workdir, path) {
+            Some(WorktreeEntry::Regular(full)) => full,
+            Some(WorktreeEntry::Symlink { target }) => {
+                return self.symlink_worktree_file_source(path, &target).map(Some);
+            }
             None => return Ok(None),
         };
 
@@ -368,7 +433,15 @@ impl GixRepo {
                     }
                 };
 
-                Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
+                let new_is_worktree = matches!(area, DiffArea::Unstaged);
+                Ok(Some(self.with_large_file_sides(
+                    &repo,
+                    path,
+                    &repo_path,
+                    old,
+                    new,
+                    new_is_worktree,
+                )))
             }
             DiffTarget::Commit { commit_id, path } => {
                 let Some(path) = path else {
@@ -387,7 +460,9 @@ impl GixRepo {
                 let new =
                     self.file_diff_source_from_revision_path(&repo, commit_id.as_ref(), path)?;
 
-                Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
+                Ok(Some(
+                    self.with_large_file_sides(&repo, path, path, old, new, false),
+                ))
             }
             DiffTarget::CommitRange {
                 from_commit_id,
@@ -414,7 +489,14 @@ impl GixRepo {
                     }
                 };
 
-                Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
+                Ok(Some(self.with_large_file_sides(
+                    &repo,
+                    path,
+                    path,
+                    old,
+                    new,
+                    to_commit_id.is_none(),
+                )))
             }
         }
     }
@@ -439,7 +521,7 @@ impl GixRepo {
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
-                        Ok(worktree_file_path_optional(&self.spec.workdir, &repo_path))
+                        self.worktree_preview_path_optional(&repo, &repo_path)
                     }
                     (DiffArea::Unstaged, DiffPreviewTextSide::Old)
                     | (DiffArea::Staged, DiffPreviewTextSide::New) => {
@@ -505,7 +587,7 @@ impl GixRepo {
                 // Working-tree tip + New side: the preview is the live worktree file.
                 if matches!(side, DiffPreviewTextSide::New) && to_commit_id.is_none() {
                     let repo_path = to_repo_path(path, &self.spec.workdir)?;
-                    return Ok(worktree_file_path_optional(&self.spec.workdir, &repo_path));
+                    return self.worktree_preview_path_optional(&repo, &repo_path);
                 }
                 let blob_id = match side {
                     DiffPreviewTextSide::New => gix_revision_path_blob_object_id_optional(
@@ -579,6 +661,24 @@ impl GixRepo {
         &self,
         target: &DiffTarget,
     ) -> Result<Option<FileDiffImage>> {
+        let Some(mut image) = self.diff_file_image_git_form(target)? else {
+            return Ok(None);
+        };
+        // Git LFS / git-annex sides hold pointer text; show the real image
+        // when it is here, so both sides decode.
+        let repo = self.repo();
+        let logical = to_repo_path(&image.path, &self.spec.workdir)?;
+        for side in [&mut image.old, &mut image.new] {
+            if let Some(bytes) = side.as_deref().and_then(|git_form| {
+                self.large_file_image_bytes(&repo, git_form, &logical, MAX_IMAGE_DIFF_SIDE_BYTES)
+            }) {
+                *side = Some(bytes);
+            }
+        }
+        Ok(Some(image))
+    }
+
+    fn diff_file_image_git_form(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -948,7 +1048,8 @@ fn read_worktree_image_file_bytes_optional(workdir: &Path, path: &Path) -> Resul
     } else {
         workdir.join(path)
     };
-    let metadata = match std::fs::metadata(&full) {
+    // A symlink is link text, never an image; the text diff shows it.
+    let metadata = match std::fs::symlink_metadata(&full) {
         Ok(metadata) if metadata.is_file() => metadata,
         Ok(_) => return Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1230,16 +1331,27 @@ fn gix_index_stage_image_blob_bytes_optional(
     gix_image_blob_bytes_from_object_id_optional(repo, object_id, path)
 }
 
-fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path::PathBuf> {
+/// A worktree path as git stores it: a regular file, or a symlink whose link
+/// text is the content. Following the link would show the target's bytes,
+/// which is wrong for plain symlinks and for git-annex locked files.
+enum WorktreeEntry {
+    Regular(std::path::PathBuf),
+    Symlink { target: Vec<u8> },
+}
+
+fn worktree_entry_optional(workdir: &Path, path: &Path) -> Option<WorktreeEntry> {
     let full = if path.is_absolute() {
         path.to_path_buf()
     } else {
         workdir.join(path)
     };
-    std::fs::metadata(&full)
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .map(|_| full)
+    let metadata = std::fs::symlink_metadata(&full).ok()?;
+    if metadata.file_type().is_symlink() {
+        let mut target = Vec::new();
+        target.extend_from_slice(gix::path::into_bstr(std::fs::read_link(&full).ok()?).as_ref());
+        return Some(WorktreeEntry::Symlink { target });
+    }
+    metadata.is_file().then_some(WorktreeEntry::Regular(full))
 }
 
 fn copy_and_hash(
@@ -1336,7 +1448,8 @@ impl GixRepo {
 /// If dependencies cannot be read, bypass the memo and let the pipeline report
 /// any error through its normal path. A `filter=<driver>` attribute also
 /// bypasses it: the driver is an external program whose output can change
-/// without any input we can stamp changing.
+/// without any input we can stamp changing. `filter=lfs` is the exception: its
+/// clean output is the sha256 of the bytes, so the file stamp already covers it.
 fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Option<u64> {
     let index = repo.index_or_empty().ok()?;
     let mut attributes = repo
@@ -1353,13 +1466,24 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
     let mut hasher = FxHasher::default();
     for matched in outcome.iter() {
         let assignment = matched.assignment;
-        if assignment.name.as_str() == "filter"
-            && matches!(
-                assignment.state,
-                gix::attrs::StateRef::Set | gix::attrs::StateRef::Value(_)
-            )
-        {
-            return None;
+        if assignment.name.as_str() == "filter" {
+            match assignment.state {
+                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs" => {
+                    let config = repo.config_snapshot();
+                    for key in [
+                        "filter.lfs.clean",
+                        "filter.lfs.process",
+                        "filter.lfs.required",
+                    ] {
+                        config
+                            .string(key)
+                            .map(|value| value.to_vec())
+                            .hash(&mut hasher);
+                    }
+                }
+                gix::attrs::StateRef::Set | gix::attrs::StateRef::Value(_) => return None,
+                _ => {}
+            }
         }
         assignment.hash(&mut hasher);
     }
@@ -1669,6 +1793,36 @@ mod tests {
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    #[test]
+    fn attributes_fingerprint_keeps_lfs_and_drops_other_filter_drivers() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        init_test_repo(root);
+        std::fs::write(
+            root.join(".gitattributes"),
+            "*.bin filter=lfs\n*.raw filter=other\n*.txt text\n",
+        )
+        .unwrap();
+        run_git(root, &["config", "filter.lfs.clean", "one"]);
+        let repo = open_repo(root).repo();
+        let lfs = worktree_attributes_fingerprint(&repo, Path::new("a.bin"));
+        assert!(lfs.is_some(), "lfs output is a pure function of the bytes");
+        assert!(worktree_attributes_fingerprint(&repo, Path::new("a.raw")).is_none());
+        assert!(worktree_attributes_fingerprint(&repo, Path::new("a.txt")).is_some());
+        assert_ne!(
+            lfs,
+            worktree_attributes_fingerprint(&repo, Path::new("a.txt"))
+        );
+
+        run_git(root, &["config", "filter.lfs.clean", "two"]);
+        let repo = open_repo(root).repo();
+        assert_ne!(
+            worktree_attributes_fingerprint(&repo, Path::new("a.bin")),
+            lfs,
+            "a changed driver command must invalidate the memo"
+        );
     }
 
     #[test]

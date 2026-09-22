@@ -99,7 +99,8 @@ pub(crate) fn commit_file_change_from_diff(
     use gitcomet_core::domain::FileStatusKind;
     use gix::object::tree::diff::ChangeDetached;
 
-    let (location, is_tree, is_submodule, kind, old_id, new_id) = match change {
+    // `link`: the current (or deleted) entry is a symlink, as git-annex locks files.
+    let (location, is_tree, is_submodule, kind, old_id, new_id, link) = match change {
         ChangeDetached::Addition {
             entry_mode,
             location,
@@ -112,6 +113,7 @@ pub(crate) fn commit_file_change_from_diff(
             FileStatusKind::Added,
             None,
             Some(id),
+            entry_mode.is_link(),
         ),
         ChangeDetached::Deletion {
             entry_mode,
@@ -125,6 +127,7 @@ pub(crate) fn commit_file_change_from_diff(
             FileStatusKind::Deleted,
             Some(id),
             None,
+            entry_mode.is_link(),
         ),
         ChangeDetached::Modification {
             previous_entry_mode,
@@ -139,6 +142,7 @@ pub(crate) fn commit_file_change_from_diff(
             FileStatusKind::Modified,
             Some(previous_id),
             Some(id),
+            entry_mode.is_link(),
         ),
         ChangeDetached::Rewrite {
             source_entry_mode,
@@ -159,6 +163,7 @@ pub(crate) fn commit_file_change_from_diff(
             },
             Some(source_id),
             Some(id),
+            entry_mode.is_link(),
         ),
     };
 
@@ -172,12 +177,20 @@ pub(crate) fn commit_file_change_from_diff(
         (None, None)
     };
 
+    let path = path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?;
+    let large_file = (!is_submodule)
+        .then(|| new_id.or(old_id))
+        .flatten()
+        .and_then(|id| {
+            super::super::large_files::committed_large_file_state(repo, id, link, &path)
+        });
     Ok(Some(CommitFileChange {
-        path: path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
+        path,
         kind,
         is_submodule,
         additions,
         deletions,
+        large_file,
     }))
 }
 

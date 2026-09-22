@@ -1,3 +1,4 @@
+pub mod annex;
 pub mod auth;
 pub mod conflict_labels;
 pub mod conflict_output;
@@ -12,6 +13,9 @@ pub mod git_ops_trace;
 pub mod gitignore;
 pub mod hex;
 pub mod history_index;
+pub mod large_file_tools;
+pub mod large_files;
+pub mod lfs;
 pub mod merge;
 pub mod merge_extraction;
 pub mod mergetool_trace;

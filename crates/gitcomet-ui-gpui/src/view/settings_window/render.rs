@@ -2110,6 +2110,7 @@ impl Render for SettingsWindowView {
                     }
 
                     let signing_tools = self.runtime_info.signing_tools.as_ref();
+                    let large_file_tools = self.runtime_info.large_file_tools.as_ref();
                     for (row_id, detail_id, label, description, info) in [
                         (
                             "settings_window_gpg_runtime",
@@ -2124,6 +2125,20 @@ impl Render for SettingsWindowView {
                             "ssh-keygen",
                             SSH_KEYGEN_DESCRIPTION,
                             ssh_keygen_info(signing_tools),
+                        ),
+                        (
+                            "settings_window_git_lfs_runtime",
+                            "settings_window_git_lfs_runtime_detail",
+                            "Git LFS",
+                            GIT_LFS_DESCRIPTION,
+                            git_lfs_info(large_file_tools),
+                        ),
+                        (
+                            "settings_window_git_annex_runtime",
+                            "settings_window_git_annex_runtime_detail",
+                            "git-annex",
+                            GIT_ANNEX_DESCRIPTION,
+                            git_annex_info(large_file_tools),
                         ),
                     ] {
                         git_executable_card = git_executable_card

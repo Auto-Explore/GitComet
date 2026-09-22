@@ -33,6 +33,34 @@ pub struct GitOutputChunk {
     pub text: String,
 }
 
+/// Large-file transfer progress, as git-lfs reports it through
+/// `GIT_LFS_PROGRESS` (also during hook-driven transfers in push and checkout).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferProgress {
+    /// `download`, `upload` or `checkout`.
+    pub direction: String,
+    pub files_done: u64,
+    pub files_total: u64,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub name: String,
+}
+
+impl TransferProgress {
+    /// One line for activity rows, e.g. `LFS download 3/10 files · 12 MB of 40 MB`.
+    pub fn summary(&self) -> String {
+        use crate::text_utils::human_readable_bytes;
+        format!(
+            "LFS {} {}/{} files · {} of {}",
+            self.direction,
+            self.files_done,
+            self.files_total,
+            human_readable_bytes(self.bytes_done),
+            human_readable_bytes(self.bytes_total)
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GitOperationEvent {
     Output {
@@ -48,6 +76,7 @@ pub enum GitOperationEvent {
         exit_code: Option<i32>,
         duration: Duration,
     },
+    TransferProgress(TransferProgress),
 }
 
 type EventSink = dyn Fn(GitOperationId, GitOperationEvent) + Send + Sync + 'static;

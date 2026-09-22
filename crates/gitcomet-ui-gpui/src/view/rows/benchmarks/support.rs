@@ -376,6 +376,7 @@ pub(crate) fn build_repo_switch_repo_state(
                     is_submodule: false,
                     additions: None,
                     deletions: None,
+                    large_file: None,
                 })
                 .collect(),
         }));
@@ -836,6 +837,7 @@ pub(crate) fn build_synthetic_commit_details_with_message(
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         });
     }
 
@@ -896,6 +898,7 @@ pub(crate) fn build_synthetic_commit_details_unique_paths(
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         });
     }
     CommitDetails {

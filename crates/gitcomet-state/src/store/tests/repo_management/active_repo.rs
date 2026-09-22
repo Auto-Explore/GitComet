@@ -1185,6 +1185,7 @@ fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details(
             is_submodule: true,
             additions: None,
             deletions: None,
+            large_file: None,
         }],
     })));
     repo1_state.set_diff_target(Some(target));

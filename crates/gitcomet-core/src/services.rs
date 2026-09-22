@@ -752,6 +752,43 @@ pub trait GitRepository: Send + Sync {
         self.uncommitted_line_stats_cancellable(cancellation)
     }
 
+    /// Repository-level Git LFS and git-annex facts from config, attributes and
+    /// the local object stores. Must not run either tool.
+    fn large_file_support_cancellable(
+        &self,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::large_files::LargeFileSupport> {
+        Ok(Default::default())
+    }
+
+    /// Large-file state for the rows of a status snapshot the caller just
+    /// collected. Must not run either tool.
+    fn uncommitted_large_files_for_status_cancellable(
+        &self,
+        _status: &RepoStatus,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::large_files::UncommittedLargeFiles> {
+        Ok(Default::default())
+    }
+
+    /// Run a Git LFS or git-annex operation through the tool.
+    fn run_large_file_command(
+        &self,
+        _command: &crate::large_files::LargeFileCommand,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "large-file commands are not supported by this backend",
+        )))
+    }
+
+    /// Current Git LFS locks for the repository (a server round trip).
+    fn lfs_locks_cancellable(
+        &self,
+        _cancellation: &CancellationToken,
+    ) -> Result<Vec<crate::large_files::LfsLock>> {
+        Ok(Vec::new())
+    }
+
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`

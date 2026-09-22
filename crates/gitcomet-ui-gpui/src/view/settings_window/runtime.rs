@@ -3,6 +3,7 @@ use super::*;
 impl Drop for SettingsWindowView {
     fn drop(&mut self) {
         self.signing_tools_cancellation.cancel();
+        self.large_file_tools_cancellation.cancel();
     }
 }
 
@@ -11,6 +12,8 @@ pub(super) struct SettingsRuntimeInfo {
     pub(super) git: GitRuntimeInfo,
     /// `None` until the background probe finishes.
     pub(super) signing_tools: Option<SigningToolsState>,
+    /// `None` while the `git lfs` / `git annex` probe runs.
+    pub(super) large_file_tools: Option<gitcomet_core::large_file_tools::LargeFileToolsState>,
     pub(super) app_version_display: SharedString,
     pub(super) operating_system: SharedString,
 }
@@ -125,7 +128,33 @@ impl SettingsWindowView {
     ) {
         self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime);
         self.refresh_signing_tools(cx);
+        self.refresh_large_file_tools(cx);
         cx.notify();
+    }
+
+    pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
+        self.large_file_tools_cancellation.cancel();
+        self.large_file_tools_probe = None;
+        if cfg!(test) || !current_git_runtime().is_available() {
+            return;
+        }
+        self.large_file_tools_cancellation = Default::default();
+        let cancellation = self.large_file_tools_cancellation.clone();
+        let runtime = current_git_runtime();
+        self.runtime_info.large_file_tools = None;
+        let detection = cx.background_spawn(async move {
+            gitcomet_core::large_file_tools::detect_large_file_tools_cancellable(&cancellation)
+        });
+        self.large_file_tools_probe = Some(cx.spawn(async move |view, cx| {
+            let tools = detection.await;
+            let _ = view.update(cx, |this, cx| {
+                if current_git_runtime() != runtime {
+                    return;
+                }
+                this.runtime_info.large_file_tools = Some(tools);
+                cx.notify();
+            });
+        }));
     }
 
     pub(super) fn cancel_signing_tools_probe(&mut self) {
@@ -171,6 +200,7 @@ impl SettingsRuntimeInfo {
         Self {
             git: git_runtime_info_from_state(runtime),
             signing_tools: Some(SigningToolsState::default()),
+            large_file_tools: Some(Default::default()),
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
                 "{} ({})",
@@ -268,6 +298,71 @@ pub(super) fn is_supported_git_version(version: GitVersion) -> bool {
 pub(super) const GPG_DESCRIPTION: &str =
     "Verifies GPG and X.509 commit signatures, such as commits made on GitHub.";
 pub(super) const SSH_KEYGEN_DESCRIPTION: &str = "Verifies SSH commit signatures.";
+pub(super) const GIT_LFS_DESCRIPTION: &str =
+    "Stores large files outside Git history; needed to check out, fetch and push them.";
+pub(super) const GIT_ANNEX_DESCRIPTION: &str =
+    "Manages annexed file content across repositories and special remotes.";
+
+pub(super) fn git_lfs_info(
+    tools: Option<&gitcomet_core::large_file_tools::LargeFileToolsState>,
+) -> SigningToolInfo {
+    large_file_tool_info(
+        tools.map(|tools| &tools.git_lfs),
+        "git-lfs",
+        "Git LFS files",
+    )
+}
+
+pub(super) fn git_annex_info(
+    tools: Option<&gitcomet_core::large_file_tools::LargeFileToolsState>,
+) -> SigningToolInfo {
+    large_file_tool_info(
+        tools.map(|tools| &tools.git_annex),
+        "git-annex",
+        "Annexed files",
+    )
+}
+
+fn large_file_tool_info(
+    availability: Option<&SigningToolAvailability>,
+    program: &str,
+    files: &str,
+) -> SigningToolInfo {
+    let Some(availability) = availability else {
+        return SigningToolInfo {
+            status: SigningToolStatus::Detecting,
+            version_display: SharedString::default(),
+            detail: None,
+        };
+    };
+    match availability {
+        SigningToolAvailability::NotChecked => SigningToolInfo {
+            status: SigningToolStatus::NotChecked,
+            version_display: "Not checked".into(),
+            detail: None,
+        },
+        SigningToolAvailability::Available { version } => SigningToolInfo {
+            status: SigningToolStatus::Found,
+            version_display: version.as_deref().unwrap_or(program).to_string().into(),
+            detail: None,
+        },
+        SigningToolAvailability::NotFound { detail } => SigningToolInfo {
+            status: SigningToolStatus::NotFound,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!(
+                    "{detail} {files} can be browsed but not fetched or pushed. Install {program} where Git can find it."
+                )
+                .into(),
+            ),
+        },
+        SigningToolAvailability::Unknown => SigningToolInfo {
+            status: SigningToolStatus::Unknown,
+            version_display: program.to_string().into(),
+            detail: Some(format!("GitComet could not tell whether Git can run {program}.").into()),
+        },
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SigningToolStatus {

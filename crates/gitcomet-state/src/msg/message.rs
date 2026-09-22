@@ -219,6 +219,7 @@ pub enum Msg {
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
     SetSigningToolsState(SigningToolsState),
+    SetLargeFileToolsState(gitcomet_core::large_file_tools::LargeFileToolsState),
     SetCommitSignatureTargets {
         repo_id: RepoId,
         epoch: u64,
@@ -740,6 +741,15 @@ pub enum Msg {
         repo_id: RepoId,
         patterns: Vec<String>,
     },
+    /// Run a Git LFS or git-annex operation through the tool.
+    RunLargeFileCommand {
+        repo_id: RepoId,
+        command: gitcomet_core::large_files::LargeFileCommand,
+    },
+    /// Reload Git LFS locks from the server; never polled.
+    LoadLfsLocks {
+        repo_id: RepoId,
+    },
     Commit {
         repo_id: RepoId,
         message: String,
@@ -1150,6 +1160,8 @@ pub enum InternalMsg {
         repo_id: RepoId,
         generation: crate::model::LineStatsGeneration,
         result: Result<UncommittedLineStats, Error>,
+        /// Present when the effect asked for large-file rows.
+        large_files: Option<Result<gitcomet_core::large_files::UncommittedLargeFiles, Error>>,
     },
     StatusLoaded {
         repo_id: RepoId,
@@ -1268,6 +1280,14 @@ pub enum InternalMsg {
     SubmodulesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
+    },
+    LargeFileSupportLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::large_files::LargeFileSupport, Error>,
+    },
+    LfsLocksLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<gitcomet_core::large_files::LfsLock>, Error>,
     },
     FileBrowserLoaded {
         repo_id: RepoId,

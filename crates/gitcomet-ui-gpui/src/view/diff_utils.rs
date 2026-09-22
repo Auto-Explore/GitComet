@@ -880,9 +880,56 @@ pub(super) fn context_menu_selection_range_from_diff_text(
     Some((start.source_visible_ix, end.source_visible_ix))
 }
 
+/// Placeholder line for a side that is binary or not UTF-8, with the sizes
+/// of whichever sides exist so a size change is still visible.
+pub(in crate::view) fn binary_diff_placeholder_message(
+    old_bytes: Option<u64>,
+    new_bytes: Option<u64>,
+) -> String {
+    use gitcomet_core::text_utils::human_readable_bytes;
+    match (old_bytes, new_bytes) {
+        (Some(old), Some(new)) if old == new => {
+            format!(
+                "Binary or non-UTF-8 content is not shown as text ({}).",
+                human_readable_bytes(old)
+            )
+        }
+        (Some(old), Some(new)) => format!(
+            "Binary or non-UTF-8 content is not shown as text ({} to {}).",
+            human_readable_bytes(old),
+            human_readable_bytes(new)
+        ),
+        (None, Some(bytes)) | (Some(bytes), None) => format!(
+            "Binary or non-UTF-8 content is not shown as text ({}).",
+            human_readable_bytes(bytes)
+        ),
+        (None, None) => "Binary or non-UTF-8 content is not shown as text.".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_placeholder_names_the_sizes_that_exist() {
+        assert_eq!(
+            binary_diff_placeholder_message(Some(1_000), Some(2_500)),
+            "Binary or non-UTF-8 content is not shown as text (1 KB to 2.5 KB)."
+        );
+        assert_eq!(
+            binary_diff_placeholder_message(Some(700), Some(700)),
+            "Binary or non-UTF-8 content is not shown as text (700 B)."
+        );
+        assert_eq!(
+            binary_diff_placeholder_message(None, Some(3)),
+            "Binary or non-UTF-8 content is not shown as text (3 B)."
+        );
+        assert_eq!(
+            binary_diff_placeholder_message(None, None),
+            "Binary or non-UTF-8 content is not shown as text."
+        );
+    }
     use gitcomet_core::domain::DiffLineKind as K;
 
     fn dl(kind: K, text: &str) -> AnnotatedDiffLine {

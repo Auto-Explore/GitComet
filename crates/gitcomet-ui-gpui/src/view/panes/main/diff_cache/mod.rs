@@ -11,6 +11,7 @@ mod image_cache;
 mod patch_diff;
 mod word_highlight;
 
+pub(in crate::view) use self::file_diff::FileDiffCacheError;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;

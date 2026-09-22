@@ -245,10 +245,10 @@ impl IndexedFileDiffSource {
         }
     }
 
-    fn from_file(path: &std::path::Path) -> Result<Self, String> {
+    fn from_file(path: &std::path::Path) -> Result<Self, IndexedSourceError> {
         let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
         if metadata.is_dir() {
-            return Err("file diff source is a directory".to_string());
+            return Err("file diff source is a directory".to_string().into());
         }
 
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -308,7 +308,7 @@ impl IndexedFileDiffSource {
         }
 
         if !utf8_tail.is_empty() {
-            return Err("file diff source is not valid UTF-8".to_string());
+            return Err(IndexedSourceError::NotUtf8);
         }
         if source_len > 0 && !ended_with_newline {
             line_flags.push(preview_line_flags_from_bools(
@@ -379,11 +379,52 @@ fn file_diff_line_count_from_starts(source_len: usize, line_starts: &[usize]) ->
         .saturating_sub(usize::from(line_starts.last().copied() == Some(source_len)))
 }
 
+/// Why a source file could not be indexed. `NotUtf8` is the binary case the
+/// diff pane shows as a placeholder; everything else is a real failure.
+#[derive(Debug)]
+enum IndexedSourceError {
+    NotUtf8,
+    Other(String),
+}
+
+impl From<String> for IndexedSourceError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+/// Why a file diff could not be built. A binary side is a normal outcome with
+/// its own placeholder rather than an error dump naming a temp file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum FileDiffCacheError {
+    /// A side is binary or not UTF-8; sizes are of the sides that exist.
+    NotText {
+        old_bytes: Option<u64>,
+        new_bytes: Option<u64>,
+    },
+    Message(String),
+}
+
+impl From<String> for FileDiffCacheError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl std::fmt::Display for FileDiffCacheError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotText { .. } => f.write_str("file diff source is not valid UTF-8"),
+            Self::Message(message) => f.write_str(message),
+        }
+    }
+}
+
 fn validate_file_diff_utf8_chunk_streaming(
     utf8_tail: &mut Vec<u8>,
     validation_buffer: &mut Vec<u8>,
     chunk: &[u8],
-) -> Result<(), String> {
+) -> Result<(), IndexedSourceError> {
     validation_buffer.clear();
     if !utf8_tail.is_empty() {
         validation_buffer.extend_from_slice(utf8_tail.as_slice());
@@ -397,7 +438,7 @@ fn validate_file_diff_utf8_chunk_streaming(
         }
         Err(error) => {
             if error.error_len().is_some() {
-                return Err("file diff source is not valid UTF-8".to_string());
+                return Err(IndexedSourceError::NotUtf8);
             }
             let valid_up_to = error.valid_up_to();
             utf8_tail.clear();
@@ -1618,18 +1659,32 @@ fn build_file_diff_plan_from_indexed_sources(
 }
 
 fn index_file_diff_side(
+    file: &gitcomet_core::domain::FileDiffText,
     source: Option<&gitcomet_core::domain::FileDiffTextSource>,
     legacy_text: Option<&Arc<str>>,
-) -> Result<IndexedFileDiffSource, String> {
+) -> Result<IndexedFileDiffSource, FileDiffCacheError> {
     if let Some(source) = source {
-        return IndexedFileDiffSource::from_file(&source.path).map_err(|error| {
-            format!(
+        return IndexedFileDiffSource::from_file(&source.path).map_err(|error| match error {
+            IndexedSourceError::NotUtf8 => not_text_error(file),
+            IndexedSourceError::Other(error) => FileDiffCacheError::Message(format!(
                 "Unable to load file diff source `{}`: {error}",
                 source.path.display()
-            )
+            )),
         });
     }
     Ok(IndexedFileDiffSource::from_shared(legacy_text))
+}
+
+fn not_text_error(file: &gitcomet_core::domain::FileDiffText) -> FileDiffCacheError {
+    let bytes = |source: Option<&gitcomet_core::domain::FileDiffTextSource>| {
+        source
+            .and_then(|source| std::fs::metadata(&source.path).ok())
+            .map(|metadata| metadata.len())
+    };
+    FileDiffCacheError::NotText {
+        old_bytes: bytes(file.old_source.as_ref()),
+        new_bytes: bytes(file.new_source.as_ref()),
+    }
 }
 
 fn file_diff_plan_from_runs(
@@ -1899,7 +1954,7 @@ pub(in crate::view) struct FileDiffCacheRebuild {
 pub(in crate::view) fn build_file_diff_cache_rebuild(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
-) -> Result<FileDiffCacheRebuild, String> {
+) -> Result<FileDiffCacheRebuild, FileDiffCacheError> {
     build_file_diff_cache_rebuild_with_patch(file, workdir, None, DiffWhitespaceMode::Show)
 }
 
@@ -1908,9 +1963,9 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     workdir: &std::path::Path,
     patch_diff: Option<&gitcomet_core::domain::Diff>,
     whitespace_mode: DiffWhitespaceMode,
-) -> Result<FileDiffCacheRebuild, String> {
-    let old_source = index_file_diff_side(file.old_source.as_ref(), file.old.as_ref())?;
-    let new_source = index_file_diff_side(file.new_source.as_ref(), file.new.as_ref())?;
+) -> Result<FileDiffCacheRebuild, FileDiffCacheError> {
+    let old_source = index_file_diff_side(file, file.old_source.as_ref(), file.old.as_ref())?;
+    let new_source = index_file_diff_side(file, file.new_source.as_ref(), file.new.as_ref())?;
     let old_text = file_diff_source_text(&old_source);
     let new_text = file_diff_source_text(&new_source);
     let old_source_path = file_diff_source_path(&old_source);
@@ -2383,8 +2438,32 @@ mod tests {
         let error = build_file_diff_cache_rebuild(&file, tmp.path())
             .expect_err("invalid UTF-8 source should be reported");
 
-        assert!(error.contains(source_path.to_string_lossy().as_ref()));
-        assert!(error.contains("not valid UTF-8"));
+        assert_eq!(
+            error,
+            FileDiffCacheError::NotText {
+                old_bytes: None,
+                new_bytes: Some(3),
+            },
+            "binary content is a placeholder outcome, not an error dump"
+        );
+    }
+
+    #[test]
+    fn build_file_diff_cache_rebuild_reports_unreadable_source_as_message() {
+        let file = gitcomet_core::domain::FileDiffText::new_sources(
+            PathBuf::from("missing.txt"),
+            None,
+            Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                PathBuf::from("/nonexistent/gitcomet-missing-source"),
+                "missing-source",
+            )),
+        );
+        match build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo")) {
+            Err(FileDiffCacheError::Message(message)) => {
+                assert!(message.contains("gitcomet-missing-source"), "{message}");
+            }
+            other => panic!("expected a message error, got {other:?}"),
+        }
     }
 
     #[test]

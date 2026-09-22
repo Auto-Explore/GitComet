@@ -2314,6 +2314,7 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         })
         .collect::<Vec<_>>();
     let start_ix = 40usize;
@@ -2557,6 +2558,7 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         },
         CommitFileChange {
             path: std::path::PathBuf::from("src/commit_details/second.rs"),
@@ -2564,6 +2566,7 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         },
     ];
 

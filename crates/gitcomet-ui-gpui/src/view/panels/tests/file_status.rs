@@ -652,6 +652,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     }],
                 },
             ));
@@ -2790,6 +2791,7 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     }],
                 },
             ));
@@ -2913,6 +2915,7 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
                             is_submodule: false,
                             additions: None,
                             deletions: None,
+                            large_file: None,
                         })
                         .collect(),
                 },
@@ -3196,6 +3199,7 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         })
         .collect::<Vec<_>>();
 
@@ -3306,6 +3310,7 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             is_submodule: false,
                             additions: Some(1),
                             deletions: Some(2),
+                            large_file: None,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: "src/removed.rs".into(),
@@ -3313,6 +3318,7 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             is_submodule: false,
                             additions: Some(0),
                             deletions: Some(4),
+                            large_file: None,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: "src/added.rs".into(),
@@ -3320,6 +3326,7 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             is_submodule: false,
                             additions: Some(5),
                             deletions: Some(0),
+                            large_file: None,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: "src/renamed.rs".into(),
@@ -3327,6 +3334,7 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             is_submodule: false,
                             additions: Some(0),
                             deletions: Some(0),
+                            large_file: None,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: "src/added-small.rs".into(),
@@ -3334,6 +3342,7 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             is_submodule: false,
                             additions: Some(1),
                             deletions: Some(0),
+                            large_file: None,
                         },
                     ],
                 },
@@ -3546,6 +3555,7 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
             is_submodule: false,
             additions: None,
             deletions: None,
+            large_file: None,
         })
         .collect::<Vec<_>>();
 
@@ -3691,6 +3701,7 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                             is_submodule: false,
                             additions: None,
                             deletions: None,
+                            large_file: None,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: std::path::PathBuf::from(
@@ -3700,6 +3711,7 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                             is_submodule: false,
                             additions: None,
                             deletions: None,
+                            large_file: None,
                         },
                     ],
                 },
@@ -5421,6 +5433,7 @@ fn commit_details_state_with_paths(
                     is_submodule: false,
                     additions: Some(1),
                     deletions: Some(1),
+                    large_file: None,
                 })
                 .collect(),
         }));
@@ -6889,5 +6902,66 @@ fn commit_links_cancel_cross_link_and_outside_releases(cx: &mut gpui::TestAppCon
     let menu = click_commit_details_link(cx, &view, first, 1);
     assert!(
         matches!(menu, Some(PopoverKind::WebLinkMenu { ref url, .. }) if url.as_ref() == first_url)
+    );
+}
+
+/// Chips arrive after the list (with line stats), so the row must pick them
+/// up from the snapshot and the details pane must repaint for them.
+#[gpui::test]
+fn status_row_shows_large_file_chip_for_managed_paths(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(7431);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_large_file_chip",
+        std::process::id()
+    ));
+
+    let push = |cx: &mut gpui::VisualTestContext, with_chip: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    std::path::PathBuf::from("art/hero.psd"),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                if with_chip {
+                    let mut files = gitcomet_core::large_files::UncommittedLargeFiles::default();
+                    files.unstaged.insert(
+                        std::path::PathBuf::from("art/hero.psd"),
+                        gitcomet_core::large_files::LargeFileState {
+                            pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+                                gitcomet_core::lfs::LfsPointer {
+                                    oid: gitcomet_core::lfs::LfsOid([3; 32]),
+                                    size: 42,
+                                },
+                            ),
+                            in_local_store: Some(false),
+                            worktree: Some(gitcomet_core::large_files::LargeFileWorktree::Pointer),
+                            lockable: false,
+                        },
+                    );
+                    repo.uncommitted_large_files = Arc::new(files);
+                    repo.large_files_rev = 1;
+                }
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    push(cx, false);
+    assert!(
+        cx.debug_bounds("status_row_large_file_0").is_none(),
+        "plain rows carry no chip"
+    );
+    push(cx, true);
+    assert!(
+        cx.debug_bounds("status_row_large_file_0").is_some(),
+        "managed rows show the chip once their state arrives"
     );
 }

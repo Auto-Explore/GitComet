@@ -1560,6 +1560,7 @@ impl GitCometView {
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
             signing_tools_probe_cancellation: Default::default(),
+            large_file_tools_probe_in_flight: false,
             date_time_format,
             timezone,
             show_timezone,
@@ -2824,6 +2825,35 @@ impl GitCometView {
     }
 
     /// Discovery runs only after explicit opt-in, startup, or diagnostics.
+    /// Probe `git lfs` / `git annex` once per Git runtime. Not gated by any
+    /// preference: the answer decides whether their commands are offered.
+    pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
+        if cfg!(test)
+            || self.large_file_tools_probe_in_flight
+            || !current_git_runtime().is_available()
+        {
+            return;
+        }
+        self.large_file_tools_probe_in_flight = true;
+        let runtime = current_git_runtime();
+        let detection =
+            cx.background_spawn(async move {
+                gitcomet_core::large_file_tools::detect_large_file_tools_cancellable(
+                    &Default::default(),
+                )
+            });
+        cx.spawn(async move |view, cx| {
+            let tools = detection.await;
+            let _ = view.update(cx, |this, _cx| {
+                this.large_file_tools_probe_in_flight = false;
+                if current_git_runtime() == runtime {
+                    this.store.dispatch(Msg::SetLargeFileToolsState(tools));
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn refresh_signing_tools(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
         if cfg!(test)
             || !self

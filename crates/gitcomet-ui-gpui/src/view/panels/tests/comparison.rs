@@ -38,6 +38,7 @@ impl Files {
                         is_submodule: false,
                         additions: Some(1),
                         deletions: Some(0),
+                        large_file: None,
                     })
                     .collect(),
             )),

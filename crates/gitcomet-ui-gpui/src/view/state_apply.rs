@@ -208,7 +208,7 @@ impl GitCometView {
                 .feedback
                 .hook_activity
                 .iter()
-                .filter(|operation| operation.has_hooks() && !operation.status.is_active())
+                .filter(|operation| operation.is_reportable() && !operation.status.is_active())
             {
                 let was_completed = previous_repo
                     .and_then(|repo| {
@@ -361,6 +361,12 @@ impl GitCometView {
             && !self.signing_tools_probe_in_flight
         {
             self.refresh_signing_tools(false, cx);
+        }
+        if matches!(
+            self.state.large_file_tools.git_lfs,
+            gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
+        ) {
+            self.refresh_large_file_tools(cx);
         }
         // Only an open palette shows enablement; `open` takes a fresh context.
         if self.command_palette_open {

@@ -3330,7 +3330,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_diff_cache_whitespace_mode: DiffWhitespaceMode,
     pub(in crate::view) file_diff_cache_target: Option<DiffTarget>,
-    pub(in crate::view) file_diff_cache_error: Option<String>,
+    pub(in crate::view) file_diff_cache_error:
+        Option<crate::view::panes::main::diff_cache::FileDiffCacheError>,
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,

@@ -47,6 +47,8 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod large_files;
+mod lfs;
 mod line_stats;
 mod log;
 mod mergetool;
@@ -707,6 +709,35 @@ impl GitRepository for GixRepo {
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.line_stats_for_entries_impl(&status.unstaged, cancellation)
+    }
+
+    fn large_file_support_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::LargeFileSupport> {
+        self.large_file_support_impl(cancellation)
+    }
+
+    fn uncommitted_large_files_for_status_cancellable(
+        &self,
+        status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::UncommittedLargeFiles> {
+        self.uncommitted_large_files_impl(status, cancellation)
+    }
+
+    fn run_large_file_command(
+        &self,
+        command: &gitcomet_core::large_files::LargeFileCommand,
+    ) -> Result<CommandOutput> {
+        self.run_large_file_command_impl(command)
+    }
+
+    fn lfs_locks_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<gitcomet_core::large_files::LfsLock>> {
+        self.lfs_locks_impl(cancellation)
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {

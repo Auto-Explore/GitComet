@@ -5224,3 +5224,141 @@ fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load
     assert!(matches!(setup.full_messages, Loadable::Error(_)));
     assert_eq!(setup.entries[0].message, "subject");
 }
+
+fn large_file_fixture() -> (
+    FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    AtomicU64,
+    AppState,
+    RepoId,
+) {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(41);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.open = Loadable::Ready(());
+    state.repos.push(repo_state);
+    (repos, AtomicU64::new(1), state, repo_id)
+}
+
+#[test]
+fn large_file_command_runs_as_a_local_action_and_lock_changes_reload_locks() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let command = LargeFileCommand::LfsLock {
+        paths: vec![PathBuf::from("art/hero.psd")],
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RunLargeFileCommand {
+            repo_id,
+            command: command.clone(),
+        },
+    );
+    assert!(
+        matches!(effects.as_slice(), [Effect::RunLargeFileCommand { command: c, auth: None, .. }] if *c == command),
+        "{effects:?}"
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LargeFile { command },
+            result: Ok(CommandOutput::default()),
+        }),
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadLfsLocks { .. })),
+        "a lock change reloads the lock list: {effects:?}"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadLargeFileSupport { .. }))
+    );
+}
+
+#[test]
+fn lockable_patterns_load_locks_once_and_failures_stay_quiet() {
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support
+        .lfs
+        .tracked_patterns
+        .push(gitcomet_core::large_files::LfsTrackedPattern {
+            pattern: "*.psd".into(),
+            lockable: true,
+            source: PathBuf::from(".gitattributes"),
+        });
+    let loaded = |support| {
+        Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded {
+            repo_id,
+            result: Ok(support),
+        })
+    };
+    let effects = reduce(&mut repos, &id_alloc, &mut state, loaded(support.clone()));
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::LoadLfsLocks { .. }))
+            .count(),
+        1
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
+            repo_id,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("locking API not supported".into()),
+            )),
+        }),
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state.repos[0].lfs_locks, Loadable::Error(_)));
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+
+    // Unchanged support does not ask the server again.
+    let effects = reduce(&mut repos, &id_alloc, &mut state, loaded(support));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadLfsLocks { .. }))
+    );
+}
+
+#[test]
+fn large_file_command_replays_after_an_auth_prompt() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    let command = LargeFileCommand::LfsFetchAll;
+    let replay = crate::store::reducer::repo_command_replay_msg_for_test(
+        RepoId(3),
+        RepoCommandKind::LargeFile {
+            command: command.clone(),
+        },
+    );
+    assert!(
+        matches!(
+            &replay,
+            Some(Msg::RunLargeFileCommand { repo_id: RepoId(3), command: c }) if *c == command
+        ),
+        "{replay:?}"
+    );
+}

@@ -1030,6 +1030,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::LaunchMergetool { .. }
             | RepoCommandKind::SaveWorktreeFile { .. }
             | RepoCommandKind::AppendGitignorePatterns { .. }
+            | RepoCommandKind::LargeFile { .. }
             | RepoCommandKind::ExportPatch { .. }
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }
@@ -1299,6 +1300,17 @@ pub(super) fn repo_command_finished(
         repo_state.diff_state.inline_submodule_diff = None;
         repo_state.bump_diff_state_rev();
         extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+    }
+    if command_succeeded
+        && let Some(effect) = super::effects::request_large_file_support_effect(repo_state)
+    {
+        extra_effects.push(effect);
+    }
+    // Lock and unlock change server state the rows show.
+    if matches!(&command, RepoCommandKind::LargeFile { command } if command.changes_locks())
+        && let Some(effect) = super::effects::request_lfs_locks_effect(repo_state)
+    {
+        extra_effects.push(effect);
     }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);

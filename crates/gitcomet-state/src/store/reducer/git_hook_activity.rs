@@ -39,6 +39,7 @@ pub(super) fn started(
         output_bytes: 0,
         output_truncated: false,
         latest_line: String::new(),
+        transfer: None,
     });
     repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
@@ -94,6 +95,10 @@ pub(super) fn apply_event(
                 duration: None,
             });
         }
+        GitOperationEvent::TransferProgress(progress) => {
+            operation.latest_line = progress.summary();
+            operation.transfer = Some(progress);
+        }
         GitOperationEvent::HookFinished {
             id,
             name,
@@ -148,7 +153,7 @@ pub(super) fn finished(
         return;
     };
 
-    if !repo.feedback.hook_activity[index].has_hooks() {
+    if !repo.feedback.hook_activity[index].is_reportable() {
         repo.feedback.hook_activity.remove(index);
         repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
         return;
@@ -200,7 +205,7 @@ fn trim_metadata(repo: &mut RepoState) {
         .feedback
         .hook_activity
         .iter()
-        .filter(|operation| operation.has_hooks())
+        .filter(|operation| operation.is_reportable())
         .count()
         > MAX_ACTIVITY_ENTRIES
     {
@@ -208,7 +213,7 @@ fn trim_metadata(repo: &mut RepoState) {
             .feedback
             .hook_activity
             .iter()
-            .position(|operation| operation.has_hooks() && !operation.status.is_active())
+            .position(|operation| operation.is_reportable() && !operation.status.is_active())
         else {
             break;
         };
@@ -248,7 +253,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         .feedback
         .hook_activity
         .iter()
-        .filter(|operation| operation.has_hooks())
+        .filter(|operation| operation.is_reportable())
         .map(|operation| operation.output_bytes)
         .sum::<usize>();
     if total <= MAX_REPO_OUTPUT_BYTES {
@@ -258,7 +263,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.has_hooks() || operation.status.is_active() || operation.output_bytes == 0 {
+        if !operation.is_reportable() || operation.status.is_active() || operation.output_bytes == 0 {
             continue;
         }
         total = total.saturating_sub(operation.output_bytes);
@@ -273,7 +278,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.has_hooks() {
+        if !operation.is_reportable() {
             continue;
         }
         let previous = operation.output_bytes;
@@ -662,7 +667,7 @@ mod tests {
             .feedback
             .hook_activity
             .iter()
-            .filter(|operation| operation.has_hooks())
+            .filter(|operation| operation.is_reportable())
             .map(|operation| operation.output_bytes)
             .sum::<usize>();
         assert_eq!(

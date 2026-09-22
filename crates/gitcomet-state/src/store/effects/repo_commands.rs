@@ -29,6 +29,26 @@ fn pull_mode_suffix(mode: PullMode) -> Option<&'static str> {
     }
 }
 
+/// One-line subject for an activity row: the paths, patterns or remote.
+fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCommand) -> String {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let paths = |paths: &[PathBuf]| match paths {
+        [] => "all files".to_string(),
+        [path] => path.display().to_string(),
+        many => format!("{} files", many.len()),
+    };
+    match command {
+        C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
+        C::LfsUnlock { paths: p, force } => {
+            format!("{}{}", paths(p), if *force { " · force" } else { "" })
+        }
+        C::LfsPushAll { remote } => remote.clone(),
+        C::LfsTrack { patterns, .. } => patterns.join(", "),
+        C::LfsFetchAll => "all refs".to_string(),
+        C::LfsPrune | C::LfsFsck | C::LfsInstall => "this repository".to_string(),
+    }
+}
+
 fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
     let context = match command {
         RepoCommandKind::FetchAll => "All remotes".to_string(),
@@ -133,6 +153,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             path.display(),
             if *stage { " · stage after saving" } else { "" }
         ),
+        RepoCommandKind::LargeFile { command } => large_file_command_context(command),
         RepoCommandKind::AppendGitignorePatterns { patterns } => match patterns.as_slice() {
             [] => GITIGNORE_FILE_NAME.to_string(),
             [pattern] => pattern.clone(),
@@ -806,6 +827,22 @@ pub(super) fn schedule_apply_worktree_patch(
         RepoCommandKind::ApplyWorktreePatch { reverse },
         move |repo| repo.apply_unified_patch_to_worktree_with_output(&patch, reverse),
     );
+}
+
+pub(super) fn schedule_large_file_command(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    command: gitcomet_core::large_files::LargeFileCommand,
+    auth: Option<StagedGitAuth>,
+) {
+    let kind = RepoCommandKind::LargeFile {
+        command: command.clone(),
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, kind, move |repo| {
+        run_with_git_auth(auth, || repo.run_large_file_command(&command))
+    });
 }
 
 pub(super) fn schedule_fetch_all(

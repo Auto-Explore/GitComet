@@ -187,6 +187,10 @@ pub enum RepoCommandKind {
     ApplyWorktreePatch {
         reverse: bool,
     },
+    /// A Git LFS or git-annex operation.
+    LargeFile {
+        command: gitcomet_core::large_files::LargeFileCommand,
+    },
 }
 
 impl RepoCommandKind {
@@ -240,6 +244,7 @@ impl RepoCommandKind {
             Self::StageHunk => "Stage hunk",
             Self::UnstageHunk => "Unstage hunk",
             Self::ApplyWorktreePatch { .. } => "Apply worktree patch",
+            Self::LargeFile { command } => command.label(),
         }
     }
 }

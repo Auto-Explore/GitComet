@@ -370,6 +370,7 @@ pub(super) fn schedule_load_uncommitted_line_stats(
     repo_id: RepoId,
     generation: crate::model::LineStatsGeneration,
     status: std::sync::Arc<gitcomet_core::domain::RepoStatus>,
+    large_files: bool,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
@@ -379,15 +380,20 @@ pub(super) fn schedule_load_uncommitted_line_stats(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
+            // Cancellable: this reads every changed file, so a superseded scan
+            // must not hold the repo-load worker.
+            let result = repo.uncommitted_line_stats_for_status_cancellable(&status, &cancellation);
+            // Same snapshot and generation, so the rows stay coherent.
+            let large_files = large_files.then(|| {
+                repo.uncommitted_large_files_for_status_cancellable(&status, &cancellation)
+            });
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
                     repo_id,
                     generation,
-                    // Cancellable: this reads every changed file, so a
-                    // superseded scan must not hold the repo-load worker.
-                    result: repo
-                        .uncommitted_line_stats_for_status_cancellable(&status, &cancellation),
+                    result,
+                    large_files,
                 }),
             );
         },
@@ -398,6 +404,7 @@ pub(super) fn schedule_load_uncommitted_line_stats(
                     repo_id,
                     generation,
                     result: Err(missing_repo_error(repo_id)),
+                    large_files: None,
                 }),
             );
         },
@@ -1389,6 +1396,72 @@ pub(super) fn schedule_load_submodules(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_large_file_support(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded {
+                    repo_id,
+                    result: repo.large_file_support_cancellable(&cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_lfs_locks(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
+                    repo_id,
+                    result: repo.lfs_locks_cancellable(&cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
                     repo_id,
                     result: Err(missing_repo_error(repo_id)),
                 }),

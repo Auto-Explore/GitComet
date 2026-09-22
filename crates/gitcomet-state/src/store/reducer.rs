@@ -310,6 +310,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::SaveWorktreeFile { .. }
             | Msg::AppendGitignorePatterns { .. }
+            | Msg::RunLargeFileCommand { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
@@ -491,6 +492,14 @@ fn clear_stale_clone_banner_error(state: &mut AppState) {
     {
         state.banner_error = None;
     }
+}
+
+#[cfg(test)]
+pub(crate) fn repo_command_replay_msg_for_test(
+    repo_id: RepoId,
+    command: RepoCommandKind,
+) -> Option<Msg> {
+    retry_msg_for_repo_command(repo_id, command)
 }
 
 fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
@@ -704,6 +713,8 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // command after an auth prompt. Retaining `patterns` would make a replay
         // possible; there is just nothing here that an auth prompt could fix.
         RepoCommandKind::AppendGitignorePatterns { .. } => return None,
+        // Network LFS/annex commands fail for want of credentials like fetch.
+        RepoCommandKind::LargeFile { command } => Msg::RunLargeFileCommand { repo_id, command },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
@@ -726,6 +737,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::CommitAmend { auth: slot, .. }
         | Effect::SafePushAfterCommit { auth: slot, .. }
         | Effect::FetchAll { auth: slot, .. }
+        | Effect::RunLargeFileCommand { auth: slot, .. }
         | Effect::Pull { auth: slot, .. }
         | Effect::PullBranch { auth: slot, .. }
         | Effect::PushWithTags { auth: slot, .. }
@@ -1070,6 +1082,8 @@ fn reduce_inner(
             }
             state.git_runtime = runtime;
             state.signing_tools = Default::default();
+            // A different Git resolves `git lfs` / `git annex` differently.
+            state.large_file_tools = Default::default();
             if state.git_log_settings.verify_commit_signatures {
                 util::reverify_all_commit_signatures_effects(state)
             } else {
@@ -1081,6 +1095,10 @@ fn reduce_inner(
             epoch,
             commit_ids,
         } => util::set_commit_signature_targets(state, repo_id, epoch, commit_ids),
+        Msg::SetLargeFileToolsState(tools) => {
+            state.large_file_tools = tools;
+            Vec::new()
+        }
         Msg::SetSigningToolsState(tools) => {
             if state.signing_tools == tools {
                 return Vec::new();
@@ -1917,6 +1935,24 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
         }
+        Msg::RunLargeFileCommand { repo_id, command } => {
+            begin_local_action(state, repo_id);
+            vec![Effect::RunLargeFileCommand {
+                repo_id,
+                command,
+                auth: None,
+            }]
+        }
+        Msg::LoadLfsLocks { repo_id } => state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo_id)
+            .and_then(effects::request_lfs_locks_effect)
+            .into_iter()
+            .collect(),
+        Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded { repo_id, result }) => {
+            effects::lfs_locks_loaded(state, repo_id, result)
+        }
         Msg::Commit {
             repo_id,
             message,
@@ -2441,7 +2477,13 @@ fn reduce_inner(
             repo_id,
             generation,
             result,
-        }) => effects::uncommitted_line_stats_loaded(state, repo_id, generation, result),
+            large_files,
+        }) => {
+            effects::uncommitted_line_stats_loaded(state, repo_id, generation, result, large_files)
+        }
+        Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded { repo_id, result }) => {
+            effects::large_file_support_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
@@ -3627,6 +3669,7 @@ mod comparison_tests {
             is_submodule: false,
             additions: Some(1),
             deletions: Some(0),
+            large_file: None,
         }];
 
         // A stale result (wrong `from`) is dropped.

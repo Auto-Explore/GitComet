@@ -244,6 +244,9 @@ pub struct CommitFileChange {
     pub additions: Option<u32>,
     /// Removed line count; `None` under the same conditions as `additions`.
     pub deletions: Option<u32>,
+    /// Set when the new side (or the old side of a deletion) is a Git LFS
+    /// pointer or git-annex key.
+    pub large_file: Option<crate::large_files::LargeFileState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -778,6 +781,9 @@ pub struct FileDiffText {
     pub new_source: Option<FileDiffTextSource>,
     pub old: Option<Arc<str>>,
     pub new: Option<Arc<str>>,
+    /// Set when a side's git form is a Git LFS pointer or git-annex key.
+    pub old_large: Option<crate::large_files::LargeFileSide>,
+    pub new_large: Option<crate::large_files::LargeFileSide>,
     content_signature: u64,
 }
 
@@ -795,6 +801,8 @@ impl FileDiffText {
             new_source: None,
             old,
             new,
+            old_large: None,
+            new_large: None,
             content_signature,
         }
     }
@@ -817,8 +825,26 @@ impl FileDiffText {
             new_source,
             old: None,
             new: None,
+            old_large: None,
+            new_large: None,
             content_signature,
         }
+    }
+
+    /// Attach large-file sides, folding them into the content signature.
+    pub fn with_large_sides(
+        mut self,
+        old_large: Option<crate::large_files::LargeFileSide>,
+        new_large: Option<crate::large_files::LargeFileSide>,
+    ) -> Self {
+        let mut hasher = FxHasher::default();
+        self.content_signature.hash(&mut hasher);
+        old_large.hash(&mut hasher);
+        new_large.hash(&mut hasher);
+        self.content_signature = hasher.finish();
+        self.old_large = old_large;
+        self.new_large = new_large;
+        self
     }
 
     pub fn content_signature(&self) -> u64 {

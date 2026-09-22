@@ -1146,6 +1146,7 @@ pub(super) fn diff_commit_to_worktree_files(
                 is_submodule: change.is_submodule,
                 additions,
                 deletions,
+                large_file: None,
             }
         })
         .collect())

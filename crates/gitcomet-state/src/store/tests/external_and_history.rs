@@ -1024,6 +1024,7 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
             repo_id,
             generation,
             result: Ok(Default::default()),
+            large_files: None,
         }),
     );
     assert!(
@@ -4269,6 +4270,7 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
                 repo_id,
                 generation,
                 result: Ok(Default::default()),
+                large_files: None,
             }),
         );
         assert_eq!(

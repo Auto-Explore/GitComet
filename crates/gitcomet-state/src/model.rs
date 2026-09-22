@@ -175,6 +175,11 @@ impl RepoLoadsInFlight {
     /// Managed by `invalidate_line_stats`/`start_line_stats`/`finish_line_stats`,
     /// not generic `request`/`finish`: replays need a fresh status snapshot.
     pub const UNCOMMITTED_LINE_STATS: u32 = 1 << 19;
+    /// Git LFS / git-annex repository facts. Outside the primary refresh:
+    /// config and attributes change far less often than status.
+    pub const LARGE_FILE_SUPPORT: u32 = 1 << 20;
+    /// Git LFS lock list; a server round trip, loaded only on demand.
+    pub const LFS_LOCKS: u32 = 1 << 21;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -722,6 +727,8 @@ pub struct AppState {
     pub git_runtime: GitRuntimeState,
     /// The signature verifiers Git can run. Formats without one are not verified.
     pub signing_tools: SigningToolsState,
+    /// Whether Git can run `git lfs` / `git annex`; gates their commands.
+    pub large_file_tools: gitcomet_core::large_file_tools::LargeFileToolsState,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
@@ -998,11 +1005,18 @@ pub struct GitHookOperation {
     pub output_bytes: usize,
     pub output_truncated: bool,
     pub latest_line: String,
+    /// Latest Git LFS transfer progress, when the operation moved content.
+    pub transfer: Option<gitcomet_core::git_operation::TransferProgress>,
 }
 
 impl GitHookOperation {
     pub fn has_hooks(&self) -> bool {
         !self.hooks.is_empty()
+    }
+
+    /// Worth showing in the activity panel: a hook ran or content moved.
+    pub fn is_reportable(&self) -> bool {
+        self.has_hooks() || self.transfer.is_some()
     }
 
     pub fn active_hook_name(&self) -> Option<&str> {
@@ -1781,6 +1795,15 @@ pub struct RepoState {
     pub ref_metadata_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    /// Git LFS / git-annex facts; drives whether per-row state is computed.
+    pub large_file_support: Loadable<Arc<gitcomet_core::large_files::LargeFileSupport>>,
+    pub large_file_support_rev: u64,
+    /// Per-row large-file state, produced with line stats under the same
+    /// generation and kept across rescans like them.
+    pub uncommitted_large_files: Arc<gitcomet_core::large_files::UncommittedLargeFiles>,
+    pub large_files_rev: u64,
+    pub lfs_locks: Loadable<Arc<Vec<gitcomet_core::large_files::LfsLock>>>,
+    pub lfs_locks_rev: u64,
     pub submodule_add_in_flight: Option<SubmoduleAddProgressState>,
     pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
@@ -1880,6 +1903,12 @@ impl RepoState {
             ref_metadata_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            large_file_support: Loadable::NotLoaded,
+            large_file_support_rev: 0,
+            uncommitted_large_files: Arc::default(),
+            large_files_rev: 0,
+            lfs_locks: Loadable::NotLoaded,
+            lfs_locks_rev: 0,
             submodule_add_in_flight: None,
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
@@ -2106,6 +2135,71 @@ impl RepoState {
         self.submodules = submodules;
         self.submodules_rev = self.submodules_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    pub(crate) fn set_large_file_support(
+        &mut self,
+        support: Loadable<gitcomet_core::large_files::LargeFileSupport>,
+    ) {
+        let support = loadable_into_arc(support);
+        if self.large_file_support == support {
+            return;
+        }
+        self.large_file_support = support;
+        self.large_file_support_rev = self.large_file_support_rev.wrapping_add(1);
+        if !self.large_file_support_active() {
+            self.set_uncommitted_large_files(Arc::default());
+        }
+    }
+
+    /// The repository uses Git LFS or git-annex, so rows carry their state.
+    pub fn large_file_support_active(&self) -> bool {
+        matches!(&self.large_file_support, Loadable::Ready(support) if support.is_active())
+    }
+
+    pub(crate) fn set_uncommitted_large_files(
+        &mut self,
+        files: Arc<gitcomet_core::large_files::UncommittedLargeFiles>,
+    ) {
+        if self.uncommitted_large_files == files {
+            return;
+        }
+        self.uncommitted_large_files = files;
+        self.large_files_rev = self.large_files_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_lfs_locks(
+        &mut self,
+        locks: Loadable<Vec<gitcomet_core::large_files::LfsLock>>,
+    ) {
+        let locks = loadable_into_arc(locks);
+        if self.lfs_locks == locks {
+            return;
+        }
+        self.lfs_locks = locks;
+        self.lfs_locks_rev = self.lfs_locks_rev.wrapping_add(1);
+    }
+
+    /// The lock held on `path`, when the lock list has loaded.
+    pub fn lfs_lock_for(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<&gitcomet_core::large_files::LfsLock> {
+        match &self.lfs_locks {
+            Loadable::Ready(locks) => locks.iter().find(|lock| lock.path == path),
+            _ => None,
+        }
+    }
+
+    pub fn large_file_state(
+        &self,
+        area: DiffArea,
+        path: &std::path::Path,
+    ) -> Option<&gitcomet_core::large_files::LargeFileState> {
+        match area {
+            DiffArea::Staged => self.uncommitted_large_files.staged.get(path),
+            DiffArea::Unstaged => self.uncommitted_large_files.unstaged.get(path),
+        }
     }
 
     #[inline]

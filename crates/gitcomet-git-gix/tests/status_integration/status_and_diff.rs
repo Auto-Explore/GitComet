@@ -1688,3 +1688,79 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
     assert_eq!(session.regions[0].ours, "ours\n");
     assert_eq!(session.regions[0].theirs, "theirs\n");
 }
+
+#[cfg(unix)]
+fn init_symlink_repo(repo: &Path) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    write(repo, "a.txt", "alpha\n");
+    write(repo, "b.txt", "beta\n");
+    symlink("a.txt", repo.join("link")).unwrap();
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-m", "init"]);
+}
+
+#[cfg(unix)]
+fn repoint_symlink(repo: &Path, target: &str) {
+    fs::remove_file(repo.join("link")).unwrap();
+    symlink(target, repo.join("link")).unwrap();
+}
+
+/// The worktree side of a symlink is its link text, as git stores it. Reading
+/// through the link would diff the target's bytes against the link text and,
+/// for git-annex locked files, show the annexed object instead of the key.
+#[cfg(unix)]
+#[test]
+fn diff_file_text_for_symlink_uses_link_text_not_target_bytes() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_symlink_repo(repo);
+    repoint_symlink(repo, "b.txt");
+
+    let opened = GixBackend.open(repo).unwrap();
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("link"),
+        area: DiffArea::Unstaged,
+    };
+    let text = opened
+        .diff_file_text(&target)
+        .unwrap()
+        .expect("text diff for a symlink");
+    assert_file_diff_text_sources(&text, Some("a.txt"), Some("b.txt"));
+
+    let preview = opened
+        .diff_preview_text_file(&target, gitcomet_core::domain::DiffPreviewTextSide::New)
+        .unwrap()
+        .expect("preview path for a symlink");
+    assert_eq!(fs::read_to_string(preview).unwrap(), "b.txt");
+
+    let image = opened
+        .diff_file_image(&target)
+        .unwrap()
+        .expect("image diff for a symlink");
+    assert_eq!(image.old.as_deref(), Some("a.txt".as_bytes()));
+    assert_eq!(image.new, None, "link text is never an image");
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_file_text_for_dangling_symlink_reports_link_text() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_symlink_repo(repo);
+    repoint_symlink(repo, "missing.txt");
+
+    let opened = GixBackend.open(repo).unwrap();
+    let text = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("link"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("text diff for a dangling symlink");
+    assert_file_diff_text_sources(&text, Some("a.txt"), Some("missing.txt"));
+}

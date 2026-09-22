@@ -128,11 +128,16 @@ impl std::fmt::Debug for InternalMsg {
                 repo_id,
                 generation,
                 result,
+                large_files,
             } => f
                 .debug_struct("UncommittedLineStatsLoaded")
                 .field("generation", generation)
                 .field("repo_id", repo_id)
                 .field("ok", &result.is_ok())
+                .field(
+                    "large_files_ok",
+                    &large_files.as_ref().map(|result| result.is_ok()),
+                )
                 .finish(),
             InternalMsg::StatusLoaded { repo_id, result } => f
                 .debug_struct("StatusLoaded")
@@ -303,6 +308,16 @@ impl std::fmt::Debug for InternalMsg {
                 .finish(),
             InternalMsg::SubmodulesLoaded { repo_id, result } => f
                 .debug_struct("SubmodulesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::LargeFileSupportLoaded { repo_id, result } => f
+                .debug_struct("LargeFileSupportLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::LfsLocksLoaded { repo_id, result } => f
+                .debug_struct("LfsLocksLoaded")
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),

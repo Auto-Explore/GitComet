@@ -546,6 +546,9 @@ fn render_status_rows_for_section(
                     is_submodule,
                     submodule_status,
                     line_stats: line_stats.and_then(|stats| stats.get(&entry.path)).copied(),
+                    large_file: repo
+                        .large_file_state(section.diff_area(), &entry.path)
+                        .cloned(),
                 },
                 entry,
                 path_display,
@@ -614,6 +617,8 @@ struct StatusRowCtx {
     submodule_status: Option<SubmoduleStatus>,
     /// `None` for untracked, binary, or before the counts have loaded.
     line_stats: Option<gitcomet_core::domain::LineStats>,
+    /// Set when Git LFS or git-annex manages the path.
+    large_file: Option<gitcomet_core::large_files::LargeFileState>,
 }
 
 /// Stage/Unstage a whole folder, revealed at the row's right edge on hover.
@@ -717,6 +722,7 @@ fn status_row(
         is_submodule,
         submodule_status,
         line_stats,
+        large_file,
     } = ctx;
     let ix = row_ix;
     let scaled_px = crate::ui_scale::scaler(ui_scale);
@@ -940,6 +946,12 @@ fn status_row(
                     .render(cx),
                 ),
         )
+        .when_some(large_file, |row, state| {
+            row.child(
+                components::large_file_chip(theme, ui_scale, &state)
+                    .debug_selector(move || format!("status_row_large_file_{ix}")),
+            )
+        })
         .when(show_line_stats, |row| {
             row.child(div().flex_none().child(components::diff_stat_optional(
                 theme,

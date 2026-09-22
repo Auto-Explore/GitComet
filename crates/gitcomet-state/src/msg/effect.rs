@@ -73,6 +73,8 @@ pub enum Effect {
         repo_id: RepoId,
         generation: crate::model::LineStatsGeneration,
         status: std::sync::Arc<RepoStatus>,
+        /// Also classify rows for Git LFS / git-annex in the same pass.
+        large_files: bool,
     },
     LoadStatus {
         repo_id: RepoId,
@@ -142,6 +144,12 @@ pub enum Effect {
         repo_id: RepoId,
     },
     LoadSubmodules {
+        repo_id: RepoId,
+    },
+    LoadLargeFileSupport {
+        repo_id: RepoId,
+    },
+    LoadLfsLocks {
         repo_id: RepoId,
     },
     LoadFileBrowser {
@@ -290,6 +298,11 @@ pub enum Effect {
     AppendGitignorePatterns {
         repo_id: RepoId,
         patterns: Vec<String>,
+    },
+    RunLargeFileCommand {
+        repo_id: RepoId,
+        command: gitcomet_core::large_files::LargeFileCommand,
+        auth: Option<StagedGitAuth>,
     },
 
     CheckoutBranch {

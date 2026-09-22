@@ -57,7 +57,51 @@ impl MainPaneView {
         })
     }
 
+    /// The file diff, explained by a card when either side is a Git LFS or
+    /// git-annex pointer: the card replaces a pointer diff when content is
+    /// missing and sits above the real diff when it is here.
     pub(super) fn render_selected_file_diff(
+        &mut self,
+        theme: AppTheme,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let large_sides = match self.rendered_file_diff_loadable() {
+            Some(Loadable::Ready(Some(file)))
+                if file.old_large.is_some() || file.new_large.is_some() =>
+            {
+                Some((file.old_large.clone(), file.new_large.clone()))
+            }
+            _ => None,
+        };
+        let Some((old, new)) = large_sides else {
+            return self.render_selected_file_diff_body(theme, window, cx);
+        };
+        if !gitcomet_core::large_files::large_file_sides_show_content(old.as_ref(), new.as_ref()) {
+            return crate::view::large_file_card::large_file_card(
+                theme,
+                old.as_ref(),
+                new.as_ref(),
+                false,
+            );
+        }
+        let body = self.render_selected_file_diff_body(theme, window, cx);
+        div()
+            .size_full()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .child(crate::view::large_file_card::large_file_card(
+                theme,
+                old.as_ref(),
+                new.as_ref(),
+                true,
+            ))
+            .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body))
+            .into_any_element()
+    }
+
+    fn render_selected_file_diff_body(
         &mut self,
         theme: AppTheme,
         window: &mut gpui::Window,
@@ -393,10 +437,25 @@ impl MainPaneView {
                     if !has_file {
                         components::empty_state(theme, "Diff", "No file contents available.")
                             .into_any_element()
+                    } else if let Some(
+                        crate::view::panes::main::diff_cache::FileDiffCacheError::NotText {
+                            old_bytes,
+                            new_bytes,
+                        },
+                    ) = self.file_diff_cache_error
+                    {
+                        components::empty_state(
+                            theme,
+                            "Binary file",
+                            crate::view::diff_utils::binary_diff_placeholder_message(
+                                old_bytes, new_bytes,
+                            ),
+                        )
+                        .into_any_element()
                     } else if let Some(error) = self.file_diff_cache_error.clone() {
                         self.diff_raw_input.update(cx, |input, cx| {
                             input.set_theme(theme, cx);
-                            input.set_text(error, cx);
+                            input.set_text(error.to_string(), cx);
                             input.set_read_only(true, cx);
                         });
                         div()

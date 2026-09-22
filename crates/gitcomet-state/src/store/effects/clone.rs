@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -306,6 +306,10 @@ pub(super) fn schedule_clone_repo(
         active_clone.set_child(child);
 
         let (stdout, stderr) = active_clone.take_stdio();
+        // Millis since `start` of the last stderr chunk: the deadline measures
+        // silence, so a clone that keeps reporting progress is never killed.
+        let start = Instant::now();
+        let last_activity = Arc::new(AtomicU64::new(0));
         let stdout_handle = std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut stdout) = stdout {
@@ -316,6 +320,7 @@ pub(super) fn schedule_clone_repo(
 
         let progress_dest = Arc::new(dest.clone());
         let progress_tx = msg_tx.clone();
+        let stderr_activity = Arc::clone(&last_activity);
         let stderr_handle = std::thread::spawn(move || {
             let mut stderr_bytes = Vec::new();
             let mut pending = Vec::new();
@@ -325,6 +330,9 @@ pub(super) fn schedule_clone_repo(
                     match stderr.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            let millis =
+                                u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                            stderr_activity.fetch_max(millis, Ordering::Relaxed);
                             let chunk = &buf[..n];
                             stderr_bytes.extend_from_slice(chunk);
                             pending.extend_from_slice(chunk);
@@ -355,13 +363,15 @@ pub(super) fn schedule_clone_repo(
         });
 
         let timeout = git_command_timeout();
-        let start = Instant::now();
         let mut timed_out = false;
         let status = loop {
             match active_clone.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
-                    if start.elapsed() >= timeout {
+                    let idle = start.elapsed().saturating_sub(Duration::from_millis(
+                        last_activity.load(Ordering::Relaxed),
+                    ));
+                    if idle >= timeout {
                         timed_out = true;
                         active_clone.request_cancel();
                         break active_clone.wait();
@@ -380,7 +390,7 @@ pub(super) fn schedule_clone_repo(
             Ok(status) => {
                 if timed_out {
                     Err(Error::new(ErrorKind::Backend(format!(
-                        "{command_str} timed out after {} seconds (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+                        "{command_str} timed out after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
                         timeout.as_secs()
                     ))))
                 } else if active_clone.cancel_requested() && !status.success() {

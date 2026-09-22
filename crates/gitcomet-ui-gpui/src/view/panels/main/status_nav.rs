@@ -607,6 +607,7 @@ mod tests {
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_b.clone(),
@@ -614,6 +615,7 @@ mod tests {
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_c.clone(),
@@ -621,6 +623,7 @@ mod tests {
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     },
                 ],
             }));
@@ -687,6 +690,7 @@ mod tests {
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_b.clone(),
@@ -694,6 +698,7 @@ mod tests {
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_c.clone(),
@@ -701,6 +706,7 @@ mod tests {
                         is_submodule: false,
                         additions: None,
                         deletions: None,
+                        large_file: None,
                     },
                 ],
             }));

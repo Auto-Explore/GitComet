@@ -304,6 +304,8 @@ impl DetailsPaneView {
             // never repaints for them.
             repo.staged_line_stats_rev.hash(&mut hasher);
             repo.unstaged_line_stats_rev.hash(&mut hasher);
+            // Large-file chips also arrive after the list.
+            repo.large_files_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.log_rev.hash(&mut hasher);
@@ -1443,6 +1445,7 @@ impl DetailsPaneView {
                     is_submodule: false,
                     additions: stats.additions,
                     deletions: stats.deletions,
+                    large_file: None,
                 }
             })
             .collect();

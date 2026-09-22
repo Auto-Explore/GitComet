@@ -1302,6 +1302,9 @@ pub(super) fn repo_opened_ok(
         if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
             effects.push(effect);
         }
+        if let Some(effect) = super::effects::request_large_file_support_effect(repo_state) {
+            effects.push(effect);
+        }
         if should_refresh_worktrees {
             append_ensure_sidebar_data_effects(repo_state, &mut effects);
             super::effects::sync_file_browser_to_selection(

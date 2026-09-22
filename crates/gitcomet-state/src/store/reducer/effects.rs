@@ -2479,6 +2479,9 @@ pub(super) fn uncommitted_line_stats_loaded(
     repo_id: RepoId,
     generation: crate::model::LineStatsGeneration,
     result: std::result::Result<gitcomet_core::domain::UncommittedLineStats, Error>,
+    large_files: Option<
+        std::result::Result<gitcomet_core::large_files::UncommittedLargeFiles, Error>,
+    >,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -2495,9 +2498,111 @@ pub(super) fn uncommitted_line_stats_loaded(
         if current && let Ok(next) = result {
             repo_state.set_uncommitted_line_stats(Loadable::Ready(std::sync::Arc::new(next)));
         }
+        // Like the numbers, previous chips stand on failure.
+        if current
+            && repo_state.large_file_support_active()
+            && let Some(Ok(next)) = large_files
+        {
+            repo_state.set_uncommitted_large_files(std::sync::Arc::new(next));
+        }
         super::util::append_ready_line_stats_effect(repo_state, &mut effects);
     }
     effects
+}
+
+pub(super) fn large_file_support_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::large_files::LargeFileSupport, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return effects;
+    };
+    let was_active = repo_state.large_file_support_active();
+    match result {
+        Ok(support) => repo_state.set_large_file_support(Loadable::Ready(support)),
+        // Detection is advisory: keep what was known, never raise a banner.
+        Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {}
+        Err(e) => {
+            if !matches!(repo_state.large_file_support, Loadable::Ready(_)) {
+                repo_state.set_large_file_support(Loadable::Error(e.to_string()));
+            }
+        }
+    }
+    let replay = repo_state
+        .loads_in_flight
+        .finish(RepoLoadsInFlight::LARGE_FILE_SUPPORT);
+    if replay {
+        effects.push(Effect::LoadLargeFileSupport { repo_id });
+    }
+    let lockable = matches!(
+        &repo_state.large_file_support,
+        Loadable::Ready(support) if support.lfs.has_lockable_patterns()
+    );
+    if lockable
+        && matches!(repo_state.lfs_locks, Loadable::NotLoaded)
+        && let Some(effect) = request_lfs_locks_effect(repo_state)
+    {
+        effects.push(effect);
+    }
+    // Rows computed before the repo was known to use LFS/annex carry no
+    // state; recount them once.
+    if !was_active && repo_state.large_file_support_active() {
+        repo_state.loads_in_flight.invalidate_line_stats();
+        super::util::append_ready_line_stats_effect(repo_state, &mut effects);
+    }
+    effects
+}
+
+/// Ask for the Git LFS lock list, coalescing with a running load.
+pub(super) fn request_lfs_locks_effect(repo_state: &mut RepoState) -> Option<Effect> {
+    if matches!(
+        repo_state.lfs_locks,
+        Loadable::NotLoaded | Loadable::Error(_)
+    ) {
+        repo_state.set_lfs_locks(Loadable::Loading);
+    }
+    repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::LFS_LOCKS)
+        .then_some(Effect::LoadLfsLocks {
+            repo_id: repo_state.id,
+        })
+}
+
+pub(super) fn lfs_locks_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<gitcomet_core::large_files::LfsLock>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return effects;
+    };
+    match result {
+        Ok(locks) => repo_state.set_lfs_locks(Loadable::Ready(locks)),
+        Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {}
+        // Many LFS servers have no lock API; say so on the rows, no banner.
+        Err(e) => repo_state.set_lfs_locks(Loadable::Error(e.to_string())),
+    }
+    if repo_state
+        .loads_in_flight
+        .finish(RepoLoadsInFlight::LFS_LOCKS)
+    {
+        effects.push(Effect::LoadLfsLocks { repo_id });
+    }
+    effects
+}
+
+/// Ask for repository-level LFS/annex facts, coalescing with a running load.
+pub(super) fn request_large_file_support_effect(repo_state: &mut RepoState) -> Option<Effect> {
+    repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::LARGE_FILE_SUPPORT)
+        .then_some(Effect::LoadLargeFileSupport {
+            repo_id: repo_state.id,
+        })
 }
 
 pub(super) fn staged_status_loaded(

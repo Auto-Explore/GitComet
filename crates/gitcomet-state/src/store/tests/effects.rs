@@ -5709,6 +5709,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
             repo_id: repo_a,
             generation: 1,
             status: Arc::clone(&snapshot),
+            large_files: false,
         },
     );
     assert_eq!(
@@ -5741,6 +5742,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
             repo_id: repo_b,
             generation: 1,
             status: snapshot,
+            large_files: false,
         },
     );
 

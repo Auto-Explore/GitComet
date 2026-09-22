@@ -1535,3 +1535,40 @@ mod meld_tests {
         assert_eq!(delete_last_line("hello\n"), "hello");
     }
 }
+
+/// Short size label for UI: `512 B`, `1.5 KB`, `12.3 MB`, `1.2 GB` (decimal
+/// units, one fraction digit above bytes, no trailing `.0`).
+pub fn human_readable_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit + 1 < UNITS.len() {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{bytes} B");
+    }
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0} {}", UNITS[unit])
+    } else {
+        format!("{rounded:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod human_readable_bytes_tests {
+    use super::human_readable_bytes;
+
+    #[test]
+    fn formats_decimal_units_with_one_fraction_digit() {
+        assert_eq!(human_readable_bytes(0), "0 B");
+        assert_eq!(human_readable_bytes(999), "999 B");
+        assert_eq!(human_readable_bytes(1_000), "1 KB");
+        assert_eq!(human_readable_bytes(1_536), "1.5 KB");
+        assert_eq!(human_readable_bytes(12_345_678), "12.3 MB");
+        assert_eq!(human_readable_bytes(1_200_000_000), "1.2 GB");
+        assert_eq!(human_readable_bytes(5_000_000_000_000_000), "5000 TB");
+    }
+}

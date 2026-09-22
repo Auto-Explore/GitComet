@@ -2074,6 +2074,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
             is_submodule: false,
             additions: Some(1),
             deletions: Some(0),
+            large_file: None,
         }]
     );
 
@@ -2088,6 +2089,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
             is_submodule: false,
             additions: Some(0),
             deletions: Some(0),
+            large_file: None,
         }]
     );
 }

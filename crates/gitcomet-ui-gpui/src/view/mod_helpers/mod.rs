@@ -1015,6 +1015,8 @@ pub struct GitCometView {
     pub(super) signing_tools_probe_seq: u64,
     pub(super) signing_tools_probe_in_flight: bool,
     pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
+    /// Background `git lfs` / `git annex` detection; rerun after a Git change.
+    pub(super) large_file_tools_probe_in_flight: bool,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,

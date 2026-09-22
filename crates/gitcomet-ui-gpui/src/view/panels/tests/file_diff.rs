@@ -7329,3 +7329,150 @@ mod scrolling;
 mod syntax;
 use fixtures::{BUILD_RELEASE_ARTIFACTS, COMMIT_PATCH, DEPLOYMENT_CI};
 use scrolling::push_raw_patch_diff_state_with_rev;
+
+/// A binary side is a placeholder outcome: the pane must classify it instead
+/// of dumping the loader error, which names a temp file the user never chose.
+#[gpui::test]
+fn binary_source_backed_diff_is_classified_as_not_text(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(882);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_binary_source_backed",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create binary fixture");
+    let path = PathBuf::from("assets/blob.bin");
+    let old_source_path = source_dir.join("old.bin");
+    let new_source_path = source_dir.join("new.bin");
+    std::fs::write(&old_source_path, [0u8, 0xff, 0xfe, 1, 2]).expect("write old binary");
+    std::fs::write(&new_source_path, [0u8, 0xff, 0xfe, 1, 2, 3, 4]).expect("write new binary");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(
+                    target,
+                    "Binary files a/assets/blob.bin and b/assets/blob.bin differ\n",
+                ),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                        old_source_path.clone(),
+                        "old-binary",
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                        new_source_path.clone(),
+                        "new-binary",
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the binary diff rebuild to settle",
+        |pane| pane.file_diff_cache_rev == 1 && pane.file_diff_cache_inflight.is_none(),
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.file_diff_cache_error,
+            Some(
+                crate::view::panes::main::diff_cache::FileDiffCacheError::NotText {
+                    old_bytes: Some(5),
+                    new_bytes: Some(7),
+                }
+            )
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup binary fixture");
+}
+
+/// A pointer-only LFS file must be explained by the card, never shown as a
+/// three-line pointer diff.
+#[gpui::test]
+fn missing_lfs_content_shows_the_large_file_card(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(883);
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_lfs_card", std::process::id()));
+    let path = PathBuf::from("art/hero.psd");
+    let side = |content| gitcomet_core::large_files::LargeFileSide {
+        pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+            gitcomet_core::lfs::LfsPointer {
+                oid: gitcomet_core::lfs::LfsOid([9; 32]),
+                size: 4_200_000,
+            },
+        ),
+        content,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some("version https://git-lfs.github.com/spec/v1\n".to_string()),
+                    Some("version https://git-lfs.github.com/spec/v1\n".to_string()),
+                )
+                .with_large_sides(
+                    Some(side(
+                        gitcomet_core::large_files::LargeFileContent::MissingLocally,
+                    )),
+                    Some(side(
+                        gitcomet_core::large_files::LargeFileContent::MissingLocally,
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("large_file_card").is_some(),
+        "the card must explain a pointer-only file"
+    );
+}

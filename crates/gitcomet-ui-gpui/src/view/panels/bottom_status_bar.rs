@@ -122,7 +122,7 @@ impl BottomStatusBarView {
                     repo.feedback
                         .hook_activity
                         .iter()
-                        .filter(|operation| operation.has_hooks() && operation.status.is_active())
+                        .filter(|operation| operation.is_reportable() && operation.status.is_active())
                         .count(),
                     repo.feedback.hook_activity.iter().rev().any(|operation| {
                         matches!(
