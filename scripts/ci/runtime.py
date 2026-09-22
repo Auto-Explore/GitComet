@@ -15,12 +15,13 @@ import uuid
 import run as runner
 
 
-def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None, session=None):
+def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None, session=None, batch_pure_tests="auto"):
     if samples < 1 or any(value is not None and (value < 1 or schedule != "serial")
                           for value in (threads, ui_threads)):
         raise ValueError("positive samples/threads required; threads requires serial")
     if nextest_profile not in runner.NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
+    runner.batch_pure_enabled(batch_pure_tests)
     if any(os.environ.get(name) for name in ("RUST_TEST_THREADS", "NEXTEST_TEST_THREADS")):
         raise ValueError("Use --ui-threads/--nextest-threads instead of thread environment overrides for measurements")
     instrumentation = [name for name in ("GITCOMET_CI_FIXTURE_TIMINGS", "GITCOMET_TEST_SYNC_TRACE",
@@ -39,6 +40,7 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
     build = json.loads(coverage.read_text(encoding="utf-8")) if coverage.exists() else {}
     metadata = {
         "measurement_id": str(uuid.uuid4()),
+        "batch_pure_tests": batch_pure_tests,
         "machine_id": platform.node(), "local_session": session,
         "source_diff_sha256": hashlib.sha256(subprocess.check_output(
             ["git", "diff", "--binary", "HEAD"], cwd=runner.ROOT, text=True, encoding="utf-8").encode()).hexdigest(),
@@ -66,7 +68,7 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
                 shutil.copytree(source, sample / "workspace",
                                 ignore=shutil.ignore_patterns("execution.json", "junit.xml"))
                 runner.REPORTS = sample
-                runner.execute("workspace", schedule, threads, nextest_profile, ui_threads)
+                runner.execute("workspace", schedule, threads, nextest_profile, ui_threads, batch_pure_tests)
             finally:
                 runner.REPORTS = original_reports
                 if summary.exists():
@@ -90,12 +92,14 @@ def main():
     parser.add_argument("--ui-threads", type=int)
     parser.add_argument("--nextest-profile", choices=runner.NEXTEST_PROFILES, default="ci")
     parser.add_argument("--session", help="Independent local measurement session identifier")
+    parser.add_argument("--batch-pure-tests", choices=("auto", "on", "off"), default="auto")
     parser.add_argument("--checkout", type=Path, help="Use this checkout's compiled inventory with the current driver")
     args = parser.parse_args()
     if args.checkout:
         runner.ROOT = args.checkout.resolve()
         runner.REPORTS = runner.ROOT / "target/ci-reports"
-    measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads, args.session)
+    measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile,
+            args.ui_threads, args.session, args.batch_pure_tests)
 
 
 if __name__ == "__main__":

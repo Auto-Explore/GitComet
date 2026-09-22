@@ -18,6 +18,10 @@
 //! - `main_cpu`: CPU time the main thread consumed as a share of wall time,
 //!   averaged over at least five seconds to smooth Windows scheduler-tick
 //!   quantization (Windows only; `n/a` elsewhere).
+//! - `submit`: CPU time in platform drawing/presentation, excluding GPU/display
+//!   completion. `GITCOMET_UI_PROBE_JSONL` additionally records individual frame
+//!   events and interval input-to-submission histograms. Timestamps are relative
+//!   to the `start` record's Unix clock anchor, for external scenario alignment.
 //!
 //! One-off sections such as window creation are timed with [`time_section`]
 //! and logged as their own lines.
@@ -26,13 +30,16 @@
 //! never started and gpui's profiler tracing stays off.
 
 use gitcomet_core::process::write_stderr_line;
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ENABLED_ENV: &str = "GITCOMET_UI_PROBE";
 const LOG_PATH_ENV: &str = "GITCOMET_UI_PROBE_LOG";
+const JSONL_PATH_ENV: &str = "GITCOMET_UI_PROBE_JSONL";
 const INTERVAL_ENV: &str = "GITCOMET_UI_PROBE_INTERVAL_MS";
 const DEFAULT_INTERVAL: Duration = Duration::from_millis(1000);
 /// `GetThreadTimes` is scheduler-tick quantized on Windows. Average several UI
@@ -46,10 +53,58 @@ const SLOW_FRAME: Duration = Duration::from_millis(16);
 struct ProbeLog {
     started: Instant,
     file: Option<Mutex<File>>,
+    jsonl: Option<Mutex<File>>,
 }
 
 /// `None` until [`start_if_enabled`] runs with the probe switched on.
 static LOG: OnceLock<ProbeLog> = OnceLock::new();
+
+fn open_log(variable: &str) -> Option<Mutex<File>> {
+    let path = std::env::var_os(variable).filter(|path| !path.is_empty())?;
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => Some(Mutex::new(file)),
+        Err(error) => {
+            write_stderr_line(format_args!(
+                "ui-probe: cannot open {variable}={path:?}: {error}"
+            ));
+            None
+        }
+    }
+}
+
+fn write_json(records: &[Value]) {
+    let Some(file) = LOG.get().and_then(|log| log.jsonl.as_ref()) else {
+        return;
+    };
+    let mut file = file.lock().unwrap_or_else(|error| error.into_inner());
+    for record in records {
+        if serde_json::to_writer(&mut *file, record).is_err() || file.write_all(b"\n").is_err() {
+            break;
+        }
+    }
+}
+
+fn milliseconds(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
+    let timestamp = |at: Instant| milliseconds(at.saturating_duration_since(origin));
+    match event {
+        gpui::profiler::FrameEvent::Draw(frame) => json!({
+            "event": "draw", "window": format!("{:?}", frame.window_id),
+            "at_ms": timestamp(frame.draw_end), "start_ms": timestamp(frame.draw_start),
+            "dirty_ms": frame.dirty_at.map(timestamp), "duration_ms": milliseconds(frame.draw_duration()),
+            "invalidations": frame.invalidations,
+        }),
+        gpui::profiler::FrameEvent::Present(frame) => json!({
+            "event": "submit", "window": format!("{:?}", frame.window_id),
+            "at_ms": timestamp(frame.present_end), "start_ms": timestamp(frame.present_start),
+            "duration_ms": milliseconds(frame.present_duration()),
+            "animation_interval_ms": frame.animation_interval.map(milliseconds),
+        }),
+    }
+}
 
 fn log_line(text: &str) {
     let Some(log) = LOG.get() else {
@@ -112,18 +167,18 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
         return;
     }
 
-    let file = std::env::var_os(LOG_PATH_ENV).and_then(|path| {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .ok()
-            .map(Mutex::new)
-    });
+    let file = open_log(LOG_PATH_ENV);
+    let jsonl = open_log(JSONL_PATH_ENV);
+    let started = Instant::now();
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(milliseconds);
     if LOG
         .set(ProbeLog {
-            started: Instant::now(),
+            started,
             file,
+            jsonl,
         })
         .is_err()
     {
@@ -136,6 +191,9 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     // Do not turn on process-wide frame collection until a collector and the
     // pinger that drives it are both guaranteed to exist.
     gpui::profiler::set_trace_enabled(true);
+    write_json(&[json!({"event": "start", "version": 1, "unix_ms": unix_ms,
+        "pid": std::process::id(), "os": std::env::consts::OS,
+        "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis()})]);
 
     log_line(&format!(
         "ui-probe start os={} debug_assertions={} interval={}ms ping={}ms main_cpu={}",
@@ -150,13 +208,14 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
         },
     ));
 
-    cx.spawn(async move |_cx: &mut gpui::AsyncApp| {
+    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
         let mut frame_collector = gpui::profiler::FrameTimingCollector::new();
         let mut wake_latencies: Vec<Duration> = Vec::with_capacity(512);
         let mut interval_started = Instant::now();
         let mut cpu_sample_started = Instant::now();
         let mut cpu_at_sample_start = main_cpu.cpu_time();
         let mut main_cpu_pct = None;
+        let mut previous_input = HashMap::<gpui::WindowId, gpui::profiler::InputLatencySnapshot>::new();
 
         loop {
             let Ok(sent_at) = ping_rx.recv().await else {
@@ -178,9 +237,41 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
                 cpu_at_sample_start = cpu_now;
             }
 
+            let frames = frame_collector.collect_unseen();
+            if LOG.get().is_some_and(|log| log.jsonl.is_some()) {
+                let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
+                records.push(json!({"event": "interval", "at_ms": milliseconds(now.duration_since(started)),
+                    "wall_ms": milliseconds(now.duration_since(interval_started)), "main_cpu_percent": main_cpu_pct,
+                    "wake_ms": wake_latencies.iter().copied().map(milliseconds).collect::<Vec<_>>() }));
+                cx.update(|app| {
+                    let windows = app.windows();
+                    previous_input.retain(|id, _| windows.iter().any(|window| window.window_id() == *id));
+                    for handle in windows {
+                        let _ = handle.update(app, |_, window, _| {
+                            let snapshot = window.input_latency_snapshot();
+                            let mut latency = snapshot.latency_histogram.clone();
+                            let mut dropped = snapshot.mid_draw_events_dropped;
+                            if let Some(previous) = previous_input.get(&handle.window_id()) {
+                                // A newly created/reset histogram starts another interval.
+                                if latency.subtract(&previous.latency_histogram).is_err() {
+                                    latency = snapshot.latency_histogram.clone();
+                                }
+                                dropped = dropped.saturating_sub(previous.mid_draw_events_dropped);
+                            }
+                            previous_input.insert(handle.window_id(), snapshot);
+                            records.push(json!({"event": "input_interval", "window": format!("{:?}", handle.window_id()),
+                                "at_ms": milliseconds(now.duration_since(started)), "count": latency.len(),
+                                "p95_ms": if latency.is_empty() { None } else { Some(latency.value_at_quantile(0.95) as f64 / 1e6) },
+                                "max_ms": if latency.is_empty() { None } else { Some(latency.max() as f64 / 1e6) },
+                                "mid_draw_events_dropped": dropped}));
+                        });
+                    }
+                });
+                write_json(&records);
+            }
             let summary = IntervalSummary::new(
                 now.duration_since(interval_started),
-                &frame_collector.collect_unseen(),
+                &frames,
                 &mut wake_latencies,
                 main_cpu_pct,
             );
@@ -250,6 +341,7 @@ struct IntervalSummary {
     slow_frames: usize,
     invalidations: u64,
     draw: Option<DurationStats>,
+    submit: Option<DurationStats>,
     dirty_to_draw: Option<DurationStats>,
     wake: Option<DurationStats>,
     main_cpu_pct: Option<f64>,
@@ -263,18 +355,24 @@ impl IntervalSummary {
         main_cpu_pct: Option<f64>,
     ) -> Self {
         let mut draws = Vec::with_capacity(frame_events.len());
+        let mut submissions = Vec::with_capacity(frame_events.len());
         let mut dirty_to_draws = Vec::with_capacity(frame_events.len());
         let mut invalidations = 0;
         for event in frame_events {
-            let gpui::profiler::FrameEvent::Draw(frame) = event else {
-                continue;
-            };
-            draws.push(frame.draw_duration());
-            dirty_to_draws.extend(frame.dirty_to_draw_duration());
-            invalidations += frame.invalidations;
+            match event {
+                gpui::profiler::FrameEvent::Draw(frame) => {
+                    draws.push(frame.draw_duration());
+                    dirty_to_draws.extend(frame.dirty_to_draw_duration());
+                    invalidations += frame.invalidations;
+                }
+                gpui::profiler::FrameEvent::Present(frame) => {
+                    submissions.push(frame.present_duration())
+                }
+            }
         }
 
         draws.sort_unstable();
+        submissions.sort_unstable();
         dirty_to_draws.sort_unstable();
         wake_latencies.sort_unstable();
 
@@ -284,6 +382,7 @@ impl IntervalSummary {
             slow_frames: draws.iter().filter(|d| **d > SLOW_FRAME).count(),
             invalidations,
             draw: DurationStats::from_sorted(&draws),
+            submit: DurationStats::from_sorted(&submissions),
             dirty_to_draw: DurationStats::from_sorted(&dirty_to_draws),
             wake: DurationStats::from_sorted(wake_latencies),
             main_cpu_pct,
@@ -330,6 +429,16 @@ impl IntervalSummary {
             Some(pct) => out.push_str(&format!(" main_cpu={pct:.1}%")),
             None => out.push_str(" main_cpu=n/a"),
         }
+        match &self.submit {
+            Some(submit) => out.push_str(&format!(
+                " submit[n={} avg={} p95={} max={}]",
+                submit.count,
+                ms(submit.avg),
+                ms(submit.p95),
+                ms(submit.max)
+            )),
+            None => out.push_str(" submit[-]"),
+        }
         out
     }
 }
@@ -375,6 +484,44 @@ impl MainThreadCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submission_time_is_separate_from_cpu_drawing_and_raw_timestamps() {
+        use gpui::profiler::{FrameEvent, FrameTiming, PresentTiming};
+        let origin = Instant::now();
+        let frames = [
+            FrameEvent::Draw(FrameTiming {
+                window_id: 1_u64.into(),
+                dirty_at: Some(origin),
+                invalidations: 2,
+                draw_start: origin + Duration::from_millis(8),
+                draw_end: origin + Duration::from_millis(12),
+            }),
+            FrameEvent::Present(PresentTiming {
+                window_id: 1_u64.into(),
+                present_start: origin + Duration::from_millis(12),
+                present_end: origin + Duration::from_millis(34),
+                animation_interval: None,
+            }),
+        ];
+        let summary = IntervalSummary::new(Duration::from_secs(1), &frames, &mut [], None);
+        assert_eq!(summary.frames, 1);
+        assert_eq!(summary.slow_frames, 0);
+        assert_eq!(summary.draw.as_ref().unwrap().avg, Duration::from_millis(4));
+        assert_eq!(
+            summary.submit.as_ref().unwrap().avg,
+            Duration::from_millis(22)
+        );
+        assert_eq!(
+            summary.dirty_to_draw.as_ref().unwrap().avg,
+            Duration::from_millis(12)
+        );
+        let raw = frame_record(&frames[1], origin);
+        assert_eq!(raw["event"], "submit");
+        assert_eq!(raw["start_ms"], 12.0);
+        assert_eq!(raw["at_ms"], 34.0);
+        assert_eq!(raw["duration_ms"], 22.0);
+    }
 
     #[test]
     fn percentile_uses_nearest_rank_for_small_samples() {

@@ -32,6 +32,61 @@ probe_spec.loader.exec_module(application_probe)
 local_spec = importlib.util.spec_from_file_location("local_performance", Path(__file__).with_name("local-performance.py"))
 local_performance = importlib.util.module_from_spec(local_spec)
 local_spec.loader.exec_module(local_performance)
+ui_spec = importlib.util.spec_from_file_location("ui_responsiveness", Path(__file__).with_name("ui-responsiveness.py"))
+ui_responsiveness = importlib.util.module_from_spec(ui_spec)
+ui_spec.loader.exec_module(ui_responsiveness)
+
+
+class UiMeasurementTests(unittest.TestCase):
+    def test_raw_frames_are_aligned_and_submission_is_not_display_latency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = {"outcome": "passed", "probe": True, "sha256": "ABC", "gpu": [], "phases": [
+                {"name": "native-move", "valid": True, "start_unix_ms": 1000, "end_unix_ms": 4000,
+                 "seconds": 3, "actions": 180, "cpu_seconds": 1.5, "api_ms": [1, 2],
+                 "native_starts": 1, "native_ends": 1}]}
+            (root / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+            records = [{"event": "start", "unix_ms": 1000},
+                       {"event": "draw", "start_ms": 100, "at_ms": 500, "duration_ms": 400, "dirty_ms": 50},
+                       {"event": "draw", "start_ms": 500, "at_ms": 504, "duration_ms": 4, "dirty_ms": 480},
+                       {"event": "submit", "start_ms": 504, "at_ms": 526, "duration_ms": 22},
+                       {"event": "interval", "at_ms": 1800, "wall_ms": 1000, "wake_ms": [1, 9]},
+                       {"event": "draw", "start_ms": 2700, "at_ms": 2801, "duration_ms": 101, "dirty_ms": 2650}]
+            (root / "frames.jsonl").write_text("\n".join(map(json.dumps, records)), encoding="utf-8")
+            summary = ui_responsiveness.summarize(root)
+            phase = summary["phases"]["native-move"]
+            self.assertEqual(summary["binary_sha256"], "abc")
+            self.assertEqual(phase["draw_ms"]["count"], 1)
+            self.assertEqual(phase["draw_ms"]["p95"], 4)
+            self.assertEqual(phase["submit_ms"]["p95"], 22)
+            self.assertEqual(phase["dirty_to_draw_ms"]["p95"], 24)
+            self.assertEqual(phase["wake_ms"]["p95"], 9)
+            self.assertEqual(phase["process_cpu_cores"], .5)
+            self.assertEqual(phase["slow_frames"], 0)
+            capture["phases"][0]["native_starts"] = 0
+            (root / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Missing native gesture"):
+                ui_responsiveness.summarize(root)
+            capture["phases"][0]["name"] = "typing"
+            (root / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "verify filter focus"):
+                ui_responsiveness.summarize(root)
+
+    def test_empty_distribution_does_not_invent_zero_latency(self):
+        self.assertIsNone(ui_responsiveness.distribution([])["p95"])
+        self.assertEqual(ui_responsiveness.distribution(range(1, 101))["p95"], 95)
+
+    def test_copied_or_failed_sessions_cannot_establish_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = {"measurement_id": "same", "complete": True}
+            (root / "session.json").write_text(json.dumps(session), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "copied session"):
+                ui_responsiveness.report_sessions([root, root])
+            session["complete"] = False
+            (root / "session.json").write_text(json.dumps(session), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "completed sessions"):
+                ui_responsiveness.report_sessions([root])
 
 
 class CacheTests(unittest.TestCase):
@@ -196,6 +251,55 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    def test_pure_batch_partition_is_explicit_and_preserves_ignored_tests(self):
+        suite = {"package-name": "gitcomet-core", "package-id": "core", "kind": "lib",
+                 "testcases": {"conflict_session::pure": {"ignored": False},
+                               "conflict_session::ignored": {"ignored": True},
+                               "process::integration": {"ignored": False}}}
+        suites = {"gitcomet-core": suite, "gitcomet-core::integration": dict(suite, kind="test")}
+        for platform_name in ("win32", "linux", "darwin"):
+            with self.subTest(platform=platform_name), patch.object(runner.sys, "platform", platform_name):
+                batches = runner.pure_batches(suites)
+                expected = {("gitcomet-core", "conflict_session::pure")} if platform_name == "win32" else set()
+                self.assertEqual(runner.batched_test_names(batches), expected)
+                self.assertEqual(runner.pure_batches(suites, "off"), [])
+                self.assertEqual(len(runner.pure_batches(suites, "on")), 1)
+
+    def test_pure_batch_rejects_wrong_names_and_duplicate_results(self):
+        suite = {"binary-path": "unused", "cwd": runner.ROOT,
+                 "testcases": {"conflict_session::a": {"ignored": False},
+                               "conflict_session::b": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0):
+            log = Path(directory) / "core-gitcomet-core-conflict_session--.log"
+            for names in (("a", "a"), ("a", "wrong"), ("a", "b")):
+                log.write_text("".join(f"test conflict_session::{name} ... ok\n" for name in names) +
+                               "test result: ok. 2 passed; 0 failed;\n")
+                if names == ("a", "b"):
+                    runner.run_suite("core", "gitcomet-core", suite, test_filter="conflict_session::", verify_names=True)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "test-name coverage mismatch"):
+                        runner.run_suite("core", "gitcomet-core", suite, test_filter="conflict_session::", verify_names=True)
+            log.write_text("test conflict_session::a - should panic ... ok\n"
+                           "test conflict_session::b ... ok\ntest result: ok. 2 passed; 0 failed;\n")
+            runner.run_suite("core", "gitcomet-core", suite, test_filter="conflict_session::", verify_names=True)
+
+    def test_nextest_rejects_duplicate_or_also_batched_results(self):
+        suites = {"gitcomet-core": {"package-id": "core", "testcases": {
+            "pure": {"ignored": False}, "isolated": {"ignored": False}}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
+            junit = Path(directory) / "junit.xml"
+            for names in (("isolated", "isolated"), ("pure", "isolated"), ("isolated",)):
+                junit.write_text('<testsuites><testsuite name="gitcomet-core">' +
+                                 ''.join(f'<testcase name="{name}"/>' for name in names) + '</testsuite></testsuites>')
+                if names == ("isolated",):
+                    runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit,
+                                                 excluded={("gitcomet-core", "pure")})
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "coverage mismatch"):
+                        runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit,
+                                                     excluded={("gitcomet-core", "pure")})
+
     @unittest.skipUnless(os.name == "nt", "Windows runtime DLL search policy")
     def test_runtime_search_retains_dlls_helpers_and_unreadable_paths(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory) / "reports"):
@@ -212,6 +316,22 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(path.with_name("binaries-original.json").read_bytes(), original)
             runner.prepare_runtime_binaries("workspace")
             self.assertEqual(path.with_name("binaries-original.json").read_bytes(), original)
+
+    def test_ui_harness_environment_isolates_personal_settings_after_binary_relocation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.dict(os.environ, {"GITCOMET_SESSION_FILE": "personal-session.json"}):
+            metadata = runner.paths("ui") / "binaries.json"
+            metadata.write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
+            suite = {"package-name": runner.UI, "binary-path": str(Path(directory) / "renamed.exe")}
+            first = runner.suite_env("ui", suite)
+            second = runner.suite_env("ui", suite)
+            self.assertNotIn("GITCOMET_SESSION_FILE", first)
+            self.assertEqual(first["GITCOMET_DISABLE_SESSION_PERSIST"], "1")
+            self.assertEqual(os.environ["GITCOMET_SESSION_FILE"], "personal-session.json")
+            if os.name == "nt":
+                self.assertNotEqual(first["LOCALAPPDATA"], second["LOCALAPPDATA"])
+                self.assertTrue(Path(first["LOCALAPPDATA"]).is_relative_to(directory))
+                self.assertTrue(Path(first["LOCALAPPDATA"]).is_dir())
 
     @staticmethod
     def git_integration_suites():
@@ -542,9 +662,10 @@ class RuntimeTests(unittest.TestCase):
             (source / "junit.xml").write_text("stale")
             calls = []
 
-            def execute(context, schedule, threads, profile, ui_threads):
+            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests):
                 self.assertEqual(profile, "ci-git-limited")
                 self.assertEqual(ui_threads, 8)
+                self.assertEqual(batch_pure_tests, "off")
                 calls.append(len(calls) + 1)
                 sample = runtime.runner.paths(context)
                 self.assertEqual((sample / "binaries.json").read_text(), '"compiled-once"')
@@ -557,7 +678,7 @@ class RuntimeTests(unittest.TestCase):
             with patch.object(runtime.runner, "REPORTS", reports), \
                     patch.object(runtime.runner, "execute", side_effect=execute), \
                     patch.object(runtime.subprocess, "check_output", return_value="test"):
-                runtime.measure(root / "output", 2, "serial", None, "ci-git-limited", 8)
+                runtime.measure(root / "output", 2, "serial", None, "ci-git-limited", 8, batch_pure_tests="off")
                 self.assertEqual(runtime.runner.REPORTS, reports)
             for index in (1, 2):
                 for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
@@ -798,6 +919,15 @@ class ReportTests(unittest.TestCase):
             rows = report.runtime_statistics(root)
             self.assertEqual(len(rows), 3)
             self.assertEqual({row["p95_seconds"] for row in rows}, {100, 200, 300})
+
+    def test_runtime_report_separates_batched_and_process_per_test_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = [dict(success=True, seconds=seconds, schedule="serial", batch_pure_tests=mode)
+                       for seconds, mode in ((100, "on"), (200, "off"))]
+            (root / "runtime.json").write_text(json.dumps(dict(job="local/test", samples=samples)))
+            rows = report.runtime_statistics(root)
+            self.assertEqual({row["batch_pure_tests"]: row["median_seconds"] for row in rows}, {"on": 100, "off": 200})
 
     def test_renamed_platform_lanes_match_without_treating_timeouts_as_success(self):
         records = [{"jobs": [

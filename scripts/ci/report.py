@@ -170,6 +170,7 @@ def runtime_statistics(directory):
         environment["source_diff_sha256"] = record.get("source_diff_sha256")
         for sample in record["samples"]:
             descriptor = dict(environment, schedule=sample.get("schedule"),
+                              batch_pure_tests=sample.get("batch_pure_tests", record.get("batch_pure_tests", "off")),
                               nextest_profile=sample.get("nextest_profile", "ci"),
                               nextest_threads=sample.get("nextest_threads"),
                               ui_threads=sample.get("ui_threads"),

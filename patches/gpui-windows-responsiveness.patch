@@ -1,0 +1,320 @@
+diff --git a/crates/gpui/src/platform/test/window.rs b/crates/gpui/src/platform/test/window.rs
+index b7e5cee2d8..6b16da8ad8 100644
+--- a/crates/gpui/src/platform/test/window.rs
++++ b/crates/gpui/src/platform/test/window.rs
+@@ -167,6 +167,18 @@ impl TestWindow {
+         self.0.lock().resize_callback = Some(callback);
+     }
+ 
++    /// Deliver the native moved callback without changing the client size.
++    pub fn simulate_move(&mut self, origin: Point<Pixels>) {
++        let mut lock = self.0.lock();
++        lock.bounds.origin = origin;
++        let Some(mut callback) = lock.moved_callback.take() else {
++            return;
++        };
++        drop(lock);
++        callback();
++        self.0.lock().moved_callback = Some(callback);
++    }
++
+     pub(crate) fn simulate_active_status_change(&self, active: bool) {
+         let mut lock = self.0.lock();
+         let Some(mut callback) = lock.active_status_change_callback.take() else {
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 6faad051a9..4ba63ff0b5 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1780,7 +1780,7 @@ impl Window {
+             let mut cx = cx.to_async();
+             move || {
+                 handle
+-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
++                    .update(&mut cx, |_, window, cx| window.moved(cx))
+                     .log_err();
+             }
+         }));
+@@ -2547,6 +2547,26 @@ impl Window {
+             .retain(&(), |callback| callback(self, cx));
+     }
+ 
++    fn moved(&mut self, cx: &mut App) {
++        // The Windows compositor translates the existing surface during a
++        // title-bar drag. Rebuilding every cached view for that translation
++        // stalls the synchronous WM_MOVE handler, particularly in debug builds.
++        // A changed client-relative cursor can change hover/tooltip contents;
++        // keep the full refresh in that case, and for display/DPI/size changes.
++        if cfg!(target_os = "windows")
++            && self.viewport_size == self.platform_window.content_size()
++            && self.scale_factor == self.platform_window.scale_factor()
++            && self.display_id == self.platform_window.display().map(|display| display.id())
++            && self.mouse_position == self.platform_window.mouse_position()
++        {
++            self.bounds_observers
++                .clone()
++                .retain(&(), |callback| callback(self, cx));
++        } else {
++            self.bounds_changed(cx);
++        }
++    }
++
+     /// Returns the bounds of the current window in the global coordinate space, which could span across multiple displays.
+     pub fn bounds(&self) -> Bounds<Pixels> {
+         self.platform_window.bounds()
+@@ -7619,6 +7639,61 @@ mod tests {
+ 
+     struct EmptyView;
+ 
++    #[cfg(target_os = "windows")]
++    #[gpui::test]
++    fn windows_translation_notifies_observers_without_rebuilding_the_scene(
++        cx: &mut TestAppContext,
++    ) {
++        let renders = Rc::new(Cell::new(0));
++        let observed = Rc::new(Cell::new(Point::default()));
++        struct Counted(Rc<Cell<usize>>);
++        impl Render for Counted {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                self.0.set(self.0.get() + 1);
++                div().size_full().bg(white())
++            }
++        }
++        let window = cx.add_window(|window, cx| {
++            let observed = observed.clone();
++            cx.observe_window_bounds(window, move |_, window, _| {
++                observed.set(window.bounds().origin)
++            })
++            .detach();
++            Counted(renders.clone())
++        });
++        let mut native = cx.test_window(window.into());
++        while native.simulate_scheduled_frame() {}
++        let before = renders.get();
++        let origin = point(px(100.), px(200.));
++        native.simulate_move(origin);
++        while native.simulate_scheduled_frame() {}
++        assert_eq!(observed.get(), origin);
++        assert_eq!(
++            renders.get(),
++            before,
++            "the compositor can translate the existing surface"
++        );
++
++        native.simulate_resize(size(px(700.), px(500.)));
++        while native.simulate_scheduled_frame() {}
++        assert!(
++            renders.get() > before,
++            "resizing still requires a fresh scene"
++        );
++        let before = renders.get();
++        window
++            .update(cx, |_, window, _| {
++                window.mouse_position = point(px(30.), px(40.))
++            })
++            .unwrap();
++        native.simulate_move(point(px(200.), px(300.)));
++        while native.simulate_scheduled_frame() {}
++        assert!(
++            renders.get() > before,
++            "a changed relative cursor must refresh hover-dependent content"
++        );
++    }
++
+     impl Render for EmptyView {
+         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+             div()
+diff --git a/crates/gpui_windows/src/directx_devices.rs b/crates/gpui_windows/src/directx_devices.rs
+index c0837da964..81b1b90d60 100644
+--- a/crates/gpui_windows/src/directx_devices.rs
++++ b/crates/gpui_windows/src/directx_devices.rs
+@@ -63,17 +63,49 @@ impl DirectXDevices {
+ 
+ #[inline]
+ fn check_debug_layer_available() -> bool {
+-    #[cfg(debug_assertions)]
+-    {
+-        use crate::bindings::Windows::Win32::{DXGIGetDebugInterface1, IDXGIInfoQueue};
++    use crate::bindings::Windows::Win32::{DXGIGetDebugInterface1, IDXGIInfoQueue};
++    let mode = std::env::var("GPUI_D3D_DEBUG").unwrap_or_default();
++    let requested = match debug_layer_requested(&mode, cfg!(debug_assertions)) {
++        Some(requested) => requested,
++        None => {
++            log::warn!("Invalid GPUI_D3D_DEBUG={mode:?}; expected auto, on, or off. Using auto.");
++            cfg!(debug_assertions)
++        }
++    };
++    if !requested {
++        return false;
++    }
++    let available = unsafe { DXGIGetDebugInterface1::<IDXGIInfoQueue>(0) }
++        .log_err()
++        .is_some();
++    if !available {
++        log::warn!("DirectX validation was requested but the DXGI debug interface is unavailable.");
++    }
++    available
++}
+ 
+-        unsafe { DXGIGetDebugInterface1::<IDXGIInfoQueue>(0) }
+-            .log_err()
+-            .is_some()
++fn debug_layer_requested(mode: &str, debug_build: bool) -> Option<bool> {
++    match mode.trim() {
++        "" | "auto" => Some(debug_build),
++        "on" => Some(true),
++        "off" => Some(false),
++        _ => None,
+     }
+-    #[cfg(not(debug_assertions))]
+-    {
+-        false
++}
++
++#[cfg(test)]
++mod tests {
++    use super::debug_layer_requested;
++
++    #[test]
++    fn validation_override_preserves_auto_and_can_validate_release_builds() {
++        for debug in [false, true] {
++            assert_eq!(debug_layer_requested("auto", debug), Some(debug));
++            assert_eq!(debug_layer_requested("", debug), Some(debug));
++            assert_eq!(debug_layer_requested(" on ", debug), Some(true));
++            assert_eq!(debug_layer_requested("off", debug), Some(false));
++            assert_eq!(debug_layer_requested("typo", debug), None);
++        }
+     }
+ }
+ 
+@@ -82,10 +114,6 @@ fn get_dxgi_factory(debug_layer_available: bool) -> Result<IDXGIFactory6> {
+     let factory_flag = if debug_layer_available {
+         DXGI_CREATE_FACTORY_DEBUG
+     } else {
+-        #[cfg(debug_assertions)]
+-        log::warn!(
+-            "Failed to get DXGI debug interface. DirectX debugging features will be disabled."
+-        );
+         0
+     };
+     unsafe { Ok(CreateDXGIFactory2(factory_flag as u32)?) }
+diff --git a/crates/gpui_windows/src/dispatcher.rs b/crates/gpui_windows/src/dispatcher.rs
+index dd6ce87c12..cd92253ce8 100644
+--- a/crates/gpui_windows/src/dispatcher.rs
++++ b/crates/gpui_windows/src/dispatcher.rs
+@@ -18,9 +18,13 @@ use gpui_util::ResultExt;
+ 
+ use crate::{HWND, SafeHwnd, WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD};
+ use gpui::{
+-    PlatformDispatcher, Priority, PriorityQueueSender, RunnableVariant, TimerResolutionGuard,
++    PlatformDispatcher, Priority, PriorityQueueReceiver, PriorityQueueSender, RunnableVariant,
++    TimerResolutionGuard,
+ };
+ 
++/// Share the ordinary message loop's work budget with native modal loops.
++pub(crate) const MAIN_TASK_BUDGET: Duration = Duration::from_millis(10);
++
+ pub(crate) struct WindowsDispatcher {
+     pub(crate) wake_posted: AtomicBool,
+     main_sender: PriorityQueueSender<RunnableVariant>,
+@@ -30,6 +34,16 @@ pub(crate) struct WindowsDispatcher {
+ }
+ 
+ impl WindowsDispatcher {
++    pub(crate) fn drain_modal_tasks(receiver: &mut PriorityQueueReceiver<RunnableVariant>) {
++        let start = std::time::Instant::now();
++        while start.elapsed() < MAIN_TASK_BUDGET {
++            let Ok(Some(runnable)) = receiver.try_pop() else {
++                break;
++            };
++            Self::execute_runnable(runnable);
++        }
++    }
++
+     pub(crate) fn new(
+         main_sender: PriorityQueueSender<RunnableVariant>,
+         platform_window_handle: HWND,
+@@ -187,3 +201,36 @@ unsafe extern "system" fn run_timer_callback(
+     WindowsDispatcher::execute_runnable(runnable);
+     unsafe { CloseThreadpoolTimer(timer) };
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::{cell::Cell, rc::Rc, sync::Arc};
++
++    #[test]
++    fn modal_budget_leaves_pending_tasks_and_the_normal_loop_wake_intact() {
++        let (sender, mut receiver) = PriorityQueueReceiver::new();
++        let dispatcher = Arc::new(WindowsDispatcher::new(sender, HWND::default(), 0));
++        let foreground = gpui::ForegroundExecutor::new(dispatcher.clone());
++        let completed = Rc::new(Cell::new(0));
++        for _ in 0..2 {
++            let completed = completed.clone();
++            foreground
++                .spawn(async move {
++                    // One non-preemptible task consumes the modal tick. The next
++                    // task must remain queued so painting/input can get a turn.
++                    std::thread::sleep(MAIN_TASK_BUDGET + Duration::from_millis(1));
++                    completed.set(completed.get() + 1);
++                })
++                .detach();
++        }
++        WindowsDispatcher::drain_modal_tasks(&mut receiver);
++        assert_eq!(completed.get(), 1);
++        assert!(!receiver.is_empty());
++        assert!(dispatcher.wake_posted.load(Ordering::Acquire));
++        WindowsDispatcher::drain_modal_tasks(&mut receiver);
++        assert_eq!(completed.get(), 2);
++        assert!(receiver.is_empty());
++        assert!(dispatcher.wake_posted.load(Ordering::Acquire));
++    }
++}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 7b52fd02dd..5307086d7a 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -206,6 +206,9 @@ impl WindowsWindowInner {
+             callback();
+             self.state.callbacks.moved.set(Some(callback));
+         }
++        // A same-display translation can reuse the composited surface, but
++        // native IME candidate placement still follows the moved window.
++        self.handle_ime_position(handle);
+         Some(0)
+     }
+ 
+@@ -314,10 +317,11 @@ impl WindowsWindowInner {
+ 
+     fn handle_timer_msg(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
+         if wparam.0 == SIZE_MOVE_LOOP_TIMER_ID {
+-            let mut runnables = self.main_receiver.clone().try_iter();
+-            while let Some(Ok(runnable)) = runnables.next() {
+-                WindowsDispatcher::execute_runnable(runnable);
+-            }
++            WindowsDispatcher::drain_modal_tasks(&mut self.main_receiver.clone());
++            // Leave remaining work in the queue. The still-armed modal timer
++            // services it on its next tick; the dispatcher's pending wake
++            // services it when the native loop exits. Never clear wake_posted
++            // here: that handshake belongs to the ordinary foreground pump.
+             self.handle_paint_msg(handle)
+         } else {
+             None
+diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
+index ffd6b30a63..718ae92152 100644
+--- a/crates/gpui_windows/src/platform.rs
++++ b/crates/gpui_windows/src/platform.rs
+@@ -1070,12 +1070,10 @@ impl WindowsPlatformInner {
+ 
+     #[inline]
+     fn run_foreground_task(&self) -> Option<isize> {
+-        const MAIN_TASK_TIMEOUT: u128 = 10;
+-
+         let start = std::time::Instant::now();
+         'tasks: loop {
+             'timeout_loop: loop {
+-                if start.elapsed().as_millis() >= MAIN_TASK_TIMEOUT {
++                if start.elapsed() >= crate::dispatcher::MAIN_TASK_BUDGET {
+                     log::debug!("foreground task timeout reached");
+                     // we spent our budget on gpui tasks, we likely have a lot of work queued so drain system events first to stay responsive
+                     // then quit out of foreground work to allow us to process other gpui events first before returning back to foreground task work

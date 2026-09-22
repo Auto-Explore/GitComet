@@ -2,6 +2,7 @@
 """Build once, inventory every test, then run nextest + the GPUI libtest harness."""
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from contextlib import ExitStack
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,7 +25,10 @@ REPORTS = ROOT / "target" / "ci-reports"
 REPORT_LOCK = threading.RLock()
 CONSOLE_LOCK = threading.RLock()
 UI = "gitcomet-ui-gpui"
-NEXTEST_PROFILES = ("ci", "ci-git-limited")
+NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first")
+# Audited in-memory tests: no process-global environment, filesystem, or native
+# resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
+PURE_BATCHES = {"gitcomet-core": ("conflict_session::",)}
 CONTEXTS = {
     "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
@@ -46,6 +51,38 @@ GIT_PREREQUISITE_SKIP = re.compile(
 def uses_libtest(package):
     # Run the GPUI harness in one process on every platform.
     return package == UI
+
+
+def batch_pure_enabled(mode="auto"):
+    if mode not in ("auto", "on", "off"):
+        raise ValueError(f"Unsupported pure-test batching mode: {mode}")
+    return mode == "on" or (mode == "auto" and sys.platform == "win32")
+
+
+def pure_batches(suites, mode="auto"):
+    if not batch_pure_enabled(mode):
+        return []
+    return [(binary_id, suite, prefix)
+            for binary_id, suite in suites.items() if suite.get("kind") == "lib"
+            for prefix in PURE_BATCHES.get(binary_id, ())
+            if any(name.startswith(prefix) and not test["ignored"]
+                   for name, test in suite["testcases"].items())]
+
+
+def batched_test_names(batches):
+    return {(binary_id, name) for binary_id, suite, prefix in batches
+            for name, test in suite["testcases"].items()
+            if name.startswith(prefix) and not test["ignored"]}
+
+
+def nextest_filter(batches):
+    # `binary` matches the Cargo binary name; `binary_id` also distinguishes
+    # library and integration harnesses. Inventory verification below remains
+    # the authority for the actual partition.
+    exclusions = [f"package(={UI})"]
+    for _, suite, prefix in batches:
+        exclusions.append(f"(package(={suite['package-name']}) & kind(lib) & test(/^{re.escape(prefix)}/))")
+    return "not " + exclusions[0] if len(exclusions) == 1 else "not (" + " | ".join(exclusions) + ")"
 
 
 def record(name, duration, returncode, **details):
@@ -262,12 +299,14 @@ def compile_tests(context, profile, test_targets=()):
         "--message-format", "json", "--ignore-default-filter"], output=directory / "tests.json")
     packages = package_names(context)
     entries = []
+    batched = batched_test_names(pure_batches(inventory(context)["rust-suites"]))
     for binary_id, suite in inventory(context)["rust-suites"].items():
         package = packages[suite["package-id"]]
         for name, test in suite["testcases"].items():
             entries.append(dict(package=package, binary=binary_id, test=name,
                                 ignored=test["ignored"],
-                                runner="libtest" if uses_libtest(package) else "nextest"))
+                                runner="libtest" if uses_libtest(package) else
+                                       "libtest-pure" if (binary_id, name) in batched else "nextest"))
     if not entries:
         raise RuntimeError(f"No tests discovered for {context}")
     (directory / "coverage.json").write_text(json.dumps({
@@ -280,6 +319,17 @@ def compile_tests(context, profile, test_targets=()):
 
 def suite_env(context, suite):
     env = dict(os.environ)
+    if suite.get("package-name") == UI:
+        # Keep copied/renamed UI harnesses away from the developer's session.
+        # Explicit session files created by subprocess tests still take
+        # precedence over DISABLE_SESSION_PERSIST in the session loader.
+        env.pop("GITCOMET_SESSION_FILE", None)
+        env["GITCOMET_DISABLE_SESSION_PERSIST"] = "1"
+        if os.name == "nt":
+            appdata = REPORTS / "ui-appdata" / uuid.uuid4().hex
+            appdata.mkdir(parents=True)
+            env["LOCALAPPDATA"] = str(appdata)
+            env["APPDATA"] = str(appdata)
     binary_dir = str(Path(suite["binary-path"]).parent)
     metadata = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
     build = metadata["rust-build-meta"]
@@ -297,13 +347,15 @@ def suite_env(context, suite):
     return env
 
 
-def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None):
+def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None, verify_names=False):
     expected = [name for name, test in suite["testcases"].items()
                 if not test["ignored"] and (test_filter is None or
                     (name == test_filter if exact else test_filter in name))]
     if test_filter and not expected:
         raise RuntimeError(f"Smoke selector {test_filter!r} matches no tests in {binary_id}")
-    command = [suite["binary-path"], "--nocapture"]
+    # Capture pure-test output so successful result lines cannot interleave
+    # with test stdout. Existing GPUI/smoke diagnostics retain --nocapture.
+    command = [suite["binary-path"], "--format", "pretty"] if verify_names else [suite["binary-path"], "--nocapture"]
     if threads is not None:
         command += ["--test-threads", str(threads)]
     if test_filter:
@@ -323,21 +375,26 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
     summaries = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", log)
     if not code and (not summaries or sum(map(int, summaries[-1])) != len(expected)):
         raise RuntimeError(f"{name}: libtest did not execute the inventoried test count ({len(expected)})")
+    if verify_names and not code:
+        actual = re.findall(r"^test (\S+)(?: - should panic)? \.\.\. ok\s*$", log, re.MULTILINE)
+        if Counter(actual) != Counter(expected):
+            raise RuntimeError(f"{name}: libtest test-name coverage mismatch")
     return code
 
 
-def check_nextest_results(context, suites, packages, junit):
+def check_nextest_results(context, suites, packages, junit, *, excluded=frozenset()):
     expected = {(binary_id, name) for binary_id, suite in suites.items()
                 if not uses_libtest(packages[suite["package-id"]])
-                for name, test in suite["testcases"].items() if not test["ignored"]}
+                for name, test in suite["testcases"].items() if not test["ignored"]} - excluded
     xml = ET.parse(junit)
     for case in xml.iter("testcase"):
         reject_prerequisite_skips(f"{context}:{case.attrib['name']}",
                                   case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
-    actual = {(suite.attrib["name"], case.attrib["name"])
+    observed = [(suite.attrib["name"], case.attrib["name"])
               for suite in xml.getroot().findall("testsuite") for case in suite.findall("testcase")
-              if case.find("skipped") is None}
-    if expected != actual:
+              if case.find("skipped") is None]
+    actual = set(observed)
+    if len(observed) != len(actual) or expected != actual:
         raise RuntimeError(f"{context}: nextest coverage mismatch: {len(expected - actual)} missing, {len(actual - expected)} unexpected")
     with REPORT_LOCK, (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
         for case in xml.iter("testcase"):
@@ -364,7 +421,8 @@ def run_parallel(tasks):
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None):
+def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None, batch_pure_tests="auto"):
+    batch_pure_enabled(batch_pure_tests)
     for option, threads in (("nextest", nextest_threads), ("ui", ui_threads)):
         if threads is not None and (threads < 1 or schedule != "serial"):
             raise ValueError(f"--{option}-threads must be positive and requires --schedule serial")
@@ -373,6 +431,8 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
     prepare_runtime_binaries(context)
     packages = package_names(context)
     suites = inventory(context)["rust-suites"]
+    batches = pure_batches(suites, batch_pure_tests)
+    batched = batched_test_names(batches)
     cpus = os.cpu_count() or 1
     balanced = schedule == "balanced" and cpus > 1
     start = time.monotonic()
@@ -385,13 +445,13 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest" / nextest_profile / "junit.xml"
         junit.unlink(missing_ok=True)
         command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", nextest_profile,
-                   "--ignore-default-filter", "-E", f"not package(={UI})", "--no-fail-fast"]
+                   "--ignore-default-filter", "-E", nextest_filter(batches), "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]
         code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel)
         if junit.exists():
             shutil.copyfile(junit, paths(context) / "junit.xml")
-            check_nextest_results(context, suites, packages, junit)
+            check_nextest_results(context, suites, packages, junit, excluded=batched)
         elif not code:
             raise RuntimeError(f"{context}: nextest produced no results")
         return code
@@ -414,6 +474,13 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
 
     succeeded = False
     try:
+        for binary_id, suite, prefix in batches:
+            # libtest's filter is a substring; reject any inventory for which
+            # it would select a test outside the audited module prefix.
+            if any(prefix in name and not name.startswith(prefix) for name in suite["testcases"]):
+                raise RuntimeError(f"{binary_id}: ambiguous pure-test prefix {prefix}")
+            codes.append(run_suite(context, binary_id, suite, test_filter=prefix,
+                                   threads=nextest_threads or cpus, verify_names=True))
         if balanced:
             codes.extend(run_parallel([partial(nextest, threads=cpus - effective_ui_threads), ui]))
         else:
@@ -427,6 +494,7 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         (paths(context) / "execution.json").write_text(json.dumps({
             "schedule": schedule, "effective_schedule": "balanced" if balanced else "serial",
             "nextest_profile": nextest_profile,
+            "batch_pure_tests": batch_pure_tests, "batched_tests": sorted(batched),
             "ui_threads": ui_threads,
             "effective_ui_threads": effective_ui_threads if effective_ui_threads is not None else
                                     default_ui_threads,
@@ -457,6 +525,8 @@ def main():
     parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
     parser.add_argument("--ui-threads", type=int, help="Opt-in libtest concurrency experiment (serial schedule only)")
     parser.add_argument("--nextest-profile", choices=NEXTEST_PROFILES, default="ci")
+    parser.add_argument("--batch-pure-tests", choices=("auto", "on", "off"), default="auto",
+                        help="Batch audited pure tests in libtest (auto enables on Windows)")
     args, extra = parser.parse_known_args()
     if args.test_target and args.phase != "compile":
         parser.error("--test-target requires compile")
@@ -468,7 +538,8 @@ def main():
     if args.phase == "compile":
         compile_tests(args.context, args.cargo_profile, args.test_target)
     elif args.phase == "test":
-        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads)
+        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile,
+                args.ui_threads, args.batch_pure_tests)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":

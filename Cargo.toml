@@ -267,9 +267,30 @@ unsafe_code = "forbid"
 incremental = true
 opt-level = 0
 
+# Keep application code quick to rebuild while optimizing the layout/render
+# dependencies. Windows measurements and reproduction: docs/windows-ui-performance.md.
+[profile.dev.package.gpui-ce]
+opt-level = 2
+
+[profile.dev.package.gpui_ce_windows]
+opt-level = 2
+
+[profile.dev.package.taffy]
+opt-level = 2
+
 [profile.test]
 opt-level = 1
 split-debuginfo = "packed"
+
+# Test profiles inherit dev package overrides; retain their measured settings.
+[profile.test.package.gpui-ce]
+opt-level = 1
+
+[profile.test.package.gpui_ce_windows]
+opt-level = 1
+
+[profile.test.package.taffy]
+opt-level = 1
 
 # CI avoids generating and packaging debugger symbols on ephemeral runners.
 # Keep algorithm/dependency optimization; the large UI crate favors fast builds.
@@ -286,6 +307,15 @@ overflow-checks = true
 
 [profile.ci-test.package.gitcomet-ui-gpui]
 opt-level = 0
+
+[profile.ci-test.package.gpui-ce]
+opt-level = 1
+
+[profile.ci-test.package.gpui_ce_windows]
+opt-level = 1
+
+[profile.ci-test.package.taffy]
+opt-level = 1
 
 # Compile/link coverage only. Actual performance measurements still use bench,
 # which inherits the production release settings below.
