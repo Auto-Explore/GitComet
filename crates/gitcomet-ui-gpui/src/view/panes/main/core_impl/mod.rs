@@ -209,6 +209,17 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            // The open-file disk check keys off these; working-tree targets
+            // only, for the same reason as the status rev.
+            let disk_revs = if matches!(
+                repo.diff_state.diff_target,
+                Some(DiffTarget::WorkingTree { .. })
+            ) {
+                (repo.worktree_change_rev, repo.local_worktree_write_rev)
+            } else {
+                (0, 0)
+            };
+            disk_revs.hash(&mut hasher);
             // Edit-size sorting can change file neighbors without a status change.
             let line_stats_rev = match repo.diff_state.diff_target.as_ref() {
                 Some(DiffTarget::WorkingTree { area, .. }) => repo.line_stats_rev(*area),
@@ -2193,6 +2204,10 @@ impl MainPaneView {
         // A closed repo tab takes its `RepoId` with it; buffers stashed under it
         // can never be saved again and would block every future close.
         self.prune_orphaned_file_editor_stash();
+        self.sync_file_disk_check(
+            prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target,
+            cx,
+        );
 
         self.sync_conflict_resolver(cx);
         self.ensure_file_image_diff_cache(cx);

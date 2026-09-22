@@ -903,6 +903,8 @@ fn commit_completion_finished(
     repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
     repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
     repo_state.bump_ops_rev();
+    // Hooks can rewrite files.
+    repo_state.bump_local_worktree_write_rev();
     match result {
         Ok(()) => {
             repo_state.feedback.last_error = None;
@@ -1171,6 +1173,9 @@ pub(super) fn repo_command_finished(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Unconditional: over-counting a fetch or push is harmless, missing a
+    // pull or reset is not.
+    repo_state.bump_local_worktree_write_rev();
 
     let mut extra_effects = Vec::new();
     if refresh_remote_branches && !matches!(repo_state.remote_branches, Loadable::Ready(_)) {

@@ -1235,6 +1235,7 @@ mod conflict;
 mod control_interaction;
 mod diff_stage_gutter;
 mod file_diff;
+mod file_disk_notice;
 mod file_editor;
 mod file_preview;
 mod file_status;

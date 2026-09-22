@@ -2,6 +2,7 @@ use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::main::DiskSurface;
 use crate::view::panes::main::diff_search::DiffSearchOptions;
 use gpui::Focusable;
 
@@ -1397,6 +1398,118 @@ impl MainPaneView {
     }
 
     /// The explicit "Save" button, shown while editing with auto-save off.
+    /// The "File changed on disk" strip, when the notice names the surface on
+    /// screen. Sits between the toolbar and the body; the body itself is left
+    /// exactly as it was, which is the point.
+    fn render_file_disk_notice(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let notice = self.file_disk_notice_for_screen()?;
+        let name = notice
+            .abs_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "this file".to_string());
+        // Read live, not at notice time: the user may have typed since.
+        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty;
+        let actor = if notice.by_git_operation {
+            "A git operation"
+        } else {
+            "Another program"
+        };
+        let verb = if notice.deleted {
+            "deleted"
+        } else {
+            "modified"
+        };
+
+        let reload_button = components::Button::new("file_disk_notice_reload", "Reload")
+            .style(if discards_edits {
+                components::ButtonStyle::Danger
+            } else {
+                components::ButtonStyle::Filled
+            })
+            .on_click(theme, cx, |this, _e, _window, cx| {
+                this.reload_file_from_disk_notice(cx);
+            })
+            .debug_selector(|| "file_disk_notice_reload".to_string());
+        let dismiss_button = components::Button::new(
+            "file_disk_notice_dismiss",
+            if discards_edits {
+                "Keep my edits"
+            } else {
+                "Dismiss"
+            },
+        )
+        .style(components::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, _window, cx| {
+            this.dismiss_file_disk_notice(cx);
+        })
+        .debug_selector(|| "file_disk_notice_dismiss".to_string());
+
+        Some(
+            div()
+                .id("file_disk_notice")
+                .debug_selector(|| "file_disk_notice".to_string())
+                .mx_2()
+                .mt_2()
+                .px_2()
+                .py_1()
+                // Neutral panel, status colour in the border — same reasoning
+                // as the crash banner and the toasts.
+                .bg(if theme.is_dark {
+                    with_alpha(theme.colors.status.warning.foreground, 0.13)
+                } else {
+                    theme.colors.surface.raised
+                })
+                .border_1()
+                .border_color(if theme.is_dark {
+                    with_alpha(theme.colors.status.warning.foreground, 0.30)
+                } else {
+                    theme.colors.status.warning.border
+                })
+                .rounded(px(theme.radii.panel))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(theme.ui_text(14.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("File changed on disk"),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme.ui_text(14.0))
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(format!("{actor} {verb} {name}.")),
+                        )
+                        .when(discards_edits, |d| {
+                            d.child(
+                                div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("Reloading discards your unsaved edits."),
+                            )
+                        })
+                        .child(
+                            div()
+                                .pt_1()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(reload_button)
+                                .child(dismiss_button),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn file_editor_save_button(
         &self,
         theme: AppTheme,
@@ -2272,6 +2385,8 @@ impl MainPaneView {
                     .overflow_hidden()
                     .child(controls),
             );
+
+        let disk_notice = self.render_file_disk_notice(theme, cx);
 
         let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)
@@ -3292,6 +3407,7 @@ impl MainPaneView {
                     .border_b_1()
                     .border_color(theme.colors.stroke.default),
             )
+            .when_some(disk_notice, |d, strip| d.child(strip))
             .child(
                 div()
                     .id("diff_body_container")

@@ -4290,3 +4290,211 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
         }
     }
 }
+
+/// An open repo showing `a.txt` from the working tree, with the initial
+/// refresh completed so later refreshes are not coalesced away.
+fn open_repo_showing_working_tree_file() -> (
+    FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    AtomicU64,
+    AppState,
+) {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Unstaged,
+            },
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+    (repos, id_alloc, state)
+}
+
+#[test]
+fn external_worktree_change_bumps_worktree_change_rev() {
+    let (mut repos, id_alloc, mut state) = open_repo_showing_working_tree_file();
+    let rev = |state: &AppState| state.repos[0].worktree_change_rev;
+    let before = rev(&state);
+
+    for change in [
+        crate::msg::RepoExternalChange::Index,
+        crate::msg::RepoExternalChange::GitState,
+    ] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id: RepoId(1),
+                change,
+            },
+        );
+        assert_eq!(
+            rev(&state),
+            before,
+            "{change:?} touched no worktree file; nothing to check"
+        );
+    }
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert_eq!(rev(&state), before + 1);
+
+    // The window-focus full refresh sets every flag, worktree included.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::all(),
+        },
+    );
+    assert_eq!(rev(&state), before + 2);
+    assert_eq!(
+        state.repos[0].local_worktree_write_rev, 0,
+        "an external change is not a GitComet command"
+    );
+}
+
+#[test]
+fn repo_action_finished_bumps_local_worktree_write_rev() {
+    let (mut repos, id_alloc, mut state) = open_repo_showing_working_tree_file();
+    let rev = |state: &AppState| state.repos[0].local_worktree_write_rev;
+    let before = rev(&state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::DiscardWorktreeChangesPath {
+            repo_id: RepoId(1),
+            path: PathBuf::from("a.txt"),
+        },
+    );
+    assert_eq!(rev(&state), before, "dispatching moves nothing on disk yet");
+    assert!(
+        state.repos[0].git_operation_in_flight(),
+        "while it runs, a disk change is the command's"
+    );
+
+    for result in [Ok(()), Err(Error::new(ErrorKind::Cancelled))] {
+        let expected = rev(&state) + 1;
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id: RepoId(1),
+                action: RepoActionKind::DiscardWorktreeChangesPath,
+                result,
+            }),
+        );
+        assert_eq!(
+            rev(&state),
+            expected,
+            "a failed command may still have written"
+        );
+    }
+    assert_eq!(state.repos[0].worktree_change_rev, 0);
+}
+
+#[test]
+fn repo_command_finished_bumps_local_worktree_write_rev() {
+    let (mut repos, id_alloc, mut state) = open_repo_showing_working_tree_file();
+    let rev = |state: &AppState| state.repos[0].local_worktree_write_rev;
+    let before = rev(&state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SaveWorktreeFile {
+            repo_id: RepoId(1),
+            path: PathBuf::from("a.txt"),
+            contents: "new\n".to_string(),
+            stage: false,
+        },
+    );
+    assert_eq!(rev(&state), before);
+    assert!(state.repos[0].git_operation_in_flight());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::SaveWorktreeFile {
+                path: PathBuf::from("a.txt"),
+                stage: false,
+            },
+            result: Ok(CommandOutput::empty_success("save")),
+        }),
+    );
+    assert_eq!(rev(&state), before + 1);
+    assert!(!state.repos[0].git_operation_in_flight());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Default,
+            },
+            result: Ok(CommandOutput::empty_success("git pull")),
+        }),
+    );
+    assert_eq!(rev(&state), before + 2);
+}

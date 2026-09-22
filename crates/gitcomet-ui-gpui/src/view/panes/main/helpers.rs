@@ -3481,6 +3481,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_segments_cache:
         FxHashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
+    /// What the read-only preview was read from. See `super::file_disk`.
+    pub(in crate::view) worktree_preview_disk: DiskIdentity,
+    /// Scroll offset to restore after a reload that must not jump to the top.
+    pub(in crate::view) worktree_preview_restore_scroll_offset: Option<gpui::Point<Pixels>>,
 
     /// The editable working-tree buffer. See `super::file_editor`.
     pub(in crate::view) file_editor_input: Entity<components::TextInput>,
@@ -3490,10 +3494,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_key: Option<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_editor_loading: bool,
-    /// Repo status revision the buffer was last read at. A clean buffer re-reads
-    /// when this moves, so an external write to the open file is picked up
-    /// rather than silently overwritten by the next save.
-    pub(in crate::view) file_editor_loaded_status_rev: u64,
+    /// Generation of the last disk read, so a superseded read is dropped.
+    pub(in crate::view) file_editor_reread_seq: u64,
+    /// What the buffer was read from (or last wrote). See `super::file_disk`.
+    pub(in crate::view) file_editor_disk: DiskIdentity,
     pub(in crate::view) file_editor_error: Option<SharedString>,
     pub(in crate::view) file_editor_dirty: bool,
     /// The topmost 0-based line an unsaved edit has touched, or `None` while the
@@ -3510,6 +3514,14 @@ pub(crate) struct MainPaneView {
     /// Fingerprint of the text last known to be on disk. `None` before the
     /// first read lands, which reads as "everything is unsaved".
     pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,
+    /// "File changed on disk", for the surface it names. See `super::file_disk`.
+    pub(in crate::view) file_disk_notice: Option<FileDiskNotice>,
+    /// Generation of the last disk check, so a superseded check is dropped.
+    pub(in crate::view) file_disk_check_seq: u64,
+    /// The surface on screen and the repo revisions it was last read or
+    /// checked at. `None` until a read lands, so bumps that predate the read
+    /// never fire a check.
+    pub(in crate::view) file_disk_seen: Option<FileDiskSeen>,
     /// Unsaved buffers the user navigated away from, keyed by path. This is what
     /// makes leaving a file and coming back non-destructive with auto-save off.
     /// Keyed by repo *and* path: two repo tabs can hold the same relative path,

@@ -1793,6 +1793,14 @@ pub struct RepoState {
 
     pub open_rev: u64,
     pub ops_rev: u64,
+    /// Bumped when the watcher (or the window-focus full refresh) reports a
+    /// working-tree write. The view stats the open file when this moves; the
+    /// watcher itself carries no paths.
+    pub worktree_change_rev: u64,
+    /// Bumped when a GitComet-run git command that may have rewritten
+    /// worktree files completes. Not `ops_rev`: that one also moves when a
+    /// command *starts*, which would spend the signal before the disk changed.
+    pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
 
     pub feedback: RepoFeedbackState,
@@ -1889,6 +1897,8 @@ impl RepoState {
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
+            worktree_change_rev: 0,
+            local_worktree_write_rev: 0,
             last_active_at: None,
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
@@ -2860,6 +2870,23 @@ impl RepoState {
 
     pub(crate) fn bump_ops_rev(&mut self) {
         self.ops_rev = self.ops_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_worktree_change_rev(&mut self) {
+        self.worktree_change_rev = self.worktree_change_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_local_worktree_write_rev(&mut self) {
+        self.local_worktree_write_rev = self.local_worktree_write_rev.wrapping_add(1);
+    }
+
+    /// A GitComet-run git command that may write worktree files is still
+    /// running. Push and worktree listing never touch the checkout.
+    pub fn git_operation_in_flight(&self) -> bool {
+        self.local_actions_in_flight > 0
+            || self.sequencer_actions_in_flight > 0
+            || self.pull_in_flight > 0
+            || self.commit_in_flight > 0
     }
 
     pub(crate) fn bump_load_epoch(&mut self) -> u64 {
@@ -3997,6 +4024,26 @@ mod tests {
         assert_eq!(repo.ops_rev, before + 1);
         repo.bump_ops_rev();
         assert_eq!(repo.ops_rev, before + 2);
+    }
+
+    #[test]
+    fn git_operation_in_flight_counts_commands_that_can_write_the_worktree() {
+        let mut repo = new_repo();
+        assert!(!repo.git_operation_in_flight());
+        for set in [
+            |repo: &mut RepoState| repo.local_actions_in_flight = 1,
+            |repo: &mut RepoState| repo.sequencer_actions_in_flight = 1,
+            |repo: &mut RepoState| repo.pull_in_flight = 1,
+            |repo: &mut RepoState| repo.commit_in_flight = 1,
+        ] {
+            let mut repo = new_repo();
+            set(&mut repo);
+            assert!(repo.git_operation_in_flight());
+        }
+        // Push and worktree listing never touch the checkout.
+        repo.push_in_flight = 1;
+        repo.worktrees_in_flight = 1;
+        assert!(!repo.git_operation_in_flight());
     }
 
     // --- Equality-guard tests: setters that skip rev bump on no-change ---

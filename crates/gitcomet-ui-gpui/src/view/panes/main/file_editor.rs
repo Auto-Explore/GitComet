@@ -13,6 +13,7 @@
 //! still there when the user comes back. Only the text and caret are stashed —
 //! `TextInput`'s undo stack does not leave the widget.
 
+use super::file_disk::{DiskCheckCause, DiskIdentity, DiskSurface, disk_content_hash};
 use super::*;
 use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
@@ -49,6 +50,9 @@ pub(in crate::view) struct StashedFileEdit {
     /// defaulting it to line 0 would blank the annotation column of every file
     /// the user has ever come back to.
     pub(in crate::view) first_dirty_line: Option<u32>,
+    /// What the buffer was read from, so the disk check has a baseline the
+    /// moment the buffer comes back.
+    pub(in crate::view) disk: DiskIdentity,
 }
 
 impl StashedFileEdit {
@@ -467,37 +471,20 @@ impl MainPaneView {
         let Some(path) = self.file_editor_path() else {
             return;
         };
-        // A clean buffer follows the file: `git checkout`, a discard, or another
-        // editor writing it all bump the repo's status revision, and re-reading
-        // there is what stops a later save from putting the pre-change text
-        // back. A *dirty* buffer is never re-read — that would be the edit loss
-        // this whole path exists to avoid.
-        let status_rev = self
-            .active_repo()
-            .map(|repo| repo.status_cache_rev())
-            .unwrap_or(0);
-        let same_file = self.file_editor_key.as_ref() == Some(&(repo_id, path.clone()));
-        // Not while this repo has a command in flight. A save is dispatched, not
-        // executed, so between the dispatch and the write the file on disk is
-        // still the *old* one — re-reading there seats the pre-save text over
-        // the buffer and marks it clean, and the next save writes that revert
-        // back over what the first save committed.
-        let writes_in_flight = self
-            .active_repo()
-            .is_some_and(|repo| repo.local_actions_in_flight > 0);
-        let disk_may_have_moved = !self.file_editor_dirty
-            && !writes_in_flight
-            && self.file_editor_loaded_status_rev != status_rev;
-        if same_file && !disk_may_have_moved {
+        // Only a *different* file is loaded here. The buffer never follows the
+        // disk on its own: an external write raises the "File changed on disk"
+        // notice (`super::file_disk`) and the user chooses to reload.
+        if self.file_editor_key.as_ref() == Some(&(repo_id, path.clone())) {
             return;
         }
-        self.file_editor_loaded_status_rev = status_rev;
 
         // Leaving one file for another: write it if auto-save is on, otherwise
         // keep the unsaved text so coming back does not silently drop it.
         self.flush_file_editor_buffer(cx);
 
         self.file_editor_key = Some((repo_id, path.clone()));
+        // The outgoing file's disk identity says nothing about this one.
+        self.file_editor_disk = DiskIdentity::default();
         // The buffer is about to be blanked and refilled asynchronously. Until
         // the read lands it holds nothing that belongs to this file, so it must
         // not read as unsaved content for it — carrying the *previous* file's
@@ -522,23 +509,18 @@ impl MainPaneView {
         }
         self.file_editor_error = None;
         self.file_editor_language = rows::diff_syntax_language_for_path(&path);
-        // Only a *different* file invalidates the tree. Tearing it down on a
-        // same-file re-read — which a save triggers, via the status bump — threw
-        // away the incremental document after every write: the next keystroke
-        // paid a full-document parse instead of a `tree.edit()`, and any caret
-        // move in between rebound through the no-tree branch and visibly
-        // downgraded the file to heuristic highlighting.
-        if !same_file {
-            self.file_editor_syntax_pair = None;
-            self.file_editor_occurrences.clear();
-            self.file_editor_occurrences_version = None;
-            self.file_editor_live_syntax = None;
-            self.file_editor_live_syntax_source = None;
-            self.file_editor_live_syntax_building = None;
-            self.file_editor_live_syntax_build = None;
-            self.file_editor_live_syntax_reparse = None;
-            self.file_editor_autosave = None;
-        }
+        // The incremental tree belongs to the outgoing file. A same-file
+        // re-read (`reread_file_editor_from_disk`) keeps it: tearing it down
+        // there cost a full-document parse on the next keystroke.
+        self.file_editor_syntax_pair = None;
+        self.file_editor_occurrences.clear();
+        self.file_editor_occurrences_version = None;
+        self.file_editor_live_syntax = None;
+        self.file_editor_live_syntax_source = None;
+        self.file_editor_live_syntax_building = None;
+        self.file_editor_live_syntax_build = None;
+        self.file_editor_live_syntax_reparse = None;
+        self.file_editor_autosave = None;
 
         // A stashed buffer that still differs from disk is restored; a clean one
         // is only kept so a failed write leaves the text somewhere, and must not
@@ -555,6 +537,7 @@ impl MainPaneView {
                 // user undid the edit by hand.
                 self.file_editor_stash.remove(&(repo_id, path.clone()));
                 self.file_editor_loading = false;
+                self.file_editor_disk = stashed.disk;
                 self.apply_file_editor_text(
                     stashed.text,
                     Some(stashed.cursor),
@@ -565,6 +548,10 @@ impl MainPaneView {
                 // being seated is not a fresh read but the one the user left,
                 // and its edits are still under the same lines.
                 self.file_editor_first_dirty_line = stashed.first_dirty_line;
+                // The disk may have moved while the buffer was away.
+                let revs = self.current_file_disk_revs();
+                self.file_disk_read_landed(DiskSurface::Editor, revs, cx);
+                self.spawn_file_disk_check(DiskCheckCause::CameIntoView, cx);
                 return;
             }
             Some(_) => {
@@ -573,24 +560,33 @@ impl MainPaneView {
             None => {}
         }
 
-        let Some(absolute) = self.absolute_worktree_path(&path) else {
+        // Blank the buffer and show the loading state: nothing in it belongs
+        // to the incoming file.
+        self.file_editor_loading = true;
+        self.file_editor_input.update(cx, |input, cx| {
+            input.set_text("", cx);
+        });
+        self.reread_file_editor_from_disk(cx);
+    }
+
+    /// Read the file under `file_editor_key` and seat it.
+    ///
+    /// Shared by the first load and by a reload of the file already on screen:
+    /// when the bytes match what the buffer holds nothing is seated (seating
+    /// resets the caret and the undo stack), otherwise the caret is kept,
+    /// clamped, rather than thrown back to the top.
+    pub(in crate::view) fn reread_file_editor_from_disk(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(load_key) = self.file_editor_key.clone() else {
+            return;
+        };
+        let Some(absolute) = self.absolute_worktree_path(&load_key.1) else {
             self.file_editor_loading = false;
             self.file_editor_error = Some("Repository working directory is unavailable.".into());
             return;
         };
-
-        // A *different* file blanks the buffer and shows the loading state; a
-        // re-read of the file already on screen must not touch it. Blanking here
-        // made the `unchanged` fast path below unreachable — the buffer it
-        // compared against was always empty — so every save reset the caret and
-        // cleared the undo stack, once per auto-save.
-        if !same_file {
-            self.file_editor_loading = true;
-            self.file_editor_input.update(cx, |input, cx| {
-                input.set_text("", cx);
-            });
-        }
-        let load_key = (repo_id, path.clone());
+        self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
+        let seq = self.file_editor_reread_seq;
+        let revs = self.current_file_disk_revs();
         cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
             let read = {
                 let absolute = absolute.clone();
@@ -605,18 +601,19 @@ impl MainPaneView {
                 // The user may have moved on while this was in flight — to
                 // another file, or to another repo tab holding the same relative
                 // path, which is why this compares the whole key and not just
-                // the path.
-                if this.file_editor_key.as_ref() != Some(&load_key) {
+                // the path. A newer read supersedes this one outright.
+                if this.file_editor_key.as_ref() != Some(&load_key)
+                    || seq != this.file_editor_reread_seq
+                {
                     return;
                 }
                 this.file_editor_loading = false;
                 match result {
-                    Ok(text) => {
-                        // A save is followed by a status bump, so this re-read
-                        // fires after every write. When the bytes match what the
-                        // buffer already holds there is nothing to seat, and
-                        // seating it anyway would reset the caret (and the undo
-                        // stack) on every auto-save.
+                    Ok((text, stamp)) => {
+                        this.file_editor_disk =
+                            DiskIdentity::loaded(stamp, Some(disk_content_hash(text.as_bytes())));
+                        // A retry after a failed read (the file came back).
+                        this.file_editor_error = None;
                         // Compared as text, not by fingerprint: the buffer's
                         // fingerprint is folded chunk-by-chunk off the rope and
                         // a flat string cannot reproduce it. The whole file was
@@ -631,25 +628,39 @@ impl MainPaneView {
                             this.file_editor_saved_fingerprint = Some(fingerprint);
                             this.file_editor_dirty = false;
                             this.file_editor_first_dirty_line = None;
-                            return;
+                            cx.notify();
+                        } else {
+                            let cursor = this
+                                .file_editor_input
+                                .read_with(cx, |input, _| input.cursor_offset())
+                                .min(text.len());
+                            this.apply_file_editor_text(text, Some(cursor), None, cx);
                         }
-                        // The file really did move under a clean buffer. Keep the
-                        // caret where it was, clamped, rather than throwing the
-                        // user back to the top of the file.
-                        let cursor = this
-                            .file_editor_input
-                            .read_with(cx, |input, _| input.cursor_offset())
-                            .min(text.len());
-                        this.apply_file_editor_text(text, Some(cursor), None, cx);
                     }
                     Err(message) => {
                         this.file_editor_error = Some(message.into());
                         cx.notify();
                     }
                 }
+                this.file_disk_read_landed(DiskSurface::Editor, revs, cx);
             });
         })
         .detach();
+    }
+
+    /// Reload the file on screen from disk, dropping unsaved edits, keeping
+    /// the caret. Not `discard_file_editor_buffer`: that blanks the buffer.
+    pub(in crate::view) fn reload_file_editor_from_disk(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(key) = self.file_editor_key.clone() else {
+            return;
+        };
+        self.file_editor_stash.remove(&key);
+        // A pending auto-save would write the discarded edits straight back.
+        self.file_editor_autosave = None;
+        self.file_editor_dirty = false;
+        self.file_editor_first_dirty_line = None;
+        self.file_editor_saved_fingerprint = None;
+        self.reread_file_editor_from_disk(cx);
     }
 
     /// Seat `text` in the input.
@@ -828,6 +839,10 @@ impl MainPaneView {
         self.file_editor_saved_fingerprint = Some(fingerprint);
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        // The disk check must not mistake this write for someone else's,
+        // whether it looks before or after the bytes land.
+        self.file_editor_disk
+            .note_pending_write(disk_content_hash(contents.as_bytes()));
         // Only the newest clean entry is worth keeping — it exists solely so a
         // write that fails leaves the text somewhere recoverable. Without this
         // every file saved in a session held a full copy of its contents alive
@@ -844,6 +859,7 @@ impl MainPaneView {
                 // A recovery copy of text that is now on disk: clean, so nothing
                 // below it is misattributed.
                 first_dirty_line: None,
+                disk: self.file_editor_disk.clone(),
             },
         );
         // The read-only preview of the same path is now behind the file on
@@ -891,6 +907,7 @@ impl MainPaneView {
                 text_fingerprint,
                 saved_fingerprint,
                 first_dirty_line: self.file_editor_first_dirty_line,
+                disk: self.file_editor_disk.clone(),
             },
         );
     }
