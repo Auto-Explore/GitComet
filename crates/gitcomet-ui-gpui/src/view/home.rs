@@ -2,13 +2,47 @@
 
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::{Scrollbar, ScrollbarAxis};
+use crate::view::panels::popover::picker_nav::{
+    PickerNavKeys, PickerNavOutcome, handle_picker_nav,
+};
 use gitcomet_state::session::{Workspace, WorkspaceId};
-use gpui::Stateful;
+use gpui::{ScrollStrategy, Stateful, UniformListScrollHandle, uniform_list};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-const HOME_MAX_WIDTH_PX: f32 = 720.0;
+const HOME_MAX_WIDTH_PX: f32 = 960.0;
+/// Rows a list shows before it scrolls; also the Page Up/Down step.
+pub(super) const HOME_LIST_MAX_ROWS: usize = 8;
+
+/// The filtered Home rows, in keyboard order: workspaces, then repositories.
+#[derive(Default)]
+pub(super) struct HomeRows {
+    pub(super) workspaces: Vec<Workspace>,
+    pub(super) repositories: Vec<PathBuf>,
+}
+
+impl HomeRows {
+    fn len(&self) -> usize {
+        self.workspaces.len() + self.repositories.len()
+    }
+}
+
+struct HomeColumn {
+    title: &'static str,
+    frame_id: &'static str,
+    list_id: &'static str,
+    scrollbar_id: &'static str,
+    empty_text: &'static str,
+}
+
+type HomeRowsRenderer = fn(
+    &mut GitCometView,
+    std::ops::Range<usize>,
+    &mut Window,
+    &mut gpui::Context<GitCometView>,
+) -> Vec<AnyElement>;
 
 fn matches_query(query: &str, haystacks: &[&str]) -> bool {
     query.is_empty()
@@ -64,8 +98,7 @@ impl GitCometView {
         cx.defer(move |cx| crate::app::open_workspace_in_window(cx, window_id, id));
     }
 
-    fn home_section(&self, id: &'static str, title: &'static str, theme: AppTheme) -> gpui::Div {
-        let _ = id;
+    fn home_section(&self, title: &'static str, theme: AppTheme) -> gpui::Div {
         div()
             .pt(px(8.0))
             .pb(px(4.0))
@@ -76,15 +109,14 @@ impl GitCometView {
             .child(title)
     }
 
-    fn home_list(&self, id: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
+    fn home_list_frame(&self, id: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
         div()
             .id(id)
             .debug_selector(move || id.to_string())
+            .relative()
             .w_full()
-            .flex()
-            .flex_col()
+            .min_w(px(0.0))
             .p(px(4.0))
-            .gap(px(2.0))
             .rounded(px(theme.radii.panel))
             .border_1()
             .border_color(theme.colors.stroke.subtle)
@@ -100,31 +132,212 @@ impl GitCometView {
             .child(text)
     }
 
+    /// Every row has this height: `uniform_list` measures only the first one.
+    /// Two text lines plus padding, in rems so it follows the font size.
+    pub(super) fn home_row_height(&self) -> gpui::Rems {
+        self.theme.ui_text(18.0 + 16.0 + 12.0)
+    }
+
+    fn compute_home_rows(&self, cx: &App) -> HomeRows {
+        let query = self.home_search_query.trim().to_lowercase();
+        let workspaces = home_workspaces(cx, self.workspace_id)
+            .into_iter()
+            .filter(|workspace| {
+                let name = workspace.display_name();
+                let paths: Vec<String> = workspace
+                    .repositories
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+                let mut haystacks = vec![name.as_str()];
+                haystacks.extend(paths.iter().map(String::as_str));
+                matches_query(&query, &haystacks)
+            })
+            .collect();
+        let repositories = home_repositories(&self.home_pinned_repos, &self.home_recent_repos)
+            .into_iter()
+            .filter(|path| {
+                let name = repo_name(path);
+                let full = path.display().to_string();
+                matches_query(&query, &[name.as_str(), full.as_str()])
+            })
+            .collect();
+        HomeRows {
+            workspaces,
+            repositories,
+        }
+    }
+
+    /// Refresh the filtered rows and keep a row selected while any exist.
+    pub(super) fn sync_home_rows(&mut self, cx: &App) {
+        self.home_rows = self.compute_home_rows(cx);
+        let count = self.home_rows.len();
+        self.home_selected = (count > 0).then(|| self.home_selected.unwrap_or(0).min(count - 1));
+    }
+
+    fn scroll_home_selection_into_view(&self) {
+        let Some(ix) = self.home_selected else {
+            return;
+        };
+        let workspaces = self.home_rows.workspaces.len();
+        if ix < workspaces {
+            self.home_workspaces_scroll
+                .scroll_to_item(ix, ScrollStrategy::Nearest);
+        } else {
+            self.home_repositories_scroll
+                .scroll_to_item(ix - workspaces, ScrollStrategy::Nearest);
+        }
+    }
+
+    fn activate_home_row(&mut self, ix: usize, cx: &mut gpui::Context<Self>) {
+        let workspaces = self.home_rows.workspaces.len();
+        if let Some(workspace) = self.home_rows.workspaces.get(ix) {
+            let id = workspace.id;
+            self.open_workspace_from_home(id, cx);
+        } else if let Some(path) = self.home_rows.repositories.get(ix - workspaces).cloned() {
+            self.open_repo_path(path, cx);
+        }
+    }
+
+    /// The search box's keys: typing filters and selects the first match,
+    /// Up/Down walk both lists as one run, Left/Right (with the caret at that
+    /// edge) jump to the same position in the other list, Enter opens.
+    pub(super) fn handle_home_search_input(
+        &mut self,
+        input: &Entity<components::TextInput>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (keys, left, right, text) = input.update(cx, |input, _| {
+            (
+                PickerNavKeys::take(input),
+                input.take_arrow_left_at_start_pressed(),
+                input.take_arrow_right_at_end_pressed(),
+                input.text().to_string(),
+            )
+        });
+        if self.home_search_query != text {
+            self.home_search_query = text;
+            self.home_selected = None;
+            self.sync_home_rows(cx);
+            self.home_workspaces_scroll
+                .scroll_to_item_strict(0, ScrollStrategy::Top);
+            self.home_repositories_scroll
+                .scroll_to_item_strict(0, ScrollStrategy::Top);
+            cx.notify();
+            return;
+        }
+        if !self.is_home_screen_active() {
+            return;
+        }
+        self.sync_home_rows(cx);
+        let workspaces = self.home_rows.workspaces.len();
+        let repositories = self.home_rows.repositories.len();
+
+        if left || right {
+            if let Some(ix) = self.home_selected
+                && workspaces > 0
+                && repositories > 0
+            {
+                self.home_selected = Some(if right && ix < workspaces {
+                    workspaces + ix.min(repositories - 1)
+                } else if left && ix >= workspaces {
+                    (ix - workspaces).min(workspaces - 1)
+                } else {
+                    ix
+                });
+                self.scroll_home_selection_into_view();
+                cx.notify();
+            }
+            return;
+        }
+
+        match handle_picker_nav(
+            &keys,
+            &mut self.home_selected,
+            workspaces + repositories,
+            HOME_LIST_MAX_ROWS,
+        ) {
+            PickerNavOutcome::Navigated => {
+                self.scroll_home_selection_into_view();
+                cx.notify();
+            }
+            PickerNavOutcome::Enter => {
+                if let Some(ix) = self.home_selected {
+                    self.activate_home_row(ix, cx);
+                }
+            }
+            PickerNavOutcome::Escape => {
+                if !self.home_search_query.is_empty() {
+                    input.update(cx, |input, cx| input.set_text("", cx));
+                }
+            }
+            PickerNavOutcome::Idle => {}
+        }
+    }
+
+    /// Focus the search box (entering Home) or release it (leaving Home) once
+    /// the snapshot has been applied; this path has no `Window`.
+    pub(super) fn defer_home_search_focus(&self, focus: bool, cx: &mut gpui::Context<Self>) {
+        let handle = self.home_search_input.read(cx).focus_handle();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_root, window, cx| {
+                if focus {
+                    window.focus(&handle, cx);
+                } else if handle.is_focused(window) {
+                    window.blur(cx);
+                }
+            });
+        });
+    }
+
+    pub(super) fn focus_home_search(&self, window: &mut Window, cx: &mut App) {
+        let focus = self.home_search_input.read(cx).focus_handle();
+        window.focus(&focus, cx);
+    }
+
     fn home_row(
         &self,
         id: SharedString,
         leading: AnyElement,
-        title: String,
-        detail: String,
+        text: (String, String),
+        selected: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let (title, detail) = text;
         let debug_id = id.clone();
+        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         div()
             .id(id)
             .debug_selector(move || debug_id.to_string())
+            .relative()
             .w_full()
             .min_w(px(0.0))
+            .h(self.home_row_height())
             .px(px(8.0))
-            .py(px(6.0))
             .flex()
             .items_center()
             .gap(px(10.0))
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
+            // The accent bar marks the selection, as in the repository picker.
             .control_interaction(
-                components::InteractionStyle::new(theme),
-                components::InteractionState::default(),
+                components::InteractionStyle::new(theme).selection_outline(false),
+                components::InteractionState::default().selected(selected, theme.active_overlay()),
             )
+            .when(selected, |row| {
+                row.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(scaled_px(3.0))
+                        .rounded_tr(px(theme.radii.row))
+                        .rounded_br(px(theme.radii.row))
+                        .bg(theme.colors.accent.foreground),
+                )
+            })
             .child(leading)
             .child(
                 div()
@@ -135,6 +348,7 @@ impl GitCometView {
                     .child(
                         div()
                             .text_size(theme.ui_text(13.0))
+                            .line_height(theme.ui_text(18.0))
                             .text_color(theme.colors.foreground.primary)
                             .truncate()
                             .child(title),
@@ -142,6 +356,7 @@ impl GitCometView {
                     .child(
                         div()
                             .text_size(theme.ui_text(12.0))
+                            .line_height(theme.ui_text(16.0))
                             .text_color(theme.colors.foreground.secondary)
                             .truncate()
                             .child(detail),
@@ -149,26 +364,16 @@ impl GitCometView {
             )
     }
 
-    fn home_workspace_rows(
-        &self,
-        query: &str,
-        theme: AppTheme,
+    fn render_home_workspace_rows(
+        this: &mut Self,
+        range: std::ops::Range<usize>,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        home_workspaces(cx, self.workspace_id)
-            .into_iter()
-            .filter(|workspace| {
-                let name = workspace.display_name();
-                let mut haystacks = vec![name.as_str()];
-                let paths: Vec<String> = workspace
-                    .repositories
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect();
-                haystacks.extend(paths.iter().map(String::as_str));
-                matches_query(query, &haystacks)
-            })
-            .map(|workspace| {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| this.home_rows.workspaces.get(ix).cloned().map(|w| (ix, w)))
+            .map(|(ix, workspace)| {
                 let id = workspace.id;
                 let dot = div()
                     .size(px(10.0))
@@ -199,17 +404,18 @@ impl GitCometView {
                 } else {
                     format!("{state} · {count} · {names}")
                 };
-                self.home_row(
+                this.home_row(
                     format!("home_workspace_{id}").into(),
                     dot,
-                    workspace.display_name(),
-                    detail,
+                    (workspace.display_name(), detail),
+                    this.home_selected == Some(ix),
                     theme,
                 )
                 .on_activate(
                     false,
-                    controls::ControlActivation::Action,
+                    controls::ControlActivation::PreserveFocus,
                     cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.home_selected = Some(ix);
                         this.open_workspace_from_home(id, cx);
                     }),
                 )
@@ -218,28 +424,31 @@ impl GitCometView {
             .collect()
     }
 
-    fn home_repository_rows(
-        &self,
-        query: &str,
-        theme: AppTheme,
+    fn render_home_repository_rows(
+        this: &mut Self,
+        range: std::ops::Range<usize>,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let scale = crate::ui_scale::UiScale::from_percent(self.ui_scale_percent);
-        home_repositories(&self.home_pinned_repos, &self.home_recent_repos)
-            .into_iter()
-            .filter(|path| {
-                let name = repo_name(path);
-                let full = path.display().to_string();
-                matches_query(query, &[name.as_str(), full.as_str()])
+        let theme = this.theme;
+        let scale = crate::ui_scale::UiScale::from_percent(this.ui_scale_percent);
+        let offset = this.home_rows.workspaces.len();
+        range
+            .filter_map(|ix| {
+                this.home_rows
+                    .repositories
+                    .get(ix)
+                    .cloned()
+                    .map(|p| (ix, p))
             })
-            .map(|path| {
+            .map(|(ix, path)| {
+                let selected = this.home_selected == Some(offset + ix);
                 let name = repo_name(&path);
                 let parent = path
                     .parent()
                     .map(|parent| parent.display().to_string())
                     .unwrap_or_default();
-                let pinned = self.home_pinned_repos.contains(&path);
-                let detail = if pinned {
+                let detail = if this.home_pinned_repos.contains(&path) {
                     format!("Pinned · {parent}")
                 } else {
                     parent
@@ -248,22 +457,63 @@ impl GitCometView {
                     theme,
                     scale,
                     components::repository_initials(&name).into(),
-                    false,
+                    selected,
                 )
                 .into_any_element();
                 let row_id: SharedString =
                     format!("home_recent_{}", session::path_storage_key(&path)).into();
-                self.home_row(row_id, badge, name, detail, theme)
+                this.home_row(row_id, badge, (name, detail), selected, theme)
                     .on_activate(
                         false,
-                        controls::ControlActivation::Action,
+                        controls::ControlActivation::PreserveFocus,
                         cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                            this.home_selected = Some(offset + ix);
                             this.open_repo_path(path.clone(), cx);
                         }),
                     )
                     .into_any_element()
             })
             .collect()
+    }
+
+    /// A column: header plus a list capped at `HOME_LIST_MAX_ROWS` rows that
+    /// renders only what is in view.
+    fn home_column(
+        &self,
+        labels: HomeColumn,
+        count: usize,
+        scroll: UniformListScrollHandle,
+        rows: HomeRowsRenderer,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme;
+        let frame = self.home_list_frame(labels.frame_id, theme);
+        let body = if count == 0 {
+            frame.child(self.home_empty(labels.empty_text, theme))
+        } else {
+            let height = self.home_row_height() * count.min(HOME_LIST_MAX_ROWS) as f32;
+            let gutter = Scrollbar::visible_gutter(scroll.clone(), ScrollbarAxis::Vertical);
+            let list = uniform_list(labels.list_id, count, cx.processor(rows))
+                .h(height)
+                .pr(gutter)
+                .track_scroll(&scroll);
+            frame.child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(height)
+                    .min_w(px(0.0))
+                    .child(restrict_scroll_to_vertical_axis(list))
+                    .child(Scrollbar::new(labels.scrollbar_id, scroll).render(theme)),
+            )
+        };
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .child(self.home_section(labels.title, theme))
+            .child(body)
     }
 
     pub(super) fn home_screen(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
@@ -361,43 +611,42 @@ impl GitCometView {
                 .child(self.open_repo_panel(cx))
         });
 
-        let workspace_rows = self.home_workspace_rows(&query, theme, cx);
-        let repository_rows = self.home_repository_rows(&query, theme, cx);
+        self.sync_home_rows(cx);
         let filtering = !query.is_empty();
-        let workspaces_list = if workspace_rows.is_empty() {
-            self.home_list("home_workspaces_list", theme)
-                .child(self.home_empty(
-                    if filtering {
-                        "No matching workspaces."
-                    } else {
-                        "No saved workspaces yet. Every window with repositories open is one."
-                    },
-                    theme,
-                ))
-        } else {
-            self.home_list("home_workspaces_list", theme)
-                .children(workspace_rows)
-        };
-        let repositories_list = if repository_rows.is_empty() {
-            self.home_list("home_recent_list", theme)
-                .child(self.home_empty(
-                    if filtering {
-                        "No matching repositories."
-                    } else {
-                        "Repositories you open appear here."
-                    },
-                    theme,
-                ))
-        } else {
-            self.home_list("home_recent_list", theme)
-                .children(repository_rows)
-        };
-
-        let own_workspace_name = self
-            .workspace_id
-            .and_then(|id| crate::workspaces::workspace(cx, id))
-            .map(|workspace| workspace.display_name());
-        let title = own_workspace_name.unwrap_or_else(|| "Home".to_string());
+        let workspaces_column = self.home_column(
+            HomeColumn {
+                title: "Workspaces",
+                frame_id: "home_workspaces_list",
+                list_id: "home_workspaces_rows",
+                scrollbar_id: "home_workspaces_scrollbar",
+                empty_text: if filtering {
+                    "No matching workspaces."
+                } else {
+                    "No saved workspaces yet. Every window with repositories open is one."
+                },
+            },
+            self.home_rows.workspaces.len(),
+            self.home_workspaces_scroll.clone(),
+            Self::render_home_workspace_rows,
+            cx,
+        );
+        let repositories_column = self.home_column(
+            HomeColumn {
+                title: "Recent repositories",
+                frame_id: "home_recent_list",
+                list_id: "home_recent_rows",
+                scrollbar_id: "home_recent_scrollbar",
+                empty_text: if filtering {
+                    "No matching repositories."
+                } else {
+                    "Repositories you open appear here."
+                },
+            },
+            self.home_rows.repositories.len(),
+            self.home_repositories_scroll.clone(),
+            Self::render_home_repository_rows,
+            cx,
+        );
 
         div()
             .id("repository_entry_screen")
@@ -445,7 +694,7 @@ impl GitCometView {
                                             .text_size(theme.ui_text(22.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(colors.text)
-                                            .child(title),
+                                            .child("GitComet"),
                                     ),
                             )
                             .child(
@@ -480,18 +729,17 @@ impl GitCometView {
                                     .w_full()
                                     .child(self.home_search_input.clone()),
                             )
-                            .child(self.home_section(
-                                "home_workspaces_heading",
-                                "Workspaces",
-                                theme,
-                            ))
-                            .child(workspaces_list)
-                            .child(self.home_section(
-                                "home_recent_heading",
-                                "Recent repositories",
-                                theme,
-                            ))
-                            .child(repositories_list),
+                            .child(
+                                div()
+                                    .id("home_columns")
+                                    .debug_selector(|| "home_columns".to_string())
+                                    .w_full()
+                                    .flex()
+                                    .items_start()
+                                    .gap(scaled_px(16.0))
+                                    .child(workspaces_column)
+                                    .child(repositories_column),
+                            ),
                     ),
             )
             .into_any_element()

@@ -99,6 +99,13 @@ impl GitCometView {
                 for path in self.persisted_workspace_repo_paths.iter().rev() {
                     session::promote_recent_repo(&mut self.home_recent_repos, path);
                 }
+                self.home_selected = None;
+                self.defer_home_search_focus(true, cx);
+            } else if !live_repo_paths.is_empty() && self.persisted_workspace_repo_paths.is_empty()
+            {
+                // Leaving Home: gpui keeps focus on an unmounted element, which
+                // would then be a stale restore target for the palette.
+                self.defer_home_search_focus(false, cx);
             }
             self.persisted_workspace_repo_paths = live_repo_paths;
             self.persisted_workspace_active_repository = live_active_repository;

@@ -3603,6 +3603,14 @@ fn home_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppConte
         cx.debug_bounds("splash_headline").is_none(),
         "the marketing headline is gone"
     );
+    let workspaces = cx
+        .debug_bounds("home_workspaces_list")
+        .expect("workspaces list");
+    let recent = cx.debug_bounds("home_recent_list").expect("recent list");
+    assert!(
+        workspaces.right() <= recent.left() && (workspaces.top() - recent.top()).abs() < px(1.0),
+        "the two lists sit side by side: {workspaces:?} {recent:?}"
+    );
 
     #[cfg(not(target_os = "macos"))]
     assert!(
@@ -6418,5 +6426,216 @@ fn opening_a_workspace_from_home_adopts_it_into_this_window(cx: &mut gpui::TestA
     assert!(
         cx.debug_bounds(row).is_none(),
         "Home no longer lists its own workspace"
+    );
+}
+
+/// A Home window with the given saved workspaces and recent repositories, and
+/// the text-input keys bound so arrows reach the search box.
+fn home_view_with<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    workspaces: Vec<gitcomet_state::session::Workspace>,
+    recents: Vec<PathBuf>,
+) -> (gpui::Entity<GitCometView>, &'a mut gpui::VisualTestContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    cx.update(|app| crate::workspaces::initialize_for_test(app, workspaces));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |view, _cx| {
+            view.home_recent_repos = recents;
+            view.home_pinned_repos.clear();
+        });
+        let _ = window.draw(app);
+    });
+    (view, cx)
+}
+
+fn home_selected(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Option<usize> {
+    cx.update(|_window, app| view.read(app).home_selected)
+}
+
+fn press(cx: &mut gpui::VisualTestContext, keys: &str) {
+    cx.simulate_keystrokes(keys);
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Workspace {
+    let mut workspace = gitcomet_state::session::Workspace::new(vec![PathBuf::from(repo)]);
+    workspace.custom_name = Some(name.to_string());
+    workspace.restore_on_launch = false;
+    workspace
+}
+
+#[gpui::test]
+fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(cx, Vec::new(), Vec::new());
+    let focused = cx.update(|window, app| {
+        view.read(app)
+            .home_search_input
+            .read(app)
+            .focus_handle()
+            .is_focused(window)
+    });
+    assert!(focused, "a new window on Home is ready to type into");
+}
+
+#[gpui::test]
+fn home_selects_the_first_row_and_arrows_walk_both_columns(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(
+        cx,
+        vec![
+            named_saved_workspace("Alpha", "/work/a"),
+            named_saved_workspace("Beta", "/work/b"),
+        ],
+        vec![PathBuf::from("/work/c"), PathBuf::from("/work/d")],
+    );
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(0),
+        "the first row starts selected"
+    );
+
+    press(cx, "down down");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(2),
+        "Down continues into the repositories"
+    );
+    press(cx, "up");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(1),
+        "Up returns to the last workspace"
+    );
+    press(cx, "down down down");
+    assert_eq!(home_selected(&view, cx), Some(0), "the run wraps around");
+}
+
+#[gpui::test]
+fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(
+        cx,
+        vec![
+            named_saved_workspace("Alpha", "/work/a"),
+            named_saved_workspace("Beta", "/work/b"),
+        ],
+        vec![PathBuf::from("/work/c"), PathBuf::from("/work/d")],
+    );
+    press(cx, "down");
+    assert_eq!(home_selected(&view, cx), Some(1));
+    press(cx, "right");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(3),
+        "Right keeps the row position"
+    );
+    press(cx, "left");
+    assert_eq!(home_selected(&view, cx), Some(1), "Left jumps back");
+
+    // With text and the caret mid-text, Left edits the query instead.
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.home_search_input
+                .update(cx, |input, cx| input.set_text("work", cx));
+        });
+    });
+    cx.run_until_parked();
+    let selected = home_selected(&view, cx);
+    press(cx, "left");
+    assert_eq!(
+        home_selected(&view, cx),
+        selected,
+        "the caret moves, not the selection"
+    );
+}
+
+#[gpui::test]
+fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut empty = gitcomet_state::session::Workspace::new(Vec::new());
+    empty.custom_name = Some("Later".to_string());
+    empty.restore_on_launch = false;
+    let id = empty.id;
+    let (view, cx) = home_view_with(
+        cx,
+        vec![named_saved_workspace("Alpha", "/work/a"), empty],
+        vec![PathBuf::from("/work/c")],
+    );
+    press(cx, "down down");
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.home_search_input
+                .update(cx, |input, cx| input.set_text("later", cx));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(0),
+        "a new query selects its first match"
+    );
+
+    press(cx, "enter");
+    let window_id = cx.update(|window, _app| window.window_handle().window_id());
+    assert_eq!(
+        cx.update(|_window, app| {
+            crate::workspaces::workspace_for_window(app, window_id).map(|workspace| workspace.id)
+        }),
+        Some(id),
+        "Enter opens the selected workspace in this window"
+    );
+}
+
+#[gpui::test]
+fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let recents = (0..50)
+        .map(|ix| PathBuf::from(format!("/work/repo-{ix:02}")))
+        .collect::<Vec<_>>();
+    let row_selector = |ix: usize| -> &'static str {
+        format!(
+            "home_recent_{}",
+            gitcomet_state::session::path_storage_key(Path::new(&format!("/work/repo-{ix:02}")))
+        )
+        .leak()
+    };
+    let (view, cx) = home_view_with(cx, Vec::new(), recents);
+
+    let first = cx
+        .debug_bounds(row_selector(0))
+        .expect("first row rendered");
+    assert!(
+        cx.debug_bounds(row_selector(49)).is_none(),
+        "rows far below the fold are not rendered"
+    );
+    let frame = cx.debug_bounds("home_recent_list").expect("list frame");
+    let cap = first.size.height * crate::view::home::HOME_LIST_MAX_ROWS as f32;
+    assert!(
+        frame.size.height <= cap + px(16.0),
+        "the list stops growing at {} rows ({:?} > {:?})",
+        crate::view::home::HOME_LIST_MAX_ROWS,
+        frame.size.height,
+        cap
+    );
+
+    press(cx, "up");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(49),
+        "Up from the first row wraps to the last"
+    );
+    assert!(
+        cx.debug_bounds(row_selector(49)).is_some(),
+        "the selection scrolls into view"
     );
 }

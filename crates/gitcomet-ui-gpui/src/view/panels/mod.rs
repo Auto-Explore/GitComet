@@ -650,7 +650,7 @@ mod bars;
 mod bottom_status_bar;
 mod layout;
 mod main;
-mod popover;
+pub(in crate::view) mod popover;
 mod repo_tabs_bar;
 
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};

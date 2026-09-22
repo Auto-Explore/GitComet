@@ -27,7 +27,7 @@ mod force_remove_worktree_confirm;
 mod hook_activity;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
-mod picker_nav;
+pub(in crate::view) mod picker_nav;
 mod picker_row_menu;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;

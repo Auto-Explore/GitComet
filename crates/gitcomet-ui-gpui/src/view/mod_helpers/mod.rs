@@ -1077,6 +1077,11 @@ pub struct GitCometView {
     pub(super) open_repo_input: Entity<components::TextInput>,
     pub(super) home_search_input: Entity<components::TextInput>,
     pub(super) home_search_query: String,
+    pub(super) home_rows: super::home::HomeRows,
+    /// Index into `home_rows` in keyboard order (workspaces, then repositories).
+    pub(super) home_selected: Option<usize>,
+    pub(super) home_workspaces_scroll: gpui::UniformListScrollHandle,
+    pub(super) home_repositories_scroll: gpui::UniformListScrollHandle,
     pub(super) home_pinned_repos: Vec<std::path::PathBuf>,
     pub(super) home_recent_repos: Vec<std::path::PathBuf>,
     pub(super) external_drag_paths: Option<gpui::ExternalPaths>,

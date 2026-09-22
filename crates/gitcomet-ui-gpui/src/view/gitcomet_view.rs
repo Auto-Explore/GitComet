@@ -1546,11 +1546,7 @@ impl GitCometView {
             )
         });
         let home_search_input_subscription = cx.observe(&home_search_input, |this, input, cx| {
-            let next = input.read(cx).text().to_string();
-            if this.home_search_query != next {
-                this.home_search_query = next;
-                cx.notify();
-            }
+            this.handle_home_search_input(&input, cx);
         });
 
         let open_repo_input_subscription = cx.observe(&open_repo_input, |this, input, cx| {
@@ -1730,6 +1726,10 @@ impl GitCometView {
             open_repo_input,
             home_search_input,
             home_search_query: String::new(),
+            home_rows: Default::default(),
+            home_selected: None,
+            home_workspaces_scroll: gpui::UniformListScrollHandle::new(),
+            home_repositories_scroll: gpui::UniformListScrollHandle::new(),
             home_pinned_repos: ui_session.pinned_repos.clone(),
             home_recent_repos: ui_session.recent_repos.clone(),
             external_drag_paths: None,
@@ -1792,6 +1792,9 @@ impl GitCometView {
         view.refresh_signing_tools(false, cx);
 
         view.sync_workspace_and_registry(cx);
+        if view.is_home_screen_active() {
+            view.focus_home_search(window, cx);
+        }
 
         view
     }
