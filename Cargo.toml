@@ -268,7 +268,7 @@ incremental = true
 opt-level = 0
 
 # Keep application code quick to rebuild while optimizing the layout/render
-# dependencies. Windows measurements and reproduction: docs/windows-ui-performance.md.
+# dependencies. Windows measurements and reproduction: scripts/profiling/README.md.
 [profile.dev.package.gpui-ce]
 opt-level = 2
 

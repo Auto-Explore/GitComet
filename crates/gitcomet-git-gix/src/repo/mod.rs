@@ -295,8 +295,9 @@ type RefMetadataCache =
 /// an object read per ref, so a page request whose fingerprint matches skips
 /// that entirely.
 /// Identity of a file as it sat on disk when we last read it. Inode and ctime
-/// (or Windows file ID and ChangeTime) detect replacements and edits that keep length and mtime, but
-/// rapid writes can share even the same ctime. Verification memos must exclude
+/// (or Windows file ID and ChangeTime) detect replacements and edits that keep
+/// length and mtime, but rapid writes can share even the same ctime.
+/// Verification memos must exclude
 /// racy stamps before recording them. `None` where those fields are unavailable,
 /// which disables the memo rather than weakening it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -388,6 +389,9 @@ impl DiskFileStamp {
         Self::acquire(path).filter(|guard| !guard.stamp.is_racy_at(now))
     }
 
+    // Windows may coalesce journal updates while handles remain open. Seal a
+    // verified read before recording its identity, otherwise a later mapped write
+    // could reuse that identity. Failure disables the memo, never verification.
     fn acquire_for_verification_recording(path: &Path) -> Option<DiskFileStampGuard> {
         let guard = Self::acquire_for_verification_memo(path)?;
         #[cfg(windows)]

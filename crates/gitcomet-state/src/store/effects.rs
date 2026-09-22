@@ -36,7 +36,11 @@ pub(super) struct RepoTaskToken {
     /// replacement to start at all — but stopping it must not disturb the
     /// repository's other loads, which share [`Self::cancellation`].
     log_cancellation: Arc<Mutex<CancellationToken>>,
+    // The revision distinguishes refreshes of the same path. All loads for one
+    // selection share a child token, so superseding it leaves log/status work alive.
     selected_diff: Arc<Mutex<Option<(DiffTarget, u64, CancellationToken)>>>,
+    // Separate slots for patch, submodule, image, preview and text loads: sharing
+    // one slot would let complementary results replace each other before running.
     selected_diff_slots: [LatestTaskSlot; 5],
 }
 

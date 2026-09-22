@@ -1364,6 +1364,9 @@ fn supplement_gitlink_status_from_porcelain(
     Ok(())
 }
 
+// Restrict only the supplemental Git query; gix remains responsible for ordinary
+// paths. None means the selection is uncertain and requires a full Git query,
+// while Some(empty) proves there is nothing left to supplement.
 fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option<Vec<PathBuf>> {
     let index = repo.index_or_empty().ok()?;
     // Collapsed sparse directories can hide gitlinks. Let Git expand them for

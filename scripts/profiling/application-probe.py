@@ -7,7 +7,10 @@ import os
 import platform
 from pathlib import Path
 import subprocess
+import sys
 
+# Resolve shared CI helpers from this file so invocation is independent of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
 import run as runner
 
 
@@ -30,7 +33,7 @@ def main():
     ) if os.environ.get(name) or (name == "GITCOMET_TEST_SYNC_TRACE" and name in os.environ)]
     if instrumentation:
         parser.error(f"Disable external instrumentation/worker overrides for comparable probes: {instrumentation}")
-    directory = args.output or runner.REPORTS / "application-probe"
+    directory = (args.output or runner.REPORTS / "application-probe").resolve()
     # Refuse to combine fresh results with stale successes after a failure.
     directory.mkdir(parents=True, exist_ok=False)
     metadata = dict(

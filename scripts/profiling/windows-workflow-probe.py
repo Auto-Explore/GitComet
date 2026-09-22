@@ -12,10 +12,13 @@ from pathlib import Path
 import platform
 import statistics
 import subprocess
+import sys
 import time
 
-import cache
+# Resolve shared CI helpers from this file so invocation is independent of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
 import run as runner
+import cache
 
 
 def main():

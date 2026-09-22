@@ -266,7 +266,7 @@ def measure(args):
             for name in order:
                 verify_repository()
                 output = (args.output / f"pair-{pair + 1}-{name}").resolve()
-                command = "& " + ps_quote(ROOT / "scripts/measure-ui-responsiveness.ps1")
+                command = "& " + ps_quote(ROOT / "scripts/profiling/measure-ui-responsiveness.ps1")
                 for key, value in {"OutputDirectory": output, "Repository": args.repository.resolve(),
                                    "Binary": binaries[name], "SecondsPerScenario": args.seconds,
                                    "D3DValidation": args.d3d_validation}.items():

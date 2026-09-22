@@ -37,10 +37,6 @@ on:
         description: Workspace UI libtest concurrency (serial schedule only)
         type: string
         default: ''
-      application-probe:
-        description: Compare raw Git and GitComet latency in ci-test and release
-        type: boolean
-        default: false
       benchmark-profile:
         description: Compile/link profile (candidate disables UI optimization)
         type: choice
@@ -71,7 +67,6 @@ jobs:
       nextest-threads: ${{ inputs.nextest-threads || '' }}
       nextest-profile: ${{ inputs.nextest-profile || 'ci' }}
       ui-threads: ${{ inputs.ui-threads || '' }}
-      application-probe: ${{ inputs.application-probe || false }}
   benchmarks:
     uses: ./.github/workflows/benchmark-targets.yml
     with:

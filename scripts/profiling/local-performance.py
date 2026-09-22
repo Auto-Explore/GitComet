@@ -14,9 +14,12 @@ import platform
 import shutil
 import statistics
 import subprocess
+import sys
 import tomllib
 import uuid
 
+# Resolve shared CI helpers from this file so invocation is independent of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
 import run as runner
 
 SOURCE = Path("crates/gitcomet-git-gix/examples/operation-context-probe.rs")
@@ -101,12 +104,12 @@ def build(args):
                         text += f'{key} = {json.dumps(value)}\n'
             (driver / "Cargo.toml").write_text(text, encoding="utf-8")
             shutil.copy2(root / "Cargo.lock", driver / "Cargo.lock")
-            # Offline lock pruning adds only this standalone harness package.
-            runner.run(f"{label}-lock", ["cargo", "metadata", "--offline", "--manifest-path",
+            # Lock pruning adds only this standalone harness package.
+            runner.run(f"{label}-lock", ["cargo", "metadata", *(["--offline"] if args.offline else []), "--manifest-path",
                        str(driver / "Cargo.toml"), "--format-version", "1"], cwd=root,
                        output=directory / f"{label}-metadata.json")
             output = directory / f"{label}-build.jsonl"
-            runner.run(f"{label}-build", ["cargo", "build", "--offline", "--locked", "--manifest-path",
+            runner.run(f"{label}-build", ["cargo", "build", *(["--offline"] if args.offline else []), "--locked", "--manifest-path",
                        str(driver / "Cargo.toml"), "--target-dir", str(root / "target"),
                        "--profile", args.profile, "--message-format", "json"], cwd=root, output=output, timeout=1800)
             artifacts = [value for line in output.read_text(encoding="utf-8").splitlines()
@@ -148,7 +151,7 @@ def measure(args):
     cases = [(fixture, state) for fixture, state in CASES if fixture in args.fixtures]
     record = dict(schema_version=1, evidence="local", session=args.session, measurement_id=str(uuid.uuid4()),
                   recorded_at=datetime.now(timezone.utc).isoformat(), environment=environment(),
-                  samples=args.samples, warmups=5, cases=cases, pairs=[], success=False)
+                  samples=args.samples, warmups=args.warmups, cases=cases, pairs=[], success=False)
     try:
         for pair in range(args.pairs):
             order = ["baseline", "candidate"]
@@ -162,7 +165,7 @@ def measure(args):
                     name = f'{pair + 1}-{label}-{fixture}-{state}'
                     path = output / f"{name}.json"
                     runner.run(name, [build_record["builds"][label]["binary"], "--fixture", fixture,
-                               "--status-state", state, "--warmups", "5", "--samples", str(args.samples),
+                               "--status-state", state, "--warmups", str(args.warmups), "--samples", str(args.samples),
                                "--profile-label", build_record["profile"], "--output", str(path)],
                                timeout=600, live=False, output=output / f"{name}.stdout.json")
                     item["results"][label].append(path.name)
@@ -228,12 +231,14 @@ def main():
     build_parser = sub.add_parser("build")
     build_parser.add_argument("--baseline", type=Path, required=True)
     build_parser.add_argument("--output", type=Path, required=True)
+    build_parser.add_argument("--offline", action="store_true", help="Require dependencies to be cached locally")
     build_parser.add_argument("--profile", choices=("ci-test", "release"), default="release")
     measure_parser = sub.add_parser("measure")
     measure_parser.add_argument("--build", type=Path, required=True)
     measure_parser.add_argument("--session", required=True)
     measure_parser.add_argument("--pairs", type=int, choices=range(1, 11), default=3)
     measure_parser.add_argument("--samples", type=int, choices=range(1, 10001), default=35)
+    measure_parser.add_argument("--warmups", type=int, choices=range(0, 10001), default=5)
     measure_parser.add_argument("--reverse", action="store_true")
     measure_parser.add_argument("--fixtures", nargs="+", choices=("plain", "lfs", "mixed", "submodule"),
                                 default=["plain", "lfs", "mixed", "submodule"])

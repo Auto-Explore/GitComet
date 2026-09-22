@@ -33,10 +33,6 @@ on:
         description: Collect per-test fixture and subprocess timings
         type: boolean
         default: false
-      application-probe:
-        description: Compare raw Git and GitComet latency in ci-test and release
-        type: boolean
-        default: false
   workflow_dispatch:
     inputs:
       watcher-stress:
@@ -73,10 +69,6 @@ on:
         description: Collect per-test fixture and subprocess timings
         type: boolean
         default: false
-      application-probe:
-        description: Compare raw Git and GitComet latency in ci-test and release
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -94,7 +86,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ (inputs.execution-samples > 1 || inputs.application-probe) && 180 || 60 }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -230,9 +222,6 @@ jobs:
           python3 scripts/ci/run.py command --name macos-release-signing-build -- cargo build "${args[@]}" -p gitcomet --no-default-features --features gix --release --locked
           codesign --verify --verbose target/release/gitcomet || true
           spctl --assess --type execute --verbose target/release/gitcomet || true
-      - name: Measure GitComet application overhead
-        if: inputs.application-probe
-        run: python3 scripts/ci/application-probe.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
@@ -250,7 +239,7 @@ jobs:
   fedora:
     name: Linux Headless Suite (Fedora container)
     runs-on: ubuntu-22.04
-    timeout-minutes: ${{ (inputs.execution-samples > 1 || inputs.application-probe) && 180 || 60 }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     container:
       image: fedora:41
     steps:
@@ -289,9 +278,6 @@ jobs:
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         run: python3 scripts/ci/run.py doc --context workspace
-      - name: Measure GitComet application overhead
-        if: inputs.application-probe
-        run: python3 scripts/ci/application-probe.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:

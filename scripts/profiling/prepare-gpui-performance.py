@@ -9,35 +9,38 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = "https://github.com/Havunen/gpui-ce.git"
-BASE = "9ff6e7f487f9cba1a8d5a1fc45aa173d094ff9e7"
-PATCH = ROOT / "patches/gpui-windows-responsiveness.patch"
 
 
 def git(checkout, *args):
     return subprocess.check_output(["git", "-c", "core.autocrlf=false", "-C", str(checkout), *args])
 
 
-def prepare(checkout, config):
+def prepare(checkout, config, patch_path):
     checkout = checkout.resolve()
     if checkout == ROOT or ROOT in checkout.parents:
         raise ValueError("Use a checkout outside GitComet; nested workspaces have ambiguous dependency inheritance")
-    patch = PATCH.read_bytes()
+    patch_path = patch_path.resolve()
+    patch = patch_path.read_bytes()
     lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
-    packages = {p["name"] for p in lock["package"] if p.get("source", "").startswith("git+" + SOURCE)}
-    if not packages or any(BASE not in p["source"] for p in lock["package"] if p["name"] in packages):
-        raise ValueError("The GPUI pin changed; rebase and review the patch before applying it")
+    # Resolve the dependency from this checkout, not a revision from a past run.
+    dependency = next(p for p in lock["package"] if p["name"] == "gpui")
+    pinned = dependency.get("source", "")
+    if not pinned.startswith("git+") or "#" not in pinned:
+        raise ValueError("Expected a pinned Git dependency for gpui")
+    source, base = pinned[4:].split("#", 1)
+    source = source.split("?", 1)[0]
+    packages = {p["name"] for p in lock["package"] if p.get("source") == pinned}
     if not checkout.exists():
-        subprocess.run(["git", "-c", "core.autocrlf=false", "clone", "--no-checkout", SOURCE, str(checkout)], check=True)
-        git(checkout, "checkout", "--detach", BASE)
+        subprocess.run(["git", "-c", "core.autocrlf=false", "clone", "--no-checkout", source, str(checkout)], check=True)
+        git(checkout, "checkout", "--detach", base)
     head = git(checkout, "rev-parse", "HEAD").decode().strip()
-    if head == BASE:
+    if head == base:
         current = git(checkout, "diff", "--binary", "HEAD", "--")
         if current != patch:
             if git(checkout, "status", "--porcelain").strip():
                 raise ValueError("Checkout has unrelated changes; use a new checkout")
-            git(checkout, "apply", "--check", str(PATCH))
-            git(checkout, "apply", str(PATCH))
+            git(checkout, "apply", "--check", str(patch_path))
+            git(checkout, "apply", str(patch_path))
         elif git(checkout, "ls-files", "--others", "--exclude-standard").strip():
             raise ValueError("Checkout has unrelated untracked files; use a new checkout")
     else:
@@ -45,9 +48,9 @@ def prepare(checkout, config):
         # entire change is exactly this patch and no working changes remain.
         if git(checkout, "status", "--porcelain").strip():
             raise ValueError("Committed review checkout must be clean")
-        if (git(checkout, "show", "-s", "--format=%P", "HEAD").decode().strip() != BASE
-                or git(checkout, "diff", "--binary", BASE, "HEAD", "--") != patch):
-            raise ValueError(f"Checkout must be at {BASE} or its exact review-patch commit")
+        if (git(checkout, "show", "-s", "--format=%P", "HEAD").decode().strip() != base
+                or git(checkout, "diff", "--binary", base, "HEAD", "--") != patch):
+            raise ValueError(f"Checkout must be at {base} or its exact review-patch commit")
     manifests = git(checkout, "ls-files", "**/Cargo.toml").decode().splitlines()
     paths = {}
     for manifest in manifests:
@@ -58,7 +61,7 @@ def prepare(checkout, config):
     if paths.keys() != packages:
         raise ValueError(f"Missing GPUI packages: {packages - paths.keys()}")
     config.parent.mkdir(parents=True, exist_ok=True)
-    overrides = f'[patch."{SOURCE}"]\n' + "".join(
+    overrides = f'[patch."{source}"]\n' + "".join(
         f'{json.dumps(name)} = {{ path = {json.dumps(path)} }}\n' for name, path in sorted(paths.items()))
     # Git dependencies use non-incremental compilation (16 codegen units).
     # Path dependencies would otherwise inherit incremental dev compilation
@@ -68,7 +71,7 @@ def prepare(checkout, config):
                          for name in sorted(packages))
     config.write_text(overrides, encoding="utf-8")
     config.with_suffix(".json").write_text(json.dumps({
-        "base": BASE, "head": head, "committed_patch": head != BASE,
+        "base": base, "head": head, "committed_patch": head != base,
         "patch_sha256": hashlib.sha256(patch).hexdigest(),
         "checkout": str(checkout), "packages": sorted(packages),
     }, indent=2) + "\n", encoding="utf-8")
@@ -80,8 +83,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=ROOT / "target/gpui-performance.toml")
+    parser.add_argument("--patch", type=Path, default=ROOT / "patches/gpui-windows-responsiveness.patch")
     args = parser.parse_args()
-    prepare(args.checkout, args.config)
+    prepare(args.checkout, args.config, args.patch)
 
 
 if __name__ == "__main__":

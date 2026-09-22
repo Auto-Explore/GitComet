@@ -5,6 +5,7 @@
 *.lock      text eol=lf
 *.md        text eol=lf
 *.sh        text eol=lf
+scripts/profiling/valgrind_cdp text eol=lf
 *.py        text eol=lf
 *.json      text eol=lf
 *.jsonc     text eol=lf

@@ -20,12 +20,12 @@ if (($CaptureScreenshots -or @($Scenarios | Where-Object { $_ -in @('native-move
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
 $Repository = (Resolve-Path -LiteralPath $Repository).Path
 $harnessPs1Hash = (Get-FileHash -LiteralPath $PSCommandPath).Hash
-$harnessCsHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'windows/ui-responsiveness.cs')).Hash
+$harnessCsHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'ui-responsiveness.cs')).Hash
 $outputDir = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $outputDir) { throw "Use a new output directory: $outputDir" }
 New-Item -ItemType Directory -Path $outputDir | Out-Null
 . ([ScriptBlock]::Create((Get-Content -Raw (Join-Path $PSScriptRoot 'measure-process-tree.ps1'))))
-if (-not ('GitCometUiScenario' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'windows/ui-responsiveness.cs') -ReferencedAssemblies System.Drawing }
+if (-not ('GitCometUiScenario' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'ui-responsiveness.cs') -ReferencedAssemblies System.Drawing }
 [void][GitCometUiScenario]::SetProcessDPIAware()
 $environmentBefore = @{}
 foreach ($name in @('LOCALAPPDATA','GITCOMET_SESSION_FILE','GITCOMET_DISABLE_SESSION_PERSIST','GITCOMET_UI_PROBE','GITCOMET_UI_PROBE_LOG','GITCOMET_UI_PROBE_JSONL','GPUI_D3D_DEBUG','GIT_CONFIG_GLOBAL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS','GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE')) {
@@ -232,7 +232,7 @@ try {
     if ($NativeGestures) { [void][GitCometUiScenario]::SetCursorPos($savedCursor.X,$savedCursor.Y); [void][GitCometUiScenario]::SetForegroundWindow($savedForeground) }
     if ($timerActive) { [void][GitCometUiScenario]::timeEndPeriod(1) }
     foreach ($name in $environmentBefore.Keys) { [Environment]::SetEnvironmentVariable($name,$environmentBefore[$name],'Process') }
-    if ($harnessPs1Hash -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash -or $harnessCsHash -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'windows/ui-responsiveness.cs')).Hash) { $outcome = 'harness-changed' }
-    $captureJson = @{version=1;outcome=$outcome;binary=$Binary;sha256=(Get-FileHash -LiteralPath $Binary).Hash.ToLowerInvariant();repository=$Repository;repository_sha=(git -C $Repository rev-parse HEAD);input_rate=$InputRate;probe=(-not $NoProbe);d3d_validation=$D3DValidation;debug_modules=$modules;gpu=$gpu;phases=@($phases.ToArray());harness_sha=(git -C (Join-Path $PSScriptRoot '..') rev-parse HEAD);harness_ps1_sha256=$harnessPs1Hash;harness_cs_sha256=$harnessCsHash} | ConvertTo-Json -Depth 8
+    if ($harnessPs1Hash -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash -or $harnessCsHash -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'ui-responsiveness.cs')).Hash) { $outcome = 'harness-changed' }
+    $captureJson = @{version=1;outcome=$outcome;binary=$Binary;sha256=(Get-FileHash -LiteralPath $Binary).Hash.ToLowerInvariant();repository=$Repository;repository_sha=(git -C $Repository rev-parse HEAD);input_rate=$InputRate;probe=(-not $NoProbe);d3d_validation=$D3DValidation;debug_modules=$modules;gpu=$gpu;phases=@($phases.ToArray());harness_sha=(git -C (Join-Path $PSScriptRoot '../..') rev-parse HEAD);harness_ps1_sha256=$harnessPs1Hash;harness_cs_sha256=$harnessCsHash} | ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $outputDir 'capture.json'), $captureJson, [Text.UTF8Encoding]::new($false))
 }

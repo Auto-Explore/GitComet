@@ -6,34 +6,22 @@ pub(crate) fn refresh_and_draw(cx: &mut gpui::VisualTestContext) {
     });
 }
 
-/// Keep the lock alive for the entire measured hold interval. Timing is opt-in
-/// and uses the same per-test records as fixture and UI wait diagnostics.
-pub(crate) struct TestLockGuard {
-    _hold: gitcomet_core::test_support::git_fixture::FixtureTimer,
-    _guard: std::sync::MutexGuard<'static, ()>,
-}
+pub(crate) fn lock_clipboard_test() -> std::sync::MutexGuard<'static, ()> {
+    static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn lock_test(lock: &'static std::sync::Mutex<()>, name: &str) -> TestLockGuard {
-    use gitcomet_core::test_support::git_fixture::FixtureTimer;
-    let wait = FixtureTimer::new("ui-lock-wait", name);
-    let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    drop(wait);
-    TestLockGuard {
-        _hold: FixtureTimer::new("ui-lock-held", name),
-        _guard: guard,
+    match CLIPBOARD_TEST_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
-pub(crate) fn lock_clipboard_test() -> TestLockGuard {
-    static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    lock_test(&CLIPBOARD_TEST_LOCK, "clipboard")
-}
-
-pub(crate) fn lock_visual_test() -> TestLockGuard {
+pub(crate) fn lock_visual_test() -> std::sync::MutexGuard<'static, ()> {
     static VISUAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    lock_test(&VISUAL_TEST_LOCK, "visual")
+    match VISUAL_TEST_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 /// Compare the real fill and border quad, rather than inspecting which style

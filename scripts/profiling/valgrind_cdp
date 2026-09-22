@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/valgrind_cdp <run|on|off|open> [path]
+Usage: scripts/profiling/valgrind_cdp <run|on|off|open> [path] [binary arguments...]
 
 Commands:
   run [binary]    Run a binary under callgrind.
@@ -12,22 +12,27 @@ Commands:
   off             Disable callgrind instrumentation.
   open [outfile]  Open a callgrind output file in kcachegrind.
                   Default: callgrind.out
+
+Set CALLGRIND_OUT_FILE to change the capture path (also used by open).
 EOF
 }
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+outfile="${CALLGRIND_OUT_FILE:-callgrind.out}"
 cmd="${1:-run}"
 case "$cmd" in
   run)
-    binary="${2:-./target/release-with-debug/gitcomet}"
+    binary="${2:-${repo_root}/target/release-with-debug/gitcomet}"
+    if [[ $# -ge 2 ]]; then shift 2; else shift "$#"; fi
     valgrind \
       --tool=callgrind \
-      --callgrind-out-file=callgrind.out \
+      --callgrind-out-file="$outfile" \
       --dump-instr=yes \
       --instr-atstart=no \
       --collect-jumps=yes \
       --sigill-diagnostics=no \
       --error-limit=no \
-      "$binary"
+      "$binary" "$@"
     ;;
   on)
     callgrind_control -i on
@@ -36,7 +41,7 @@ case "$cmd" in
     callgrind_control -i off
     ;;
   open)
-    outfile="${2:-callgrind.out}"
+    outfile="${2:-$outfile}"
     kcachegrind "$outfile"
     ;;
   -h|--help|help)

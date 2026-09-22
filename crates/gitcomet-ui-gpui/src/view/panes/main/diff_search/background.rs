@@ -8,6 +8,9 @@ use gitcomet_core::file_diff::FileDiffLineText;
 use gitcomet_core::services::CancellationToken;
 use std::sync::Mutex;
 
+/// Includes content generations and the visible row projection. A wrap, mode or
+/// viewport change can move matches even when the bytes are unchanged. Extend this
+/// key when adding a search surface; omitting its generation can publish stale rows.
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::view) struct SearchDocumentKey {
     repo: Option<(RepoId, u64)>,
@@ -631,6 +634,9 @@ impl MainPaneView {
             let _ = view.update(cx, |this, cx| {
                 this.diff_search_worker_running = false;
                 this.diff_search_cancellation = None;
+                // Cancellation saves work but can race with completion. Check
+                // both query sequence and document projection before publishing;
+                // only this UI callback may replace the visible match list.
                 if this.diff_search_active && this.diff_search_debounce_seq == sequence && this.diff_search_document_key() == key {
                     this.diff_search_matches = result.matches;
                     this.diff_search_probe_render = action;

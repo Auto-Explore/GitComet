@@ -98,6 +98,10 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
 }
 
 impl TaskExecutor {
+    /// Coalesce queued work without occupying a worker for every obsolete request.
+    /// `Some` means a queue entry already owns this slot. Taking it before running
+    /// allows a concurrent replacement to enqueue its own entry; do not hold the
+    /// slot lock across `task()`. Running work still needs cooperative cancellation.
     pub(super) fn spawn_latest(&self, slot: &LatestTaskSlot, task: impl FnOnce() + Send + 'static) {
         let context = mergetool_trace::current_capture_context();
         let task: Task = Box::new(move || {
