@@ -14,8 +14,8 @@ This document is the release test plan for GitComet's multi-window support. It c
 - Tiled or snapped placement (tiling window managers, Windows Snap) is owned by the window manager and cannot be requested back. The tiled edges are recorded for diagnostics and the window reopens at its last frame.
 - `gitcomet <repository>` sends the request to the running browser process. The default target is the active window; the General setting can instead request a new window. A repository already open in any window is focused instead of duplicated.
 - Zoom is process-wide, so it lives in menus (the in-app menu on Linux and Windows, the Window menu on macOS), shortcuts, the command palette, and Settings, never in an individual window's footer.
-- Right-clicking a workspace in the repository picker exposes its title-bar color. The choice is per workspace, survives closing/relaunching, and **Default** returns to the theme-derived color.
-- **Settings › Workspaces** renames a workspace, sets its title-bar color and an optional theme override, opens it, or deletes it. A theme override applies only to that workspace's window; changing the app theme leaves overridden windows alone.
+- Right-clicking a workspace in the repository picker offers **Activate** (disabled for the window's own workspace) and **Workspace Settings…**, which opens Settings › Workspaces with that workspace selected. Title-bar color is set there; it is per workspace, survives closing/relaunching, and **Default** returns to the theme-derived color.
+- **Settings › Workspaces** explains how to start a workspace (New Window, its shortcut, and a **New Workspace** button that opens an empty window), and renames a workspace (the **Save** button beside the name is enabled once the name changes), sets its title-bar color and an optional theme override, opens it, or deletes it. A theme override applies only to that workspace's window; changing the app theme leaves overridden windows alone.
 - **Open Workspace** (`Ctrl/Cmd+Shift+R`, the command palette, the app menu) lists only workspaces. From an empty window the chosen workspace opens in that window; otherwise its own window is focused or opened.
 - On Linux and FreeBSD, **Follow system** uses the desktop button layout and hides minimize/maximize while tiled. Explicit Show/Hide modes override that behavior. macOS keeps native traffic lights.
 
@@ -103,7 +103,7 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 ### 5. Window controls, title-bar colors, and zoom
 
 1. Verify the footer has no zoom control in any window and menu/shortcut zoom changes all windows consistently.
-2. Open the repository picker, right-click both an open workspace and a recoverable closed workspace, and choose different title-bar colors. Verify only the selected workspace's title bar changes and the picker remains open after each choice.
+2. Open the repository picker and right-click the current window's workspace: **Activate** is disabled. Right-click a recoverable closed workspace: **Activate** opens it, and **Workspace Settings…** opens Settings on that workspace. Choose different title-bar colors for two workspaces there and verify only the selected workspace's title bar changes.
 3. Close/recover one colored workspace and quit/relaunch with the other open. Verify both colors persist. Choose **Default** and verify that workspace returns to the current theme's title-bar color.
 4. On Linux/FreeBSD, test floating and tiled states with **Follow system**, including a desktop layout that places/reorders buttons on the left. Verify side and order are preserved, then test explicit Show and Hide. Hide must leave Close available.
 5. On Windows, verify minimize, maximize/restore, close, title dragging, and double-click maximize in Show and Hide modes.

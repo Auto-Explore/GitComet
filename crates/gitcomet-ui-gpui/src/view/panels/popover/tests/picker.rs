@@ -971,82 +971,93 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
 }
 
 #[gpui::test]
-fn review_regression_workspace_row_opens_title_bar_color_menu(cx: &mut gpui::TestAppContext) {
+fn workspace_row_menu_activates_other_workspaces_and_links_to_settings(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    let mut group = session::Workspace::new(vec!["/tmp/window-group-color".into()]);
-    group.custom_name = Some("Work".into());
-    let workspace_id = group.id;
-    cx.cx.update(|app| {
-        crate::workspaces::initialize_for_test(app, vec![group]);
+    // This window sits in an empty named workspace; "Work" is saved elsewhere.
+    let mut mine = session::Workspace::new(Vec::new());
+    mine.custom_name = Some("Mine".into());
+    let mine_id = mine.id;
+    let mut work = session::Workspace::new(vec!["/tmp/workspace-row-menu".into()]);
+    work.custom_name = Some("Work".into());
+    work.restore_on_launch = false;
+    let work_id = work.id;
+    let window_id = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![mine, work]);
+        let window_id = window.window_handle().window_id();
+        crate::workspaces::sync_window(app, window_id, Some(mine_id), Vec::new(), None);
+        window_id
     });
 
     open_repo_picker(&view, cx);
     let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
-    let entry = repo_picker::RepoPickerEntry::Workspace(workspace_id);
-    cx.update(|_window, app| {
-        assert_eq!(
-            as_str_pairs(&row_menu_labels(popover_host.read(app), &entry)),
-            vec![
-                ("Default", false),
-                ("Gray", false),
-                ("Red", false),
-                ("Orange", false),
-                ("Yellow", false),
-                ("Green", false),
-                ("Blue", false),
-                ("Purple", false),
-                ("Pink", false),
-            ],
-            "the row settings menu should expose every persisted title-bar color"
-        );
-    });
-    let row = cx
-        .debug_bounds("picker_prompt_item_0")
-        .expect("expected the saved window group row");
-    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
-    cx.simulate_event(gpui::MouseDownEvent {
-        position: row.center(),
-        modifiers: gpui::Modifiers::default(),
-        button: MouseButton::Right,
-        click_count: 1,
-        first_mouse: false,
-    });
-    cx.simulate_mouse_up(row.center(), MouseButton::Right, gpui::Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-
-    cx.debug_bounds("picker_row_menu")
-        .expect("right-clicking a saved window group should open its settings menu");
-
-    cx.update(|window, app| {
-        popover_host.update(app, |host, cx| {
-            picker_row_menu::activate(
-                host,
-                ContextMenuAction::SetWorkspaceColor {
-                    workspace_id,
-                    color: Some(session::WorkspaceColor::Blue),
-                },
-                window,
-                cx,
-            );
-        });
-    });
-    cx.run_until_parked();
+    let menu = |cx: &mut gpui::VisualTestContext, id| {
+        cx.update(|_window, app| {
+            row_menu_labels(
+                popover_host.read(app),
+                &repo_picker::RepoPickerEntry::Workspace(id),
+            )
+        })
+    };
     assert_eq!(
-        cx.cx.update(|app| {
-            crate::workspaces::workspace(app, workspace_id).and_then(|group| group.color)
-        }),
-        Some(session::WorkspaceColor::Blue),
-        "the context-menu choice should persist on the selected window group"
+        as_str_pairs(&menu(cx, work_id)),
+        vec![("Activate", false), ("Workspace Settings…", false)],
+        "no colour choices; activate and a link to settings"
+    );
+    assert_eq!(
+        as_str_pairs(&menu(cx, mine_id)),
+        vec![("Activate", true), ("Workspace Settings…", false)],
+        "the window's own workspace cannot be activated again"
+    );
+
+    // Actions run through the row menu, so open it on Work's row first.
+    let activate = |cx: &mut gpui::VisualTestContext, action: ContextMenuAction| {
+        cx.update(|window, app| {
+            popover_host.update(app, |host, cx| {
+                let target = picker_row_menu::PickerRowMenuTarget::Repo(
+                    repo_picker::RepoPickerEntry::Workspace(work_id),
+                );
+                picker_row_menu::open(host, target, 0, gpui::point(px(120.0), px(120.0)), cx);
+                picker_row_menu::activate(host, action, window, cx);
+            });
+        });
+        cx.run_until_parked();
+    };
+
+    activate(
+        cx,
+        ContextMenuAction::OpenWorkspaceSettings {
+            workspace_id: work_id,
+        },
     );
     assert!(
-        cx.update(|_window, app| popover_host.read(app).is_open()),
-        "changing a color should leave the repository picker open"
+        cx.update(|_window, app| {
+            app.windows().into_iter().any(|window| {
+                window
+                    .downcast::<crate::view::SettingsWindowView>()
+                    .is_some()
+            })
+        }),
+        "the settings link opens the settings window"
+    );
+
+    open_repo_picker(&view, cx);
+    activate(
+        cx,
+        ContextMenuAction::ActivateWorkspace {
+            workspace_id: work_id,
+        },
+    );
+    assert_eq!(
+        cx.update(|_window, app| {
+            crate::workspaces::workspace_for_window(app, window_id).map(|workspace| workspace.id)
+        }),
+        Some(work_id),
+        "activating from an empty window adopts the workspace there"
     );
 }
 

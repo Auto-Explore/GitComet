@@ -334,7 +334,9 @@ use panes::{
     HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
     history_primary_selection,
 };
-pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
+pub(crate) use settings_window::{
+    SettingsWindowView, open_settings_window, open_settings_window_to_workspace,
+};
 use toast_host::ToastHost;
 pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;

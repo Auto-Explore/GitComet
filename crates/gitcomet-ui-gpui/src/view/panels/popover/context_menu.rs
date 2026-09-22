@@ -939,23 +939,13 @@ impl PopoverHost {
                     });
                 });
             }
-            ContextMenuAction::SetWorkspaceColor {
-                workspace_id,
-                color,
-            } => {
-                if crate::workspaces::set_workspace_color(cx, workspace_id, color) {
-                    if let Some(group) = self
-                        .cached_workspaces
-                        .iter_mut()
-                        .find(|group| group.id == workspace_id)
-                    {
-                        group.color = color;
-                    }
-                    crate::app::notify_workspace_changed_from_view(cx, workspace_id);
-                }
-                // This is an in-place setting over the repository picker. Keep
-                // the picker available so another group can be styled next.
-                close_after_action = false;
+            ContextMenuAction::ActivateWorkspace { workspace_id } => {
+                repo_picker::activate_workspace(self, workspace_id, cx);
+            }
+            ContextMenuAction::OpenWorkspaceSettings { workspace_id } => {
+                cx.defer(move |cx| {
+                    crate::view::open_settings_window_to_workspace(cx, workspace_id);
+                });
             }
             ContextMenuAction::PinRepository { path } => {
                 let _ = session::persist_pinned_repo(&path);

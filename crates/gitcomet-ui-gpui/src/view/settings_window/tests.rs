@@ -3611,6 +3611,12 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
         Some(id),
         "the most recently used workspace is preselected"
     );
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_workspaces_intro")
+            .is_some(),
+        "the page explains how to start a new workspace"
+    );
     let row: &'static str = format!("settings_window_workspace_{id}").leak();
     assert!(settings_cx.debug_bounds(row).is_some());
 
@@ -3642,10 +3648,15 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
         None
     );
 
+    // Typing alone does not save; the Save button beside the field does.
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.workspace_name_draft = "  Client work ".to_string();
-        settings.commit_workspace_name(cx);
+        settings
+            .workspace_name_input
+            .update(cx, |input, cx| input.set_text("  Client work ", cx));
     });
+    redraw(&mut settings_cx);
+    assert_eq!(read(&mut settings_cx).and_then(|w| w.custom_name), None);
+    click(&mut settings_cx, "settings_window_workspace_name_save");
     assert_eq!(
         read(&mut settings_cx).and_then(|workspace| workspace.custom_name),
         Some("Client work".to_string())
@@ -3665,4 +3676,104 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
         selected.is_some_and(|selected| selected != id),
         "the selection moves to a remaining workspace"
     );
+}
+
+#[gpui::test]
+fn opening_settings_to_a_workspace_selects_its_page_and_row(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let first = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/ws-link-a")]);
+    let second = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/ws-link-b")]);
+    let (first_id, second_id) = (first.id, second.id);
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![first, second]);
+        let _ = window.draw(app);
+    });
+
+    let selection = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let window = app
+                .windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window");
+            window
+                .read_with(app, |view, _| {
+                    (view.selected_category, view.selected_workspace)
+                })
+                .expect("readable settings window")
+        })
+    };
+
+    cx.update(|_window, app| open_settings_window_to_workspace(app, second_id));
+    cx.run_until_parked();
+    assert_eq!(
+        selection(cx),
+        (SettingsCategory::Workspaces, Some(second_id))
+    );
+
+    // Already open on another page: the link still lands on the workspace.
+    cx.update(|_window, app| {
+        let window = app
+            .windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window");
+        let _ = window.update(app, |view, _window, cx| {
+            view.select_category(SettingsCategory::Diff, cx);
+        });
+        open_settings_window_to_workspace(app, first_id);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        selection(cx),
+        (SettingsCategory::Workspaces, Some(first_id))
+    );
+}
+
+#[gpui::test]
+fn new_workspace_button_opens_an_empty_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, std::sync::Arc::new(TestBackend));
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let count_views = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .filter(|window| window.downcast::<GitCometView>().is_some())
+                .count()
+        })
+    };
+    let before = count_views(&mut settings_cx);
+
+    let button = settings_cx
+        .debug_bounds("settings_window_workspace_new")
+        .expect("New Workspace button");
+    settings_cx.simulate_click(button.center(), Modifiers::default());
+    settings_cx.run_until_parked();
+
+    assert_eq!(count_views(&mut settings_cx), before + 1);
 }

@@ -188,18 +188,41 @@ impl SettingsWindowView {
         self.workspace_name_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         let workspaces = sorted_workspaces(cx);
+        let new_window_shortcut = crate::view::shortcut_labels::secondary_shortcut("N");
+        let open_workspace_shortcut = crate::view::shortcut_labels::secondary_shortcut("Shift+R");
+        let new_workspace_button =
+            components::Button::new("settings_window_workspace_new", "New Workspace")
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |_this, _e, _window, cx| {
+                    cx.defer(crate::app::open_new_empty_window);
+                });
         let mut card = self
             .card("settings_window_workspaces", "Workspaces", theme)
             .child(
                 div()
+                    .id("settings_window_workspaces_intro")
+                    .debug_selector(|| "settings_window_workspaces_intro".to_string())
                     .px_2()
                     .pb_2()
-                    .text_size(theme.ui_text(12.0))
-                    .text_color(theme.colors.foreground.secondary)
+                    .flex()
+                    .items_start()
+                    .gap_3()
                     .child(
-                        "Each window is a workspace. Give one a name, a title-bar colour or \
-                         its own theme and it is kept even after its last repository closes.",
-                    ),
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(theme.ui_text(12.0))
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(format!(
+                                "Each window is a workspace. Open a new one with New Workspace \
+                                 or New Window ({new_window_shortcut}); it is saved once a \
+                                 repository is open in it. Give a workspace a name, a title-bar \
+                                 colour or its own theme and it is kept even after its last \
+                                 repository closes. Reopen saved ones with Open Workspace \
+                                 ({open_workspace_shortcut})."
+                            )),
+                    )
+                    .child(new_workspace_button),
             );
         if workspaces.is_empty() {
             return card.child(
@@ -251,7 +274,7 @@ impl SettingsWindowView {
                 "Selected workspace",
                 theme,
             ))
-            .child(self.field_label("Name (press Enter to save)", theme))
+            .child(self.field_label("Name", theme))
             .child(
                 div()
                     .id("settings_window_workspace_name")
@@ -260,7 +283,28 @@ impl SettingsWindowView {
                     .pb_1()
                     .w_full()
                     .min_w(px(0.0))
-                    .child(self.workspace_name_input.clone()),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(self.workspace_name_input.clone()),
+                    )
+                    .child(
+                        // Enter also saves; the button makes that discoverable.
+                        components::Button::new("settings_window_workspace_name_save", "Save")
+                            .style(components::ButtonStyle::Filled)
+                            .disabled(
+                                self.workspace_name_draft.trim()
+                                    == selected.custom_name.as_deref().unwrap_or(""),
+                            )
+                            .on_click(theme, cx, |this, _e, _window, cx| {
+                                this.commit_workspace_name(cx);
+                                cx.notify();
+                            }),
+                    ),
             )
             .child(self.field_label("Title bar color", theme))
             .child(self.color_swatches(id, selected.color, theme, cx));

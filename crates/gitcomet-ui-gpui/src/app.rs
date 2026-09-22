@@ -2628,6 +2628,21 @@ fn open_repository_switcher_in_window(cx: &mut App, window: &GitCometWindowEntry
 }
 
 /// Open Workspace in the active window, or in a new (Home) window.
+/// Open a new empty window (a workspace-to-be) on Home. Used from Settings,
+/// which has no window of its own to route a `NewWindow` action through.
+pub(crate) fn open_new_empty_window(cx: &mut App) {
+    let Some(backend) = cx
+        .try_global::<GitCometBackendGlobal>()
+        .map(|backend| Arc::clone(&backend.0))
+    else {
+        return;
+    };
+    let launch = normal_empty_launch_config(None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    activate_gitcomet_window(cx, window.into());
+    cx.activate(true);
+}
+
 fn open_workspace_picker_in_existing_or_new_window(cx: &mut App, backend: Arc<dyn GitBackend>) {
     let toggle =
         |view: &mut GitCometView, window: &mut Window, cx: &mut gpui::Context<GitCometView>| {

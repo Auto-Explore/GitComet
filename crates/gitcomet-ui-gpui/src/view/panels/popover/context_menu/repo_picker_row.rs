@@ -16,25 +16,26 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
         else {
             return ContextMenuModel::new(Vec::new());
         };
-        let mut items = vec![
+        let workspace_id = *workspace_id;
+        return ContextMenuModel::new(vec![
             ContextMenuItem::Header(workspace.display_name().into()),
-            ContextMenuItem::Label("Title bar color".into()),
-        ];
-        items.extend(
-            crate::workspaces::WORKSPACE_COLORS
-                .into_iter()
-                .map(|(color, label)| ContextMenuItem::Entry {
-                    label: label.into(),
-                    icon: (workspace.color == color).then(|| "icons/check.svg".into()),
-                    shortcut: None,
-                    disabled: false,
-                    action: Box::new(ContextMenuAction::SetWorkspaceColor {
-                        workspace_id: *workspace_id,
-                        color,
-                    }),
-                }),
-        );
-        return ContextMenuModel::new(items);
+            ContextMenuItem::Entry {
+                label: "Activate".into(),
+                icon: None,
+                shortcut: None,
+                // This window already is that workspace.
+                disabled: host.cached_workspace_id == Some(workspace_id),
+                action: Box::new(ContextMenuAction::ActivateWorkspace { workspace_id }),
+            },
+            ContextMenuItem::Separator,
+            ContextMenuItem::Entry {
+                label: "Workspace Settings…".into(),
+                icon: Some("icons/cog.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenWorkspaceSettings { workspace_id }),
+            },
+        ]);
     }
 
     let workdir = entry.workdir(host);

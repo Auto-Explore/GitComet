@@ -172,7 +172,6 @@ impl PickerRowMenuTarget {
                     | ContextMenuAction::UnpinRepository { .. }
                     | ContextMenuAction::ForgetRecentRepository { .. }
                     | ContextMenuAction::CloseRepo { .. }
-                    | ContextMenuAction::SetWorkspaceColor { .. }
             ),
             // Every branch and worktree action either navigates away or opens a
             // prompt of its own, and the picker has nothing left to offer once

@@ -196,9 +196,14 @@ pub(in crate::view) enum ContextMenuAction {
         path: std::path::PathBuf,
         target_workspace: Option<gitcomet_state::session::WorkspaceId>,
     },
-    SetWorkspaceColor {
+    /// Open a workspace from its picker row: adopted into an empty window,
+    /// otherwise focused or opened in its own.
+    ActivateWorkspace {
         workspace_id: gitcomet_state::session::WorkspaceId,
-        color: Option<gitcomet_state::session::WorkspaceColor>,
+    },
+    /// Settings › Workspaces with this workspace selected.
+    OpenWorkspaceSettings {
+        workspace_id: gitcomet_state::session::WorkspaceId,
     },
     /// Keep a repository in the picker's Pinned section. Pins outlive both the
     /// recents cap and the repository being closed, so this is what keeps one

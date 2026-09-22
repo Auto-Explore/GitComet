@@ -573,6 +573,24 @@ pub(super) fn filtered_layout(
     (rows.filtered_payloads(), (*rows.layout).clone())
 }
 
+/// Open a workspace row from this picker's window: an empty window adopts it,
+/// otherwise its own window is focused or opened.
+pub(super) fn activate_workspace(
+    this: &mut PopoverHost,
+    workspace_id: session::WorkspaceId,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    this.close_popover(cx);
+    let root_view = this.root_view.clone();
+    cx.defer(move |cx| {
+        let Ok(window_id) = root_view.read_with(cx, |root, _| root.window_handle.window_id())
+        else {
+            return;
+        };
+        crate::app::open_workspace_in_window(cx, window_id, workspace_id);
+    });
+}
+
 /// What the arrow keys walk in the picker: repository rows normally, sort
 /// options while the sort menu covers the list, and the row actions while a
 /// repository's context menu floats over it.
@@ -745,18 +763,7 @@ pub(super) fn activate(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match entry {
-        RepoPickerEntry::Workspace(workspace_id) => {
-            this.close_popover(cx);
-            let root_view = this.root_view.clone();
-            cx.defer(move |cx| {
-                let Ok(window_id) =
-                    root_view.read_with(cx, |root, _| root.window_handle.window_id())
-                else {
-                    return;
-                };
-                crate::app::open_workspace_in_window(cx, window_id, workspace_id);
-            });
-        }
+        RepoPickerEntry::Workspace(workspace_id) => activate_workspace(this, workspace_id, cx),
         RepoPickerEntry::Open(repo_id) => {
             this.store.dispatch(Msg::SetActiveRepo { repo_id });
             this.close_popover(cx);

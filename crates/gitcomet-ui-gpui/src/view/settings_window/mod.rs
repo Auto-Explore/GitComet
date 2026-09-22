@@ -657,6 +657,27 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     cx.activate(true);
 }
 
+/// Open (or raise) Settings on the Workspaces page with `workspace_id` selected.
+pub(crate) fn open_settings_window_to_workspace(
+    cx: &mut App,
+    workspace_id: gitcomet_state::session::WorkspaceId,
+) {
+    open_settings_window(cx);
+    let Some(window) = cx
+        .windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<SettingsWindowView>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |view, _window, cx| {
+        view.current_view = SettingsView::Root;
+        view.select_category(SettingsCategory::Workspaces, cx);
+        view.select_workspace(workspace_id, cx);
+        cx.notify();
+    });
+}
+
 fn settings_window_min_size_for_percent(percent: u32) -> gpui::Size<Pixels> {
     ui_scale::design_size_from_percent(
         SETTINGS_WINDOW_MIN_WIDTH_PX,
