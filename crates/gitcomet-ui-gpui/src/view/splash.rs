@@ -272,7 +272,8 @@ impl GitCometView {
         div()
             .id("repository_entry_logo")
             .size(size)
-            .child(gpui::svg().path("gitcomet_logo.svg").w(size).h(size))
+            // `svg()` paints a one-colour mask; the logo has two colours.
+            .child(gpui::img("gitcomet_logo.svg").w(size).h(size))
             .into_any_element()
     }
 
