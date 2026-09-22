@@ -322,14 +322,6 @@ fn workspace_rows(
     rows
 }
 
-pub(in crate::view) fn repository_count_label(count: usize) -> String {
-    match count {
-        0 => "No repositories".to_string(),
-        1 => "1 repository".to_string(),
-        n => format!("{n} repositories"),
-    }
-}
-
 fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
     let name = workspace.display_name();
     let repositories = workspace
@@ -345,7 +337,7 @@ fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
     };
     let detail = format!(
         "{state} · {}",
-        repository_count_label(workspace.repositories.len())
+        crate::workspaces::repository_count_label(workspace.repositories.len())
     );
     let path_key = workspace
         .repositories

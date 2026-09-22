@@ -132,19 +132,24 @@ impl GitCometView {
             );
         }
 
-        if self.view_mode == GitCometViewMode::Normal {
-            let title = crate::workspaces::workspace_for_window(cx, self.window_handle.window_id())
-                .map(|workspace| format!("{} — GitComet", workspace.display_name()))
-                .unwrap_or_else(|| "GitComet".to_string());
-            if self.native_window_title != title {
-                self.native_window_title.clone_from(&title);
-                let window_handle = self.window_handle;
-                cx.defer(move |cx| {
-                    let _ = window_handle.update(cx, |_root, window, _cx| {
-                        window.set_window_title(&title);
-                    });
+        self.sync_native_window_title(cx);
+    }
+
+    pub(super) fn sync_native_window_title(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.view_mode != GitCometViewMode::Normal {
+            return;
+        }
+        let title = crate::workspaces::workspace_for_window(cx, self.window_handle.window_id())
+            .map(|workspace| format!("{} — GitComet", workspace.display_name()))
+            .unwrap_or_else(|| "GitComet".to_string());
+        if self.native_window_title != title {
+            self.native_window_title.clone_from(&title);
+            let window_handle = self.window_handle;
+            cx.defer(move |cx| {
+                let _ = window_handle.update(cx, |_root, window, _cx| {
+                    window.set_window_title(&title);
                 });
-            }
+            });
         }
     }
 

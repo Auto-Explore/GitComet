@@ -7,18 +7,6 @@
 
 use super::*;
 
-const WORKSPACE_COLORS: [(Option<session::WorkspaceColor>, &str); 9] = [
-    (None, "Default"),
-    (Some(session::WorkspaceColor::Gray), "Gray"),
-    (Some(session::WorkspaceColor::Red), "Red"),
-    (Some(session::WorkspaceColor::Orange), "Orange"),
-    (Some(session::WorkspaceColor::Yellow), "Yellow"),
-    (Some(session::WorkspaceColor::Green), "Green"),
-    (Some(session::WorkspaceColor::Blue), "Blue"),
-    (Some(session::WorkspaceColor::Purple), "Purple"),
-    (Some(session::WorkspaceColor::Pink), "Pink"),
-];
-
 pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) -> ContextMenuModel {
     if let repo_picker::RepoPickerEntry::Workspace(workspace_id) = entry {
         let Some(workspace) = host
@@ -33,7 +21,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
             ContextMenuItem::Label("Title bar color".into()),
         ];
         items.extend(
-            WORKSPACE_COLORS
+            crate::workspaces::WORKSPACE_COLORS
                 .into_iter()
                 .map(|(color, label)| ContextMenuItem::Entry {
                     label: label.into(),

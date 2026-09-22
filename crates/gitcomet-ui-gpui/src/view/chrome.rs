@@ -352,7 +352,7 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
-fn workspace_color(
+pub(in crate::view) fn workspace_color(
     color: Option<gitcomet_state::session::WorkspaceColor>,
     theme: AppTheme,
 ) -> gpui::Rgba {

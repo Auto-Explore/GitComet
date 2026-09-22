@@ -368,7 +368,6 @@ where
 }
 
 /// A blank name clears it, falling back to the automatic name.
-#[allow(dead_code)] // Wired up by the Settings workspaces page.
 pub(crate) fn set_workspace_name<C>(cx: &mut C, workspace_id: WorkspaceId, name: &str) -> bool
 where
     C: BorrowAppContext,
@@ -382,7 +381,6 @@ where
 }
 
 /// `None` follows the app theme; otherwise a `theme_mode` key.
-#[allow(dead_code)] // Wired up by the per-workspace theme override.
 pub(crate) fn set_workspace_theme_mode<C>(
     cx: &mut C,
     workspace_id: WorkspaceId,
@@ -524,6 +522,27 @@ pub(crate) fn rebase_window_frame(
     }
 }
 
+/// Title-bar colours offered for a workspace, `None` being the theme default.
+pub(crate) const WORKSPACE_COLORS: [(Option<session::WorkspaceColor>, &str); 9] = [
+    (None, "Default"),
+    (Some(session::WorkspaceColor::Gray), "Gray"),
+    (Some(session::WorkspaceColor::Red), "Red"),
+    (Some(session::WorkspaceColor::Orange), "Orange"),
+    (Some(session::WorkspaceColor::Yellow), "Yellow"),
+    (Some(session::WorkspaceColor::Green), "Green"),
+    (Some(session::WorkspaceColor::Blue), "Blue"),
+    (Some(session::WorkspaceColor::Purple), "Purple"),
+    (Some(session::WorkspaceColor::Pink), "Pink"),
+];
+
+pub(crate) fn repository_count_label(count: usize) -> String {
+    match count {
+        0 => "No repositories".to_string(),
+        1 => "1 repository".to_string(),
+        n => format!("{n} repositories"),
+    }
+}
+
 /// Read-only view of the manager. Reads must not go through
 /// `update_default_global`: gpui notifies every global observer on each lease,
 /// and the title bar reads the manager per frame, so a leasing read plus an
@@ -546,6 +565,11 @@ pub(crate) fn workspaces(cx: &App) -> Vec<Workspace> {
     manager(cx)
         .map(|manager| manager.workspaces.clone())
         .unwrap_or_default()
+}
+
+/// The workspace of the most recently focused window, if any.
+pub(crate) fn active_workspace_id(cx: &App) -> Option<WorkspaceId> {
+    manager(cx)?.active_workspace
 }
 
 pub(crate) fn workspace(cx: &App, id: WorkspaceId) -> Option<Workspace> {

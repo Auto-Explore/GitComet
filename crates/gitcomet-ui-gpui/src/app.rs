@@ -2374,10 +2374,10 @@ pub(crate) fn move_repository_to_workspace_from_view<T>(
     });
 }
 
-/// Repaint every live window that owns the workspace whose persisted title-bar
-/// color changed. The request originates in a `PopoverHost` update, so defer
+/// Refresh every live window that owns a workspace whose name, colour or theme
+/// changed. Requests come from a `PopoverHost` or the settings window, so defer
 /// before touching a root view that may own that same host.
-pub(crate) fn notify_workspace_color_changed_from_view<T>(
+pub(crate) fn notify_workspace_changed_from_view<T>(
     cx: &mut gpui::Context<T>,
     workspace_id: session::WorkspaceId,
 ) where
@@ -2389,7 +2389,7 @@ pub(crate) fn notify_workspace_color_changed_from_view<T>(
                 continue;
             }
             let _ = entry.view.update(cx, |view, cx| {
-                view.notify_workspace_color_changed(cx);
+                view.workspace_changed(cx);
             });
         }
     });

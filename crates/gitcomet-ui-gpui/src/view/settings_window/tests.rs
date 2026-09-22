@@ -3540,3 +3540,129 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 
     assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
 }
+
+#[test]
+fn workspaces_category_is_listed_after_general_and_matches_its_search_terms() {
+    assert_eq!(SettingsCategory::ALL[1], SettingsCategory::Workspaces);
+    for query in ["workspace", "title bar color", "rename"] {
+        assert!(
+            SettingsCategory::Workspaces.matches_query(query),
+            "{query} should find the Workspaces page"
+        );
+    }
+    assert_eq!(
+        SettingsSection::WorkspaceTheme.category(),
+        SettingsCategory::Workspaces
+    );
+}
+
+#[gpui::test]
+fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-a")]);
+    workspace.last_activation_order = 5;
+    let id = workspace.id;
+    let other =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-b")]);
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace, other]);
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1400.0)));
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+    });
+    let redraw = |settings_cx: &mut gpui::VisualTestContext| {
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    let click = |settings_cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = settings_cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        settings_cx.simulate_click(bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    redraw(&mut settings_cx);
+
+    let selected = settings_window
+        .read_with(&settings_cx, |settings, _| settings.selected_workspace)
+        .expect("settings window");
+    assert_eq!(
+        selected,
+        Some(id),
+        "the most recently used workspace is preselected"
+    );
+    let row: &'static str = format!("settings_window_workspace_{id}").leak();
+    assert!(settings_cx.debug_bounds(row).is_some());
+
+    click(&mut settings_cx, "settings_window_workspace_color_blue");
+    let read = |settings_cx: &mut gpui::VisualTestContext| {
+        settings_cx.update(|_window, app| crate::workspaces::workspace(app, id))
+    };
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.color),
+        Some(gitcomet_state::session::WorkspaceColor::Blue)
+    );
+
+    click(&mut settings_cx, "settings_window_workspace_theme");
+    click(
+        &mut settings_cx,
+        "settings_window_workspace_theme_tokyo_night",
+    );
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
+        Some("tokyo_night".to_string())
+    );
+    click(&mut settings_cx, "settings_window_workspace_theme");
+    click(
+        &mut settings_cx,
+        "settings_window_workspace_theme_follow_app",
+    );
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
+        None
+    );
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.workspace_name_draft = "  Client work ".to_string();
+        settings.commit_workspace_name(cx);
+    });
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.custom_name),
+        Some("Client work".to_string())
+    );
+
+    click(&mut settings_cx, "settings_window_workspace_delete");
+    assert!(
+        read(&mut settings_cx).is_some(),
+        "delete asks for confirmation first"
+    );
+    click(&mut settings_cx, "settings_window_workspace_delete_confirm");
+    assert!(read(&mut settings_cx).is_none());
+    let selected = settings_window
+        .read_with(&settings_cx, |settings, _| settings.selected_workspace)
+        .expect("settings window");
+    assert!(
+        selected.is_some_and(|selected| selected != id),
+        "the selection moves to a remaining workspace"
+    );
+}

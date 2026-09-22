@@ -951,7 +951,7 @@ impl PopoverHost {
                     {
                         group.color = color;
                     }
-                    crate::app::notify_workspace_color_changed_from_view(cx, workspace_id);
+                    crate::app::notify_workspace_changed_from_view(cx, workspace_id);
                 }
                 // This is an in-place setting over the repository picker. Keep
                 // the picker available so another group can be styled next.

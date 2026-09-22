@@ -1862,7 +1862,9 @@ impl GitCometView {
         cx.notify();
     }
 
-    pub(crate) fn notify_workspace_color_changed(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn workspace_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        self.sync_workspace_theme_override(cx);
+        self.sync_native_window_title(cx);
         // Both entities paint against the title-bar fill: the title bar owns
         // the chrome and the tab strip owns transparent labels and hover
         // overlays that must composite over the same color.

@@ -2290,8 +2290,10 @@ impl Render for SettingsWindowView {
                         .map(SettingsSection::category)
                         .unwrap_or(self.selected_category);
 
+                    let workspaces_card = self.workspaces_card(theme, cx);
                     let active_card = match active_category {
                         SettingsCategory::General => general_card,
+                        SettingsCategory::Workspaces => workspaces_card,
                         SettingsCategory::SecurityPrivacy => security_privacy_card,
                         SettingsCategory::Terminal => terminal_card,
                         SettingsCategory::ChangeTracking => change_tracking_card,
