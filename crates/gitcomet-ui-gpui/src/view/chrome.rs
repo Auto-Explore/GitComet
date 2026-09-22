@@ -594,7 +594,7 @@ impl TitleBarView {
         }
         self.repo_tab_actions_enabled = enabled;
         if !enabled {
-            self.app_menu_open = false;
+            // The app menu stays reachable from Home; only the picker closes.
             self.repo_picker_open = false;
         }
         cx.notify();
@@ -632,11 +632,11 @@ impl Render for TitleBarView {
         let theme = self.theme;
         let is_macos = cfg!(target_os = "macos");
         let repo_tab_actions_enabled = self.repo_tab_actions_enabled;
-        let repo_tabs_enabled = repo_tab_actions_enabled
-            && self
-                .root_view
-                .upgrade()
-                .is_some_and(|root| show_titlebar_repo_tabs(root.read(cx).view_mode));
+        let root_view_mode = self.root_view.upgrade().map(|root| root.read(cx).view_mode);
+        let repo_tabs_enabled =
+            repo_tab_actions_enabled && root_view_mode.is_some_and(show_titlebar_repo_tabs);
+        // Normal windows always offer the app menu, Home included.
+        let app_menu_enabled = root_view_mode.is_some_and(renders_full_chrome);
         let app_menu_open = self.app_menu_open;
         let app_menu_open_bg = with_alpha(
             theme.colors.accent.foreground,
@@ -653,6 +653,7 @@ impl Render for TitleBarView {
         );
         let workspace =
             crate::workspaces::workspace_for_window(cx, window.window_handle().window_id());
+        let workspace_chip_visible = workspace.is_some();
         let bar_bg = title_bar_background(
             theme,
             window.is_window_active(),
@@ -902,10 +903,11 @@ impl Render for TitleBarView {
                         .children(left_controls),
                 )
             })
-            .when(!is_macos && repo_tab_actions_enabled, |d| {
-                d.child(menu_toggle)
-            })
-            .when(repo_tab_actions_enabled, |d| d.child(repo_picker_toggle));
+            .when(!is_macos && app_menu_enabled, |d| d.child(menu_toggle))
+            // An empty customized workspace keeps its name and colour on Home.
+            .when(repo_tab_actions_enabled || workspace_chip_visible, |d| {
+                d.child(repo_picker_toggle)
+            });
 
         // Browser-style: when repositories are open, the repo tabs live in the
         // title bar's middle. Keep a fixed draggable strip beside them so the

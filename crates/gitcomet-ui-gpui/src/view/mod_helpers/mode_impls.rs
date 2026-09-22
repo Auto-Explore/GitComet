@@ -1118,7 +1118,7 @@ pub(crate) fn should_show_startup_repository_loading_screen(
     repository_entry_interstitial_active(view_mode, has_repo_tabs) && startup_repo_bootstrap_pending
 }
 
-pub(crate) fn should_show_splash_screen(
+pub(crate) fn should_show_home_screen(
     view_mode: GitCometViewMode,
     has_repo_tabs: bool,
     startup_repo_bootstrap_pending: bool,

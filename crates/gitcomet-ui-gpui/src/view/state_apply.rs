@@ -92,6 +92,14 @@ impl GitCometView {
         // repository may still be loading (or temporarily unavailable), so
         // retain its saved membership until bootstrap resolves.
         if !live_repo_paths.is_empty() || !self.startup_repo_bootstrap_pending {
+            if live_repo_paths.is_empty() && !self.persisted_workspace_repo_paths.is_empty() {
+                // Entering Home: the store records these as recent in the
+                // background, so promote them here rather than race that write.
+                self.refresh_home_repositories();
+                for path in self.persisted_workspace_repo_paths.iter().rev() {
+                    session::promote_recent_repo(&mut self.home_recent_repos, path);
+                }
+            }
             self.persisted_workspace_repo_paths = live_repo_paths;
             self.persisted_workspace_active_repository = live_active_repository;
         }

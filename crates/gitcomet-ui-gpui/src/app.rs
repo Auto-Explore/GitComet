@@ -3381,7 +3381,7 @@ mod tests {
             }
 
             if Instant::now() >= deadline {
-                panic!("timed out waiting for the workspace view to leave the splash state");
+                panic!("timed out waiting for the window to leave the Home screen");
             }
 
             std::thread::sleep(Duration::from_millis(10));

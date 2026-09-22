@@ -9,8 +9,9 @@ impl Render for GitCometView {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
-        let external_repo_drop_enabled =
-            renders_full_chrome(self.view_mode) && !self.state.repos.is_empty();
+        // The repository bar takes drops once repositories are open; Home
+        // takes them before that.
+        let external_repo_drop_enabled = renders_full_chrome(self.view_mode);
         if self.external_drag_paths.is_some()
             && (!external_repo_drop_enabled
                 || (!cx.has_active_drag() && !self.external_drag_drop_pending))

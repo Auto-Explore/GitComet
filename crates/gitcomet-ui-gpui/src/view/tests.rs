@@ -3091,12 +3091,12 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
         false,
         true
     ));
-    assert!(!should_show_splash_screen(
+    assert!(!should_show_home_screen(
         GitCometViewMode::Normal,
         false,
         true
     ));
-    assert!(should_show_splash_screen(
+    assert!(should_show_home_screen(
         GitCometViewMode::Normal,
         false,
         false
@@ -3574,7 +3574,7 @@ fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext)
 }
 
 #[gpui::test]
-fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
+fn home_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -3584,23 +3584,34 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
         let _ = window.draw(app);
     });
 
-    cx.debug_bounds("repository_entry_screen")
-        .expect("expected repository entry splash screen");
-    cx.debug_bounds("splash_headline")
-        .expect("expected splash headline");
-    cx.debug_bounds("splash_open_repo_action")
-        .expect("expected splash open repository button");
-    cx.debug_bounds("splash_clone_repo_action")
-        .expect("expected splash clone repository button");
+    for selector in [
+        "repository_entry_screen",
+        "home_title",
+        "home_open_repo_action",
+        "home_clone_repo_action",
+        "home_init_repo_action",
+        "home_search",
+        "home_workspaces_list",
+        "home_recent_list",
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "expected {selector} on the Home page"
+        );
+    }
+    assert!(
+        cx.debug_bounds("splash_headline").is_none(),
+        "the marketing headline is gone"
+    );
 
     #[cfg(not(target_os = "macos"))]
     assert!(
-        cx.debug_bounds("app_menu").is_none(),
-        "expected app menu button to be hidden on the splash screen"
+        cx.debug_bounds("app_menu").is_some(),
+        "settings and quit stay reachable from Home through the app menu"
     );
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
-    assert!(splash_active, "expected splash screen to be active");
+    let home_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
+    assert!(home_active, "expected the Home page to be active");
 }
 
 #[gpui::test]
@@ -3634,7 +3645,7 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
     );
 
     cx.update(|_window, app| {
-        assert!(view.read(app).is_splash_screen_active());
+        assert!(view.read(app).is_home_screen_active());
         assert!(view.read(app).blocks_non_repository_actions());
     });
 }
@@ -3711,7 +3722,7 @@ fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContex
         .expect("expected blocking git unavailable overlay");
 
     cx.update(|_window, app| {
-        assert!(!view.read(app).is_splash_screen_active());
+        assert!(!view.read(app).is_home_screen_active());
         assert!(view.read(app).blocks_non_repository_actions());
     });
 }
@@ -3809,8 +3820,8 @@ fn splash_backdrop_renders_native_layers_and_tracks_theme(cx: &mut gpui::TestApp
         });
         cx.debug_bounds("splash_backdrop_image")
             .expect("expected backdrop after switching themes");
-        cx.debug_bounds("splash_open_repo_action")
-            .expect("expected splash controls after switching themes");
+        cx.debug_bounds("home_open_repo_action")
+            .expect("expected Home controls after switching themes");
     }
     assert!(
         cx.debug_bounds("splash_backdrop_glow_layer").is_none(),
@@ -3825,12 +3836,12 @@ fn splash_backdrop_renders_native_layers_and_tracks_theme(cx: &mut gpui::TestApp
         "expected legacy centered backdrop container to be removed"
     );
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    let splash_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
     assert!(splash_active, "expected splash screen to remain active");
 }
 
 #[gpui::test]
-fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
+fn home_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -3841,25 +3852,25 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
     });
 
     let open_center = cx
-        .debug_bounds("splash_open_repo_action")
-        .expect("expected splash open repository button")
+        .debug_bounds("home_open_repo_action")
+        .expect("expected Home open repository button")
         .center();
     cx.simulate_mouse_move(open_center, None, gpui::Modifiers::default());
     test_support::wait_for_native_tooltip(cx);
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
-        Some("Open repository".to_string())
+        Some("Open an existing repository".to_string())
     );
 
     let clone_center = cx
-        .debug_bounds("splash_clone_repo_action")
-        .expect("expected splash clone repository button")
+        .debug_bounds("home_clone_repo_action")
+        .expect("expected Home clone repository button")
         .center();
     cx.simulate_mouse_move(clone_center, None, gpui::Modifiers::default());
     test_support::wait_for_native_tooltip(cx);
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
-        Some("Clone repository".to_string())
+        Some("Clone a repository from a URL".to_string())
     );
 }
 
@@ -3891,7 +3902,7 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
         let _ = window.draw(app);
     });
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    let splash_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
     assert!(
         !splash_active,
         "expected splash screen to disappear after opening a repo"
@@ -3934,7 +3945,7 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     cx.debug_bounds("repository_entry_screen")
         .expect("expected splash screen after closing the last repo");
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    let splash_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
     assert!(
         splash_active,
         "expected splash screen to return after closing the last repo"
@@ -6322,5 +6333,90 @@ fn clearing_the_workspace_theme_override_falls_back_to_the_global_preference(
     assert_eq!(
         cx.update(|_window, app| view.read(app).theme.colors.surface.panel),
         theme_panel_color("sunset_veil")
+    );
+}
+
+#[gpui::test]
+fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let alpha = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/alpha")]);
+    let beta = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/beta")]);
+    let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
+    let beta_row: &'static str = format!("home_workspace_{}", beta.id).leak();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![alpha, beta]);
+        view.update(app, |view, _cx| {
+            view.home_recent_repos = vec![PathBuf::from("/work/gamma")];
+            view.home_pinned_repos.clear();
+        });
+        let _ = window.draw(app);
+    });
+    let gamma_row: &'static str = format!(
+        "home_recent_{}",
+        gitcomet_state::session::path_storage_key(Path::new("/work/gamma"))
+    )
+    .leak();
+    assert!(cx.debug_bounds(alpha_row).is_some());
+    assert!(cx.debug_bounds(beta_row).is_some());
+    assert!(cx.debug_bounds(gamma_row).is_some());
+
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.home_search_input
+                .update(cx, |input, cx| input.set_text("ALPHA", cx));
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds(alpha_row).is_some(),
+        "matches by name, ignoring case"
+    );
+    assert!(cx.debug_bounds(beta_row).is_none());
+    assert!(cx.debug_bounds(gamma_row).is_none());
+}
+
+#[gpui::test]
+fn opening_a_workspace_from_home_adopts_it_into_this_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Later".to_string());
+    workspace.restore_on_launch = false;
+    let id = workspace.id;
+    let row: &'static str = format!("home_workspace_{id}").leak();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let window_id = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace]);
+        let _ = window.draw(app);
+        window.window_handle().window_id()
+    });
+    assert!(cx.debug_bounds("repo_picker_toggle").is_none());
+
+    let center = cx.debug_bounds(row).expect("workspace row").center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let adopted = cx.update(|_window, app| crate::workspaces::workspace_for_window(app, window_id));
+    assert_eq!(adopted.map(|workspace| workspace.id), Some(id));
+    assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
+    assert!(
+        cx.debug_bounds("repo_picker_toggle").is_some(),
+        "the title bar shows the adopted workspace's chip on Home"
+    );
+    assert!(
+        cx.debug_bounds(row).is_none(),
+        "Home no longer lists its own workspace"
     );
 }

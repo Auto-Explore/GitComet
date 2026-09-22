@@ -1411,6 +1411,11 @@ impl GitCometView {
             }
             crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());
             crate::workspaces::mark_window_active(cx, this.window_handle.window_id());
+            if !this.has_repo_tabs() {
+                // Another window may have opened or closed repositories.
+                this.refresh_home_repositories();
+                cx.notify();
+            }
             let self_initiated_grab =
                 consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
             if self_initiated_grab {
@@ -1525,6 +1530,24 @@ impl GitCometView {
             input
         });
 
+        let home_search_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Search workspaces and repositories".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let home_search_input_subscription = cx.observe(&home_search_input, |this, input, cx| {
+            let next = input.read(cx).text().to_string();
+            if this.home_search_query != next {
+                this.home_search_query = next;
+                cx.notify();
+            }
+        });
+
         let open_repo_input_subscription = cx.observe(&open_repo_input, |this, input, cx| {
             let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
             let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
@@ -1613,6 +1636,7 @@ impl GitCometView {
             _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _open_repo_input_subscription: open_repo_input_subscription,
+            _home_search_input_subscription: home_search_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
             workspace_id,
@@ -1699,6 +1723,10 @@ impl GitCometView {
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
+            home_search_input,
+            home_search_query: String::new(),
+            home_pinned_repos: ui_session.pinned_repos.clone(),
+            home_recent_repos: ui_session.recent_repos.clone(),
             external_drag_paths: None,
             external_drag_payload: None,
             external_drag_classification_seq: 0,
@@ -1812,6 +1840,8 @@ impl GitCometView {
         self.reveal_commit_dialog
             .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         self.open_repo_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.home_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input
             .update(cx, |input, cx| input.set_theme(theme, cx));

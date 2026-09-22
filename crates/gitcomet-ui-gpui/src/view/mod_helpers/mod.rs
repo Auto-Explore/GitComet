@@ -974,6 +974,7 @@ pub struct GitCometView {
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) _open_repo_input_subscription: gpui::Subscription,
+    pub(super) _home_search_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
     pub(super) workspace_id: Option<gitcomet_state::session::WorkspaceId>,
     pub(super) persisted_workspace_repo_paths: Vec<std::path::PathBuf>,
@@ -1074,6 +1075,10 @@ pub struct GitCometView {
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
+    pub(super) home_search_input: Entity<components::TextInput>,
+    pub(super) home_search_query: String,
+    pub(super) home_pinned_repos: Vec<std::path::PathBuf>,
+    pub(super) home_recent_repos: Vec<std::path::PathBuf>,
     pub(super) external_drag_paths: Option<gpui::ExternalPaths>,
     pub(super) external_drag_payload: Option<external_drag::ClassifiedExternalPaths>,
     pub(super) external_drag_classification_seq: u64,
