@@ -3425,6 +3425,8 @@ pub(crate) struct MainPaneView {
     /// preview, shared with the renderer that measures it. See
     /// [`rows::MarkdownPreviewRevealRequest`].
     pub(in crate::view) markdown_preview_reveal: rows::MarkdownPreviewRevealRequest,
+    /// The rendered-preview link under the pointer, underlined while hovered.
+    pub(in crate::view) markdown_preview_hovered_link: Option<rows::MarkdownPreviewHoveredLink>,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,

@@ -401,6 +401,7 @@ fn render_conflict_markdown_preview_rows(
             image_base_dir: None,
             remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
             query: this.markdown_preview_search_query(),
+            hovered_link: None,
         },
     )
 }

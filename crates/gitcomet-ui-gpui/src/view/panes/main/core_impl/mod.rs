@@ -607,6 +607,7 @@ impl MainPaneView {
         // now holds that index.
         self.diff_search_horizontal_reveal = None;
         self.markdown_preview_reveal.clear();
+        self.markdown_preview_hovered_link = None;
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -2615,8 +2616,9 @@ impl MainPaneView {
                 return;
             }
             let end_visible_ix = count - 1;
-            let end_offset =
-                self.diff_text_line_len_for_region(end_visible_ix, DiffTextRegion::Inline);
+            let end_offset = self
+                .diff_text_full_line_for_region(end_visible_ix, DiffTextRegion::Inline)
+                .len();
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {

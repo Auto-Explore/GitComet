@@ -2540,15 +2540,217 @@ fn autolinks_and_styled_link_text_stay_clickable() {
 }
 
 #[test]
-fn only_web_destinations_are_offered() {
-    // Relative paths, anchors, and non-web schemes still render as links
-    // but have nothing to open in a browser.
+fn only_openable_destinations_are_offered() {
+    // A relative path names a file in the repository, an anchor a heading in
+    // this document, and a web URL opens in the browser. Non-web schemes still
+    // render as links but have nothing to open.
     let doc = parse(
         "[rel](./other.md) [anchor](#section) [mail](mailto:a@b.c) [js](javascript:alert(1)) [ok](https://example.com)\n",
     );
     let row = &doc.rows[0];
 
-    assert_eq!(link_spans(row), vec![("ok", "https://example.com")]);
+    assert_eq!(
+        link_spans(row),
+        vec![
+            ("rel", "./other.md"),
+            ("anchor", "#section"),
+            ("ok", "https://example.com")
+        ]
+    );
+}
+
+#[test]
+fn link_destinations_classify_as_web_local_or_nothing() {
+    use super::MarkdownLinkTarget::{Anchor, LocalFile, Web};
+    let web = |url: &str| Some(Web(SharedString::from(url.to_owned())));
+    let local = |path: &str| Some(LocalFile(SharedString::from(path.to_owned())));
+
+    // An in-document anchor carries its fragment without the `#`.
+    assert_eq!(
+        classify_markdown_link_destination(" #trust-a-gpg-key "),
+        Some(Anchor("trust-a-gpg-key".into()))
+    );
+
+    assert_eq!(
+        classify_markdown_link_destination("https://a/b"),
+        web("https://a/b")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("HTTP://a"),
+        web("HTTP://a")
+    );
+    // The fragment is part of what the browser opens.
+    assert_eq!(
+        classify_markdown_link_destination("https://a/b#frag"),
+        web("https://a/b#frag")
+    );
+
+    assert_eq!(
+        classify_markdown_link_destination("./other.md"),
+        local("./other.md")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("../README.md"),
+        local("../README.md")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("docs/guide.md"),
+        local("docs/guide.md")
+    );
+    // Root-relative, as GitHub reads it.
+    assert_eq!(
+        classify_markdown_link_destination("/docs/x.md"),
+        local("/docs/x.md")
+    );
+    // Fragment and query stay attached; the resolver strips them.
+    assert_eq!(
+        classify_markdown_link_destination("other.md#sec"),
+        local("other.md#sec")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("other.md?raw=1"),
+        local("other.md?raw=1")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("  other.md  "),
+        local("other.md")
+    );
+
+    for inert in [
+        "",
+        "   ",
+        "#",
+        "mailto:a@b.c",
+        "javascript:alert(1)",
+        "data:image/png;base64,x",
+        "tel:+123",
+        "ftp://x",
+        "file:///etc/passwd",
+        "//cdn.example.com/x",
+        "C:\\notes.md",
+    ] {
+        assert_eq!(
+            classify_markdown_link_destination(inert),
+            None,
+            "{inert:?} must not be offered"
+        );
+    }
+}
+
+#[test]
+fn scheme_detection_follows_rfc_3986_not_any_colon() {
+    use super::MarkdownLinkTarget::LocalFile;
+    let local = |path: &str| Some(LocalFile(SharedString::from(path.to_owned())));
+
+    // A colon after a path separator is part of a file name, not a scheme.
+    assert_eq!(
+        classify_markdown_link_destination("docs/a:b.md"),
+        local("docs/a:b.md")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("./mailto:x"),
+        local("./mailto:x")
+    );
+    // A scheme has to start with a letter.
+    assert_eq!(
+        classify_markdown_link_destination("1http:x"),
+        local("1http:x")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("_x:y.md"),
+        local("_x:y.md")
+    );
+    // Letters, digits, `+`, `-`, and `.` after the first letter still spell a
+    // scheme, however unusual.
+    assert_eq!(classify_markdown_link_destination("a+b-c.d:x"), None);
+    assert_eq!(
+        classify_markdown_link_destination("svn+ssh:host/repo"),
+        None
+    );
+    // Web schemes need their `//`: without it this is a flat scheme.
+    assert_eq!(
+        classify_markdown_link_destination("https:example.com"),
+        None
+    );
+    // `://` after a non-web scheme is never a file.
+    assert_eq!(classify_markdown_link_destination("vscode://file/x"), None);
+    assert_eq!(classify_markdown_link_destination("ssh://git@host/r"), None);
+}
+
+#[test]
+fn offered_destinations_are_trimmed_and_carry_no_classification() {
+    assert_eq!(
+        offered_link_destination("  ./a.md  ").as_deref(),
+        Some("./a.md")
+    );
+    assert_eq!(
+        offered_link_destination(" https://example.com ").as_deref(),
+        Some("https://example.com")
+    );
+    assert_eq!(offered_link_destination(" #top ").as_deref(), Some("#top"));
+    assert_eq!(offered_link_destination("#"), None);
+    assert_eq!(offered_link_destination("mailto:a@b.c"), None);
+}
+
+#[test]
+fn reference_style_local_links_keep_their_destination() {
+    // pulldown resolves the reference, so the span sees the definition's
+    // destination exactly as an inline link's.
+    let doc = parse("See [the guide][g] and [root][].\n\n[g]: ./guide.md\n[root]: /README.md\n");
+    let row = &doc.rows[0];
+
+    assert_eq!(
+        link_spans(row),
+        vec![("the guide", "./guide.md"), ("root", "/README.md")]
+    );
+}
+
+#[test]
+fn local_links_survive_table_alignment_and_styled_text() {
+    let table = parse("| a | b |\n| --- | --- |\n| [x](../x.md) | wide cell |\n");
+    let body = table
+        .rows
+        .iter()
+        .find(|row| row.text.contains('x'))
+        .expect("table body row");
+    assert_eq!(link_spans(body), vec![("x", "../x.md")]);
+
+    // A styled span inside a local link stays clickable, as for web links.
+    let doc = parse("[**bold** and `code`](docs/a.md#part)\n");
+    let spans = link_spans(&doc.rows[0]);
+    assert!(
+        spans
+            .iter()
+            .any(|(text, url)| *text == "bold" && *url == "docs/a.md#part"),
+        "bold text inside a local link keeps the destination: {spans:?}"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|(text, url)| *text == "code" && *url == "docs/a.md#part"),
+        "code inside a local link keeps the destination: {spans:?}"
+    );
+}
+
+#[test]
+fn a_badge_wrapped_in_a_local_link_keeps_the_link() {
+    let doc = parse(
+        "[![One](https://img.shields.io/badge/one.svg)](./one.md)\n[![Two](https://img.shields.io/badge/two.svg)](#anchor)\n",
+    );
+    let badges: Vec<&MarkdownInlineImage> = doc
+        .rows
+        .iter()
+        .flat_map(|row| row.inline_images.iter())
+        .collect();
+
+    // The anchor-wrapped badge links to its heading.
+    assert_eq!(
+        badges
+            .iter()
+            .map(|badge| badge.link_url.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("./one.md"), Some("#anchor")]
+    );
 }
 
 #[test]
@@ -2763,4 +2965,74 @@ fn inline_spans_stay_on_char_boundaries_for_random_markdown_soup() {
         };
         assert_rows_span_aligned(&source, &doc);
     }
+}
+
+#[test]
+fn heading_slugs_follow_github() {
+    for (heading, slug) in [
+        ("Trust a GPG key", "trust-a-gpg-key"),
+        ("What's new?", "whats-new"),
+        ("C++ & Rust: a_b-c", "c--rust-a_b-c"),
+        ("Äiti ja Übung", "äiti-ja-übung"),
+        ("  Padded  ", "padded"),
+        ("v0.2.5 (beta)", "v025-beta"),
+    ] {
+        assert_eq!(markdown_heading_slug(heading), slug, "{heading:?}");
+    }
+}
+
+#[test]
+fn anchors_resolve_to_their_heading_row() {
+    let doc = parse(
+        "# Signatures\n\n| Badge | Meaning |\n| --- | --- |\n| `U` | See [Trust a GPG key](#trust-a-gpg-key). |\n\n## Trust a `GPG` key\n\nText.\n\n## Notes\n\n## Notes\n",
+    );
+    let heading = |text: &str| {
+        doc.rows
+            .iter()
+            .position(|row| {
+                matches!(row.kind, MarkdownPreviewRowKind::Heading { .. })
+                    && row.text.as_ref() == text
+            })
+            .unwrap_or_else(|| panic!("no heading {text:?}"))
+    };
+    let trust = heading("Trust a GPG key");
+    let first_notes = heading("Notes");
+    let second_notes = doc
+        .rows
+        .iter()
+        .rposition(|row| row.text.as_ref() == "Notes")
+        .expect("second Notes heading");
+    assert_ne!(first_notes, second_notes);
+
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "trust-a-gpg-key"),
+        Some(trust)
+    );
+    assert_eq!(markdown_preview_anchor_row(&doc, "signatures"), Some(0));
+    // A repeated heading is numbered in document order.
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "notes"),
+        Some(first_notes)
+    );
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "notes-1"),
+        Some(second_notes)
+    );
+    // Case is forgiven when nothing matches exactly.
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "Trust-A-GPG-Key"),
+        Some(trust)
+    );
+    assert_eq!(markdown_preview_anchor_row(&doc, "missing"), None);
+    // Table text is not a heading, however it reads.
+    assert_eq!(markdown_preview_anchor_row(&doc, "badge"), None);
+}
+
+#[test]
+fn an_anchor_link_in_a_table_cell_keeps_its_destination() {
+    let doc = parse(
+        "| Badge | Meaning |\n| --- | --- |\n| **Untrusted key** | See [Trust a GPG key](#trust-a-gpg-key). |\n",
+    );
+    let spans: Vec<_> = doc.rows.iter().flat_map(link_spans).collect();
+    assert_eq!(spans, vec![("Trust a GPG key", "#trust-a-gpg-key")]);
 }

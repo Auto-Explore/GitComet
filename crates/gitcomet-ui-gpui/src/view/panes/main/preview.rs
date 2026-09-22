@@ -1291,8 +1291,115 @@ impl MainPaneView {
         absolute.parent().map(ToOwned::to_owned)
     }
 
-    /// Web link under `position` in a rendered markdown preview row, and where
-    /// it sits in that row.
+    /// The menu a click on a rendered-preview link opens, or `None` when the
+    /// link is inert here.
+    pub(in crate::view) fn markdown_preview_link_popover_kind(
+        &self,
+        destination: &SharedString,
+        load_remote_image_url: Option<SharedString>,
+    ) -> Option<PopoverKind> {
+        use crate::view::markdown_preview::{
+            MarkdownLinkTarget, classify_markdown_link_destination,
+        };
+
+        match classify_markdown_link_destination(destination)? {
+            MarkdownLinkTarget::Web(url) => Some(PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            }),
+            MarkdownLinkTarget::LocalFile(path) => {
+                self.markdown_preview_local_file_link_menu(&path, load_remote_image_url)
+            }
+            // Followed on click, never offered in a menu.
+            MarkdownLinkTarget::Anchor(_) => None,
+        }
+    }
+
+    /// Scroll the preview to the heading a `#fragment` link names, and report
+    /// whether there was one.
+    pub(in crate::view) fn scroll_markdown_preview_to_anchor(
+        &mut self,
+        region: DiffTextRegion,
+        destination: &str,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        use crate::view::markdown_preview::{
+            MarkdownLinkTarget, classify_markdown_link_destination, markdown_preview_anchor_row,
+        };
+
+        let Some(MarkdownLinkTarget::Anchor(fragment)) =
+            classify_markdown_link_destination(destination)
+        else {
+            return false;
+        };
+        let fragment = crate::view::rows::percent_decode_link_path(&fragment);
+        let Some((row_ix, visual_ix)) =
+            self.markdown_preview_list_for_region(region)
+                .and_then(|(list, document)| {
+                    let row_ix = markdown_preview_anchor_row(document, &fragment)?;
+                    let visual_ix = self
+                        .markdown_preview_wrap_plan(list)
+                        .map_or(row_ix, |plan| plan.visual_ix_for_row(row_ix));
+                    Some((row_ix, visual_ix))
+                })
+        else {
+            return false;
+        };
+        match self.markdown_search_surface() {
+            // The flowing document indexes rows, not wrapped lines.
+            Some(MarkdownSearchSurface::Worktree) => {
+                self.markdown_preview_reveal.request_top(row_ix)
+            }
+            Some(MarkdownSearchSurface::DiffInline) => self
+                .diff_scroll
+                .scroll_to_item_strict(visual_ix, gpui::ScrollStrategy::Top),
+            // Both sides share one visual row space, so one index moves both.
+            Some(MarkdownSearchSurface::DiffSplit) => {
+                self.diff_scroll
+                    .scroll_to_item_strict(visual_ix, gpui::ScrollStrategy::Top);
+                self.diff_split_right_scroll
+                    .scroll_to_item_strict(visual_ix, gpui::ScrollStrategy::Top);
+            }
+            Some(MarkdownSearchSurface::Conflict) | None => return false,
+        }
+        cx.notify();
+        true
+    }
+
+    /// "Open in GitComet" for a link to a file in this repository.
+    ///
+    /// The entry is greyed out when the working-tree file is not there; a
+    /// link at a commit always tries that commit's tree.
+    fn markdown_preview_local_file_link_menu(
+        &self,
+        destination: &str,
+        load_remote_image_url: Option<SharedString>,
+    ) -> Option<PopoverKind> {
+        // An inline submodule diff renders the submodule's file, but the menu
+        // dispatches on the parent repository: the two trees do not line up.
+        if self.active_inline_submodule_diff().is_some() {
+            return None;
+        }
+        let repo = self.active_repo()?;
+        let workdir = repo.spec.workdir.as_path();
+        let (source, path) = crate::view::rows::markdown_preview_local_link_target(
+            workdir,
+            repo.diff_state.diff_target.as_ref()?,
+            destination,
+        )?;
+        let missing =
+            crate::view::rows::markdown_preview_local_link_missing(workdir, &source, &path)?;
+        Some(PopoverKind::LocalFileLinkMenu {
+            repo_id: repo.id,
+            source,
+            path,
+            missing,
+            load_remote_image_url,
+        })
+    }
+
+    /// Link under `position` in a rendered markdown preview row, and where it
+    /// sits in that row.
     ///
     /// Preview rows paint link *text*, not the destination, so the URL comes
     /// from the inline span the click landed in. Offsets from the hitbox are
@@ -1307,23 +1414,98 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
     ) -> Option<(SharedString, Range<usize>)> {
+        let (row, _, slice_start, span_ix) =
+            self.markdown_preview_link_span_ix_at(visible_ix, region, position)?;
+        let span = &row.inline_spans[span_ix];
+        let start = span.byte_range.start.saturating_sub(slice_start);
+        let end = span.byte_range.end.saturating_sub(slice_start);
+        Some((span.link_url.clone()?, start..end))
+    }
+
+    /// The link span under `position`: its row, the row's document index, where
+    /// the painted slice starts in `row.text`, and the span's index. A point
+    /// beside the text is on no link, so hover and click agree on where a
+    /// link ends.
+    fn markdown_preview_link_span_ix_at(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<(&MarkdownPreviewRow, usize, usize, usize)> {
         if !self.is_markdown_preview_active() {
             return None;
         }
         let (row, visual) = self.markdown_preview_row_at(visible_ix, region)?;
+        let row_ix = visual.map_or(visible_ix, |visual| visual.row_ix);
         let slice_start = visual.map_or(0, |visual| visual.byte_range.start);
-        let offset =
-            slice_start + self.diff_text_offset_for_position(visible_ix, region, position)?;
-
-        row.inline_spans
+        let offset = slice_start + self.diff_text_offset_on_text(visible_ix, region, position)?;
+        let span_ix = row
+            .inline_spans
             .iter()
-            .find(|span| span.byte_range.contains(&offset))
-            .and_then(|span| {
-                let url = span.link_url.clone()?;
-                let start = span.byte_range.start.saturating_sub(slice_start);
-                let end = span.byte_range.end.saturating_sub(slice_start);
-                Some((url, start..end))
-            })
+            .position(|span| span.byte_range.contains(&offset) && span.link_url.is_some())?;
+        Some((row, row_ix, slice_start, span_ix))
+    }
+
+    /// Point the hovered-link underline and pointer cursor at the link under
+    /// `position`, repainting only when that changes. A held button is a drag,
+    /// not a hover.
+    pub(in crate::view) fn update_markdown_preview_link_hover(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        button_held: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let hovered = (!button_held)
+            .then(|| self.markdown_preview_link_span_ix_at(visible_ix, region, position))
+            .flatten()
+            .map(|(row, row_ix, _, span_ix)| {
+                // A link whose text changes style spans several runs; the whole
+                // link is what the pointer is on.
+                let spans = &row.inline_spans;
+                let url = &spans[span_ix].link_url;
+                let same_link = |a: usize, b: usize| {
+                    spans[a].link_url == *url
+                        && spans[a].byte_range.end == spans[b].byte_range.start
+                };
+                let mut first = span_ix;
+                while first > 0 && same_link(first - 1, first) {
+                    first -= 1;
+                }
+                let mut last = span_ix;
+                while last + 1 < spans.len() && same_link(last, last + 1) {
+                    last += 1;
+                }
+                rows::MarkdownPreviewHoveredLink {
+                    region,
+                    visible_ix,
+                    row_ix,
+                    byte_range: spans[first].byte_range.start..spans[last].byte_range.end,
+                }
+            });
+        if self.markdown_preview_hovered_link != hovered {
+            self.markdown_preview_hovered_link = hovered;
+            cx.notify();
+        }
+    }
+
+    /// Drop the hovered link when the pointer leaves the row showing it. A row
+    /// the pointer has already moved on to may have claimed it first.
+    pub(in crate::view) fn clear_markdown_preview_link_hover(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .markdown_preview_hovered_link
+            .as_ref()
+            .is_some_and(|hovered| hovered.region == region && hovered.visible_ix == visible_ix)
+        {
+            self.markdown_preview_hovered_link = None;
+            cx.notify();
+        }
     }
 
     /// The wrap plan `list` renders with, once it is confirmed to describe the

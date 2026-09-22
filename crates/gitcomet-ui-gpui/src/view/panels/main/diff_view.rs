@@ -2349,6 +2349,9 @@ impl MainPaneView {
                                                 ),
                                             query: self.markdown_preview_search_query(),
                                             reveal: self.markdown_preview_reveal.clone(),
+                                            hovered_link: self
+                                                .markdown_preview_hovered_link
+                                                .clone(),
                                             scroll: Some(
                                                 self.worktree_preview_scroll
                                                     .0

@@ -337,7 +337,7 @@ pub(crate) fn flatten_to_rows(
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 span_stack.push(MarkdownInlineStyle::Link);
-                link_stack.push(web_link_url(dest_url.as_ref()));
+                link_stack.push(offered_link_destination(dest_url.as_ref()));
             }
             Event::End(TagEnd::Link) => {
                 span_stack.pop();

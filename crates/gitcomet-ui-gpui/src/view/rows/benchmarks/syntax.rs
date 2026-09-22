@@ -1708,6 +1708,7 @@ fn render_markdown_preview_window(
             image_base_dir: None,
             remote_image_access: Default::default(),
             query: None,
+            hovered_link: None,
         },
     )
 }

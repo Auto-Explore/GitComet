@@ -62,6 +62,8 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) reveal: crate::view::rows::MarkdownPreviewRevealRequest,
     /// The container the document scrolls in, which the reveal moves.
     pub(in crate::view) scroll: Option<gpui::ScrollHandle>,
+    /// The link under the pointer.
+    pub(in crate::view) hovered_link: Option<crate::view::rows::MarkdownPreviewHoveredLink>,
 }
 
 /// Gap between two blocks, and the extra break a heading opens above itself.
@@ -395,8 +397,12 @@ fn reveal_listener(row_ix: usize, context: &MarkdownDocumentContext) -> gpui::Di
         return shell;
     };
     let reveal = context.reveal.clone();
+    let view = context.view.clone();
     shell.on_children_prepainted(move |children_bounds, window, _app| {
-        if reveal.take() != Some(row_ix) {
+        let Some((revealed_ix, align)) = reveal.take() else {
+            return;
+        };
+        if revealed_ix != row_ix {
             return;
         }
         let Some((row_top, row_height)) =
@@ -410,6 +416,7 @@ fn reveal_listener(row_ix: usize, context: &MarkdownDocumentContext) -> gpui::Di
         // so undo it to get the row's place in the document.
         let row_top_in_content = row_top - viewport.origin.y - offset.y;
         let Some(target_y) = crate::view::rows::markdown_preview_reveal_offset_y(
+            align,
             row_top_in_content,
             row_height,
             viewport.size.height,
@@ -419,7 +426,12 @@ fn reveal_listener(row_ix: usize, context: &MarkdownDocumentContext) -> gpui::Di
             return;
         };
         scroll.set_offset(point(offset.x, target_y));
-        window.refresh();
+        // `refresh` is a no-op mid-draw, and this frame was laid out at the old
+        // offset: repaint on the next one.
+        match view.clone() {
+            Some(view) => window.on_next_frame(move |_, cx| view.update(cx, |_, cx| cx.notify())),
+            None => window.request_animation_frame(),
+        }
     })
 }
 
@@ -457,7 +469,35 @@ fn row_shell(
     };
     let text_region = context.text_region;
     shell
-        .cursor(gpui::CursorStyle::IBeam)
+        .cursor(crate::view::rows::MarkdownPreviewHoveredLink::cursor(
+            context.hovered_link.as_ref(),
+            text_region,
+            row_ix,
+        ))
+        .on_mouse_move({
+            let view = view.clone();
+            move |event, _window, cx| {
+                view.update(cx, |this, cx| {
+                    this.update_markdown_preview_link_hover(
+                        row_ix,
+                        text_region,
+                        event.position,
+                        event.pressed_button.is_some(),
+                        cx,
+                    );
+                });
+            }
+        })
+        .on_hover({
+            let view = view.clone();
+            move |hovered, _window, cx| {
+                if !*hovered {
+                    view.update(cx, |this, cx| {
+                        this.clear_markdown_preview_link_hover(row_ix, text_region, cx);
+                    });
+                }
+            }
+        })
         .on_mouse_down(gpui::MouseButton::Left, {
             let view = view.clone();
             move |event, window, cx| {
@@ -625,6 +665,11 @@ fn render_row_text(
         row,
         row_ix,
         context.query.as_ref(),
+        crate::view::rows::MarkdownPreviewHoveredLink::range_in_row(
+            context.hovered_link.as_ref(),
+            context.text_region,
+            row_ix,
+        ),
     );
     let styled = styled.as_ref();
 
@@ -660,17 +705,21 @@ fn render_row_text(
     // The selection highlight is painted inside this box against the layout the
     // text was painted with, so the box must be the glyph box: any padding here
     // would slide the highlight off the text it covers.
-    text.cursor(gpui::CursorStyle::IBeam)
-        .debug_selector(move || format!("markdown_preview_text_box_{row_ix}"))
-        .child(MarkdownFlowText::new(
-            view,
-            row_ix,
-            context.text_region,
-            row.text.clone(),
-            styled.text.clone(),
-            Arc::clone(&styled.highlights),
-        ))
-        .into_any_element()
+    text.cursor(crate::view::rows::MarkdownPreviewHoveredLink::cursor(
+        context.hovered_link.as_ref(),
+        context.text_region,
+        row_ix,
+    ))
+    .debug_selector(move || format!("markdown_preview_text_box_{row_ix}"))
+    .child(MarkdownFlowText::new(
+        view,
+        row_ix,
+        context.text_region,
+        row.text.clone(),
+        styled.text.clone(),
+        Arc::clone(&styled.highlights),
+    ))
+    .into_any_element()
 }
 
 fn render_heading(

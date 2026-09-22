@@ -275,6 +275,19 @@ pub(crate) enum PopoverKind {
         /// images under either other policy leave this empty.
         load_remote_image_url: Option<SharedString>,
     },
+    /// "Open in GitComet" for a link in the rendered markdown preview whose
+    /// destination is a file inside this repository.
+    LocalFileLinkMenu {
+        repo_id: RepoId,
+        source: gitcomet_core::domain::FileSource,
+        /// Repo-relative, with `.`/`..` folded.
+        path: std::path::PathBuf,
+        /// The working tree has no such file; the entry is shown greyed out.
+        missing: bool,
+        /// Same Ask-mode carrier as `WebLinkMenu`: a linked badge can only be
+        /// approved through its link menu.
+        load_remote_image_url: Option<SharedString>,
+    },
     /// Actions for a commit id clicked in a commit message or a SHA field.
     CommitShaLinkMenu {
         repo_id: RepoId,

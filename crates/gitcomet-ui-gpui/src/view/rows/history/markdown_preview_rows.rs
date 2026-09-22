@@ -98,6 +98,48 @@ pub(in crate::view) struct MarkdownPreviewRenderContext<'a> {
     pub(in crate::view) remote_image_access: MarkdownRemoteImageAccess,
     /// Quick-search state, when the search box is open over this preview.
     pub(in crate::view) query: Option<MarkdownPreviewQuery>,
+    /// The link under the pointer, if it is in this list.
+    pub(in crate::view) hovered_link: Option<MarkdownPreviewHoveredLink>,
+}
+
+/// The rendered-preview link under the pointer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct MarkdownPreviewHoveredLink {
+    pub(in crate::view) region: DiffTextRegion,
+    /// List position the pointer is over; that row shows the pointer cursor.
+    pub(in crate::view) visible_ix: usize,
+    /// Document row holding the link, and the link's bytes in its text. Every
+    /// wrapped slice of the row underlines its part.
+    pub(in crate::view) row_ix: usize,
+    pub(in crate::view) byte_range: Range<usize>,
+}
+
+impl MarkdownPreviewHoveredLink {
+    /// The link bytes to underline in document row `row_ix`.
+    pub(in crate::view) fn range_in_row(
+        hovered: Option<&Self>,
+        region: DiffTextRegion,
+        row_ix: usize,
+    ) -> Option<&Range<usize>> {
+        hovered
+            .filter(|hovered| hovered.region == region && hovered.row_ix == row_ix)
+            .map(|hovered| &hovered.byte_range)
+    }
+
+    /// The cursor list position `visible_ix` shows.
+    pub(in crate::view) fn cursor(
+        hovered: Option<&Self>,
+        region: DiffTextRegion,
+        visible_ix: usize,
+    ) -> gpui::CursorStyle {
+        if hovered
+            .is_some_and(|hovered| hovered.region == region && hovered.visible_ix == visible_ix)
+        {
+            gpui::CursorStyle::PointingHand
+        } else {
+            gpui::CursorStyle::IBeam
+        }
+    }
 }
 
 /// A snapshot of the per-window permission state used by one render pass.
@@ -375,8 +417,18 @@ pub(in crate::view) fn markdown_preview_row_element(
     let row_layout = markdown_preview_row_layout(row, ui_scale_percent);
     let typography =
         markdown_preview_row_typography(theme, row, &context.editor_font_family, ui_scale_percent);
-    let full_styled =
-        markdown_preview_styled_row_with_query(theme, row, row_ix, context.query.as_ref());
+    let doc_row_ix = visual_row.map_or(row_ix, |visual| visual.row_ix);
+    let full_styled = markdown_preview_styled_row_with_query(
+        theme,
+        row,
+        row_ix,
+        context.query.as_ref(),
+        MarkdownPreviewHoveredLink::range_in_row(
+            context.hovered_link.as_ref(),
+            text_region,
+            doc_row_ix,
+        ),
+    );
     let full_styled = full_styled.as_ref();
     // Wrapped rows paint one slice of the row's text each; the marker and
     // alert badge belong to the first slice so continuations stay aligned
@@ -547,9 +599,14 @@ pub(in crate::view) fn markdown_preview_row_element(
             .line_height(px(typography.line_height))
             .text_color(typography.text_color);
         if is_interactive {
-            // Preview text is selectable, so the pointer should say so.
+            // Preview text is selectable, so the pointer should say so — unless
+            // it is on a link.
             content = content
-                .cursor(gpui::CursorStyle::IBeam)
+                .cursor(MarkdownPreviewHoveredLink::cursor(
+                    context.hovered_link.as_ref(),
+                    text_region,
+                    row_ix,
+                ))
                 .debug_selector(|| format!("markdown_preview_text_box_{row_ix}"));
         }
 
@@ -748,13 +805,41 @@ pub(in crate::view) fn markdown_preview_row_element(
             .w(min_width)
             .flex()
             .items_center()
-            .cursor(gpui::CursorStyle::IBeam)
+            .cursor(MarkdownPreviewHoveredLink::cursor(
+                context.hovered_link.as_ref(),
+                text_region,
+                row_ix,
+            ))
             .pt(px(row_layout.top_inset_px))
             .pb(px(row_layout.bottom_inset_px))
             .when_some(markdown_preview_row_background(theme, row), |div, bg| {
                 div.bg(bg)
             })
             .min_w(min_width)
+            .on_mouse_move({
+                let view = view.clone();
+                move |event, _window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.update_markdown_preview_link_hover(
+                            row_ix,
+                            text_region,
+                            event.position,
+                            event.pressed_button.is_some(),
+                            cx,
+                        );
+                    });
+                }
+            })
+            .on_hover({
+                let view = view.clone();
+                move |hovered, _window, cx| {
+                    if !*hovered {
+                        view.update(cx, |this, cx| {
+                            this.clear_markdown_preview_link_hover(row_ix, text_region, cx);
+                        });
+                    }
+                }
+            })
             .on_mouse_down(gpui::MouseButton::Left, {
                 let view = view.clone();
                 move |event, window, cx| {
@@ -1189,6 +1274,162 @@ pub(in crate::view) fn markdown_preview_image_source(
         .then_some(MarkdownPreviewImageSource::File(resolved))
 }
 
+/// Repo-relative path a local markdown link names, resolved from the
+/// previewed document's own repo-relative path.
+///
+/// `..` is folded rather than refused — `../README.md` is how a `docs/` page
+/// links to the root — but a path that climbs out of the repository, enters
+/// `.git`, or is absolute on the OS resolves to nothing. A leading `/` is
+/// repository-root-relative, as GitHub reads it.
+pub(in crate::view) fn markdown_preview_local_link_path(
+    document_path: &std::path::Path,
+    destination: &str,
+) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+
+    let destination = destination.trim();
+    // Query and fragment suffixes address something inside the file.
+    let destination = destination.split(['#', '?']).next().unwrap_or(destination);
+    let destination = percent_decode_link_path(destination);
+    let (mut stack, rest) = match destination.strip_prefix('/') {
+        Some(rest) => (Vec::new(), rest),
+        None => {
+            let base = document_path
+                .parent()
+                .into_iter()
+                .flat_map(|dir| dir.components())
+                .filter_map(|component| match component {
+                    Component::Normal(name) => Some(name.to_os_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (base, destination.as_ref())
+        }
+    };
+    // A link that names nothing of its own (`.`, `..`, `/`) is not a file link.
+    let mut names_something = false;
+    for component in std::path::Path::new(rest).components() {
+        match component {
+            Component::CurDir => {}
+            // Nothing left to climb out of: the link leaves the repository.
+            Component::ParentDir => {
+                stack.pop()?;
+            }
+            Component::Normal(name) => {
+                if gitcomet_core::path_utils::is_git_metadata_component(name) {
+                    return None;
+                }
+                // On Windows `./C:..` parses as a Normal `C:..`, which a
+                // `PathBuf` reparses as a drive prefix and drops the base.
+                let mut reparsed = std::path::Path::new(name).components();
+                if !matches!(
+                    (reparsed.next(), reparsed.next()),
+                    (Some(Component::Normal(_)), None)
+                ) {
+                    return None;
+                }
+                stack.push(name.to_os_string());
+                names_something = true;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if !names_something || stack.is_empty() {
+        return None;
+    }
+    Some(stack.iter().collect())
+}
+
+/// What a local link in the preview of `target` opens: the version of the
+/// tree it reads from, and the repo-relative path it names.
+///
+/// A document shown at a commit links into that commit; a range diff has no
+/// single tree to read from, so its links are inert.
+pub(in crate::view) fn markdown_preview_local_link_target(
+    workdir: &std::path::Path,
+    target: &DiffTarget,
+    destination: &str,
+) -> Option<(gitcomet_core::domain::FileSource, std::path::PathBuf)> {
+    use gitcomet_core::domain::FileSource;
+
+    let (document_path, source) = match target {
+        DiffTarget::WorkingTree { path, .. } => (path.as_path(), FileSource::WorkingDirectory),
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => (path.as_path(), FileSource::Commit(commit_id.clone())),
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => return None,
+    };
+    let document_path = if document_path.is_absolute() {
+        document_path.strip_prefix(workdir).ok()?
+    } else {
+        document_path
+    };
+    let path = markdown_preview_local_link_path(document_path, destination)?;
+    Some((source, path))
+}
+
+/// Whether the file a resolved local link names is missing, or `None` when
+/// the link must stay inert.
+///
+/// Only the working tree is on disk. There a symlink can carry a lexically
+/// clean path out of the repository or into `.git`, so the canonical
+/// destination is checked too. A commit's tree is read by the backend, which
+/// reports a file that is not there.
+pub(in crate::view) fn markdown_preview_local_link_missing(
+    workdir: &std::path::Path,
+    source: &gitcomet_core::domain::FileSource,
+    path: &std::path::Path,
+) -> Option<bool> {
+    if *source != gitcomet_core::domain::FileSource::WorkingDirectory {
+        return Some(false);
+    }
+    let (Ok(workdir), Ok(destination)) =
+        (workdir.canonicalize(), workdir.join(path).canonicalize())
+    else {
+        // Nothing (or a dangling link) is there.
+        return Some(true);
+    };
+    let inside = destination.strip_prefix(&workdir).ok()?;
+    if inside.components().any(|component| {
+        gitcomet_core::path_utils::is_git_metadata_component(component.as_os_str())
+    }) {
+        return None;
+    }
+    Some(!destination.is_file())
+}
+
+/// Decode `%XX` escapes in a link path. A malformed escape or a result that
+/// is not UTF-8 keeps the text as written, which then names no file.
+pub(in crate::view) fn percent_decode_link_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if !path.contains('%') {
+        return std::borrow::Cow::Borrowed(path);
+    }
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut ix = 0;
+    while ix < bytes.len() {
+        if bytes[ix] == b'%' {
+            let Some(byte) = bytes
+                .get(ix + 1..ix + 3)
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            else {
+                return std::borrow::Cow::Borrowed(path);
+            };
+            decoded.push(byte);
+            ix += 3;
+        } else {
+            decoded.push(bytes[ix]);
+            ix += 1;
+        }
+    }
+    match String::from_utf8(decoded) {
+        Ok(decoded) => std::borrow::Cow::Owned(decoded),
+        Err(_) => std::borrow::Cow::Borrowed(path),
+    }
+}
+
 /// The `http(s)` URL an image source names, if it names one.
 ///
 /// Only these two schemes are followed; anything else a document might carry
@@ -1234,12 +1475,26 @@ impl MarkdownPreviewQuery {
 /// [`Self::take`] during prepaint and applies the scroll then.
 #[derive(Clone, Default)]
 pub(in crate::view) struct MarkdownPreviewRevealRequest(
-    std::rc::Rc<std::cell::Cell<Option<usize>>>,
+    std::rc::Rc<std::cell::Cell<Option<(usize, MarkdownPreviewRevealAlign)>>>,
 );
+
+/// Where a revealed row lands in the viewport.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum MarkdownPreviewRevealAlign {
+    /// Search matches sit mid-screen, with context on both sides.
+    Center,
+    /// An anchor jump puts the heading at the top, as a browser does.
+    Top,
+}
 
 impl MarkdownPreviewRevealRequest {
     pub(in crate::view) fn request(&self, row_ix: usize) {
-        self.0.set(Some(row_ix));
+        self.0
+            .set(Some((row_ix, MarkdownPreviewRevealAlign::Center)));
+    }
+
+    pub(in crate::view) fn request_top(&self, row_ix: usize) {
+        self.0.set(Some((row_ix, MarkdownPreviewRevealAlign::Top)));
     }
 
     pub(in crate::view) fn clear(&self) {
@@ -1247,12 +1502,12 @@ impl MarkdownPreviewRevealRequest {
     }
 
     pub(in crate::view) fn pending(&self) -> Option<usize> {
-        self.0.get()
+        self.0.get().map(|(row_ix, _)| row_ix)
     }
 
     /// Claim the request, so the reveal runs once instead of fighting the user
     /// on every later frame.
-    pub(in crate::view) fn take(&self) -> Option<usize> {
+    pub(in crate::view) fn take(&self) -> Option<(usize, MarkdownPreviewRevealAlign)> {
         self.0.take()
     }
 }
@@ -1280,6 +1535,7 @@ pub(in crate::view) fn markdown_preview_row_extent(
 /// Split out from the prepaint listener so the arithmetic that decides the new
 /// offset is testable without a window.
 pub(in crate::view) fn markdown_preview_reveal_offset_y(
+    align: MarkdownPreviewRevealAlign,
     row_top_in_content: Pixels,
     row_height: Pixels,
     viewport_height: Pixels,
@@ -1289,10 +1545,15 @@ pub(in crate::view) fn markdown_preview_reveal_offset_y(
     if viewport_height <= px(0.0) {
         return None;
     }
-    // Centre the row the way a uniform list would, then clamp into the
+    // Place the row the way a uniform list would, then clamp into the
     // scrollable range. Offsets are negative as you scroll down.
-    let centered = row_top_in_content + row_height / 2.0 - viewport_height / 2.0;
-    let target = (-centered).clamp(-max_offset_y.max(px(0.0)), px(0.0));
+    let top = match align {
+        MarkdownPreviewRevealAlign::Center => {
+            row_top_in_content + row_height / 2.0 - viewport_height / 2.0
+        }
+        MarkdownPreviewRevealAlign::Top => row_top_in_content,
+    };
+    let target = (-top).clamp(-max_offset_y.max(px(0.0)), px(0.0));
     (target != current_y).then_some(target)
 }
 
@@ -1308,20 +1569,59 @@ pub(in crate::view) fn markdown_preview_styled_row_with_query<'a>(
     row: &'a MarkdownPreviewRow,
     visible_ix: usize,
     query: Option<&MarkdownPreviewQuery>,
+    hovered_link: Option<&Range<usize>>,
 ) -> std::borrow::Cow<'a, CachedDiffStyledText> {
-    let base = markdown_preview_row_styled_text(theme, row);
-    let Some(query) = query else {
-        return std::borrow::Cow::Borrowed(base);
+    // Only the hovered row pays for a restyle; every other row keeps its cache.
+    let hovered =
+        hovered_link.map(|range| markdown_preview_hovered_link_styled_text(theme, row, range));
+    let base = hovered
+        .as_ref()
+        .unwrap_or_else(|| markdown_preview_row_styled_text(theme, row));
+    let Some(query) = query.filter(|query| query.matcher.is_match(base.text.as_ref())) else {
+        return match hovered {
+            Some(hovered) => std::borrow::Cow::Owned(hovered),
+            None => std::borrow::Cow::Borrowed(markdown_preview_row_styled_text(theme, row)),
+        };
     };
-    if !query.matcher.is_match(base.text.as_ref()) {
-        return std::borrow::Cow::Borrowed(base);
-    }
     std::borrow::Cow::Owned(build_cached_diff_query_overlay_styled_text(
         theme,
         base,
         &query.matcher,
         query.emphasis(visible_ix),
     ))
+}
+
+/// The row's styling with the link in `hovered` underlined.
+fn markdown_preview_hovered_link_styled_text(
+    theme: AppTheme,
+    row: &MarkdownPreviewRow,
+    hovered: &Range<usize>,
+) -> CachedDiffStyledText {
+    let underline = markdown_preview_link_hover_underline(theme);
+    let highlights = row
+        .inline_spans
+        .iter()
+        .filter_map(|span| {
+            let mut style = markdown_preview_inline_highlight(theme, span.style);
+            if span.link_url.is_some()
+                && hovered.start <= span.byte_range.start
+                && span.byte_range.end <= hovered.end
+            {
+                style.underline = Some(underline);
+            }
+            (style != gpui::HighlightStyle::default()).then_some((span.byte_range.clone(), style))
+        })
+        .collect::<Vec<_>>();
+    build_cached_diff_styled_text_from_relative_highlights(row.text.as_ref(), &highlights)
+}
+
+/// The underline a link shows while the pointer is on it.
+fn markdown_preview_link_hover_underline(theme: AppTheme) -> gpui::UnderlineStyle {
+    gpui::UnderlineStyle {
+        thickness: px(1.0),
+        color: Some(theme.colors.accent.foreground.into_color()),
+        wavy: false,
+    }
 }
 
 /// Text element carrying inline highlights, shared with the flowing renderer.
@@ -2235,13 +2535,9 @@ pub(in crate::view) fn markdown_preview_inline_highlight(
             }),
             ..gpui::HighlightStyle::default()
         },
+        // Underlined only on hover; see `markdown_preview_hovered_link_styled_text`.
         MarkdownInlineStyle::Link => gpui::HighlightStyle {
             color: Some(theme.colors.accent.foreground.into_color()),
-            underline: Some(gpui::UnderlineStyle {
-                thickness: px(1.0),
-                color: Some(theme.colors.accent.foreground.into_color()),
-                wavy: false,
-            }),
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Underline => gpui::HighlightStyle {

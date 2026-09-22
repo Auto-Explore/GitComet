@@ -70,7 +70,8 @@ impl MarkdownImage {
 pub(crate) struct MarkdownInlineSpan {
     pub(crate) byte_range: Range<usize>,
     pub(crate) style: MarkdownInlineStyle,
-    /// Destination of the link this span sits inside.
+    /// Destination of the link this span sits inside: a web URL or a local
+    /// file path (see `classify_markdown_link_destination`).
     ///
     /// Carried on the span rather than in a parallel list so it survives the
     /// byte remapping that whitespace normalisation and table alignment apply,

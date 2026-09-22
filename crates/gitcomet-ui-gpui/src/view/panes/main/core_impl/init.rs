@@ -484,6 +484,7 @@ impl MainPaneView {
             file_markdown_preview: Loadable::NotLoaded,
             markdown_preview_wrap: MarkdownPreviewWrapCache::default(),
             markdown_preview_reveal: Default::default(),
+            markdown_preview_hovered_link: None,
             file_markdown_preview_seq: 0,
             file_markdown_preview_inflight: None,
             file_image_diff_cache_repo_id: None,

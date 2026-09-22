@@ -249,17 +249,67 @@ pub(crate) fn current_link_url(link_stack: &[Option<SharedString>]) -> Option<Sh
     link_stack.last().cloned().flatten()
 }
 
-/// Keep only destinations that open in a browser.
+/// Where a link destination points, when the preview can offer it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MarkdownLinkTarget {
+    /// An `http(s)://` URL, opened in the browser.
+    Web(SharedString),
+    /// A path relative to the document (or to the repository root when it
+    /// starts with `/`), kept verbatim: fragment and query are stripped when
+    /// it is resolved against the tree.
+    LocalFile(SharedString),
+    /// `#fragment`: a heading in the same document, scrolled to on click.
+    /// Holds the fragment without its `#`.
+    Anchor(SharedString),
+}
+
+/// Classify a link destination as something the preview can act on.
 ///
-/// Relative links, in-document anchors, and `mailto:`/`javascript:` targets
-/// have no meaning for a preview of a file at some commit, so they render as
-/// links but are not offered as something to open.
-pub(crate) fn web_link_url(dest_url: &str) -> Option<SharedString> {
+/// Protocol-relative URLs, a bare `#`, and flat schemes such as
+/// `mailto:`/`javascript:`/`data:` have no meaning here, so they render as
+/// links but are never offered. A Windows drive (`C:`) reads as a flat
+/// scheme, which is right: an absolute OS path is not a repository file.
+pub(crate) fn classify_markdown_link_destination(dest_url: &str) -> Option<MarkdownLinkTarget> {
     let trimmed = dest_url.trim();
-    let scheme_end = trimmed.find("://")?;
-    let scheme = &trimmed[..scheme_end];
-    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
-        .then(|| SharedString::from(trimmed.to_owned()))
+    if let Some(fragment) = trimmed.strip_prefix('#') {
+        return (!fragment.is_empty())
+            .then(|| MarkdownLinkTarget::Anchor(SharedString::from(fragment.to_owned())));
+    }
+    if trimmed.is_empty() || trimmed.starts_with("//") {
+        return None;
+    }
+    if let Some(scheme_end) = trimmed.find("://") {
+        let scheme = &trimmed[..scheme_end];
+        return (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+            .then(|| MarkdownLinkTarget::Web(SharedString::from(trimmed.to_owned())));
+    }
+    if has_flat_scheme(trimmed) {
+        return None;
+    }
+    Some(MarkdownLinkTarget::LocalFile(SharedString::from(
+        trimmed.to_owned(),
+    )))
+}
+
+/// `scheme:` per RFC 3986: a letter, then letters, digits, `+`, `-`, `.`.
+fn has_flat_scheme(dest: &str) -> bool {
+    let Some(colon) = dest.find(':') else {
+        return false;
+    };
+    let scheme = &dest[..colon];
+    let mut chars = scheme.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// The destination a link span carries, as written: a web URL, a local file
+/// path, or a `#fragment`; `None` for targets the preview cannot open.
+pub(crate) fn offered_link_destination(dest_url: &str) -> Option<SharedString> {
+    classify_markdown_link_destination(dest_url)
+        .is_some()
+        .then(|| SharedString::from(dest_url.trim().to_owned()))
 }
 
 pub(crate) fn pop_matching_inline_style(

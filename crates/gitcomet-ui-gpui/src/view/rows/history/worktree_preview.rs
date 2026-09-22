@@ -324,6 +324,7 @@ impl MainPaneView {
                 image_base_dir: image_base_dir.clone(),
                 remote_image_access: this.markdown_remote_image_access(Some(view)),
                 query: this.markdown_preview_search_query(),
+                hovered_link: this.markdown_preview_hovered_link.clone(),
             },
         )
     }
@@ -377,6 +378,7 @@ impl MainPaneView {
                 image_base_dir: image_base_dir.clone(),
                 remote_image_access: this.markdown_remote_image_access(Some(view)),
                 query: this.markdown_preview_search_query(),
+                hovered_link: this.markdown_preview_hovered_link.clone(),
             },
         )
     }
@@ -430,6 +432,7 @@ impl MainPaneView {
                 image_base_dir: image_base_dir.clone(),
                 remote_image_access: this.markdown_remote_image_access(Some(view)),
                 query: this.markdown_preview_search_query(),
+                hovered_link: this.markdown_preview_hovered_link.clone(),
             },
         )
     }

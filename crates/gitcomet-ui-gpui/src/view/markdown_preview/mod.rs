@@ -154,6 +154,7 @@ fn resolve_style_stack(stack: &[MarkdownInlineStyle]) -> MarkdownInlineStyle {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
+mod anchors;
 mod document;
 mod flatten;
 mod html;
@@ -161,6 +162,7 @@ mod inline;
 mod tables;
 mod wrap;
 
+pub(super) use anchors::*;
 pub(super) use document::*;
 pub(super) use flatten::*;
 pub(super) use html::*;

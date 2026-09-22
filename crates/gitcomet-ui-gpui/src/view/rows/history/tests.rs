@@ -1022,3 +1022,278 @@ fn markdown_preview_spacer_rows_have_no_extra_layout_or_background() {
     assert_eq!(markdown_preview_row_background(theme, &row), None);
     assert_eq!(markdown_preview_row_marker(&row), None);
 }
+
+#[test]
+fn local_markdown_links_resolve_against_the_document_directory() {
+    use super::markdown_preview_local_link_path;
+    let doc = std::path::Path::new("docs/preview.md");
+    let resolve = |destination: &str| markdown_preview_local_link_path(doc, destination);
+    let path = |p: &str| Some(std::path::PathBuf::from(p));
+
+    assert_eq!(resolve("./other.md"), path("docs/other.md"));
+    assert_eq!(resolve("guide.md"), path("docs/guide.md"));
+    assert_eq!(resolve("sub/../guide.md"), path("docs/guide.md"));
+    // `../README.md` is how a docs page links to the root.
+    assert_eq!(resolve("../README.md"), path("README.md"));
+    // A leading slash is repository-root-relative, as GitHub reads it.
+    assert_eq!(resolve("/docs/x.md"), path("docs/x.md"));
+    // Fragment and query address something inside the file.
+    assert_eq!(resolve("other.md#a"), path("docs/other.md"));
+    assert_eq!(resolve("other.md?q"), path("docs/other.md"));
+    assert_eq!(resolve("other.md#a?q"), path("docs/other.md"));
+    assert_eq!(resolve("  other.md "), path("docs/other.md"));
+    // Percent escapes are how a space is written in a link.
+    assert_eq!(resolve("my%20file.md"), path("docs/my file.md"));
+    // A malformed escape is kept as written, which then names no file.
+    assert_eq!(resolve("bad%zz.md"), path("docs/bad%zz.md"));
+    // Relative to `docs/`, so this climbs to the root and no further.
+    assert_eq!(resolve("docs/../../x.md"), path("x.md"));
+    // A directory link still says where it points; the pane then reports
+    // that it is not a file.
+    assert_eq!(resolve("sub/"), path("docs/sub"));
+
+    // Climbing out of the repository, or into `.git`, names nothing.
+    for inert in [
+        "../../outside.md",
+        "/../x.md",
+        ".git/config",
+        "../.git/HEAD",
+        "/.GIT/config",
+        ".",
+        "./",
+        "..",
+        "../",
+        "/",
+        "",
+        "%2e%2e/%2e%2e/outside.md",
+    ] {
+        assert_eq!(resolve(inert), None, "{inert:?} must resolve to nothing");
+    }
+
+    // A document at the root has nowhere to climb to.
+    let root_doc = std::path::Path::new("README.md");
+    assert_eq!(
+        markdown_preview_local_link_path(root_doc, "docs/x.md"),
+        path("docs/x.md")
+    );
+    assert_eq!(markdown_preview_local_link_path(root_doc, "../x.md"), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn local_markdown_links_refuse_os_absolute_paths() {
+    use super::markdown_preview_local_link_path;
+    let doc = std::path::Path::new("docs/preview.md");
+    for absolute in [
+        r"C:\x.md",
+        r"\\srv\share\x.md",
+        r"\docs\x.md",
+        // A drive prefix hidden behind `./` would replace the document
+        // directory once the components are collected into a path.
+        "./C:../outside.txt",
+        "sub/C:outside.txt",
+    ] {
+        assert_eq!(
+            markdown_preview_local_link_path(doc, absolute),
+            None,
+            "{absolute:?} is not a repository path"
+        );
+    }
+}
+
+#[test]
+fn local_link_percent_escapes_decode_before_the_path_is_walked() {
+    use super::markdown_preview_local_link_path;
+    let doc = std::path::Path::new("docs/preview.md");
+    let resolve = |destination: &str| markdown_preview_local_link_path(doc, destination);
+    let path = |p: &str| Some(std::path::PathBuf::from(p));
+
+    // Multi-byte UTF-8 decodes to the character it spells.
+    assert_eq!(resolve("%C3%A4iti.md"), path("docs/äiti.md"));
+    // Upper and lower case hex both decode.
+    assert_eq!(resolve("a%2db.md"), path("docs/a-b.md"));
+    assert_eq!(resolve("a%2Db.md"), path("docs/a-b.md"));
+    // The fragment is cut before decoding, so an escaped `#` is part of the
+    // file name rather than the start of a fragment.
+    assert_eq!(resolve("a%23b.md"), path("docs/a#b.md"));
+    assert_eq!(resolve("a%3Fb.md"), path("docs/a?b.md"));
+    // An escaped leading slash is still repository-root-relative.
+    assert_eq!(resolve("%2Fdocs%2Fx.md"), path("docs/x.md"));
+
+    // Anything that does not decode cleanly is kept exactly as written.
+    assert_eq!(resolve("a%2.md"), path("docs/a%2.md"));
+    assert_eq!(resolve("trailing%"), path("docs/trailing%"));
+    assert_eq!(resolve("%FF.md"), path("docs/%FF.md"));
+
+    // Escaped traversal is walked like the plain spelling, so it cannot
+    // climb out of the repository or into `.git`.
+    assert_eq!(resolve("%2e%2e/%2e%2e/outside.md"), None);
+    assert_eq!(resolve("..%2F..%2Foutside.md"), None);
+    assert_eq!(resolve("%2Egit/config"), None);
+}
+
+#[test]
+fn local_link_target_reads_from_the_tree_the_document_came_from() {
+    use super::markdown_preview_local_link_target;
+    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileSource};
+    use std::path::{Path, PathBuf};
+
+    let workdir = Path::new("/repo");
+    let resolve = |target: &DiffTarget, destination: &str| {
+        markdown_preview_local_link_target(workdir, target, destination)
+    };
+
+    let working_tree = DiffTarget::WorkingTree {
+        path: PathBuf::from("docs/preview.md"),
+        area: DiffArea::Unstaged,
+    };
+    assert_eq!(
+        resolve(&working_tree, "../README.md"),
+        Some((FileSource::WorkingDirectory, PathBuf::from("README.md")))
+    );
+    // A staged document still links into the working tree it lives in.
+    let staged = DiffTarget::WorkingTree {
+        path: PathBuf::from("docs/preview.md"),
+        area: DiffArea::Staged,
+    };
+    assert_eq!(
+        resolve(&staged, "other.md"),
+        Some((FileSource::WorkingDirectory, PathBuf::from("docs/other.md")))
+    );
+
+    // A document shown at a commit links into that commit.
+    let at_commit = DiffTarget::Commit {
+        commit_id: CommitId("deadbeef".into()),
+        path: Some(PathBuf::from("docs/preview.md")),
+    };
+    assert_eq!(
+        resolve(&at_commit, "./other.md"),
+        Some((
+            FileSource::Commit(CommitId("deadbeef".into())),
+            PathBuf::from("docs/other.md")
+        ))
+    );
+
+    // Neither a whole-commit view nor a range has one document to resolve from.
+    let whole_commit = DiffTarget::Commit {
+        commit_id: CommitId("deadbeef".into()),
+        path: None,
+    };
+    assert_eq!(resolve(&whole_commit, "other.md"), None);
+    let range = DiffTarget::CommitRange {
+        from_commit_id: CommitId("aaaa".into()),
+        to_commit_id: Some(CommitId("bbbb".into())),
+        path: Some(PathBuf::from("docs/preview.md")),
+    };
+    assert_eq!(resolve(&range, "other.md"), None);
+    let range_to_worktree = DiffTarget::CommitRange {
+        from_commit_id: CommitId("aaaa".into()),
+        to_commit_id: None,
+        path: Some(PathBuf::from("docs/preview.md")),
+    };
+    assert_eq!(resolve(&range_to_worktree, "other.md"), None);
+
+    // Absolute document paths are taken relative to the workdir…
+    let absolute = DiffTarget::WorkingTree {
+        path: workdir.join("docs/preview.md"),
+        area: DiffArea::Unstaged,
+    };
+    assert_eq!(
+        resolve(&absolute, "other.md"),
+        Some((FileSource::WorkingDirectory, PathBuf::from("docs/other.md")))
+    );
+    // …and one outside it has no repository to link into.
+    let elsewhere = DiffTarget::WorkingTree {
+        path: PathBuf::from("/elsewhere/docs/preview.md"),
+        area: DiffArea::Unstaged,
+    };
+    assert_eq!(resolve(&elsewhere, "other.md"), None);
+
+    // A link the path resolver refuses stays refused whatever the source.
+    assert_eq!(resolve(&working_tree, "../../outside.md"), None);
+    assert_eq!(resolve(&at_commit, ".git/config"), None);
+}
+
+#[test]
+fn local_link_availability_follows_the_tree_the_link_reads_from() {
+    use super::markdown_preview_local_link_missing;
+    use gitcomet_core::domain::{CommitId, FileSource};
+    use std::path::Path;
+
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_local_link_missing_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
+    std::fs::write(workdir.join("docs/present.md"), "x").expect("write file");
+
+    let worktree = FileSource::WorkingDirectory;
+    assert_eq!(
+        markdown_preview_local_link_missing(&workdir, &worktree, Path::new("docs/present.md")),
+        Some(false)
+    );
+    assert_eq!(
+        markdown_preview_local_link_missing(&workdir, &worktree, Path::new("docs/gone.md")),
+        Some(true)
+    );
+    assert_eq!(
+        markdown_preview_local_link_missing(&workdir, &worktree, Path::new("docs")),
+        Some(true),
+        "a directory is not a file to open"
+    );
+    // Deleted or renamed since: the commit still has it, so let the
+    // commit-backed load try rather than greying the entry out.
+    let at_commit = FileSource::Commit(CommitId("deadbeef".into()));
+    assert_eq!(
+        markdown_preview_local_link_missing(&workdir, &at_commit, Path::new("docs/gone.md")),
+        Some(false)
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn local_link_availability_refuses_symlinks_out_of_the_repository() {
+    use super::markdown_preview_local_link_missing;
+    use gitcomet_core::domain::{CommitId, FileSource};
+    use std::path::Path;
+
+    let root = std::env::temp_dir().join(format!(
+        "gitcomet_local_link_symlink_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let workdir = root.join("repo");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(workdir.join("docs/real")).expect("create workdir");
+    std::fs::create_dir_all(workdir.join(".git")).expect("create .git");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::fs::write(outside.join("secret.txt"), "secret").expect("write outside");
+    std::fs::write(workdir.join(".git/config"), "[core]").expect("write config");
+    std::fs::write(workdir.join("docs/real/inside.md"), "x").expect("write inside");
+    std::os::unix::fs::symlink(&outside, workdir.join("docs/alias")).expect("alias");
+    std::os::unix::fs::symlink(workdir.join(".git"), workdir.join("docs/meta")).expect("meta");
+    std::os::unix::fs::symlink("real", workdir.join("docs/inner")).expect("inner");
+
+    let worktree = FileSource::WorkingDirectory;
+    let missing =
+        |path: &str| markdown_preview_local_link_missing(&workdir, &worktree, Path::new(path));
+    // Lexically inside the repository, but the file is not.
+    assert_eq!(missing("docs/alias/secret.txt"), None);
+    assert_eq!(missing("docs/meta/config"), None);
+    // A symlink that stays inside the repository is an ordinary link.
+    assert_eq!(missing("docs/inner/inside.md"), Some(false));
+    // Git stores a symlink as a blob, so a commit's tree has nothing to follow.
+    assert_eq!(
+        markdown_preview_local_link_missing(
+            &workdir,
+            &FileSource::Commit(CommitId("deadbeef".into())),
+            Path::new("docs/alias/secret.txt"),
+        ),
+        Some(false)
+    );
+
+    std::fs::remove_dir_all(&root).expect("cleanup");
+}

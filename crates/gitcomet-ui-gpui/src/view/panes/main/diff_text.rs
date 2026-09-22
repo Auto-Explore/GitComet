@@ -714,6 +714,7 @@ impl MainPaneView {
     }
 
     /// Byte offset in the text a row painted, for a point inside that row.
+    #[cfg(test)]
     pub(in crate::view) fn diff_text_offset_for_position(
         &self,
         visible_ix: usize,
@@ -722,6 +723,19 @@ impl MainPaneView {
     ) -> Option<usize> {
         self.diff_text_pos_from_hitbox(visible_ix, region, position)
             .map(|pos| pos.offset)
+    }
+
+    /// As above, but `None` beside or past the painted text, where the hit is
+    /// only the nearest edge.
+    pub(in crate::view) fn diff_text_offset_on_text(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<usize> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        let hit = self.diff_text_hit_in_hitbox(hitbox, region, position)?;
+        (!hit.past_painted_text).then_some(hit.pos.offset)
     }
 
     pub(in super::super::super) fn diff_text_visual_source_range_for_region(
@@ -873,8 +887,8 @@ impl MainPaneView {
         self.set_diff_text_selection(anchor, head, 1);
     }
 
-    /// Open the link menu when a plain click lands on a web link in the
-    /// rendered markdown preview, and report whether it did.
+    /// Open the link menu when a plain click lands on a link in the rendered
+    /// markdown preview, and report whether it did.
     ///
     /// A double or triple click is still a text selection — only a single
     /// click follows the link, so selecting the words of a link keeps working.
@@ -890,43 +904,33 @@ impl MainPaneView {
         if click_count > 1 || self.diff_text_has_selection() {
             return false;
         }
-        let Some((url, span)) = self.markdown_preview_link_span_at(visible_ix, region, position)
+        let Some((destination, span)) =
+            self.markdown_preview_link_span_at(visible_ix, region, position)
         else {
             return false;
         };
 
         // A row can contain several links: pairing the row alone is not enough.
         if self.markdown_preview_link_span_at(visible_ix, region, window.mouse_position())
-            != Some((url.clone(), span.clone()))
+            != Some((destination.clone(), span.clone()))
         {
             return false;
         }
+        // An in-document anchor scrolls; it has no menu.
+        if self.scroll_markdown_preview_to_anchor(region, &destination, cx) {
+            return true;
+        }
+        // A link the preview cannot open is a click on plain words.
+        let Some(kind) = self.markdown_preview_link_popover_kind(&destination, None) else {
+            return false;
+        };
         // Anchor on the link's own box, so the menu opens flush under the words
         // it describes rather than under the row that happens to hold them.
         let anchor = self
             .diff_text_hitboxes
             .get(&(visible_ix, region))
             .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span));
-        match anchor {
-            Some(bounds) => self.open_popover_for_bounds(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url: None,
-                },
-                bounds,
-                window,
-                cx,
-            ),
-            None => self.open_popover_at(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url: None,
-                },
-                position,
-                window,
-                cx,
-            ),
-        }
+        self.open_markdown_preview_link_popover(kind, anchor, position, window, cx);
         true
     }
 
@@ -937,32 +941,40 @@ impl MainPaneView {
     /// point stands in for the frames where it has not been painted yet.
     pub(in crate::view) fn open_markdown_preview_link_menu(
         &mut self,
-        url: SharedString,
+        destination: SharedString,
         load_remote_image_url: Option<SharedString>,
         anchor_bounds: Option<Bounds<Pixels>>,
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // The flowing document's pictures sit in the single worktree list.
+        if self.scroll_markdown_preview_to_anchor(DiffTextRegion::Inline, &destination, cx) {
+            return;
+        }
+        let Some(kind) =
+            self.markdown_preview_link_popover_kind(&destination, load_remote_image_url.clone())
+        else {
+            // A link that cannot open still leaves the picture approvable.
+            if let Some(image_url) = load_remote_image_url {
+                self.approve_remote_markdown_image(image_url, cx);
+            }
+            return;
+        };
+        self.open_markdown_preview_link_popover(kind, anchor_bounds, position, window, cx);
+    }
+
+    fn open_markdown_preview_link_popover(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Option<Bounds<Pixels>>,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         match anchor_bounds {
-            Some(bounds) => self.open_popover_for_bounds(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url,
-                },
-                bounds,
-                window,
-                cx,
-            ),
-            None => self.open_popover_at(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url,
-                },
-                position,
-                window,
-                cx,
-            ),
+            Some(bounds) => self.open_popover_for_bounds(kind, bounds, window, cx),
+            None => self.open_popover_at(kind, position, window, cx),
         }
     }
 
@@ -1993,18 +2005,23 @@ impl MainPaneView {
             return self.markdown_preview_row_text_len(visible_ix, region);
         }
 
+        // Below a wrapped line the row position runs ahead of the line number.
+        let source_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+
         if self.is_file_preview_active() {
             if region != DiffTextRegion::Inline {
                 return 0;
             }
             return self
-                .worktree_preview_line_raw_text(visible_ix)
+                .worktree_preview_line_raw_text(source_ix)
                 .map(|line| file_diff_display_len(&line))
                 .unwrap_or(0);
         }
 
         if self.is_collapsed_diff_projection_active() {
-            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+            let Some(row) = self.collapsed_visible_row(source_ix) else {
                 return 0;
             };
             match row {
@@ -2071,7 +2088,7 @@ impl MainPaneView {
             }
         }
 
-        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_ix) else {
             return 0;
         };
 
@@ -2239,7 +2256,16 @@ impl MainPaneView {
             return;
         }
 
-        self.append_diff_text_source_region_slice(out, visible_ix, region, range, expanded_tabs);
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        self.append_diff_text_source_region_slice(
+            out,
+            source_visible_ix,
+            region,
+            range,
+            expanded_tabs,
+        );
     }
 
     fn append_diff_text_source_region_slice(
