@@ -2948,8 +2948,8 @@ fn persist_ui_settings_round_trips_window_controls_mode() {
 }
 
 #[test]
-fn saved_window_group_automatic_name_uses_active_repository_and_count() {
-    let mut group = SavedWindowGroup::new(vec![
+fn saved_workspace_automatic_name_uses_active_repository_and_count() {
+    let mut group = Workspace::new(vec![
         PathBuf::from("/work/alpha"),
         PathBuf::from("/work/beta"),
         PathBuf::from("/work/gamma"),
@@ -2962,7 +2962,7 @@ fn saved_window_group_automatic_name_uses_active_repository_and_count() {
 }
 
 #[test]
-fn v3_open_repositories_migrate_to_one_restorable_window_group() {
+fn v3_open_repositories_migrate_to_one_restorable_workspace() {
     let path = unique_session_test_dir("window-group-v3-migration").join("session.json");
     persist_to_path(
         &path,
@@ -2980,9 +2980,9 @@ fn v3_open_repositories_migrate_to_one_restorable_window_group() {
     .expect("seed v3 session");
 
     let loaded = load_from_path(&path);
-    assert_eq!(loaded.window_groups.len(), 1);
-    let group = &loaded.window_groups[0];
-    assert_eq!(group.id, LEGACY_WINDOW_GROUP_ID);
+    assert_eq!(loaded.workspaces.len(), 1);
+    let group = &loaded.workspaces[0];
+    assert_eq!(group.id, LEGACY_WORKSPACE_ID);
     assert_eq!(
         group.repositories,
         vec![PathBuf::from("/work/alpha"), PathBuf::from("/work/beta")]
@@ -2996,7 +2996,7 @@ fn v3_open_repositories_migrate_to_one_restorable_window_group() {
 }
 
 #[test]
-fn legacy_fetch_prune_and_window_groups_migrate_together() {
+fn legacy_fetch_prune_and_workspaces_migrate_together() {
     for version in [SESSION_FILE_VERSION_V2, SESSION_FILE_VERSION_V3] {
         let path =
             unique_session_test_dir("window-group-fetch-prune-migration").join("session.json");
@@ -3016,25 +3016,24 @@ fn legacy_fetch_prune_and_window_groups_migrate_together() {
         .expect("seed legacy session");
 
         let loaded = load_from_path(&path);
-        assert_eq!(loaded.window_groups.len(), 1);
-        assert_eq!(loaded.window_groups[0].id, LEGACY_WINDOW_GROUP_ID);
+        assert_eq!(loaded.workspaces.len(), 1);
+        assert_eq!(loaded.workspaces[0].id, LEGACY_WORKSPACE_ID);
         assert_eq!(loaded.active_repo, Some(PathBuf::from("/work/beta")));
         assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
         assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
 
-        persist_window_groups_to_path(&loaded.window_groups, &path).expect("persist v4 session");
+        persist_workspaces_to_path(&loaded.workspaces, &path).expect("persist v4 session");
         assert_eq!(load_from_path(&path), loaded);
     }
 }
 
 #[test]
-fn multiple_window_groups_round_trip_without_last_writer_loss() {
+fn multiple_workspaces_round_trip_without_last_writer_loss() {
     let path = unique_session_test_dir("window-group-round-trip").join("session.json");
-    let mut group_a =
-        SavedWindowGroup::new(vec![PathBuf::from("/work/a"), PathBuf::from("/work/b")]);
-    group_a.id = WindowGroupId::from_u128(10);
+    let mut group_a = Workspace::new(vec![PathBuf::from("/work/a"), PathBuf::from("/work/b")]);
+    group_a.id = WorkspaceId::from_u128(10);
     group_a.custom_name = Some("  Backend  ".to_string());
-    group_a.color = Some(WindowGroupColor::Blue);
+    group_a.color = Some(WorkspaceColor::Blue);
     group_a.last_activation_order = 7;
     group_a.layout.sidebar_width = Some(260);
     group_a.placement.normal_frame = Some(SavedWindowFrame {
@@ -3044,23 +3043,19 @@ fn multiple_window_groups_round_trip_without_last_writer_loss() {
         height: 800,
     });
 
-    let mut group_b = SavedWindowGroup::new(vec![PathBuf::from("/work/c")]);
-    group_b.id = WindowGroupId::from_u128(11);
+    let mut group_b = Workspace::new(vec![PathBuf::from("/work/c")]);
+    group_b.id = WorkspaceId::from_u128(11);
     group_b.restore_on_launch = false;
     group_b.last_activation_order = 9;
 
-    persist_window_groups_to_path(&[group_a.clone(), group_b.clone()], &path)
-        .expect("persist groups");
+    persist_workspaces_to_path(&[group_a.clone(), group_b.clone()], &path).expect("persist groups");
     let loaded = load_from_path(&path);
 
-    assert_eq!(loaded.window_groups.len(), 2);
-    assert_eq!(
-        loaded.window_groups[0].custom_name.as_deref(),
-        Some("Backend")
-    );
-    assert_eq!(loaded.window_groups[0].color, Some(WindowGroupColor::Blue));
-    assert_eq!(loaded.window_groups[0].placement, group_a.placement);
-    assert_eq!(loaded.window_groups[1], group_b);
+    assert_eq!(loaded.workspaces.len(), 2);
+    assert_eq!(loaded.workspaces[0].custom_name.as_deref(), Some("Backend"));
+    assert_eq!(loaded.workspaces[0].color, Some(WorkspaceColor::Blue));
+    assert_eq!(loaded.workspaces[0].placement, group_a.placement);
+    assert_eq!(loaded.workspaces[1], group_b);
     assert_eq!(loaded.open_repos, group_a.repositories);
 
     persist_ui_settings_to_path(
@@ -3077,7 +3072,7 @@ fn multiple_window_groups_round_trip_without_last_writer_loss() {
         &path,
     )
     .expect("persist unrelated global preference");
-    assert_eq!(load_from_path(&path).window_groups, loaded.window_groups);
+    assert_eq!(load_from_path(&path).workspaces, loaded.workspaces);
 
     persist_repos_snapshot_to_path(
         &SessionReposSnapshot {
@@ -3087,9 +3082,9 @@ fn multiple_window_groups_round_trip_without_last_writer_loss() {
         &path,
     )
     .expect("persist legacy repository projection");
-    assert_eq!(load_from_path(&path).window_groups, loaded.window_groups);
+    assert_eq!(load_from_path(&path).workspaces, loaded.workspaces);
 
-    persist_window_groups_to_path(&loaded.window_groups, &path).expect("persist groups again");
+    persist_workspaces_to_path(&loaded.workspaces, &path).expect("persist groups again");
     let loaded = load_from_path(&path);
     assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
     assert_eq!(loaded.ui_font_size_px, Some(18));
@@ -3102,19 +3097,19 @@ fn multiple_window_groups_round_trip_without_last_writer_loss() {
 #[test]
 fn closed_groups_remain_saved_but_do_not_project_as_open_repositories() {
     let path = unique_session_test_dir("closed-window-groups").join("session.json");
-    let mut group = SavedWindowGroup::new(vec![PathBuf::from("/work/closed")]);
+    let mut group = Workspace::new(vec![PathBuf::from("/work/closed")]);
     group.restore_on_launch = false;
-    persist_window_groups_to_path(&[group.clone()], &path).expect("persist closed group");
+    persist_workspaces_to_path(&[group.clone()], &path).expect("persist closed group");
 
     let loaded = load_from_path(&path);
-    assert_eq!(loaded.window_groups, vec![group]);
+    assert_eq!(loaded.workspaces, vec![group]);
     assert!(loaded.open_repos.is_empty());
     assert!(loaded.active_repo.is_none());
 }
 
 #[test]
-fn first_v4_write_preserves_one_v3_backup() {
-    let path = unique_session_test_dir("window-group-v3-backup").join("session.json");
+fn first_current_write_preserves_one_v3_backup() {
+    let path = unique_session_test_dir("workspace-v3-backup").join("session.json");
     persist_to_path(
         &path,
         &UiSessionFile {
@@ -3133,8 +3128,8 @@ fn first_v4_write_preserves_one_v3_backup() {
             .expect("simulate a legacy session with public permissions");
     }
 
-    let group = SavedWindowGroup::new(vec![PathBuf::from("/work/legacy")]);
-    persist_window_groups_to_path(&[group], &path).expect("persist v4 groups");
+    let group = Workspace::new(vec![PathBuf::from("/work/legacy")]);
+    persist_workspaces_to_path(&[group], &path).expect("persist workspaces");
 
     let mut backup_name = path.as_os_str().to_os_string();
     backup_name.push(".v3.bak");
@@ -3154,6 +3149,54 @@ fn first_v4_write_preserves_one_v3_backup() {
             );
         }
     }
+}
+
+#[test]
+fn v4_window_groups_key_loads_as_workspaces_and_rewrites_as_v5() {
+    let path = unique_session_test_dir("workspace-v4-migration").join("session.json");
+    fs::create_dir_all(path.parent().expect("session dir")).expect("create session dir");
+    let id = WorkspaceId::new();
+    let v4 = serde_json::json!({
+        "version": 4,
+        "window_groups": [{
+            "id": id,
+            "custom_name": "Client work",
+            "color": "blue",
+            "repositories": ["/work/alpha"],
+            "active_repository": "/work/alpha",
+            "restore_on_launch": true,
+            "last_activation_order": 3,
+            "layout": {"sidebar_width": null, "details_width": null, "sidebar_collapsed": false,
+                       "change_tracking_height": null, "untracked_height": null},
+            "placement": {"normal_frame": null, "captured_visible_frame": null,
+                          "display_id": null, "state": "windowed"}
+        }],
+        "open_repos": ["/work/alpha"],
+        "active_repo": "/work/alpha"
+    });
+    let original = serde_json::to_vec(&v4).expect("encode v4");
+    fs::write(&path, &original).expect("seed v4 session");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.workspaces.len(), 1, "the old key must still load");
+    let workspace = loaded.workspaces[0].clone();
+    assert_eq!(workspace.id, id);
+    assert_eq!(workspace.display_name(), "Client work");
+    assert_eq!(workspace.color, Some(WorkspaceColor::Blue));
+
+    persist_workspaces_to_path(&[workspace], &path).expect("persist workspaces");
+    let written: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read v5")).expect("parse v5");
+    assert_eq!(written["version"], 5);
+    assert!(written.get("window_groups").is_none());
+    assert_eq!(written["workspaces"][0]["custom_name"], "Client work");
+
+    let mut backup_name = path.as_os_str().to_os_string();
+    backup_name.push(".v4.bak");
+    assert_eq!(
+        fs::read(PathBuf::from(backup_name)).expect("v4 backup"),
+        original
+    );
 }
 
 #[test]

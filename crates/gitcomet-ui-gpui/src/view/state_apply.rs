@@ -56,7 +56,7 @@ fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
 }
 
 impl GitCometView {
-    pub(super) fn sync_window_group_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn sync_workspace_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
         let session_repos = session::snapshot_repos_from_state(self.state.as_ref());
         let live_repo_paths = session_repos
             .open_repos
@@ -88,15 +88,15 @@ impl GitCometView {
         }
 
         // Use the same filtered snapshot as session persistence so provisional
-        // external drops never become durable group members. A restored
+        // external drops never become durable workspace members. A restored
         // repository may still be loading (or temporarily unavailable), so
         // retain its saved membership until bootstrap resolves.
         if !live_repo_paths.is_empty() || !self.startup_repo_bootstrap_pending {
-            self.persisted_group_repo_paths = live_repo_paths;
-            self.persisted_group_active_repository = live_active_repository;
+            self.persisted_workspace_repo_paths = live_repo_paths;
+            self.persisted_workspace_active_repository = live_active_repository;
         }
 
-        let mut synchronized_repo_paths = self.persisted_group_repo_paths.clone();
+        let mut synchronized_repo_paths = self.persisted_workspace_repo_paths.clone();
         for path in self.pending_repo_open_reservations.keys() {
             if !synchronized_repo_paths.contains(path) {
                 synchronized_repo_paths.push(path.clone());
@@ -105,7 +105,7 @@ impl GitCometView {
         let synchronized_active_repository = self
             .pending_repo_open_active
             .clone()
-            .or_else(|| self.persisted_group_active_repository.clone());
+            .or_else(|| self.persisted_workspace_active_repository.clone());
 
         // Share the effective membership, including pending opens and saved
         // bootstrap paths, until that membership actually changes.
@@ -113,18 +113,18 @@ impl GitCometView {
             self.synced_repo_paths = synchronized_repo_paths.into();
         }
 
-        self.window_group_id = crate::app::sync_gitcomet_window_state(
+        self.workspace_id = crate::app::sync_gitcomet_window_state(
             cx,
             self.window_handle,
             cx.weak_entity(),
             self.main_pane.downgrade(),
             self.view_mode,
-            self.window_group_id,
+            self.workspace_id,
             Arc::clone(&self.synced_repo_paths),
             synchronized_active_repository,
         );
         if let Some(placement) = self.window_placement.clone() {
-            crate::window_groups::record_window_placement(
+            crate::workspaces::record_window_placement(
                 cx,
                 self.window_handle.window_id(),
                 placement,
@@ -132,8 +132,8 @@ impl GitCometView {
         }
 
         if self.view_mode == GitCometViewMode::Normal {
-            let title = crate::window_groups::group_for_window(cx, self.window_handle.window_id())
-                .map(|group| format!("{} — GitComet", group.display_name()))
+            let title = crate::workspaces::workspace_for_window(cx, self.window_handle.window_id())
+                .map(|workspace| format!("{} — GitComet", workspace.display_name()))
                 .unwrap_or_else(|| "GitComet".to_string());
             if self.native_window_title != title {
                 self.native_window_title.clone_from(&title);
@@ -510,7 +510,7 @@ impl GitCometView {
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
 
-        self.sync_window_group_and_registry(cx);
+        self.sync_workspace_and_registry(cx);
 
         git_runtime_changed
             || prev_banner_error != next_banner_error

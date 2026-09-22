@@ -1744,7 +1744,7 @@ async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_ed
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.request_move_repo_to_window_group(repo_id, workdir.clone(), None, cx);
+            this.request_move_repo_to_workspace(repo_id, workdir.clone(), None, cx);
             let prompt = this
                 .pending_unsaved_file_edits_prompt
                 .as_ref()
@@ -1770,10 +1770,10 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
     let file = std::path::PathBuf::from("main.rs");
     std::fs::write(workdir.join(&file), "fn main() {}\n").expect("write fixture");
 
-    let mut saved = gitcomet_state::session::SavedWindowGroup::new(vec![workdir.clone()]);
+    let mut saved = gitcomet_state::session::Workspace::new(vec![workdir.clone()]);
     saved.restore_on_launch = false;
     let saved_id = saved.id;
-    cx.update(|app| crate::window_groups::initialize_for_test(app, vec![saved]));
+    cx.update(|app| crate::workspaces::initialize_for_test(app, vec![saved]));
 
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1803,7 +1803,7 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.request_move_repo_to_window_group(repo_id, workdir.clone(), Some(saved_id), cx);
+            this.request_move_repo_to_workspace(repo_id, workdir.clone(), Some(saved_id), cx);
             assert!(
                 this.pending_unsaved_file_edits_prompt.is_none(),
                 "a move that resolves back to its source must not offer to discard edits"
@@ -1898,7 +1898,7 @@ async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_r
             window_id: window.window_handle().window_id(),
             repo_id: first_id,
             path: first_dir.clone(),
-            target_group: None,
+            target_workspace: None,
         };
         view.update(app, |this, cx| {
             assert_eq!(
@@ -1937,7 +1937,7 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
 ) {
     let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    cx.update(|app| crate::window_groups::initialize_for_test(app, Vec::new()));
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1976,7 +1976,7 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
         window_id: source_window_id,
         repo_id,
         path: workdir.clone(),
-        target_group: None,
+        target_workspace: None,
     };
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

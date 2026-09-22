@@ -455,7 +455,7 @@ pub(crate) enum WorktreePopoverKind {
     AddPrompt,
     OpenPicker,
     RemovePicker,
-    /// The action bar's workspace badge picker: every worktree including the
+    /// The action bar's worktree badge picker: every worktree including the
     /// current one, plus a create row. Distinct from `OpenPicker`, which hides
     /// the current worktree and has no create affordance.
     BadgePicker,
@@ -542,13 +542,13 @@ pub enum InitialRepositoryLaunchMode {
 }
 
 #[derive(Clone, Debug, Default)]
-pub enum WindowGroupBootstrap {
+pub enum WorkspaceBootstrap {
     /// Compatibility path for focused tools and directly-constructed test
     /// views. Normal application windows always choose Empty or Saved.
     #[default]
     LegacySession,
     Empty,
-    Saved(Box<gitcomet_state::session::SavedWindowGroup>),
+    Saved(Box<gitcomet_state::session::Workspace>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -559,7 +559,7 @@ pub struct GitCometViewConfig {
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
     pub startup_crash_report: Option<StartupCrashReport>,
-    pub window_group: WindowGroupBootstrap,
+    pub workspace: WorkspaceBootstrap,
 }
 
 impl GitCometViewConfig {
@@ -571,7 +571,7 @@ impl GitCometViewConfig {
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
-            window_group: WindowGroupBootstrap::LegacySession,
+            workspace: WorkspaceBootstrap::LegacySession,
         }
     }
 
@@ -586,7 +586,7 @@ impl GitCometViewConfig {
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
-            window_group: WindowGroupBootstrap::Empty,
+            workspace: WorkspaceBootstrap::Empty,
         }
     }
 }
@@ -918,7 +918,7 @@ pub(in crate::view) enum TerminalShutdownAction {
     MoveRepo {
         repo_id: RepoId,
         path: std::path::PathBuf,
-        target_group: Option<gitcomet_state::session::WindowGroupId>,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
     },
     CloseTerminalForRepo {
         repo_id: RepoId,
@@ -951,7 +951,7 @@ pub(in crate::view) enum UnsavedFileEditsAction {
         window_id: gpui::WindowId,
         repo_id: RepoId,
         path: std::path::PathBuf,
-        target_group: Option<gitcomet_state::session::WindowGroupId>,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
     },
 }
 

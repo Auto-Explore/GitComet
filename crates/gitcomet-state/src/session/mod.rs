@@ -12,7 +12,7 @@ use std::{env, fs, io};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UiSession {
-    pub window_groups: Vec<SavedWindowGroup>,
+    pub workspaces: Vec<Workspace>,
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
@@ -111,7 +111,9 @@ struct UiSessionFileV1 {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct UiSessionFile {
     version: u32,
-    window_groups: Option<Vec<SavedWindowGroupFile>>,
+    // V4 (branch-only) stored workspaces under their old "window groups" name.
+    #[serde(alias = "window_groups")]
+    workspaces: Option<Vec<WorkspaceFile>>,
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
@@ -208,9 +210,10 @@ const SESSION_FILE_VERSION_V1: u32 = 1;
 const SESSION_FILE_VERSION_V2: u32 = 2;
 const SESSION_FILE_VERSION_V3: u32 = 3;
 const SESSION_FILE_VERSION_V4: u32 = 4;
-const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V4;
-const LEGACY_WINDOW_GROUP_ID: WindowGroupId =
-    WindowGroupId::from_u128(0x4749_5443_4f4d_4554_0000_0000_0000_0001);
+const SESSION_FILE_VERSION_V5: u32 = 5;
+const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V5;
+const LEGACY_WORKSPACE_ID: WorkspaceId =
+    WorkspaceId::from_u128(0x4749_5443_4f4d_4554_0000_0000_0000_0001);
 const MAX_RECENT_REPOS: usize = 15;
 const DEFAULT_UI_SCALE_PERCENT: u32 = 100;
 const MIN_UI_SCALE_PERCENT: u32 = 80;
@@ -236,24 +239,29 @@ pub fn load_from_path(path: &Path) -> UiSession {
         return UiSession::default();
     };
 
-    let window_groups = parse_window_groups(file.window_groups.unwrap_or_default());
+    let workspaces = parse_workspaces(file.workspaces.unwrap_or_default());
     let (legacy_open_repos, legacy_active_repo) = parse_repos(file.open_repos, file.active_repo);
-    let restored_group = window_groups
+    let restored_workspace = workspaces
         .iter()
-        .filter(|group| group.restore_on_launch)
-        .max_by_key(|group| group.last_activation_order);
-    let (open_repos, active_repo) = restored_group.map_or_else(
+        .filter(|workspace| workspace.restore_on_launch)
+        .max_by_key(|workspace| workspace.last_activation_order);
+    let (open_repos, active_repo) = restored_workspace.map_or_else(
         || {
-            if window_groups.is_empty() {
+            if workspaces.is_empty() {
                 (legacy_open_repos, legacy_active_repo)
             } else {
                 (Vec::new(), None)
             }
         },
-        |group| (group.repositories.clone(), group.active_repository.clone()),
+        |workspace| {
+            (
+                workspace.repositories.clone(),
+                workspace.active_repository.clone(),
+            )
+        },
     );
-    let restored_layout = restored_group.map(|group| group.layout.clone());
-    let restored_frame = restored_group.and_then(|group| group.placement.normal_frame);
+    let restored_layout = restored_workspace.map(|workspace| workspace.layout.clone());
+    let restored_frame = restored_workspace.and_then(|workspace| workspace.placement.normal_frame);
     let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
     let pinned_repos = parse_path_list(file.pinned_repos.unwrap_or_default());
     let repo_sidebar_collapsed_items =
@@ -261,7 +269,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
     let repo_sidebar_pinned_branches =
         parse_path_keyed_string_sets(file.repo_sidebar_pinned_branches.unwrap_or_default());
     UiSession {
-        window_groups,
+        workspaces,
         open_repos,
         active_repo,
         recent_repos,
@@ -436,9 +444,11 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value)
             .ok()
             .map(migrate_v3_file),
-        SESSION_FILE_VERSION_V4 => serde_json::from_value::<UiSessionFile>(value)
-            .ok()
-            .map(migrate_v3_file),
+        SESSION_FILE_VERSION_V4 | SESSION_FILE_VERSION_V5 => {
+            serde_json::from_value::<UiSessionFile>(value)
+                .ok()
+                .map(migrate_v3_file)
+        }
         _ => None,
     }?;
     file = migrate_legacy_repo_fetch_prune_setting(file);
@@ -452,7 +462,7 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
-    preserve_pre_v4_session_backup(path, &contents)?;
+    preserve_previous_version_session_backup(path, &contents)?;
     // Records every open repository path; keep it owner-only.
     gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
@@ -612,7 +622,7 @@ fn app_state_dir() -> Option<PathBuf> {
 use history_mode::{HistoryModeSetting, HistoryScopeSetting};
 use parse::*;
 use survey::SurveyPromptSession;
-use window_groups::*;
+use workspaces::*;
 
 mod history_mode;
 mod parse;
@@ -620,14 +630,14 @@ mod paths;
 mod repos;
 mod settings;
 mod survey;
-mod window_groups;
+mod workspaces;
 
 pub use history_mode::*;
 pub use paths::*;
 pub use repos::*;
 pub use settings::*;
 pub use survey::*;
-pub use window_groups::*;
+pub use workspaces::*;
 
 pub(crate) use history_mode::persist_repo_history_modes_batch_to_path;
 pub(crate) use repos::load_repo_session_preferences;

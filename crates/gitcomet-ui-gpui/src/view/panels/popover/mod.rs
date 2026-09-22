@@ -253,10 +253,10 @@ pub(in super::super) struct PopoverHost {
     /// Session pins snapshotted alongside `cached_recent_repos`. Held apart from
     /// the recents so a pin outlives the recents cap.
     cached_pinned_repos: Vec<std::path::PathBuf>,
-    /// Durable window groups snapshotted with the repository picker so its
+    /// Durable workspaces snapshotted with the repository picker so its
     /// rows remain stable for the duration of one keyboard interaction.
-    cached_window_groups: Vec<session::SavedWindowGroup>,
-    cached_window_group_id: Option<session::WindowGroupId>,
+    cached_workspaces: Vec<session::Workspace>,
+    cached_workspace_id: Option<session::WorkspaceId>,
     /// Storage keys of the repository picker sections the user folded away.
     cached_collapsed_picker_sections: std::collections::BTreeSet<String>,
     repo_picker_sort: repo_picker::RepoPickerSort,

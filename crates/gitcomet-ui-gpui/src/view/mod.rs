@@ -321,7 +321,7 @@ pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WindowGroupBootstrap,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WorkspaceBootstrap,
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,

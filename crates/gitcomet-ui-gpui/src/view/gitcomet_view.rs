@@ -1001,7 +1001,7 @@ impl GitCometView {
             focused_mergetool,
             focused_mergetool_exit_code,
             startup_crash_report,
-            window_group,
+            workspace,
         } = config;
         if initial_path.is_none() {
             initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
@@ -1018,13 +1018,13 @@ impl GitCometView {
 
         let mut ui_session = session::load();
         let (
-            window_group_id,
-            persisted_group_repo_paths,
-            persisted_group_active_repository,
+            workspace_id,
+            persisted_workspace_repo_paths,
+            persisted_workspace_active_repository,
             initial_window_placement,
-        ) = match window_group {
-            WindowGroupBootstrap::LegacySession => (None, Vec::new(), None, None),
-            WindowGroupBootstrap::Empty => {
+        ) = match workspace {
+            WorkspaceBootstrap::LegacySession => (None, Vec::new(), None, None),
+            WorkspaceBootstrap::Empty => {
                 ui_session.open_repos.clear();
                 ui_session.active_repo = None;
                 ui_session.sidebar_width = None;
@@ -1034,20 +1034,22 @@ impl GitCometView {
                 ui_session.untracked_height = None;
                 (None, Vec::new(), None, None)
             }
-            WindowGroupBootstrap::Saved(group) => {
-                let group = *group;
-                ui_session.open_repos.clone_from(&group.repositories);
-                ui_session.active_repo.clone_from(&group.active_repository);
-                ui_session.sidebar_width = group.layout.sidebar_width;
-                ui_session.details_width = group.layout.details_width;
-                ui_session.sidebar_collapsed = Some(group.layout.sidebar_collapsed);
-                ui_session.change_tracking_height = group.layout.change_tracking_height;
-                ui_session.untracked_height = group.layout.untracked_height;
+            WorkspaceBootstrap::Saved(workspace) => {
+                let workspace = *workspace;
+                ui_session.open_repos.clone_from(&workspace.repositories);
+                ui_session
+                    .active_repo
+                    .clone_from(&workspace.active_repository);
+                ui_session.sidebar_width = workspace.layout.sidebar_width;
+                ui_session.details_width = workspace.layout.details_width;
+                ui_session.sidebar_collapsed = Some(workspace.layout.sidebar_collapsed);
+                ui_session.change_tracking_height = workspace.layout.change_tracking_height;
+                ui_session.untracked_height = workspace.layout.untracked_height;
                 (
-                    Some(group.id),
-                    group.repositories,
-                    group.active_repository,
-                    Some(group.placement),
+                    Some(workspace.id),
+                    workspace.repositories,
+                    workspace.active_repository,
+                    Some(workspace.placement),
                 )
             }
         };
@@ -1402,7 +1404,7 @@ impl GitCometView {
                 return;
             }
             crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());
-            crate::window_groups::mark_window_active(cx, this.window_handle.window_id());
+            crate::workspaces::mark_window_active(cx, this.window_handle.window_id());
             let self_initiated_grab =
                 consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
             if self_initiated_grab {
@@ -1434,7 +1436,7 @@ impl GitCometView {
                 this.window_placement.as_ref(),
             ));
             if let Some(placement) = this.window_placement.clone() {
-                crate::window_groups::record_window_placement(
+                crate::workspaces::record_window_placement(
                     cx,
                     this.window_handle.window_id(),
                     placement,
@@ -1443,7 +1445,7 @@ impl GitCometView {
             if this.view_mode == GitCometViewMode::FocusedMergetool {
                 this.schedule_legacy_window_bounds_persist(cx);
             } else {
-                this.schedule_window_group_persist(cx);
+                this.schedule_workspace_persist(cx);
             }
         });
 
@@ -1604,9 +1606,9 @@ impl GitCometView {
             _open_repo_input_subscription: open_repo_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
-            window_group_id,
-            persisted_group_repo_paths,
-            persisted_group_active_repository,
+            workspace_id,
+            persisted_workspace_repo_paths,
+            persisted_workspace_active_repository,
             window_placement: Some(crate::app::capture_window_placement(
                 window,
                 cx,
@@ -1643,7 +1645,7 @@ impl GitCometView {
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             synced_repo_paths: std::sync::Arc::from(Vec::new()),
             ui_settings_persist_seq: 0,
-            window_group_persist_seq: 0,
+            workspace_persist_seq: 0,
             #[cfg(test)]
             ui_settings_persist_requests_for_test: 0,
             last_repo_activation_dispatch_at: FxHashMap::default(),
@@ -1745,7 +1747,7 @@ impl GitCometView {
         runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
 
-        view.sync_window_group_and_registry(cx);
+        view.sync_workspace_and_registry(cx);
 
         view
     }
@@ -1849,7 +1851,7 @@ impl GitCometView {
         cx.notify();
     }
 
-    pub(crate) fn notify_window_group_color_changed(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn notify_workspace_color_changed(&mut self, cx: &mut gpui::Context<Self>) {
         // Both entities paint against the title-bar fill: the title bar owns
         // the chrome and the tab strip owns transparent labels and hover
         // overlays that must composite over the same color.

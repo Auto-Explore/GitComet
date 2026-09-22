@@ -193,17 +193,17 @@ impl GitCometView {
         true
     }
 
-    pub(crate) fn request_move_repo_to_window_group(
+    pub(crate) fn request_move_repo_to_workspace(
         &mut self,
         repo_id: RepoId,
         path: std::path::PathBuf,
-        target_group: Option<gitcomet_state::session::WindowGroupId>,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
         cx: &mut gpui::Context<Self>,
     ) {
         if crate::app::repository_move_target_is_noop(
             cx,
             self.window_handle.window_id(),
-            target_group,
+            target_workspace,
         ) {
             return;
         }
@@ -211,7 +211,7 @@ impl GitCometView {
             window_id: self.window_handle.window_id(),
             repo_id,
             path: path.clone(),
-            target_group,
+            target_workspace,
         };
         if self.request_unsaved_file_edits_prompt(unsaved_action, cx) {
             return;
@@ -220,17 +220,17 @@ impl GitCometView {
         let action = TerminalShutdownAction::MoveRepo {
             repo_id,
             path: path.clone(),
-            target_group,
+            target_workspace,
         };
         if self.request_terminal_shutdown_action(action, cx) {
             return;
         }
-        crate::app::move_repository_to_window_group_from_view(
+        crate::app::move_repository_to_workspace_from_view(
             cx,
             self.window_handle.window_id(),
             repo_id,
             path,
-            target_group,
+            target_workspace,
         );
     }
 

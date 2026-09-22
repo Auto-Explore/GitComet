@@ -34,13 +34,13 @@ fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
             window_id,
             repo_id,
             path,
-            target_group,
-        } => crate::app::request_move_repository_to_window_group_by_id(
+            target_workspace,
+        } => crate::app::request_move_repository_to_workspace_by_id(
             cx,
             window_id,
             repo_id,
             path,
-            target_group,
+            target_workspace,
         ),
     }
 }
@@ -776,7 +776,7 @@ impl GitCometView {
         window_id: gpui::WindowId,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.flush_window_group_environment(cx);
+        self.flush_workspace_environment(cx);
         if self
             .request_unsaved_file_edits_prompt(UnsavedFileEditsAction::CloseWindow(window_id), cx)
         {
@@ -791,7 +791,7 @@ impl GitCometView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.flush_window_group_environment(cx);
+        self.flush_workspace_environment(cx);
         self.request_unsaved_file_edits_prompt(UnsavedFileEditsAction::QuitApp, cx)
     }
 
@@ -1073,14 +1073,14 @@ impl GitCometView {
             TerminalShutdownAction::MoveRepo {
                 repo_id,
                 path,
-                target_group,
+                target_workspace,
             } => {
-                crate::app::move_repository_to_window_group_from_view(
+                crate::app::move_repository_to_workspace_from_view(
                     cx,
                     window.window_handle().window_id(),
                     repo_id,
                     path,
-                    target_group,
+                    target_workspace,
                 );
             }
             TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
@@ -1099,11 +1099,8 @@ impl GitCometView {
                 );
             }
             TerminalShutdownAction::CloseWindow => {
-                self.flush_window_group_environment(cx);
-                crate::app::mark_window_group_closed_from_view(
-                    cx,
-                    window.window_handle().window_id(),
-                );
+                self.flush_workspace_environment(cx);
+                crate::app::mark_workspace_closed_from_view(cx, window.window_handle().window_id());
                 crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
                 window.remove_window();
             }

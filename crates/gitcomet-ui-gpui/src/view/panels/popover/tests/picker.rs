@@ -335,7 +335,7 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
                             .unwrap_or_default()
                             .to_string(),
                     ),
-                    repo_picker::RepoPickerEntry::WindowGroup(_)
+                    repo_picker::RepoPickerEntry::Workspace(_)
                     | repo_picker::RepoPickerEntry::Open(_) => None,
                 })
                 .collect::<Vec<_>>()
@@ -963,21 +963,21 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
 }
 
 #[gpui::test]
-fn review_regression_window_group_row_opens_title_bar_color_menu(cx: &mut gpui::TestAppContext) {
+fn review_regression_workspace_row_opens_title_bar_color_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    let mut group = session::SavedWindowGroup::new(vec!["/tmp/window-group-color".into()]);
+    let mut group = session::Workspace::new(vec!["/tmp/window-group-color".into()]);
     group.custom_name = Some("Work".into());
-    let group_id = group.id;
+    let workspace_id = group.id;
     cx.cx.update(|app| {
-        crate::window_groups::initialize_for_test(app, vec![group]);
+        crate::workspaces::initialize_for_test(app, vec![group]);
     });
 
     open_repo_picker(&view, cx);
     let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
-    let entry = repo_picker::RepoPickerEntry::WindowGroup(group_id);
+    let entry = repo_picker::RepoPickerEntry::Workspace(workspace_id);
     cx.update(|_window, app| {
         assert_eq!(
             as_str_pairs(&row_menu_labels(popover_host.read(app), &entry)),
@@ -1019,9 +1019,9 @@ fn review_regression_window_group_row_opens_title_bar_color_menu(cx: &mut gpui::
         popover_host.update(app, |host, cx| {
             picker_row_menu::activate(
                 host,
-                ContextMenuAction::SetWindowGroupColor {
-                    group_id,
-                    color: Some(session::WindowGroupColor::Blue),
+                ContextMenuAction::SetWorkspaceColor {
+                    workspace_id,
+                    color: Some(session::WorkspaceColor::Blue),
                 },
                 window,
                 cx,
@@ -1031,9 +1031,9 @@ fn review_regression_window_group_row_opens_title_bar_color_menu(cx: &mut gpui::
     cx.run_until_parked();
     assert_eq!(
         cx.cx.update(|app| {
-            crate::window_groups::group(app, group_id).and_then(|group| group.color)
+            crate::workspaces::workspace(app, workspace_id).and_then(|group| group.color)
         }),
-        Some(session::WindowGroupColor::Blue),
+        Some(session::WorkspaceColor::Blue),
         "the context-menu choice should persist on the selected window group"
     );
     assert!(
@@ -1801,7 +1801,7 @@ fn sectioned_row_names(
                     .map(ToString::to_string)
                     .unwrap_or_default();
                 let workdir = match entry {
-                    repo_picker::RepoPickerEntry::WindowGroup(_) => return None,
+                    repo_picker::RepoPickerEntry::Workspace(_) => return None,
                     repo_picker::RepoPickerEntry::Open(repo_id) => host
                         .state
                         .repos

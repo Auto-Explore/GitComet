@@ -352,20 +352,20 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
-fn window_group_color(
-    color: Option<gitcomet_state::session::WindowGroupColor>,
+fn workspace_color(
+    color: Option<gitcomet_state::session::WorkspaceColor>,
     theme: AppTheme,
 ) -> gpui::Rgba {
-    use gitcomet_state::session::WindowGroupColor;
+    use gitcomet_state::session::WorkspaceColor;
     match color {
-        Some(WindowGroupColor::Gray) => theme.colors.foreground.secondary,
-        Some(WindowGroupColor::Red) => gpui::rgba(0xE05252FF),
-        Some(WindowGroupColor::Orange) => gpui::rgba(0xE08A3EFF),
-        Some(WindowGroupColor::Yellow) => gpui::rgba(0xD2A83AFF),
-        Some(WindowGroupColor::Green) => gpui::rgba(0x48A868FF),
-        Some(WindowGroupColor::Blue) => gpui::rgba(0x4B8DDBFF),
-        Some(WindowGroupColor::Purple) => gpui::rgba(0x956EDBFF),
-        Some(WindowGroupColor::Pink) => gpui::rgba(0xD866A4FF),
+        Some(WorkspaceColor::Gray) => theme.colors.foreground.secondary,
+        Some(WorkspaceColor::Red) => gpui::rgba(0xE05252FF),
+        Some(WorkspaceColor::Orange) => gpui::rgba(0xE08A3EFF),
+        Some(WorkspaceColor::Yellow) => gpui::rgba(0xD2A83AFF),
+        Some(WorkspaceColor::Green) => gpui::rgba(0x48A868FF),
+        Some(WorkspaceColor::Blue) => gpui::rgba(0x4B8DDBFF),
+        Some(WorkspaceColor::Purple) => gpui::rgba(0x956EDBFF),
+        Some(WorkspaceColor::Pink) => gpui::rgba(0xD866A4FF),
         None => theme.colors.accent.foreground,
     }
 }
@@ -376,7 +376,7 @@ fn window_group_color(
 pub(in crate::view) fn title_bar_background(
     theme: AppTheme,
     window_is_active: bool,
-    group_color: Option<gitcomet_state::session::WindowGroupColor>,
+    group_color: Option<gitcomet_state::session::WorkspaceColor>,
 ) -> gpui::Rgba {
     let base = if window_is_active {
         lighten(
@@ -395,7 +395,7 @@ pub(in crate::view) fn title_bar_background(
     // inactive ones remain identifiable without competing for attention.
     mix(
         base,
-        window_group_color(Some(group_color), theme),
+        workspace_color(Some(group_color), theme),
         if window_is_active { 0.18 } else { 0.12 },
     )
 }
@@ -651,12 +651,12 @@ impl Render for TitleBarView {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.40 } else { 0.30 },
         );
-        let window_group =
-            crate::window_groups::group_for_window(cx, window.window_handle().window_id());
+        let workspace =
+            crate::workspaces::workspace_for_window(cx, window.window_handle().window_id());
         let bar_bg = title_bar_background(
             theme,
             window.is_window_active(),
-            window_group.as_ref().and_then(|group| group.color),
+            workspace.as_ref().and_then(|group| group.color),
         );
         let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
@@ -689,15 +689,14 @@ impl Render for TitleBarView {
         // The group name and color identify this window beside the repository
         // tabs and open the repository picker.
         let repo_picker_open = self.repo_picker_open;
-        let window_group_label: SharedString = window_group
+        let workspace_label: SharedString = workspace
             .as_ref()
             .map(|group| group.display_name())
-            .unwrap_or_else(|| "Window Group".to_string())
+            .unwrap_or_else(|| "Workspace".to_string())
             .into();
-        let window_group_dot =
-            window_group_color(window_group.as_ref().and_then(|group| group.color), theme);
-        let window_group_tooltip: SharedString =
-            format!("Window group: {window_group_label}").into();
+        let workspace_dot =
+            workspace_color(workspace.as_ref().and_then(|group| group.color), theme);
+        let workspace_tooltip: SharedString = format!("Workspace: {workspace_label}").into();
         let repo_picker_toggle_bounds_for_prepaint = Rc::clone(&self.repo_picker_toggle_bounds);
         let repo_picker_toggle_bounds_for_click = Rc::clone(&self.repo_picker_toggle_bounds);
         let repo_picker_toggle = div()
@@ -743,7 +742,7 @@ impl Render for TitleBarView {
                             .size(px(8.0))
                             .flex_none()
                             .rounded_full()
-                            .bg(window_group_dot),
+                            .bg(workspace_dot),
                     )
                     .child(
                         div()
@@ -753,7 +752,7 @@ impl Render for TitleBarView {
                             .whitespace_nowrap()
                             .text_size(px(12.0))
                             .text_color(theme.colors.foreground.secondary)
-                            .child(window_group_label),
+                            .child(workspace_label),
                     )
                     .child(svg_icon(
                         "icons/chevron_down.svg",
@@ -778,7 +777,7 @@ impl Render for TitleBarView {
                             );
                         }),
                     )
-                    .gitcomet_tooltip(theme, window_group_tooltip),
+                    .gitcomet_tooltip(theme, workspace_tooltip),
             );
 
         // One drag surface spans the title bar underneath its controls. Each
@@ -908,7 +907,7 @@ impl Render for TitleBarView {
             })
             .when(repo_tab_actions_enabled, |d| d.child(repo_picker_toggle));
 
-        // Browser-style: when a workspace is open, the repo tabs live in the
+        // Browser-style: when repositories are open, the repo tabs live in the
         // title bar's middle. Keep a fixed draggable strip beside them so the
         // window can still be moved by the empty title-bar area.
         let repo_tabs = if repo_tabs_enabled {
@@ -1175,18 +1174,17 @@ mod tests {
     }
 
     #[test]
-    fn configured_window_group_color_tints_the_title_bar_without_replacing_the_theme() {
+    fn configured_workspace_color_tints_the_title_bar_without_replacing_the_theme() {
         let distance = |a: gpui::Rgba, b: gpui::Rgba| {
             (a.red - b.red).abs() + (a.green - b.green).abs() + (a.blue - b.blue).abs()
         };
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let base = title_bar_background(theme, true, None);
-            let blue =
-                window_group_color(Some(gitcomet_state::session::WindowGroupColor::Blue), theme);
+            let blue = workspace_color(Some(gitcomet_state::session::WorkspaceColor::Blue), theme);
             let tinted = title_bar_background(
                 theme,
                 true,
-                Some(gitcomet_state::session::WindowGroupColor::Blue),
+                Some(gitcomet_state::session::WorkspaceColor::Blue),
             );
 
             assert_ne!(tinted, base, "a configured group color must be visible");

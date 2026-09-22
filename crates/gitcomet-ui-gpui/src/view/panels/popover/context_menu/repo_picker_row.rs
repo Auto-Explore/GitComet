@@ -7,43 +7,45 @@
 
 use super::*;
 
-const WINDOW_GROUP_COLORS: [(Option<session::WindowGroupColor>, &str); 9] = [
+const WORKSPACE_COLORS: [(Option<session::WorkspaceColor>, &str); 9] = [
     (None, "Default"),
-    (Some(session::WindowGroupColor::Gray), "Gray"),
-    (Some(session::WindowGroupColor::Red), "Red"),
-    (Some(session::WindowGroupColor::Orange), "Orange"),
-    (Some(session::WindowGroupColor::Yellow), "Yellow"),
-    (Some(session::WindowGroupColor::Green), "Green"),
-    (Some(session::WindowGroupColor::Blue), "Blue"),
-    (Some(session::WindowGroupColor::Purple), "Purple"),
-    (Some(session::WindowGroupColor::Pink), "Pink"),
+    (Some(session::WorkspaceColor::Gray), "Gray"),
+    (Some(session::WorkspaceColor::Red), "Red"),
+    (Some(session::WorkspaceColor::Orange), "Orange"),
+    (Some(session::WorkspaceColor::Yellow), "Yellow"),
+    (Some(session::WorkspaceColor::Green), "Green"),
+    (Some(session::WorkspaceColor::Blue), "Blue"),
+    (Some(session::WorkspaceColor::Purple), "Purple"),
+    (Some(session::WorkspaceColor::Pink), "Pink"),
 ];
 
 pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) -> ContextMenuModel {
-    if let repo_picker::RepoPickerEntry::WindowGroup(group_id) = entry {
-        let Some(group) = host
-            .cached_window_groups
+    if let repo_picker::RepoPickerEntry::Workspace(workspace_id) = entry {
+        let Some(workspace) = host
+            .cached_workspaces
             .iter()
-            .find(|group| group.id == *group_id)
+            .find(|workspace| workspace.id == *workspace_id)
         else {
             return ContextMenuModel::new(Vec::new());
         };
         let mut items = vec![
-            ContextMenuItem::Header(group.display_name().into()),
+            ContextMenuItem::Header(workspace.display_name().into()),
             ContextMenuItem::Label("Title bar color".into()),
         ];
-        items.extend(WINDOW_GROUP_COLORS.into_iter().map(|(color, label)| {
-            ContextMenuItem::Entry {
-                label: label.into(),
-                icon: (group.color == color).then(|| "icons/check.svg".into()),
-                shortcut: None,
-                disabled: false,
-                action: Box::new(ContextMenuAction::SetWindowGroupColor {
-                    group_id: *group_id,
-                    color,
+        items.extend(
+            WORKSPACE_COLORS
+                .into_iter()
+                .map(|(color, label)| ContextMenuItem::Entry {
+                    label: label.into(),
+                    icon: (workspace.color == color).then(|| "icons/check.svg".into()),
+                    shortcut: None,
+                    disabled: false,
+                    action: Box::new(ContextMenuAction::SetWorkspaceColor {
+                        workspace_id: *workspace_id,
+                        color,
+                    }),
                 }),
-            }
-        }));
+        );
         return ContextMenuModel::new(items);
     }
 
@@ -75,7 +77,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
     }
 
     match entry {
-        repo_picker::RepoPickerEntry::WindowGroup(_) => {}
+        repo_picker::RepoPickerEntry::Workspace(_) => {}
         repo_picker::RepoPickerEntry::Open(repo_id) => items.push(ContextMenuItem::Entry {
             label: "Activate".into(),
             icon: Some("icons/check.svg".into()),
@@ -138,7 +140,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
     // is pinned would leave the row exactly where it was — the pinned closed row
     // is the one case with nothing to put here at all.
     let destructive = match entry {
-        repo_picker::RepoPickerEntry::WindowGroup(_) => None,
+        repo_picker::RepoPickerEntry::Workspace(_) => None,
         repo_picker::RepoPickerEntry::Open(repo_id) => Some(ContextMenuItem::Entry {
             label: "Close repository".into(),
             icon: Some("icons/repo_tab_close.svg".into()),

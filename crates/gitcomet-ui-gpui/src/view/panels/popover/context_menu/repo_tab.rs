@@ -13,8 +13,8 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         host.state.as_ref(),
         repo_id,
         workdir,
-        &host.cached_window_groups,
-        host.cached_window_group_id,
+        &host.cached_workspaces,
+        host.cached_workspace_id,
     )
 }
 
@@ -22,8 +22,8 @@ fn model_for_state(
     state: &AppState,
     repo_id: RepoId,
     workdir: Option<std::path::PathBuf>,
-    window_groups: &[session::SavedWindowGroup],
-    current_window_group: Option<session::WindowGroupId>,
+    workspaces: &[session::Workspace],
+    current_workspace: Option<session::WorkspaceId>,
 ) -> ContextMenuModel {
     let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         return ContextMenuModel::new(Vec::new());
@@ -88,28 +88,29 @@ fn model_for_state(
             icon: Some("icons/swap.svg".into()),
             shortcut: None,
             disabled: false,
-            action: Box::new(ContextMenuAction::MoveRepoToWindowGroup {
+            action: Box::new(ContextMenuAction::MoveRepoToWorkspace {
                 repo_id,
                 path: workdir.clone(),
-                target_group: None,
+                target_workspace: None,
             }),
         });
 
-        let mut other_groups = window_groups
+        let mut other_workspaces = workspaces
             .iter()
-            .filter(|group| Some(group.id) != current_window_group)
+            .filter(|workspace| Some(workspace.id) != current_workspace)
             .collect::<Vec<_>>();
-        other_groups.sort_by_key(|group| std::cmp::Reverse(group.last_activation_order));
-        for group in other_groups {
+        other_workspaces
+            .sort_by_key(|workspace| std::cmp::Reverse(workspace.last_activation_order));
+        for workspace in other_workspaces {
             items.push(ContextMenuItem::Entry {
-                label: format!("Move to {}", group.display_name()).into(),
+                label: format!("Move to {}", workspace.display_name()).into(),
                 icon: Some("icons/swap.svg".into()),
                 shortcut: None,
                 disabled: false,
-                action: Box::new(ContextMenuAction::MoveRepoToWindowGroup {
+                action: Box::new(ContextMenuAction::MoveRepoToWorkspace {
                     repo_id,
                     path: workdir.clone(),
-                    target_group: Some(group.id),
+                    target_workspace: Some(workspace.id),
                 }),
             });
         }

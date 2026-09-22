@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 pub(super) const REPO_PICKER_LIST_MAX_HEIGHT_PX: f32 = 360.0;
 
 pub(super) const PINNED_SECTION: &str = "Pinned";
-pub(super) const WINDOW_GROUPS_SECTION: &str = "Window Groups";
+pub(super) const WORKSPACES_SECTION: &str = "Workspaces";
 pub(super) const OPEN_SECTION: &str = "Open Repositories";
 pub(super) const RECENTLY_CLOSED_SECTION: &str = "Recently Closed";
 
@@ -20,7 +20,8 @@ pub(super) const RECENTLY_CLOSED_SECTION: &str = "Recently Closed";
 /// under. The keys are deliberately not the labels, so the headings can be
 /// reworded without stranding everyone's folded sections.
 const SECTIONS: [(&str, &str); 4] = [
-    (WINDOW_GROUPS_SECTION, "window_groups"),
+    // Historical key from when workspaces were called window groups.
+    (WORKSPACES_SECTION, "window_groups"),
     (PINNED_SECTION, "pinned"),
     (OPEN_SECTION, "open"),
     (RECENTLY_CLOSED_SECTION, "recently_closed"),
@@ -37,7 +38,7 @@ fn section_storage_key(label: &str) -> Option<&'static str> {
 /// of the two it happens to be — the pin only decides which section it sits in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum RepoPickerEntry {
-    WindowGroup(session::WindowGroupId),
+    Workspace(session::WorkspaceId),
     Open(RepoId),
     Closed(std::path::PathBuf),
 }
@@ -45,7 +46,7 @@ pub(super) enum RepoPickerEntry {
 impl RepoPickerEntry {
     pub(super) fn workdir(&self, this: &PopoverHost) -> Option<std::path::PathBuf> {
         match self {
-            Self::WindowGroup(_) => None,
+            Self::Workspace(_) => None,
             Self::Open(repo_id) => this.workdir_for_repo(*repo_id),
             Self::Closed(path) => Some(path.clone()),
         }
@@ -216,7 +217,7 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
             .find(|repo| repo.spec.workdir == path)
     };
 
-    let group_rows = window_group_rows(this.cached_window_groups.clone(), sort);
+    let workspace_rows = workspace_rows(this.cached_workspaces.clone(), sort);
 
     // A pin outlives both the recents cap and the repository being closed, so
     // this section is built from the pin list itself and nothing else.
@@ -293,7 +294,7 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
     sort_rows(&mut open_rows, sort);
     sort_rows(&mut recent_rows, sort);
 
-    group_rows
+    workspace_rows
         .into_iter()
         .chain(pinned_rows)
         .chain(open_rows)
@@ -302,40 +303,51 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
         .collect()
 }
 
-fn window_group_rows(
-    mut window_groups: Vec<session::SavedWindowGroup>,
+fn workspace_rows(
+    mut workspaces: Vec<session::Workspace>,
     sort: RepoPickerSort,
 ) -> Vec<SortableRow> {
-    window_groups.sort_by_key(|group| {
+    workspaces.sort_by_key(|workspace| {
         (
-            !group.restore_on_launch,
-            std::cmp::Reverse(group.last_activation_order),
+            !workspace.restore_on_launch,
+            std::cmp::Reverse(workspace.last_activation_order),
         )
     });
-    let mut rows = window_groups
+    let mut rows = workspaces
         .into_iter()
         .enumerate()
-        .map(|(recency, group)| window_group_row(group, recency))
+        .map(|(recency, workspace)| workspace_row(workspace, recency))
         .collect::<Vec<_>>();
     sort_rows(&mut rows, sort);
     rows
 }
 
-fn window_group_row(group: session::SavedWindowGroup, recency: usize) -> SortableRow {
-    let name = group.display_name();
-    let repositories = group
+pub(in crate::view) fn repository_count_label(count: usize) -> String {
+    match count {
+        0 => "No repositories".to_string(),
+        1 => "1 repository".to_string(),
+        n => format!("{n} repositories"),
+    }
+}
+
+fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
+    let name = workspace.display_name();
+    let repositories = workspace
         .repositories
         .iter()
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(" · ");
-    let state = if group.restore_on_launch {
+    let state = if workspace.restore_on_launch {
         "Open"
     } else {
         "Saved"
     };
-    let detail = format!("{state} · {} repositories", group.repositories.len());
-    let path_key = group
+    let detail = format!(
+        "{state} · {}",
+        repository_count_label(workspace.repositories.len())
+    );
+    let path_key = workspace
         .repositories
         .iter()
         .map(|path| path.display().to_string())
@@ -343,7 +355,7 @@ fn window_group_row(group: session::SavedWindowGroup, recency: usize) -> Sortabl
         .join("\n")
         .to_lowercase();
     SortableRow {
-        entry: RepoPickerEntry::WindowGroup(group.id),
+        entry: RepoPickerEntry::Workspace(workspace.id),
         item: components::PickerPromptItem::from_parts([
             components::PickerPromptItemPart::new(name.clone())
                 .profile(components::TextTruncationProfile::End)
@@ -353,7 +365,7 @@ fn window_group_row(group: session::SavedWindowGroup, recency: usize) -> Sortabl
         ])
         .secondary_parts([components::PickerPromptItemPart::path(repositories)])
         .repository_initials(&name)
-        .section(WINDOW_GROUPS_SECTION),
+        .section(WORKSPACES_SECTION),
         name_key: name.to_lowercase(),
         path_key,
         recency,
@@ -462,15 +474,15 @@ mod tests {
     }
 
     #[test]
-    fn review_regression_selected_sort_applies_to_window_group_rows() {
-        let mut zulu = session::SavedWindowGroup::new(vec!["/repos/zulu".into()]);
+    fn review_regression_selected_sort_applies_to_workspace_rows() {
+        let mut zulu = session::Workspace::new(vec!["/repos/zulu".into()]);
         zulu.custom_name = Some("Zulu".to_string());
         zulu.last_activation_order = 20;
-        let mut alpha = session::SavedWindowGroup::new(vec!["/repos/alpha".into()]);
+        let mut alpha = session::Workspace::new(vec!["/repos/alpha".into()]);
         alpha.custom_name = Some("Alpha".to_string());
         alpha.last_activation_order = 10;
 
-        let rows = window_group_rows(vec![zulu, alpha], RepoPickerSort::Name);
+        let rows = workspace_rows(vec![zulu, alpha], RepoPickerSort::Name);
 
         assert_eq!(names(&rows), vec!["alpha", "zulu"]);
     }
@@ -488,8 +500,8 @@ fn rows_signature(this: &PopoverHost) -> u64 {
 
     super::rows_cache::signature(|hasher| {
         this.repo_picker_sort.hash(hasher);
-        this.cached_window_groups.hash(hasher);
-        this.cached_window_group_id.hash(hasher);
+        this.cached_workspaces.hash(hasher);
+        this.cached_workspace_id.hash(hasher);
         this.cached_pinned_repos.hash(hasher);
         this.cached_recent_repos.hash(hasher);
         // Marks the row for the repository that is active.
@@ -525,11 +537,11 @@ pub(super) fn cached(
     super::rows_cache::get_or_build(&this.repo_picker_rows_cache, key, |_now| {
         let entries = entries(this);
         let marked_index = this
-            .cached_window_group_id
-            .and_then(|group_id| {
+            .cached_workspace_id
+            .and_then(|workspace_id| {
                 entries
                     .iter()
-                    .position(|(entry, _)| *entry == RepoPickerEntry::WindowGroup(group_id))
+                    .position(|(entry, _)| *entry == RepoPickerEntry::Workspace(workspace_id))
             })
             .or_else(|| {
                 this.state.active_repo.and_then(|active| {
@@ -725,9 +737,9 @@ pub(super) fn activate(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match entry {
-        RepoPickerEntry::WindowGroup(group_id) => {
+        RepoPickerEntry::Workspace(workspace_id) => {
             this.close_popover(cx);
-            crate::app::activate_window_group_from_view(cx, group_id);
+            crate::app::activate_workspace_from_view(cx, workspace_id);
         }
         RepoPickerEntry::Open(repo_id) => {
             this.store.dispatch(Msg::SetActiveRepo { repo_id });
@@ -806,7 +818,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             // navigation scrolls by the row geometry to match
             // (`scroll_picker_prompt_to_row`), which has to be told the same
             .tooltip_host(this.tooltip_host.clone())
-            .empty_text("No window groups or repositories")
+            .empty_text("No workspaces or repositories")
             .max_height(scaled_px(REPO_PICKER_LIST_MAX_HEIGHT_PX))
             // While a row menu is open the arrow keys walk its actions, so the
             // list's highlight marks the invoking row instead — without the
@@ -894,11 +906,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 ));
             }
             let label = match entry {
-                RepoPickerEntry::WindowGroup(group_id) => this
-                    .cached_window_groups
+                RepoPickerEntry::Workspace(workspace_id) => this
+                    .cached_workspaces
                     .iter()
-                    .find(|group| group.id == *group_id)
-                    .map(|group| gpui::SharedString::from(group.display_name())),
+                    .find(|workspace| workspace.id == *workspace_id)
+                    .map(|workspace| gpui::SharedString::from(workspace.display_name())),
                 RepoPickerEntry::Open(repo_id) => this
                     .state
                     .repos

@@ -739,7 +739,7 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
 }
 
 #[gpui::test]
-fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_window_group(
+fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_workspace(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -752,7 +752,7 @@ fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_windo
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
     cx.cx
-        .update(|app| crate::window_groups::initialize_for_test(app, Vec::new()));
+        .update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
 
     let dropped = std::env::temp_dir().join("gitcomet-provisional-invalid-drop");
     store.dispatch(Msg::OpenRepoFromExternalDrop(dropped.clone()));
@@ -785,7 +785,7 @@ fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_windo
         });
     });
     let persisted_paths = cx.cx.update(|app| {
-        crate::window_groups::groups(app)
+        crate::workspaces::workspaces(app)
             .into_iter()
             .flat_map(|group| group.repositories)
             .collect::<Vec<_>>()

@@ -28,8 +28,8 @@ mod ui_runtime;
 mod ui_scale;
 mod view;
 mod window_controls;
-mod window_groups;
 mod window_root_hook;
+mod workspaces;
 
 pub use app::{
     BrowserOpenRequest, BrowserOpenTarget, FocusedMergetoolConfig, UiRunOutcome, run,

@@ -922,10 +922,10 @@ impl PopoverHost {
                 }
                 self.store.dispatch(Msg::CloseRepo { repo_id });
             }
-            ContextMenuAction::MoveRepoToWindowGroup {
+            ContextMenuAction::MoveRepoToWorkspace {
                 repo_id,
                 path,
-                target_group,
+                target_workspace,
             } => {
                 // This action runs inside a `PopoverHost` update. The move
                 // workflow checks whether that same host is already showing an
@@ -935,20 +935,23 @@ impl PopoverHost {
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
                     let _ = root_view.update(cx, |root, cx| {
-                        root.request_move_repo_to_window_group(repo_id, path, target_group, cx);
+                        root.request_move_repo_to_workspace(repo_id, path, target_workspace, cx);
                     });
                 });
             }
-            ContextMenuAction::SetWindowGroupColor { group_id, color } => {
-                if crate::window_groups::set_group_color(cx, group_id, color) {
+            ContextMenuAction::SetWorkspaceColor {
+                workspace_id,
+                color,
+            } => {
+                if crate::workspaces::set_workspace_color(cx, workspace_id, color) {
                     if let Some(group) = self
-                        .cached_window_groups
+                        .cached_workspaces
                         .iter_mut()
-                        .find(|group| group.id == group_id)
+                        .find(|group| group.id == workspace_id)
                     {
                         group.color = color;
                     }
-                    crate::app::notify_window_group_color_changed_from_view(cx, group_id);
+                    crate::app::notify_workspace_color_changed_from_view(cx, workspace_id);
                 }
                 // This is an in-place setting over the repository picker. Keep
                 // the picker available so another group can be styled next.

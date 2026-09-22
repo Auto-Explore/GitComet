@@ -186,14 +186,14 @@ pub(in crate::view) enum ContextMenuAction {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,
     },
-    MoveRepoToWindowGroup {
+    MoveRepoToWorkspace {
         repo_id: RepoId,
         path: std::path::PathBuf,
-        target_group: Option<gitcomet_state::session::WindowGroupId>,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
     },
-    SetWindowGroupColor {
-        group_id: gitcomet_state::session::WindowGroupId,
-        color: Option<gitcomet_state::session::WindowGroupColor>,
+    SetWorkspaceColor {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+        color: Option<gitcomet_state::session::WorkspaceColor>,
     },
     /// Keep a repository in the picker's Pinned section. Pins outlive both the
     /// recents cap and the repository being closed, so this is what keeps one

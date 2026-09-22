@@ -975,9 +975,9 @@ pub struct GitCometView {
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) _open_repo_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
-    pub(super) window_group_id: Option<gitcomet_state::session::WindowGroupId>,
-    pub(super) persisted_group_repo_paths: Vec<std::path::PathBuf>,
-    pub(super) persisted_group_active_repository: Option<std::path::PathBuf>,
+    pub(super) workspace_id: Option<gitcomet_state::session::WorkspaceId>,
+    pub(super) persisted_workspace_repo_paths: Vec<std::path::PathBuf>,
+    pub(super) persisted_workspace_active_repository: Option<std::path::PathBuf>,
     pub(super) window_placement: Option<gitcomet_state::session::PortableWindowPlacement>,
     pub(super) native_window_title: String,
     pub(super) theme_mode: ThemeMode,
@@ -1015,7 +1015,7 @@ pub struct GitCometView {
     /// repo list changes rather than collected on every store snapshot.
     pub(super) synced_repo_paths: std::sync::Arc<[std::path::PathBuf]>,
     pub(super) ui_settings_persist_seq: u64,
-    pub(super) window_group_persist_seq: u64,
+    pub(super) workspace_persist_seq: u64,
     #[cfg(test)]
     pub(super) ui_settings_persist_requests_for_test: u64,
     pub(super) last_repo_activation_dispatch_at: FxHashMap<RepoId, Instant>,

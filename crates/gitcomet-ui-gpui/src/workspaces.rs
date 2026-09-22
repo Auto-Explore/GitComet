@@ -1,45 +1,46 @@
 use gitcomet_state::session::{
-    self, PortableWindowPlacement, SavedWindowFrame, SavedWindowGroup, WindowGroupId,
-    WindowGroupLayout,
+    self, PortableWindowPlacement, SavedWindowFrame, Workspace, WorkspaceId, WorkspaceLayout,
 };
 use gpui::{App, BorrowAppContext, WindowId};
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
 #[derive(Default)]
-pub(crate) struct WindowGroupManager {
+pub(crate) struct WorkspaceManager {
     enabled: bool,
     persist_to_disk: bool,
-    groups: Vec<SavedWindowGroup>,
-    window_groups: FxHashMap<WindowId, WindowGroupId>,
+    workspaces: Vec<Workspace>,
+    window_workspaces: FxHashMap<WindowId, WorkspaceId>,
     focused_window: Option<WindowId>,
-    active_group: Option<WindowGroupId>,
+    active_workspace: Option<WorkspaceId>,
     next_activation_order: u64,
 }
 
-impl gpui::Global for WindowGroupManager {}
+impl gpui::Global for WorkspaceManager {}
 
-impl WindowGroupManager {
-    fn enabled(groups: Vec<SavedWindowGroup>, persist_to_disk: bool) -> Self {
-        let next_activation_order = groups
+impl WorkspaceManager {
+    fn enabled(workspaces: Vec<Workspace>, persist_to_disk: bool) -> Self {
+        let next_activation_order = workspaces
             .iter()
-            .map(|group| group.last_activation_order)
+            .map(|workspace| workspace.last_activation_order)
             .max()
             .unwrap_or(0)
             .saturating_add(1);
         Self {
             enabled: true,
             persist_to_disk,
-            groups,
-            window_groups: FxHashMap::default(),
+            workspaces,
+            window_workspaces: FxHashMap::default(),
             focused_window: None,
-            active_group: None,
+            active_workspace: None,
             next_activation_order,
         }
     }
 
-    fn group_index(&self, id: WindowGroupId) -> Option<usize> {
-        self.groups.iter().position(|group| group.id == id)
+    fn workspace_index(&self, id: WorkspaceId) -> Option<usize> {
+        self.workspaces
+            .iter()
+            .position(|workspace| workspace.id == id)
     }
 
     fn allocate_activation_order(&mut self) -> u64 {
@@ -49,21 +50,21 @@ impl WindowGroupManager {
     }
 }
 
-pub(crate) fn initialize(cx: &mut App, groups: Vec<SavedWindowGroup>) {
-    cx.set_global(WindowGroupManager::enabled(groups, true));
+pub(crate) fn initialize(cx: &mut App, workspaces: Vec<Workspace>) {
+    cx.set_global(WorkspaceManager::enabled(workspaces, true));
 }
 
 #[cfg(test)]
-pub(crate) fn initialize_for_test(cx: &mut App, groups: Vec<SavedWindowGroup>) {
-    cx.set_global(WindowGroupManager::enabled(groups, false));
+pub(crate) fn initialize_for_test(cx: &mut App, workspaces: Vec<Workspace>) {
+    cx.set_global(WorkspaceManager::enabled(workspaces, false));
 }
 
-fn persist_if_changed(groups: Option<Vec<SavedWindowGroup>>) {
-    let Some(groups) = groups else {
+fn persist_if_changed(workspaces: Option<Vec<Workspace>>) {
+    let Some(workspaces) = workspaces else {
         return;
     };
-    if let Err(error) = session::persist_window_groups(&groups) {
-        eprintln!("Failed to persist window groups: {error}");
+    if let Err(error) = session::persist_workspaces(&workspaces) {
+        eprintln!("Failed to persist workspaces: {error}");
     }
 }
 
@@ -71,267 +72,277 @@ pub(crate) fn persist_current<C>(cx: &mut C)
 where
     C: BorrowAppContext,
 {
-    let groups = cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
-        (manager.enabled && manager.persist_to_disk).then(|| manager.groups.clone())
+    let workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
+        (manager.enabled && manager.persist_to_disk).then(|| manager.workspaces.clone())
     });
-    persist_if_changed(groups);
+    persist_if_changed(workspaces);
 }
 
-/// Synchronize durable group membership with one normal window and return the
-/// group identity the view should retain. Empty ephemeral windows remain
-/// identity-less; an empty durable window deletes its group.
+/// Synchronize durable workspace membership with one normal window and return the
+/// workspace identity the view should retain. Empty ephemeral windows remain
+/// identity-less; an empty durable window deletes its workspace.
 pub(crate) fn sync_window<C>(
     cx: &mut C,
     window_id: WindowId,
-    requested_group_id: Option<WindowGroupId>,
+    requested_workspace_id: Option<WorkspaceId>,
     repositories: Vec<PathBuf>,
     active_repository: Option<PathBuf>,
-) -> Option<WindowGroupId>
+) -> Option<WorkspaceId>
 where
     C: BorrowAppContext,
 {
-    let (group_id, changed_groups) =
-        cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let (workspace_id, changed_workspaces) =
+        cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
             if !manager.enabled {
-                return (requested_group_id, None);
+                return (requested_workspace_id, None);
             }
 
             if repositories.is_empty() {
-                let group_id =
-                    requested_group_id.or_else(|| manager.window_groups.get(&window_id).copied());
-                manager.window_groups.remove(&window_id);
+                let workspace_id = requested_workspace_id
+                    .or_else(|| manager.window_workspaces.get(&window_id).copied());
+                manager.window_workspaces.remove(&window_id);
                 if manager.focused_window == Some(window_id) {
-                    manager.active_group = None;
+                    manager.active_workspace = None;
                 }
-                let Some(group_id) = group_id else {
+                let Some(workspace_id) = workspace_id else {
                     return (None, None);
                 };
-                let before = manager.groups.len();
-                manager.groups.retain(|group| group.id != group_id);
-                if manager.active_group == Some(group_id) {
-                    manager.active_group = None;
+                let before = manager.workspaces.len();
+                manager
+                    .workspaces
+                    .retain(|workspace| workspace.id != workspace_id);
+                if manager.active_workspace == Some(workspace_id) {
+                    manager.active_workspace = None;
                 }
-                let changed = (manager.groups.len() != before && manager.persist_to_disk)
-                    .then(|| manager.groups.clone());
+                let changed = (manager.workspaces.len() != before && manager.persist_to_disk)
+                    .then(|| manager.workspaces.clone());
                 return (None, changed);
             }
 
-            let group_id = requested_group_id
-                .or_else(|| manager.window_groups.get(&window_id).copied())
+            let workspace_id = requested_workspace_id
+                .or_else(|| manager.window_workspaces.get(&window_id).copied())
                 .unwrap_or_default();
-            manager.window_groups.insert(window_id, group_id);
+            manager.window_workspaces.insert(window_id, workspace_id);
             let active_repository = active_repository
                 .filter(|active| repositories.contains(active))
                 .or_else(|| repositories.first().cloned());
 
             let mut changed = false;
-            if let Some(index) = manager.group_index(group_id) {
-                let group = &mut manager.groups[index];
-                if group.repositories != repositories {
-                    group.repositories.clone_from(&repositories);
+            if let Some(index) = manager.workspace_index(workspace_id) {
+                let workspace = &mut manager.workspaces[index];
+                if workspace.repositories != repositories {
+                    workspace.repositories.clone_from(&repositories);
                     changed = true;
                 }
-                if group.active_repository != active_repository {
-                    group.active_repository.clone_from(&active_repository);
+                if workspace.active_repository != active_repository {
+                    workspace.active_repository.clone_from(&active_repository);
                     changed = true;
                 }
-                if !group.restore_on_launch {
-                    group.restore_on_launch = true;
+                if !workspace.restore_on_launch {
+                    workspace.restore_on_launch = true;
                     changed = true;
                 }
             } else {
-                let mut group = SavedWindowGroup::new(repositories);
-                group.id = group_id;
-                group.active_repository = active_repository;
-                group.last_activation_order = manager.allocate_activation_order();
-                manager.groups.push(group);
+                let mut workspace = Workspace::new(repositories);
+                workspace.id = workspace_id;
+                workspace.active_repository = active_repository;
+                workspace.last_activation_order = manager.allocate_activation_order();
+                manager.workspaces.push(workspace);
                 changed = true;
             }
 
             // Focus can arrive while a new window is still empty and therefore
-            // has no group mapping. Replay it when the first repository makes
-            // the window durable so the previously focused group is no longer
+            // has no workspace mapping. Replay it when the first repository makes
+            // the window durable so the previously focused workspace is no longer
             // mistaken for the frontmost one.
-            if manager.focused_window == Some(window_id) && manager.active_group != Some(group_id) {
-                manager.active_group = Some(group_id);
+            if manager.focused_window == Some(window_id)
+                && manager.active_workspace != Some(workspace_id)
+            {
+                manager.active_workspace = Some(workspace_id);
                 let order = manager.allocate_activation_order();
-                if let Some(index) = manager.group_index(group_id) {
-                    manager.groups[index].last_activation_order = order;
+                if let Some(index) = manager.workspace_index(workspace_id) {
+                    manager.workspaces[index].last_activation_order = order;
                     changed = true;
                 }
             }
 
             (
-                Some(group_id),
-                (changed && manager.persist_to_disk).then(|| manager.groups.clone()),
+                Some(workspace_id),
+                (changed && manager.persist_to_disk).then(|| manager.workspaces.clone()),
             )
         });
-    persist_if_changed(changed_groups);
-    group_id
+    persist_if_changed(changed_workspaces);
+    workspace_id
 }
 
 pub(crate) fn mark_window_active<C>(cx: &mut C, window_id: WindowId)
 where
     C: BorrowAppContext,
 {
-    let changed_groups = cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let changed_workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
         if !manager.enabled {
             return None;
         }
         manager.focused_window = Some(window_id);
-        let Some(group_id) = manager.window_groups.get(&window_id).copied() else {
-            manager.active_group = None;
+        let Some(workspace_id) = manager.window_workspaces.get(&window_id).copied() else {
+            manager.active_workspace = None;
             return None;
         };
-        if manager.active_group == Some(group_id) {
+        if manager.active_workspace == Some(workspace_id) {
             return None;
         }
-        manager.active_group = Some(group_id);
+        manager.active_workspace = Some(workspace_id);
         let order = manager.allocate_activation_order();
-        let index = manager.group_index(group_id)?;
-        manager.groups[index].last_activation_order = order;
-        manager.persist_to_disk.then(|| manager.groups.clone())
+        let index = manager.workspace_index(workspace_id)?;
+        manager.workspaces[index].last_activation_order = order;
+        manager.persist_to_disk.then(|| manager.workspaces.clone())
     });
-    persist_if_changed(changed_groups);
+    persist_if_changed(changed_workspaces);
 }
 
 pub(crate) fn mark_window_closed<C>(cx: &mut C, window_id: WindowId)
 where
     C: BorrowAppContext,
 {
-    let changed_groups = cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let changed_workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
         if !manager.enabled {
             return None;
         }
         if manager.focused_window == Some(window_id) {
             manager.focused_window = None;
         }
-        let group_id = manager.window_groups.remove(&window_id)?;
-        if manager.active_group == Some(group_id) {
-            manager.active_group = None;
+        let workspace_id = manager.window_workspaces.remove(&window_id)?;
+        if manager.active_workspace == Some(workspace_id) {
+            manager.active_workspace = None;
         }
-        let index = manager.group_index(group_id)?;
-        if !manager.groups[index].restore_on_launch {
+        let index = manager.workspace_index(workspace_id)?;
+        if !manager.workspaces[index].restore_on_launch {
             return None;
         }
-        manager.groups[index].restore_on_launch = false;
-        manager.persist_to_disk.then(|| manager.groups.clone())
+        manager.workspaces[index].restore_on_launch = false;
+        manager.persist_to_disk.then(|| manager.workspaces.clone())
     });
-    persist_if_changed(changed_groups);
+    persist_if_changed(changed_workspaces);
 }
 
-/// Remove a live window and its durable group entirely. This is used when a
+/// Remove a live window and its durable workspace entirely. This is used when a
 /// repository move empties the source window: unlike an explicit user close,
-/// there is no group left to recover from the picker.
-pub(crate) fn discard_window_group<C>(cx: &mut C, window_id: WindowId)
+/// there is no workspace left to recover from the picker.
+pub(crate) fn discard_workspace_for_window<C>(cx: &mut C, window_id: WindowId)
 where
     C: BorrowAppContext,
 {
-    let changed_groups = cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let changed_workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
         if !manager.enabled {
             return None;
         }
         if manager.focused_window == Some(window_id) {
             manager.focused_window = None;
         }
-        let group_id = manager.window_groups.remove(&window_id)?;
-        if manager.active_group == Some(group_id) {
-            manager.active_group = None;
+        let workspace_id = manager.window_workspaces.remove(&window_id)?;
+        if manager.active_workspace == Some(workspace_id) {
+            manager.active_workspace = None;
         }
-        let before = manager.groups.len();
-        manager.groups.retain(|group| group.id != group_id);
-        (manager.persist_to_disk && manager.groups.len() != before).then(|| manager.groups.clone())
+        let before = manager.workspaces.len();
+        manager
+            .workspaces
+            .retain(|workspace| workspace.id != workspace_id);
+        (manager.persist_to_disk && manager.workspaces.len() != before)
+            .then(|| manager.workspaces.clone())
     });
-    persist_if_changed(changed_groups);
+    persist_if_changed(changed_workspaces);
 }
 
-/// Remove a closed/stale durable group by identity. Recovery uses this when
-/// every repository saved in the group already belongs to a live window.
-pub(crate) fn discard_group<C>(cx: &mut C, group_id: WindowGroupId)
+/// Remove a closed/stale durable workspace by identity. Recovery uses this when
+/// every repository saved in the workspace already belongs to a live window.
+pub(crate) fn discard_workspace<C>(cx: &mut C, workspace_id: WorkspaceId)
 where
     C: BorrowAppContext,
 {
-    let changed_groups = cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let changed_workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
         if !manager.enabled {
             return None;
         }
         manager
-            .window_groups
-            .retain(|_, mapped_group_id| *mapped_group_id != group_id);
-        if manager.active_group == Some(group_id) {
-            manager.active_group = None;
+            .window_workspaces
+            .retain(|_, mapped_workspace_id| *mapped_workspace_id != workspace_id);
+        if manager.active_workspace == Some(workspace_id) {
+            manager.active_workspace = None;
         }
-        let before = manager.groups.len();
-        manager.groups.retain(|group| group.id != group_id);
-        (manager.persist_to_disk && manager.groups.len() != before).then(|| manager.groups.clone())
+        let before = manager.workspaces.len();
+        manager
+            .workspaces
+            .retain(|workspace| workspace.id != workspace_id);
+        (manager.persist_to_disk && manager.workspaces.len() != before)
+            .then(|| manager.workspaces.clone())
     });
-    persist_if_changed(changed_groups);
+    persist_if_changed(changed_workspaces);
 }
 
-/// Change the visual identity of one durable window group. This applies to
-/// both live and recoverable groups; the caller is responsible for repainting
-/// any live window that currently owns the group.
-pub(crate) fn set_group_color<C>(
+/// Change the visual identity of one durable window workspace. This applies to
+/// both live and recoverable workspaces; the caller is responsible for repainting
+/// any live window that currently owns the workspace.
+pub(crate) fn set_workspace_color<C>(
     cx: &mut C,
-    group_id: WindowGroupId,
-    color: Option<session::WindowGroupColor>,
+    workspace_id: WorkspaceId,
+    color: Option<session::WorkspaceColor>,
 ) -> bool
 where
     C: BorrowAppContext,
 {
-    let (changed, changed_groups) =
-        cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let (changed, changed_workspaces) =
+        cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
             if !manager.enabled {
                 return (false, None);
             }
-            let Some(index) = manager.group_index(group_id) else {
+            let Some(index) = manager.workspace_index(workspace_id) else {
                 return (false, None);
             };
-            if manager.groups[index].color == color {
+            if manager.workspaces[index].color == color {
                 return (false, None);
             }
-            manager.groups[index].color = color;
+            manager.workspaces[index].color = color;
             (
                 true,
-                manager.persist_to_disk.then(|| manager.groups.clone()),
+                manager.persist_to_disk.then(|| manager.workspaces.clone()),
             )
         });
-    persist_if_changed(changed_groups);
+    persist_if_changed(changed_workspaces);
     changed
 }
 
 pub(crate) fn update_window_environment<C>(
     cx: &mut C,
     window_id: WindowId,
-    layout: WindowGroupLayout,
+    layout: WorkspaceLayout,
     placement: Option<PortableWindowPlacement>,
 ) where
     C: BorrowAppContext,
 {
-    let changed_groups = cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    let changed_workspaces = cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
         if !manager.enabled {
             return None;
         }
-        let group_id = manager.window_groups.get(&window_id).copied()?;
-        let index = manager.group_index(group_id)?;
-        let group = &mut manager.groups[index];
+        let workspace_id = manager.window_workspaces.get(&window_id).copied()?;
+        let index = manager.workspace_index(workspace_id)?;
+        let workspace = &mut manager.workspaces[index];
         let mut changed = false;
-        if group.layout != layout {
-            group.layout = layout;
+        if workspace.layout != layout {
+            workspace.layout = layout;
             changed = true;
         }
         if let Some(placement) = placement {
-            if group.placement != placement {
-                group.placement = placement;
+            if workspace.placement != placement {
+                workspace.placement = placement;
             }
             // Bounds are recorded in memory immediately so close/quit cannot
             // lose them. This debounced call is the point at which they are
             // also flushed during an otherwise idle session.
             changed = true;
         }
-        (changed && manager.persist_to_disk).then(|| manager.groups.clone())
+        (changed && manager.persist_to_disk).then(|| manager.workspaces.clone())
     });
-    persist_if_changed(changed_groups);
+    persist_if_changed(changed_workspaces);
 }
 
 pub(crate) fn record_window_placement<C>(
@@ -341,17 +352,17 @@ pub(crate) fn record_window_placement<C>(
 ) where
     C: BorrowAppContext,
 {
-    cx.update_default_global::<WindowGroupManager, _>(|manager, _cx| {
+    cx.update_default_global::<WorkspaceManager, _>(|manager, _cx| {
         if !manager.enabled {
             return;
         }
-        let Some(group_id) = manager.window_groups.get(&window_id).copied() else {
+        let Some(workspace_id) = manager.window_workspaces.get(&window_id).copied() else {
             return;
         };
-        let Some(index) = manager.group_index(group_id) else {
+        let Some(index) = manager.workspace_index(workspace_id) else {
             return;
         };
-        manager.groups[index].placement = placement;
+        manager.workspaces[index].placement = placement;
     });
 }
 
@@ -432,27 +443,31 @@ pub(crate) fn rebase_window_frame(
 /// `update_default_global`: gpui notifies every global observer on each lease,
 /// and the title bar reads the manager per frame, so a leasing read plus an
 /// observer is a repaint loop.
-fn manager(cx: &App) -> Option<&WindowGroupManager> {
-    cx.try_global::<WindowGroupManager>()
+fn manager(cx: &App) -> Option<&WorkspaceManager> {
+    cx.try_global::<WorkspaceManager>()
 }
 
-pub(crate) fn group_for_window(cx: &App, window_id: WindowId) -> Option<SavedWindowGroup> {
+pub(crate) fn workspace_for_window(cx: &App, window_id: WindowId) -> Option<Workspace> {
     let manager = manager(cx)?;
-    let id = manager.window_groups.get(&window_id)?;
-    manager.groups.iter().find(|group| group.id == *id).cloned()
+    let id = manager.window_workspaces.get(&window_id)?;
+    manager
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == *id)
+        .cloned()
 }
 
-pub(crate) fn groups(cx: &App) -> Vec<SavedWindowGroup> {
+pub(crate) fn workspaces(cx: &App) -> Vec<Workspace> {
     manager(cx)
-        .map(|manager| manager.groups.clone())
+        .map(|manager| manager.workspaces.clone())
         .unwrap_or_default()
 }
 
-pub(crate) fn group(cx: &App, id: WindowGroupId) -> Option<SavedWindowGroup> {
+pub(crate) fn workspace(cx: &App, id: WorkspaceId) -> Option<Workspace> {
     manager(cx)?
-        .groups
+        .workspaces
         .iter()
-        .find(|group| group.id == id)
+        .find(|workspace| workspace.id == id)
         .cloned()
 }
 
@@ -471,7 +486,7 @@ mod tests {
 
         let window = cx.add_window(|_, _| gpui::Empty);
         cx.update(|cx| initialize_for_test(cx, Vec::new()));
-        let group_id = cx.update(|cx| {
+        let workspace_id = cx.update(|cx| {
             sync_window(
                 cx,
                 window.window_id(),
@@ -486,26 +501,26 @@ mod tests {
         let notifications = Rc::new(Cell::new(0usize));
         let counter = Rc::clone(&notifications);
         let _subscription = cx.update(|cx| {
-            cx.observe_global::<WindowGroupManager>(move |_cx| {
+            cx.observe_global::<WorkspaceManager>(move |_cx| {
                 counter.set(counter.get() + 1);
             })
         });
 
         cx.update(|cx| {
             for _ in 0..8 {
-                let _ = groups(cx);
-                let _ = group(cx, group_id);
-                let _ = group_for_window(cx, window.window_id());
+                let _ = workspaces(cx);
+                let _ = workspace(cx, workspace_id);
+                let _ = workspace_for_window(cx, window.window_id());
             }
         });
         cx.run_until_parked();
         assert_eq!(notifications.get(), 0, "reads must not lease the global");
 
         cx.update(|cx| {
-            assert!(set_group_color(
+            assert!(set_workspace_color(
                 cx,
-                group_id,
-                Some(session::WindowGroupColor::Blue)
+                workspace_id,
+                Some(session::WorkspaceColor::Blue)
             ));
         });
         cx.run_until_parked();
@@ -517,7 +532,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn live_windows_keep_independent_repository_groups(cx: &mut gpui::TestAppContext) {
+    fn live_windows_keep_independent_repository_workspaces(cx: &mut gpui::TestAppContext) {
         let first = cx.add_window(|_, _| gpui::Empty);
         let second = cx.add_window(|_, _| gpui::Empty);
         cx.update(|cx| initialize_for_test(cx, Vec::new()));
@@ -544,20 +559,20 @@ mod tests {
         });
 
         assert_ne!(first_id, second_id);
-        let groups = cx.update(|cx| groups(cx));
-        assert_eq!(groups.len(), 2);
+        let workspaces = cx.update(|cx| workspaces(cx));
+        assert_eq!(workspaces.len(), 2);
         assert_eq!(
-            groups
+            workspaces
                 .iter()
-                .find(|group| group.id == first_id)
+                .find(|workspace| workspace.id == first_id)
                 .expect("first group")
                 .repositories,
             vec![path("/repos/a"), path("/repos/b")]
         );
         assert_eq!(
-            groups
+            workspaces
                 .iter()
-                .find(|group| group.id == second_id)
+                .find(|workspace| workspace.id == second_id)
                 .expect("second group")
                 .repositories,
             vec![path("/repos/f")]
@@ -565,10 +580,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn close_hides_a_group_from_launch_but_keeps_it_recoverable(cx: &mut gpui::TestAppContext) {
+    fn close_hides_a_workspace_from_launch_but_keeps_it_recoverable(cx: &mut gpui::TestAppContext) {
         let window = cx.add_window(|_, _| gpui::Empty);
-        let mut saved = SavedWindowGroup::new(vec![path("/repos/a")]);
-        saved.id = WindowGroupId::from_u128(1);
+        let mut saved = Workspace::new(vec![path("/repos/a")]);
+        saved.id = WorkspaceId::from_u128(1);
         let saved_id = saved.id;
         cx.update(|cx| initialize_for_test(cx, vec![saved]));
         let placement = PortableWindowPlacement {
@@ -595,7 +610,7 @@ mod tests {
         });
 
         let saved = cx
-            .update(|cx| group(cx, saved_id))
+            .update(|cx| workspace(cx, saved_id))
             .expect("recoverable group");
         assert!(!saved.restore_on_launch);
         assert_eq!(saved.repositories, vec![path("/repos/a")]);
@@ -603,30 +618,26 @@ mod tests {
     }
 
     #[gpui::test]
-    fn window_group_color_can_be_set_and_restored_to_the_theme_default(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let mut saved = SavedWindowGroup::new(vec![path("/repos/a")]);
-        saved.id = WindowGroupId::from_u128(1);
+    fn workspace_color_can_be_set_and_restored_to_the_theme_default(cx: &mut gpui::TestAppContext) {
+        let mut saved = Workspace::new(vec![path("/repos/a")]);
+        saved.id = WorkspaceId::from_u128(1);
         let saved_id = saved.id;
         cx.update(|cx| initialize_for_test(cx, vec![saved]));
 
-        assert!(
-            cx.update(|cx| {
-                set_group_color(cx, saved_id, Some(session::WindowGroupColor::Blue))
-            })
-        );
+        assert!(cx.update(|cx| {
+            set_workspace_color(cx, saved_id, Some(session::WorkspaceColor::Blue))
+        }));
         assert_eq!(
-            cx.update(|cx| group(cx, saved_id).and_then(|group| group.color)),
-            Some(session::WindowGroupColor::Blue)
+            cx.update(|cx| workspace(cx, saved_id).and_then(|workspace| workspace.color)),
+            Some(session::WorkspaceColor::Blue)
         );
-        assert!(cx.update(|cx| set_group_color(cx, saved_id, None)));
+        assert!(cx.update(|cx| set_workspace_color(cx, saved_id, None)));
         assert_eq!(
-            cx.update(|cx| group(cx, saved_id).and_then(|group| group.color)),
+            cx.update(|cx| workspace(cx, saved_id).and_then(|workspace| workspace.color)),
             None
         );
         assert!(
-            !cx.update(|cx| set_group_color(cx, saved_id, None)),
+            !cx.update(|cx| set_workspace_color(cx, saved_id, None)),
             "selecting the current color should be a no-op"
         );
     }
@@ -642,9 +653,9 @@ mod tests {
             cx.update(|cx| sync_window(cx, window.window_id(), None, Vec::new(), None)),
             None
         );
-        assert!(cx.update(|cx| groups(cx)).is_empty());
+        assert!(cx.update(|cx| workspaces(cx)).is_empty());
 
-        let group_id = cx
+        let workspace_id = cx
             .update(|cx| {
                 sync_window(
                     cx,
@@ -655,26 +666,26 @@ mod tests {
                 )
             })
             .expect("durable group after first repository");
-        assert!(cx.update(|cx| group(cx, group_id)).is_some());
+        assert!(cx.update(|cx| workspace(cx, workspace_id)).is_some());
 
         assert_eq!(
             cx.update(|cx| {
-                sync_window(cx, window.window_id(), Some(group_id), Vec::new(), None)
+                sync_window(cx, window.window_id(), Some(workspace_id), Vec::new(), None)
             }),
             None
         );
-        assert!(cx.update(|cx| groups(cx)).is_empty());
+        assert!(cx.update(|cx| workspaces(cx)).is_empty());
     }
 
     #[gpui::test]
-    fn review_regression_lifecycle_first_group_replays_the_empty_windows_focus(
+    fn review_regression_lifecycle_first_workspace_replays_the_empty_windows_focus(
         cx: &mut gpui::TestAppContext,
     ) {
         let first = cx.add_window(|_, _| gpui::Empty);
         let second = cx.add_window(|_, _| gpui::Empty);
         cx.update(|cx| initialize_for_test(cx, Vec::new()));
 
-        let first_group = cx
+        let first_workspace = cx
             .update(|cx| {
                 sync_window(
                     cx,
@@ -690,7 +701,7 @@ mod tests {
         // The second window receives focus while it is still ephemeral, then
         // becomes durable only when its first repository is added.
         cx.update(|cx| mark_window_active(cx, second.window_id()));
-        let second_group = cx
+        let second_workspace = cx
             .update(|cx| {
                 sync_window(
                     cx,
@@ -703,19 +714,19 @@ mod tests {
             .expect("second group");
 
         // Clicking back must make the first window newest. If the provisional
-        // focus was forgotten, active_group still says "first" and suppresses
+        // focus was forgotten, active_workspace still says "first" and suppresses
         // this activation update.
         cx.update(|cx| mark_window_active(cx, first.window_id()));
-        let groups = cx.update(|cx| groups(cx));
+        let workspaces = cx.update(|cx| workspaces(cx));
         let activation = |id| {
-            groups
+            workspaces
                 .iter()
-                .find(|group| group.id == id)
+                .find(|workspace| workspace.id == id)
                 .expect("saved group")
                 .last_activation_order
         };
         assert!(
-            activation(first_group) > activation(second_group),
+            activation(first_workspace) > activation(second_workspace),
             "the last clicked window must be restored frontmost"
         );
     }

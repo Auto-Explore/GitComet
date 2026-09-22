@@ -130,7 +130,7 @@ pub(super) fn tooltip_text_for_test() -> Option<SharedString> {
 }
 
 impl GitCometView {
-    pub(crate) fn current_window_group_layout(&self, cx: &gpui::App) -> session::WindowGroupLayout {
+    pub(crate) fn current_workspace_layout(&self, cx: &gpui::App) -> session::WorkspaceLayout {
         let (change_tracking_height, untracked_height) =
             self.details_pane.read(cx).saved_status_section_heights();
         let sidebar_width = ui_scale::stored_design_units(Some(
@@ -139,7 +139,7 @@ impl GitCometView {
         let details_width = ui_scale::stored_design_units(Some(
             self.ui_scale().design_units_from_pixels(self.details_width),
         ));
-        session::WindowGroupLayout {
+        session::WorkspaceLayout {
             sidebar_width,
             details_width,
             sidebar_collapsed: self.sidebar_collapsed,
@@ -151,10 +151,10 @@ impl GitCometView {
     /// Record the live per-window layout synchronously. Debounced settings
     /// writes still handle ordinary resizing, but close/quit cannot wait for a
     /// weak-view timer that becomes invalid as soon as the window disappears.
-    pub(crate) fn flush_window_group_environment(&self, cx: &mut gpui::Context<Self>) {
-        let layout = self.current_window_group_layout(cx);
+    pub(crate) fn flush_workspace_environment(&self, cx: &mut gpui::Context<Self>) {
+        let layout = self.current_workspace_layout(cx);
         let placement = self.window_placement.clone();
-        crate::window_groups::update_window_environment(
+        crate::workspaces::update_window_environment(
             cx,
             self.window_handle.window_id(),
             layout,
@@ -166,20 +166,20 @@ impl GitCometView {
     /// already recorded in the group manager by the bounds observer; this
     /// flushes that manager without serializing this window's potentially
     /// stale copy of process-wide UI preferences.
-    pub(super) fn schedule_window_group_persist(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn schedule_workspace_persist(&mut self, cx: &mut gpui::Context<Self>) {
         if !crate::ui_runtime::current().persists_ui_settings() {
             let _ = cx;
             return;
         }
 
-        self.window_group_persist_seq = self.window_group_persist_seq.wrapping_add(1);
-        let seq = self.window_group_persist_seq;
+        self.workspace_persist_seq = self.workspace_persist_seq.wrapping_add(1);
+        let seq = self.workspace_persist_seq;
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 smol::Timer::after(Duration::from_millis(250)).await;
                 let _ = view.update(cx, |this, cx| {
-                    if this.window_group_persist_seq == seq {
-                        crate::window_groups::persist_current(cx);
+                    if this.workspace_persist_seq == seq {
+                        crate::workspaces::persist_current(cx);
                     }
                 });
             },
@@ -187,7 +187,7 @@ impl GitCometView {
         .detach();
     }
 
-    /// Focused mergetool windows do not participate in durable window groups,
+    /// Focused mergetool windows do not participate in durable workspaces,
     /// so keep their historical process-wide width/height persistence path.
     /// Persist only the dimensions: a resize must not write a stale snapshot
     /// of unrelated preferences owned by another window.
@@ -285,12 +285,12 @@ impl GitCometView {
                         ) = this.main_pane.read(cx).mergetool_preferences();
                         let mergetool_view_three_way =
                             this.main_pane.read(cx).mergetool_view_three_way;
-                        let group_layout = this.current_window_group_layout(cx);
+                        let group_layout = this.current_workspace_layout(cx);
                         let sidebar_width = group_layout.sidebar_width;
                         let details_width = group_layout.details_width;
                         let change_tracking_height = group_layout.change_tracking_height;
                         let untracked_height = group_layout.untracked_height;
-                        crate::window_groups::update_window_environment(
+                        crate::workspaces::update_window_environment(
                             cx,
                             this.window_handle.window_id(),
                             group_layout,

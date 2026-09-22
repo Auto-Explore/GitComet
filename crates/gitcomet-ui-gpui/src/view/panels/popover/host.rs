@@ -881,8 +881,8 @@ impl PopoverHost {
             repo_picker_search_query: String::new(),
             cached_recent_repos: Vec::new(),
             cached_pinned_repos: Vec::new(),
-            cached_window_groups: Vec::new(),
-            cached_window_group_id: None,
+            cached_workspaces: Vec::new(),
+            cached_workspace_id: None,
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
@@ -2515,12 +2515,12 @@ impl PopoverHost {
             kind,
             PopoverKind::RepoPicker | PopoverKind::RepoTabMenu { .. }
         ) {
-            self.cached_window_groups = crate::window_groups::groups(cx);
+            self.cached_workspaces = crate::workspaces::workspaces(cx);
             // This method can run from a listener owned by the root view, so
             // reading that entity here would re-enter an in-progress update.
             // The group manager already owns the same window-to-group mapping.
-            self.cached_window_group_id =
-                crate::window_groups::group_for_window(cx, window.window_handle().window_id())
+            self.cached_workspace_id =
+                crate::workspaces::workspace_for_window(cx, window.window_handle().window_id())
                     .map(|group| group.id);
         }
         if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
