@@ -258,10 +258,10 @@ impl GitCometView {
         )
     }
 
-    pub(super) fn sync_title_bar_workspace_actions(&mut self, cx: &mut gpui::Context<Self>) {
-        let enabled = titlebar_workspace_actions_enabled(self.view_mode, self.has_repo_tabs());
+    pub(super) fn sync_title_bar_repo_tab_actions(&mut self, cx: &mut gpui::Context<Self>) {
+        let enabled = titlebar_repo_tab_actions_enabled(self.view_mode, self.has_repo_tabs());
         self.title_bar
-            .update(cx, |bar, cx| bar.set_workspace_actions_enabled(enabled, cx));
+            .update(cx, |bar, cx| bar.set_repo_tab_actions_enabled(enabled, cx));
     }
 
     fn interstitial_logo(_theme: AppTheme, size: Pixels) -> AnyElement {

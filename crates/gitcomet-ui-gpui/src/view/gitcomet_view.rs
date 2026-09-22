@@ -1215,7 +1215,7 @@ impl GitCometView {
             TitleBarView::new(
                 initial_theme,
                 weak_view.clone(),
-                titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
+                titlebar_repo_tab_actions_enabled(view_mode, !initial_state.repos.is_empty()),
                 cx,
             )
         });

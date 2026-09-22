@@ -430,8 +430,8 @@ struct SidebarNotifyFingerprint {
     repo_fingerprint: Option<BranchSidebarFingerprint>,
     open_repo_workdirs_count: usize,
     open_repo_workdirs_hash: u64,
-    active_workspace_badges_count: usize,
-    active_workspace_badges_hash: u64,
+    active_worktree_badges_count: usize,
+    active_worktree_badges_hash: u64,
     file_browser_rev: u64,
     /// The file the main pane has open. The tree highlights it, so the sidebar
     /// has to repaint when it changes — nothing else in this fingerprint moves
@@ -452,8 +452,8 @@ impl SidebarNotifyFingerprint {
             .map(BranchSidebarFingerprint::from_repo);
         let (open_repo_workdirs_count, open_repo_workdirs_hash) =
             open_repo_workdirs_fingerprint(state);
-        let (active_workspace_badges_count, active_workspace_badges_hash) =
-            cache.active_workspace_badges_fingerprint(state);
+        let (active_worktree_badges_count, active_worktree_badges_hash) =
+            cache.active_worktree_badges_fingerprint(state);
         let file_browser_rev = active_repo_id
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(|r| r.file_browser.file_browser_rev)
@@ -468,8 +468,8 @@ impl SidebarNotifyFingerprint {
             repo_fingerprint,
             open_repo_workdirs_count,
             open_repo_workdirs_hash,
-            active_workspace_badges_count,
-            active_workspace_badges_hash,
+            active_worktree_badges_count,
+            active_worktree_badges_hash,
             file_browser_rev,
             diff_target_rev,
         }
@@ -1605,7 +1605,7 @@ impl SidebarPaneView {
         }) {
             return Some(SidebarPresentation {
                 rows: Rc::clone(&cached.rows),
-                workspace_badges: base.workspace_badges,
+                worktree_badges: base.worktree_badges,
             });
         }
         // While filtering, ignore every persisted collapse state: a match hidden
@@ -1662,7 +1662,7 @@ impl SidebarPaneView {
         });
         Some(SidebarPresentation {
             rows,
-            workspace_badges: base.workspace_badges,
+            worktree_badges: base.worktree_badges,
         })
     }
 
@@ -3585,7 +3585,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_notify_fingerprint_tracks_live_workspace_badge_branch_changes() {
+    fn sidebar_notify_fingerprint_tracks_live_worktree_badge_branch_changes() {
         let mut active = repo_state(RepoId(1), "/tmp/repo");
         active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -3611,7 +3611,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_notify_fingerprint_tracks_workspace_badge_removal_when_tab_closes() {
+    fn sidebar_notify_fingerprint_tracks_worktree_badge_removal_when_tab_closes() {
         let mut active = repo_state(RepoId(1), "/tmp/repo");
         active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -3636,7 +3636,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_notify_fingerprint_tracks_workspace_badge_removal_when_worktree_detaches() {
+    fn sidebar_notify_fingerprint_tracks_worktree_badge_removal_when_worktree_detaches() {
         let mut active = repo_state(RepoId(1), "/tmp/repo");
         active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),

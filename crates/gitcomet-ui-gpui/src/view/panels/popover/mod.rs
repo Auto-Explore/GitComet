@@ -55,8 +55,8 @@ mod tag_push;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
-mod workspace_picker;
 mod worktree_add_prompt;
+mod worktree_badge_picker;
 mod worktree_picker;
 mod worktree_remove_confirm;
 
@@ -180,7 +180,7 @@ pub(in super::super) struct PopoverHost {
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _upstream_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
-    _workspace_picker_search_input_subscription: Option<gpui::Subscription>,
+    _worktree_badge_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
     _history_author_filter_search_input_subscription: Option<gpui::Subscription>,
@@ -267,7 +267,7 @@ pub(in super::super) struct PopoverHost {
     branch_picker_selected_index: Option<usize>,
     upstream_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
-    workspace_picker_selected_index: Option<usize>,
+    worktree_badge_picker_selected_index: Option<usize>,
     /// Path/reference the workspace badge's create row hands to the Add-worktree
     /// dialog. Consumed (and cleared) when that dialog opens, so a later
     /// open from elsewhere still starts blank.
@@ -283,7 +283,8 @@ pub(in super::super) struct PopoverHost {
     /// this whole view.
     branch_picker_rows_cache: rows_cache::RowsCache<branch_picker::BranchPickerNavTarget>,
     upstream_picker_rows_cache: rows_cache::RowsCache<upstream_picker::UpstreamTarget>,
-    workspace_picker_rows_cache: rows_cache::RowsCache<workspace_picker::WorkspaceRow>,
+    worktree_badge_picker_rows_cache:
+        rows_cache::RowsCache<worktree_badge_picker::WorktreeBadgeRow>,
     repo_picker_rows_cache: rows_cache::RowsCache<repo_picker::RepoPickerEntry>,
     stash_picker_rows_cache: rows_cache::RowsCache<stash_picker_prompt::StashRow>,
     file_history_rows_cache: rows_cache::RowsCache<CommitId>,
@@ -297,7 +298,7 @@ pub(in super::super) struct PopoverHost {
     file_history_search_input: Option<Entity<components::TextInput>>,
     history_author_filter_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
-    workspace_picker_search_input: Option<Entity<components::TextInput>>,
+    worktree_badge_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
     picker_prompt_scroll: ScrollHandle,
 
@@ -423,7 +424,7 @@ pub(in crate::view) fn benchmark_workspace_rows(
     repo: &RepoState,
     query: &str,
 ) -> Vec<components::PickerPromptItem> {
-    workspace_picker::rows(repo, query).items
+    worktree_badge_picker::rows(repo, query).items
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {

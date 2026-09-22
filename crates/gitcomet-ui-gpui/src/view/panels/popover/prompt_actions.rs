@@ -149,7 +149,9 @@ impl PopoverHost {
                     WorktreePopoverKind::RemovePicker => {
                         worktree_picker::panel(self, repo_id, true, cx)
                     }
-                    WorktreePopoverKind::BadgePicker => workspace_picker::panel(self, repo_id, cx),
+                    WorktreePopoverKind::BadgePicker => {
+                        worktree_badge_picker::panel(self, repo_id, cx)
+                    }
                     WorktreePopoverKind::RemoveConfirm { path, branch } => {
                         worktree_remove_confirm::panel(self, repo_id, path, branch, cx)
                     }

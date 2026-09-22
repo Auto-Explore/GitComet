@@ -14,15 +14,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct WorkspaceBadgeIndex {
+pub(in crate::view) struct WorktreeBadgeIndex {
     listed_paths_by_branch: Arc<FxHashMap<String, PathBuf>>,
     active_paths_by_branch: Arc<FxHashMap<String, PathBuf>>,
     active_fingerprint: (usize, u64),
 }
 
-impl WorkspaceBadgeIndex {
+impl WorktreeBadgeIndex {
     fn for_state(repo: &RepoState, open_repos: &[RepoState]) -> Self {
-        let active_paths = crate::view::rows::active_workspace_paths_by_branch(repo, open_repos);
+        let active_paths = crate::view::rows::active_worktree_paths_by_branch(repo, open_repos);
         let mut badges = active_paths.iter().collect::<Vec<_>>();
         badges.sort_unstable();
         let mut hasher = FxHasher::default();
@@ -33,7 +33,7 @@ impl WorkspaceBadgeIndex {
         }
         let active_fingerprint = (badges.len(), hasher.finish());
         Self {
-            listed_paths_by_branch: Arc::new(crate::view::rows::listed_workspace_paths_by_branch(
+            listed_paths_by_branch: Arc::new(crate::view::rows::listed_worktree_paths_by_branch(
                 repo,
             )),
             active_paths_by_branch: Arc::new(active_paths),
@@ -53,18 +53,18 @@ impl WorkspaceBadgeIndex {
 #[derive(Clone)]
 pub(in crate::view) struct SidebarPresentation {
     pub(in crate::view) rows: Rc<[BranchSidebarRow]>,
-    pub(in crate::view) workspace_badges: WorkspaceBadgeIndex,
+    pub(in crate::view) worktree_badges: WorktreeBadgeIndex,
 }
 
 #[derive(Default)]
 pub(in crate::view) struct SidebarPresentationCache {
     branch_rows: Option<BranchSidebarCache>,
     filtered_rows: Option<FilteredSidebarRows>,
-    workspace_badges: Option<WorkspaceBadgeCache>,
+    worktree_badges: Option<WorktreeBadgeCache>,
 }
 
 impl SidebarPresentationCache {
-    pub(in crate::view) fn active_workspace_badges_fingerprint(
+    pub(in crate::view) fn active_worktree_badges_fingerprint(
         &mut self,
         state: &AppState,
     ) -> (usize, u64) {
@@ -75,7 +75,7 @@ impl SidebarPresentationCache {
         else {
             return (0, 0);
         };
-        workspace_badges_cached(&mut self.workspace_badges, repo, &state.repos).active_fingerprint
+        worktree_badges_cached(&mut self.worktree_badges, repo, &state.repos).active_fingerprint
     }
 }
 
@@ -88,20 +88,20 @@ struct FilteredSidebarRows {
     rows: Rc<[BranchSidebarRow]>,
 }
 
-struct OpenWorkspaceSource {
+struct OpenWorktreeSource {
     path: PathBuf,
     head: Loadable<String>,
     detached: Option<CommitId>,
 }
 
-struct WorkspaceBadgeCache {
+struct WorktreeBadgeCache {
     repo_id: RepoId,
     worktrees: Option<Arc<Vec<gitcomet_core::domain::Worktree>>>,
-    open_repos: Vec<OpenWorkspaceSource>,
-    index: WorkspaceBadgeIndex,
+    open_repos: Vec<OpenWorktreeSource>,
+    index: WorktreeBadgeIndex,
 }
 
-impl WorkspaceBadgeCache {
+impl WorktreeBadgeCache {
     fn matches(&self, repo: &RepoState, open_repos: &[RepoState]) -> bool {
         let same_worktrees = match (&self.worktrees, &repo.worktrees) {
             (Some(cached), Loadable::Ready(current)) => Arc::ptr_eq(cached, current),
@@ -123,19 +123,19 @@ impl WorkspaceBadgeCache {
     }
 }
 
-fn workspace_badges_cached(
-    cache: &mut Option<WorkspaceBadgeCache>,
+fn worktree_badges_cached(
+    cache: &mut Option<WorktreeBadgeCache>,
     repo: &RepoState,
     open_repos: &[RepoState],
-) -> WorkspaceBadgeIndex {
+) -> WorktreeBadgeIndex {
     if let Some(cached) = cache
         .as_ref()
         .filter(|cached| cached.matches(repo, open_repos))
     {
         return cached.index.clone();
     }
-    let index = WorkspaceBadgeIndex::for_state(repo, open_repos);
-    *cache = Some(WorkspaceBadgeCache {
+    let index = WorktreeBadgeIndex::for_state(repo, open_repos);
+    *cache = Some(WorktreeBadgeCache {
         repo_id: repo.id,
         worktrees: match &repo.worktrees {
             Loadable::Ready(worktrees) => Some(Arc::clone(worktrees)),
@@ -143,7 +143,7 @@ fn workspace_badges_cached(
         },
         open_repos: open_repos
             .iter()
-            .map(|repo| OpenWorkspaceSource {
+            .map(|repo| OpenWorktreeSource {
                 path: repo.spec.workdir.clone(),
                 head: repo.head_branch.clone(),
                 detached: repo.detached_head_commit.clone(),
@@ -226,8 +226,8 @@ pub(in crate::view) fn build_sidebar_presentation(
             pinned_branches,
             branch_filter,
         ),
-        workspace_badges: workspace_badges_cached(
-            &mut cache.workspace_badges,
+        worktree_badges: worktree_badges_cached(
+            &mut cache.worktree_badges,
             repo,
             state.repos.as_slice(),
         ),
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn filtered_rows_and_workspace_badges_reuse_data_until_their_sources_change() {
+    fn filtered_rows_and_worktree_badges_reuse_data_until_their_sources_change() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/feature"),
@@ -359,12 +359,12 @@ mod tests {
             build_sidebar_presentation(&mut cache, &state, &empty, &empty, "feature").unwrap();
         assert!(Rc::ptr_eq(&initial.rows, &unchanged.rows));
         assert!(Arc::ptr_eq(
-            &initial.workspace_badges.active_paths_by_branch,
-            &unchanged.workspace_badges.active_paths_by_branch,
+            &initial.worktree_badges.active_paths_by_branch,
+            &unchanged.worktree_badges.active_paths_by_branch,
         ));
         assert!(Arc::ptr_eq(
-            &initial.workspace_badges.listed_paths_by_branch,
-            &unchanged.workspace_badges.listed_paths_by_branch,
+            &initial.worktree_badges.listed_paths_by_branch,
+            &unchanged.worktree_badges.listed_paths_by_branch,
         ));
 
         state.repos[1].head_branch = Loadable::Ready("feature/new".into());
@@ -373,12 +373,12 @@ mod tests {
         assert!(Rc::ptr_eq(&initial.rows, &changed_head.rows));
         assert!(
             changed_head
-                .workspace_badges
+                .worktree_badges
                 .active_path("feature/old")
                 .is_none()
         );
         assert_eq!(
-            changed_head.workspace_badges.active_path("feature/new"),
+            changed_head.worktree_badges.active_path("feature/new"),
             Some(&PathBuf::from("/tmp/feature"))
         );
 
@@ -389,13 +389,13 @@ mod tests {
         assert!(!Rc::ptr_eq(&initial.rows, &refreshed.rows));
         assert!(
             refreshed
-                .workspace_badges
+                .worktree_badges
                 .listed_path("feature/old")
                 .is_none()
         );
         assert!(
             refreshed
-                .workspace_badges
+                .worktree_badges
                 .active_path("feature/new")
                 .is_none()
         );
@@ -510,7 +510,7 @@ mod tests {
     /// A repository's own worktree is the one row the badge index leaves out, so
     /// the index changes meaning when `set_spec` moves `spec.workdir` under it.
     #[test]
-    fn workspace_badge_cache_follows_a_repositorys_workdir_moving() {
+    fn worktree_badge_cache_follows_a_repositorys_workdir_moving() {
         let worktrees = Arc::new(vec![
             gitcomet_core::domain::Worktree {
                 path: PathBuf::from("/tmp/repo"),
@@ -535,8 +535,8 @@ mod tests {
         };
         let mut cache = SidebarPresentationCache::default();
 
-        let badges = workspace_badges_cached(
-            &mut cache.workspace_badges,
+        let badges = worktree_badges_cached(
+            &mut cache.worktree_badges,
             &state.repos[0],
             state.repos.as_slice(),
         );
@@ -545,7 +545,7 @@ mod tests {
             badges.listed_path("feature"),
             Some(&PathBuf::from("/tmp/repo-feature"))
         );
-        let fingerprint = cache.active_workspace_badges_fingerprint(&state);
+        let fingerprint = cache.active_worktree_badges_fingerprint(&state);
 
         // The same worktree list, the same open repositories -- only the
         // repository's own path moved.
@@ -555,8 +555,8 @@ mod tests {
             Loadable::Ready(current) if Arc::ptr_eq(current, &worktrees)
         ));
 
-        let badges = workspace_badges_cached(
-            &mut cache.workspace_badges,
+        let badges = worktree_badges_cached(
+            &mut cache.worktree_badges,
             &state.repos[0],
             state.repos.as_slice(),
         );
@@ -571,13 +571,13 @@ mod tests {
         );
         assert_ne!(
             fingerprint,
-            cache.active_workspace_badges_fingerprint(&state),
+            cache.active_worktree_badges_fingerprint(&state),
             "the sidebar has to repaint for it"
         );
     }
 
     #[test]
-    fn workspace_badge_index_returns_none_for_unknown_branch() {
+    fn worktree_badge_index_returns_none_for_unknown_branch() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -587,14 +587,14 @@ mod tests {
         }]));
         repo.worktrees_rev = 1;
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[]);
 
         assert!(index.listed_path("nonexistent").is_none());
         assert!(index.active_path("nonexistent").is_none());
     }
 
     #[test]
-    fn workspace_badge_index_returns_path_for_listed_worktree() {
+    fn worktree_badge_index_returns_path_for_listed_worktree() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -604,7 +604,7 @@ mod tests {
         }]));
         repo.worktrees_rev = 1;
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[]);
 
         assert_eq!(
             index.listed_path("feature"),
@@ -613,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_badge_index_active_path_returns_none_when_no_open_repo_matches() {
+    fn worktree_badge_index_active_path_returns_none_when_no_open_repo_matches() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -623,13 +623,13 @@ mod tests {
         }]));
         repo.worktrees_rev = 1;
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[]);
 
         assert!(index.active_path("feature").is_none());
     }
 
     #[test]
-    fn workspace_badge_index_active_path_returns_when_open_repo_matches_workdir() {
+    fn worktree_badge_index_active_path_returns_when_open_repo_matches_workdir() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -643,7 +643,7 @@ mod tests {
         open_repo.head_branch = Loadable::Ready("feature/listed".to_string());
         open_repo.head_branch_rev = 1;
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[open_repo]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[open_repo]);
 
         assert_eq!(
             index.active_path("feature/listed"),
@@ -652,40 +652,40 @@ mod tests {
     }
 
     #[test]
-    fn workspace_badge_index_built_with_error_worktrees_returns_empty_maps() {
+    fn worktree_badge_index_built_with_error_worktrees_returns_empty_maps() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Error("failed to load".into());
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[]);
 
         assert!(index.listed_path("feature").is_none());
         assert!(index.active_path("feature").is_none());
     }
 
     #[test]
-    fn workspace_badge_index_built_with_loading_worktrees_returns_empty_maps() {
+    fn worktree_badge_index_built_with_loading_worktrees_returns_empty_maps() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Loading;
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[]);
 
         assert!(index.listed_path("feature").is_none());
         assert!(index.active_path("feature").is_none());
     }
 
     #[test]
-    fn workspace_badge_index_built_with_not_loaded_worktrees_returns_empty_maps() {
+    fn worktree_badge_index_built_with_not_loaded_worktrees_returns_empty_maps() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::NotLoaded;
 
-        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+        let index = WorktreeBadgeIndex::for_state(&repo, &[]);
 
         assert!(index.listed_path("feature").is_none());
         assert!(index.active_path("feature").is_none());
     }
 
     #[test]
-    fn build_sidebar_presentation_includes_workspace_badges_when_worktrees_loaded() {
+    fn build_sidebar_presentation_includes_worktree_badges_when_worktrees_loaded() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -707,13 +707,13 @@ mod tests {
                 .expect("sidebar presentation");
 
         assert_eq!(
-            presentation.workspace_badges.listed_path("feature"),
+            presentation.worktree_badges.listed_path("feature"),
             Some(&PathBuf::from("/tmp/repo-feature"))
         );
     }
 
     #[test]
-    fn build_sidebar_presentation_clears_workspace_badges_when_worktrees_become_error() {
+    fn build_sidebar_presentation_clears_worktree_badges_when_worktrees_become_error() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -740,14 +740,14 @@ mod tests {
 
         assert!(
             presentation
-                .workspace_badges
+                .worktree_badges
                 .listed_path("feature")
                 .is_none()
         );
     }
 
     #[test]
-    fn build_sidebar_presentation_updates_workspace_badges_after_worktree_change() {
+    fn build_sidebar_presentation_updates_worktree_badges_after_worktree_change() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
             path: PathBuf::from("/tmp/repo-feature"),
@@ -768,7 +768,7 @@ mod tests {
             build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
                 .expect("initial sidebar presentation");
         assert_eq!(
-            initial.workspace_badges.listed_path("feature/old"),
+            initial.worktree_badges.listed_path("feature/old"),
             Some(&PathBuf::from("/tmp/repo-feature"))
         );
 
@@ -788,12 +788,12 @@ mod tests {
 
         assert!(
             refreshed
-                .workspace_badges
+                .worktree_badges
                 .listed_path("feature/old")
                 .is_none()
         );
         assert_eq!(
-            refreshed.workspace_badges.listed_path("feature/new"),
+            refreshed.worktree_badges.listed_path("feature/new"),
             Some(&PathBuf::from("/tmp/repo-feature"))
         );
     }
@@ -819,7 +819,7 @@ mod tests {
         let initial =
             build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
                 .expect("initial sidebar presentation");
-        assert!(initial.workspace_badges.listed_path("feature").is_some());
+        assert!(initial.worktree_badges.listed_path("feature").is_some());
 
         state.repos[0].worktrees =
             Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
@@ -835,6 +835,6 @@ mod tests {
             build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
                 .expect("refreshed sidebar presentation");
 
-        assert!(refreshed.workspace_badges.listed_path("feature").is_none());
+        assert!(refreshed.worktree_badges.listed_path("feature").is_none());
     }
 }

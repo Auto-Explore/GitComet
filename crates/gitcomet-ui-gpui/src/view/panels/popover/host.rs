@@ -836,7 +836,7 @@ impl PopoverHost {
             _branch_picker_search_input_subscription: None,
             _upstream_picker_search_input_subscription: None,
             _worktree_picker_search_input_subscription: None,
-            _workspace_picker_search_input_subscription: None,
+            _worktree_badge_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
             _history_author_filter_search_input_subscription: None,
@@ -890,7 +890,7 @@ impl PopoverHost {
             branch_picker_selected_index: None,
             upstream_picker_selected_index: None,
             worktree_picker_selected_index: None,
-            workspace_picker_selected_index: None,
+            worktree_badge_picker_selected_index: None,
             pending_worktree_add_prefill: None,
             submodule_picker_selected_index: None,
             file_history_selected_index: None,
@@ -898,7 +898,7 @@ impl PopoverHost {
             history_author_suggestions: None,
             branch_picker_rows_cache: rows_cache::RowsCache::default(),
             upstream_picker_rows_cache: rows_cache::RowsCache::default(),
-            workspace_picker_rows_cache: rows_cache::RowsCache::default(),
+            worktree_badge_picker_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_rows_cache: rows_cache::RowsCache::default(),
             stash_picker_rows_cache: rows_cache::RowsCache::default(),
             file_history_rows_cache: rows_cache::RowsCache::default(),
@@ -911,7 +911,7 @@ impl PopoverHost {
             file_history_search_input: None,
             history_author_filter_search_input: None,
             worktree_picker_search_input: None,
-            workspace_picker_search_input: None,
+            worktree_badge_picker_search_input: None,
             submodule_picker_search_input: None,
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
@@ -1022,7 +1022,7 @@ impl PopoverHost {
                 &self.file_history_search_input,
                 &self.history_author_filter_search_input,
                 &self.worktree_picker_search_input,
-                &self.workspace_picker_search_input,
+                &self.worktree_badge_picker_search_input,
                 &self.submodule_picker_search_input,
                 &self.stash_picker_search_input,
             ]
@@ -2616,7 +2616,7 @@ impl PopoverHost {
         self.branch_picker_selected_index = None;
         self.upstream_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
-        self.workspace_picker_selected_index = None;
+        self.worktree_badge_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
         self.file_history_selected_index = None;
         self.history_author_filter_selected_index = None;
@@ -2625,7 +2625,7 @@ impl PopoverHost {
         // keeps the memory from outliving the picker that needed it.
         self.branch_picker_rows_cache.clear();
         self.upstream_picker_rows_cache.clear();
-        self.workspace_picker_rows_cache.clear();
+        self.worktree_badge_picker_rows_cache.clear();
         self.repo_picker_rows_cache.clear();
         self.stash_picker_rows_cache.clear();
         self.file_history_rows_cache.clear();
@@ -2944,7 +2944,7 @@ impl PopoverHost {
                     repo_id,
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 } => {
-                    let _ = self.ensure_workspace_picker_search_input(window, cx);
+                    let _ = self.ensure_worktree_badge_picker_search_input(window, cx);
                     self.store
                         .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
                 }
@@ -3487,7 +3487,7 @@ impl PopoverHost {
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 ..
-            }) => self.workspace_picker_search_input.as_ref(),
+            }) => self.worktree_badge_picker_search_input.as_ref(),
             _ => None,
         }
     }
@@ -3505,7 +3505,7 @@ impl PopoverHost {
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 ..
-            }) => Some(&mut self.workspace_picker_selected_index),
+            }) => Some(&mut self.worktree_badge_picker_selected_index),
             _ => None,
         }
     }
@@ -3518,7 +3518,7 @@ impl PopoverHost {
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 ..
-            }) => self.workspace_picker_selected_index,
+            }) => self.worktree_badge_picker_selected_index,
             _ => None,
         }
     }

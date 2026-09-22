@@ -116,7 +116,7 @@ pub(super) struct TitleBarView {
     app_menu_open: bool,
     app_menu_focus_handle: FocusHandle,
     repo_picker_open: bool,
-    workspace_actions_enabled: bool,
+    repo_tab_actions_enabled: bool,
     /// Painted bounds of the repository switcher chevron, so opening the picker
     /// from the keyboard can anchor to the same control the mouse uses.
     repo_picker_toggle_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -534,7 +534,7 @@ impl TitleBarView {
     pub(super) fn new(
         theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
-        workspace_actions_enabled: bool,
+        repo_tab_actions_enabled: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
@@ -544,7 +544,7 @@ impl TitleBarView {
             app_menu_open: false,
             app_menu_focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
             repo_picker_open: false,
-            workspace_actions_enabled,
+            repo_tab_actions_enabled,
             repo_picker_toggle_bounds: Rc::new(Cell::new(None)),
         }
     }
@@ -584,15 +584,15 @@ impl TitleBarView {
         cx.notify();
     }
 
-    pub(super) fn set_workspace_actions_enabled(
+    pub(super) fn set_repo_tab_actions_enabled(
         &mut self,
         enabled: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.workspace_actions_enabled == enabled {
+        if self.repo_tab_actions_enabled == enabled {
             return;
         }
-        self.workspace_actions_enabled = enabled;
+        self.repo_tab_actions_enabled = enabled;
         if !enabled {
             self.app_menu_open = false;
             self.repo_picker_open = false;
@@ -631,8 +631,8 @@ impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let is_macos = cfg!(target_os = "macos");
-        let workspace_actions_enabled = self.workspace_actions_enabled;
-        let repo_tabs_enabled = workspace_actions_enabled
+        let repo_tab_actions_enabled = self.repo_tab_actions_enabled;
+        let repo_tabs_enabled = repo_tab_actions_enabled
             && self
                 .root_view
                 .upgrade()
@@ -903,10 +903,10 @@ impl Render for TitleBarView {
                         .children(left_controls),
                 )
             })
-            .when(!is_macos && workspace_actions_enabled, |d| {
+            .when(!is_macos && repo_tab_actions_enabled, |d| {
                 d.child(menu_toggle)
             })
-            .when(workspace_actions_enabled, |d| d.child(repo_picker_toggle));
+            .when(repo_tab_actions_enabled, |d| d.child(repo_picker_toggle));
 
         // Browser-style: when a workspace is open, the repo tabs live in the
         // title bar's middle. Keep a fixed draggable strip beside them so the

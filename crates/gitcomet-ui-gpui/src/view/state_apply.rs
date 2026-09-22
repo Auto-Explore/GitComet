@@ -506,7 +506,7 @@ impl GitCometView {
                 .update(cx, |host, cx| host.close_popover(cx));
             self.open_repo_panel = false;
         }
-        self.sync_title_bar_workspace_actions(cx);
+        self.sync_title_bar_repo_tab_actions(cx);
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
 

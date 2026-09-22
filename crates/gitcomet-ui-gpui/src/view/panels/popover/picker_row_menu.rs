@@ -49,7 +49,7 @@ pub(super) enum PickerRowMenuTarget {
     /// sidebar row opens.
     Worktree {
         repo_id: RepoId,
-        row: workspace_picker::WorkspaceRow,
+        row: worktree_badge_picker::WorktreeBadgeRow,
     },
 }
 
@@ -92,7 +92,7 @@ impl PickerRowMenuTarget {
                 | branch_picker::BranchPickerNavTarget::RowAction(_) => None,
             },
             Self::Worktree { repo_id, row } => match row {
-                workspace_picker::WorkspaceRow::Worktree(path) => {
+                worktree_badge_picker::WorktreeBadgeRow::Worktree(path) => {
                     // The sidebar's menu names the branch checked out in the
                     // worktree, so look it up the same way its rows do.
                     let branch = this
@@ -117,8 +117,8 @@ impl PickerRowMenuTarget {
                 }
                 // The create row names no worktree yet, and a menu entry is not
                 // a row at all.
-                workspace_picker::WorkspaceRow::CreateNew
-                | workspace_picker::WorkspaceRow::RowAction(_) => None,
+                worktree_badge_picker::WorktreeBadgeRow::CreateNew
+                | worktree_badge_picker::WorktreeBadgeRow::RowAction(_) => None,
             },
         }
     }
@@ -152,9 +152,11 @@ impl PickerRowMenuTarget {
             Self::Branch { row, .. } => branch_picker::nav_targets(this, query)
                 .iter()
                 .position(|candidate| candidate == row),
-            Self::Worktree { repo_id, row } => workspace_picker::nav_targets(this, *repo_id, query)
-                .iter()
-                .position(|candidate| candidate == row),
+            Self::Worktree { repo_id, row } => {
+                worktree_badge_picker::nav_targets(this, *repo_id, query)
+                    .iter()
+                    .position(|candidate| candidate == row)
+            }
         }
     }
 

@@ -565,18 +565,18 @@ impl Render for ActionBarView {
 
         // Workspace (worktree) and branch badges show the current state at a
         // glance, with each opening a filterable picker.
-        let workspace_badge = self.active_repo().map(|repo| {
+        let worktree_badge = self.active_repo().map(|repo| {
             let repo_id = repo.id;
             let label = truncate_badge_label_to(
                 &crate::view::path_display::repo_path_name(&repo.spec.workdir),
                 badge_label_max_chars,
             );
             let workdir = repo.spec.workdir.display().to_string();
-            let invoker: SharedString = "workspace_badge".into();
+            let invoker: SharedString = "worktree_badge".into();
             let is_active = active_invoker
                 .as_ref()
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
-            components::Button::new("workspace_badge", label.clone())
+            components::Button::new("worktree_badge", label.clone())
                 .start_slot(icon("icons/git_worktree.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
                 .open(is_active)
@@ -590,7 +590,7 @@ impl Render for ActionBarView {
                         cx,
                     );
                 })
-                .debug_selector(|| "workspace_badge".to_string())
+                .debug_selector(|| "worktree_badge".to_string())
                 .gitcomet_tooltip(theme, format!("Switch worktree\n{workdir}").into())
         });
 
@@ -1003,7 +1003,7 @@ impl Render for ActionBarView {
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .child(global_nav)
-                    .children(workspace_badge)
+                    .children(worktree_badge)
                     .child(tracking_actions)
                     .children(historical_badge)
                     .when(is_merging, |d| {

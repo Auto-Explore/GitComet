@@ -3272,7 +3272,7 @@ mod tests {
         }));
     }
 
-    fn seed_workspace_repo(
+    fn seed_worktree_repo(
         cx: &mut gpui::VisualTestContext,
         store: &AppStore,
         view: gpui::Entity<GitCometView>,
@@ -3541,7 +3541,7 @@ mod tests {
             let _ = window.draw(app);
             window.activate_window();
         });
-        seed_workspace_repo(cx, &store, view);
+        seed_worktree_repo(cx, &store, view);
         assert!(cx.cx.update(|app| {
             find_normal_gitcomet_window_for_repo(app, &duplicate_path).is_some()
         }));
@@ -3581,7 +3581,7 @@ mod tests {
             window.activate_window();
             window.window_handle().window_id()
         });
-        seed_workspace_repo(cx, &store, view);
+        seed_worktree_repo(cx, &store, view);
         let repo_id = store.snapshot().repos[0].id;
 
         cx.cx.update(|app| {
@@ -3914,7 +3914,7 @@ mod tests {
             window.activate_window();
             window.window_handle().window_id()
         });
-        seed_workspace_repo(cx, &store, view.clone());
+        seed_worktree_repo(cx, &store, view.clone());
         let group_id = cx
             .cx
             .update(|app| crate::window_groups::group_for_window(app, window_id))
@@ -4751,7 +4751,7 @@ mod tests {
             let _ = window.draw(app);
             window.activate_window();
         });
-        seed_workspace_repo(cx, &store, view);
+        seed_worktree_repo(cx, &store, view);
 
         assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
         cx.simulate_keystrokes("secondary-,");
@@ -4826,7 +4826,7 @@ mod tests {
             let _ = window.draw(app);
             window.activate_window();
         });
-        seed_workspace_repo(cx, &store, view);
+        seed_worktree_repo(cx, &store, view);
 
         cx.simulate_keystrokes("secondary-shift-a");
         cx.update(|window, app| {
@@ -4861,7 +4861,7 @@ mod tests {
             let _ = window.draw(app);
             window.activate_window();
         });
-        seed_workspace_repo(cx, &store, view);
+        seed_worktree_repo(cx, &store, view);
 
         assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
         cx.simulate_keystrokes("secondary-n");
@@ -4908,7 +4908,7 @@ mod tests {
             window.activate_window();
             window.window_handle().window_id()
         });
-        seed_workspace_repo(cx, &store, view.clone());
+        seed_worktree_repo(cx, &store, view.clone());
         let snapshot = store.snapshot();
         let repo = snapshot.repos.first().expect("source repo");
         let (repo_id, path) = (repo.id, repo.spec.workdir.clone());
@@ -4988,7 +4988,7 @@ mod tests {
             let _ = window.draw(app);
             window.window_handle().window_id()
         });
-        seed_workspace_repo(cx, &store, view);
+        seed_worktree_repo(cx, &store, view);
         let snapshot = store.snapshot();
         let repo = snapshot.repos.first().expect("source repo");
         let (repo_id, path) = (repo.id, repo.spec.workdir.clone());

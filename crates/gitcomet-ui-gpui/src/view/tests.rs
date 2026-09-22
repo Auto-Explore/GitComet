@@ -3105,11 +3105,11 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
         GitCometViewMode::Normal,
         true
     ));
-    assert!(titlebar_workspace_actions_enabled(
+    assert!(titlebar_repo_tab_actions_enabled(
         GitCometViewMode::FocusedMergetool,
         false
     ));
-    assert!(!titlebar_workspace_actions_enabled(
+    assert!(!titlebar_repo_tab_actions_enabled(
         GitCometViewMode::Normal,
         false
     ));
@@ -3117,7 +3117,7 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
 
 #[test]
 fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette() {
-    assert!(titlebar_workspace_actions_enabled(
+    assert!(titlebar_repo_tab_actions_enabled(
         GitCometViewMode::FocusedMergetool,
         true
     ));
@@ -5681,7 +5681,7 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
     let badges: Vec<_> = (0..12usize)
         .filter_map(|ix| {
             let selector: &'static str =
-                Box::leak(format!("branch_workspace_badge_{ix}").into_boxed_str());
+                Box::leak(format!("branch_worktree_badge_{ix}").into_boxed_str());
             cx.debug_bounds(selector)
         })
         .collect();

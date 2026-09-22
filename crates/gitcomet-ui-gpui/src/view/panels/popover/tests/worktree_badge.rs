@@ -1,4 +1,4 @@
-use super::super::workspace_picker::{self, WorkspaceRow};
+use super::super::worktree_badge_picker::{self, WorktreeBadgeRow};
 use super::*;
 use crate::view::panels::tests::{app_state_with_repo, opening_repo_state};
 use crate::view::test_support::{push_test_state, redraw};
@@ -42,7 +42,7 @@ fn repo_with_worktrees(repo_id: RepoId) -> RepoState {
 }
 
 /// Opens the workspace badge picker over a state containing `repo`.
-fn open_workspace_picker(
+fn open_worktree_badge_picker(
     cx: &mut gpui::TestAppContext,
     repo: RepoState,
     repo_id: RepoId,
@@ -81,7 +81,9 @@ fn suggested_worktree_path_places_new_worktrees_beside_the_current_one() {
     let repo = repo_with_worktrees(RepoId(1));
 
     assert_eq!(
-        PathBuf::from(workspace_picker::suggested_worktree_path(&repo, "feature")),
+        PathBuf::from(worktree_badge_picker::suggested_worktree_path(
+            &repo, "feature"
+        )),
         PathBuf::from("/tmp/ws").join("feature")
     );
 }
@@ -92,7 +94,9 @@ fn suggested_worktree_path_flattens_branch_shaped_queries() {
     let repo = repo_with_worktrees(RepoId(1));
 
     assert_eq!(
-        PathBuf::from(workspace_picker::suggested_worktree_path(&repo, "feat/x")),
+        PathBuf::from(worktree_badge_picker::suggested_worktree_path(
+            &repo, "feat/x"
+        )),
         PathBuf::from("/tmp/ws").join("feat-x")
     );
 }
@@ -101,17 +105,22 @@ fn suggested_worktree_path_flattens_branch_shaped_queries() {
 fn suggested_worktree_path_is_blank_without_a_query() {
     let repo = repo_with_worktrees(RepoId(1));
 
-    assert_eq!(workspace_picker::suggested_worktree_path(&repo, "   "), "");
+    assert_eq!(
+        worktree_badge_picker::suggested_worktree_path(&repo, "   "),
+        ""
+    );
 }
 
 #[gpui::test]
-fn workspace_picker_lists_every_worktree_and_marks_the_current_one(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_lists_every_worktree_and_marks_the_current_one(
+    cx: &mut gpui::TestAppContext,
+) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     let built = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
-        let built = workspace_picker::cached(host, repo_id, "");
+        let built = worktree_badge_picker::cached(host, repo_id, "");
         (built.payloads.to_vec(), built.marked_index)
     });
     let (rows, marked_index) = built;
@@ -119,10 +128,10 @@ fn workspace_picker_lists_every_worktree_and_marks_the_current_one(cx: &mut gpui
     // Create row, then all three worktrees — including the current one, which
     // the Open picker deliberately hides.
     assert_eq!(rows.len(), 4);
-    assert_eq!(rows[0], WorkspaceRow::CreateNew);
+    assert_eq!(rows[0], WorktreeBadgeRow::CreateNew);
     assert_eq!(
         rows[1],
-        WorkspaceRow::Worktree(PathBuf::from("/tmp/ws/main"))
+        WorktreeBadgeRow::Worktree(PathBuf::from("/tmp/ws/main"))
     );
     assert_eq!(
         marked_index,
@@ -145,37 +154,37 @@ fn workspace_picker_lists_every_worktree_and_marks_the_current_one(cx: &mut gpui
 }
 
 #[gpui::test]
-fn workspace_picker_create_row_survives_a_query_matching_no_worktree(
+fn worktree_badge_picker_create_row_survives_a_query_matching_no_worktree(
     cx: &mut gpui::TestAppContext,
 ) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     let targets = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
-        workspace_picker::nav_targets(host, repo_id, "totally-new-thing")
+        worktree_badge_picker::nav_targets(host, repo_id, "totally-new-thing")
     });
 
     // `match_items` drops rows whose match text lacks the query, so the create
     // row has to carry the query itself.
     assert_eq!(
         targets,
-        vec![WorkspaceRow::CreateNew],
+        vec![WorktreeBadgeRow::CreateNew],
         "create row must stay reachable for a name that does not exist yet"
     );
 }
 
 #[gpui::test]
-fn workspace_picker_nav_targets_follow_the_rendered_row_order(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_nav_targets_follow_the_rendered_row_order(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     let (targets, rendered) = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
         let query = "feat";
-        let targets = workspace_picker::nav_targets(host, repo_id, query);
+        let targets = worktree_badge_picker::nav_targets(host, repo_id, query);
         // What the panel renders, resolved exactly the way PickerPrompt does.
-        let built = workspace_picker::cached(host, repo_id, query);
+        let built = worktree_badge_picker::cached(host, repo_id, query);
         let layout = crate::view::components::picker_prompt_layout(&built.items, query);
         let rendered: Vec<_> = layout
             .item_indices
@@ -189,24 +198,26 @@ fn workspace_picker_nav_targets_follow_the_rendered_row_order(cx: &mut gpui::Tes
         targets, rendered,
         "keyboard order must match render order or Enter opens the wrong worktree"
     );
-    assert!(targets.contains(&WorkspaceRow::Worktree(PathBuf::from("/tmp/ws/feature"))));
+    assert!(targets.contains(&WorktreeBadgeRow::Worktree(PathBuf::from(
+        "/tmp/ws/feature"
+    ))));
 }
 
 #[gpui::test]
-fn workspace_picker_filters_worktrees_by_name_branch_and_path(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_filters_worktrees_by_name_branch_and_path(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     let by_branch = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
-        workspace_picker::nav_targets(host, repo_id, "badges")
+        worktree_badge_picker::nav_targets(host, repo_id, "badges")
     });
 
     assert_eq!(
         by_branch,
         vec![
-            WorkspaceRow::CreateNew,
-            WorkspaceRow::Worktree(PathBuf::from("/tmp/ws/feature")),
+            WorktreeBadgeRow::CreateNew,
+            WorktreeBadgeRow::Worktree(PathBuf::from("/tmp/ws/feature")),
         ],
         "a branch-name query should find its worktree"
     );
@@ -214,25 +225,27 @@ fn workspace_picker_filters_worktrees_by_name_branch_and_path(cx: &mut gpui::Tes
     // The path sits on the row's secondary line; it must still filter from there.
     let by_path = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
-        workspace_picker::nav_targets(host, repo_id, "ws/detached")
+        worktree_badge_picker::nav_targets(host, repo_id, "ws/detached")
     });
 
     assert_eq!(
         by_path,
         vec![
-            WorkspaceRow::CreateNew,
-            WorkspaceRow::Worktree(PathBuf::from("/tmp/ws/detached")),
+            WorktreeBadgeRow::CreateNew,
+            WorktreeBadgeRow::Worktree(PathBuf::from("/tmp/ws/detached")),
         ],
         "a path query should find its worktree from the detail line"
     );
 }
 
 #[gpui::test]
-fn workspace_picker_enter_reaches_the_create_row_without_arrowing(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_enter_reaches_the_create_row_without_arrowing(
+    cx: &mut gpui::TestAppContext,
+) {
     // "Select or type to create a worktree": typing then Enter must act, even
     // though nothing was arrowed to (selection starts as None).
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     cx.simulate_input("shiny");
     simulate_key_press(cx, "enter");
@@ -257,10 +270,10 @@ fn workspace_picker_enter_reaches_the_create_row_without_arrowing(cx: &mut gpui:
 }
 
 #[gpui::test]
-fn workspace_picker_enter_on_empty_query_stays_inert(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_enter_on_empty_query_stays_inert(cx: &mut gpui::TestAppContext) {
     // A stray Enter on the freshly opened picker must not create anything.
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     simulate_key_press(cx, "enter");
     redraw(cx);
@@ -284,9 +297,9 @@ fn workspace_picker_enter_on_empty_query_stays_inert(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
-fn workspace_picker_escape_closes(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_escape_closes(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
     assert!(is_open, "expected the workspace picker to open");
@@ -299,17 +312,17 @@ fn workspace_picker_escape_closes(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn workspace_picker_create_row_opens_the_add_dialog_prefilled(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_picker_create_row_opens_the_add_dialog_prefilled(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
-                workspace_picker::activate(
+                worktree_badge_picker::activate(
                     host,
                     repo_id,
-                    WorkspaceRow::CreateNew,
+                    WorktreeBadgeRow::CreateNew,
                     "shiny",
                     window,
                     cx,
@@ -428,7 +441,7 @@ mod badges {
         let (_view, cx) = draw_with_repo(cx, repo_with_worktrees(repo_id), repo_id);
 
         assert!(
-            cx.debug_bounds("workspace_badge").is_some(),
+            cx.debug_bounds("worktree_badge").is_some(),
             "expected the workspace badge on the action bar"
         );
         assert!(
@@ -537,7 +550,7 @@ mod badges {
             );
             for selector in [
                 "global_nav",
-                "workspace_badge",
+                "worktree_badge",
                 "branch_badge",
                 "upstream_badge",
                 "pull",
@@ -556,7 +569,7 @@ mod badges {
                 let containing_group = if matches!(
                     selector,
                     "global_nav"
-                        | "workspace_badge"
+                        | "worktree_badge"
                         | "branch_badge"
                         | "upstream_badge"
                         | "pull"
@@ -602,7 +615,7 @@ mod badges {
             .or_else(|| cx.debug_bounds("global_nav"))
             .map(|b| b.origin.x);
         let workspace = cx
-            .debug_bounds("workspace_badge")
+            .debug_bounds("worktree_badge")
             .expect("workspace badge")
             .origin
             .x;
@@ -625,11 +638,11 @@ mod badges {
     }
 
     #[gpui::test]
-    fn clicking_the_workspace_badge_opens_the_worktree_picker(cx: &mut gpui::TestAppContext) {
+    fn clicking_the_worktree_badge_opens_the_worktree_picker(cx: &mut gpui::TestAppContext) {
         let repo_id = RepoId(1);
         let (view, cx) = draw_with_repo(cx, repo_with_worktrees(repo_id), repo_id);
 
-        let center = cx.debug_bounds("workspace_badge").expect("badge").center();
+        let center = cx.debug_bounds("worktree_badge").expect("badge").center();
         cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
         cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
         cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
@@ -693,7 +706,7 @@ mod badges {
             "no branch badge before HEAD is known"
         );
         assert!(
-            cx.debug_bounds("workspace_badge").is_some(),
+            cx.debug_bounds("worktree_badge").is_some(),
             "the workspace badge does not depend on HEAD"
         );
     }
@@ -719,7 +732,7 @@ mod badges {
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
         redraw(cx);
 
-        assert!(cx.debug_bounds("workspace_badge").is_none());
+        assert!(cx.debug_bounds("worktree_badge").is_none());
         assert!(cx.debug_bounds("branch_badge").is_none());
     }
     /// Right-clicking a worktree row floats the very menu that worktree's sidebar
@@ -729,7 +742,7 @@ mod badges {
         cx: &mut gpui::TestAppContext,
     ) {
         let repo_id = RepoId(1);
-        let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+        let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
 
         // Row 0 is the create row, which has no menu; the worktrees follow it.
         let row = cx
@@ -777,11 +790,11 @@ mod badges {
                     .as_ref()
                     .expect("a menu should be open")
                     .clone();
-                let row = workspace_picker::cached(host, repo_id, "")
+                let row = worktree_badge_picker::cached(host, repo_id, "")
                     .filtered_payloads()
                     .into_iter()
                     .find_map(|row| match row {
-                        workspace_picker::WorkspaceRow::Worktree(path) => Some(path),
+                        worktree_badge_picker::WorktreeBadgeRow::Worktree(path) => Some(path),
                         _ => None,
                     })
                     .expect("a worktree row");

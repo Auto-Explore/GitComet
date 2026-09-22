@@ -275,7 +275,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         } => {
             repo.worktrees_rev.hash(hasher);
             // The badge picker's create row reads HEAD for its "Based off <ref>"
-            // line (`workspace_picker::create_base_ref`), so a checkout landing
+            // line (`worktree_badge_picker::create_base_ref`), so a checkout landing
             // while the picker is open has to repaint it — otherwise the row keeps
             // promising a base the Add dialog will no longer use.
             repo.head_branch_rev.hash(hasher);

@@ -1127,7 +1127,7 @@ pub(crate) fn should_show_splash_screen(
         && !startup_repo_bootstrap_pending
 }
 
-pub(crate) fn titlebar_workspace_actions_enabled(
+pub(crate) fn titlebar_repo_tab_actions_enabled(
     view_mode: GitCometViewMode,
     has_repo_tabs: bool,
 ) -> bool {
