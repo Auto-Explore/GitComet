@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::markdown_preview::{
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
 };
 #[cfg(test)]
 use std::borrow::Cow;
@@ -1053,11 +1053,8 @@ impl MainPaneView {
         ))
     }
 
-    /// Rows the active markdown preview list renders, or `None` when no
-    /// markdown preview is active.
-    ///
-    /// This is the list length, so with word wrap on it counts visual rows —
-    /// every caller indexes rows by list position.
+    /// Rows the active markdown preview renders, or `None` when no markdown
+    /// preview is active. Split sides share one aligned row space.
     pub(in crate::view) fn markdown_preview_row_count(&self) -> Option<usize> {
         if self.is_file_preview_active() {
             if let Loadable::Ready(doc) = &self.worktree_markdown_preview {
@@ -1068,103 +1065,52 @@ impl MainPaneView {
             return None;
         }
         if let Loadable::Ready(diff) = &self.file_markdown_preview {
-            let wrapped_len = |list, rows: usize| {
-                self.markdown_preview_wrap_plan(list)
-                    .map_or(rows, |plan| plan.len())
-            };
             return Some(match self.diff_view {
-                DiffViewMode::Inline => {
-                    wrapped_len(MarkdownPreviewList::Inline, diff.inline.rows.len())
-                }
-                DiffViewMode::Split => wrapped_len(MarkdownPreviewList::Old, diff.old.rows.len())
-                    .max(wrapped_len(MarkdownPreviewList::New, diff.new.rows.len())),
+                DiffViewMode::Inline => diff.inline.rows.len(),
+                DiffViewMode::Split => diff.old.rows.len().max(diff.new.rows.len()),
             });
         }
         None
     }
 
-    /// Logical EOF of one Markdown region as `(visual row, byte offset)`.
+    /// Logical EOF of one Markdown region as `(row, byte offset)`.
     ///
     /// Split preview documents are padded with `Spacer` rows to align additions
-    /// and deletions. Their wrap plans can add more empty continuations when
-    /// the opposite column wraps farther. Neither kind of padding is part of
-    /// this side's document, so EOF stays on the last non-spacer source row and
-    /// its last content-bearing visual slice. A genuinely empty final row still
-    /// owns its first visual slice.
+    /// and deletions. That padding is not part of this side's document, so EOF
+    /// stays on the last non-spacer row.
     pub(in crate::view) fn markdown_preview_region_eof(
         &self,
         region: DiffTextRegion,
     ) -> Option<(usize, usize)> {
-        let (list, document) = self.markdown_preview_list_for_region(region)?;
-        let source_row_ix = document
+        let document = self.markdown_preview_document_for_region(region)?;
+        let row_ix = document
             .rows
             .iter()
             .rposition(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))?;
-        let row = document.rows.get(source_row_ix)?;
-
-        let Some(plan) = self.markdown_preview_wrap_plan(list) else {
-            return Some((source_row_ix, row.text.len()));
-        };
-
-        let first_visual_ix = plan.visual_ix_for_row(source_row_ix);
-        let after_visual_ix = plan
-            .visual_ix_for_row(source_row_ix.saturating_add(1))
-            .min(plan.len());
-        if first_visual_ix >= after_visual_ix {
-            return None;
-        }
-
-        let last_content_visual_ix = (first_visual_ix..after_visual_ix)
-            .rev()
-            .find(|&visual_ix| {
-                plan.get(visual_ix)
-                    .is_some_and(|visual| !visual.byte_range.is_empty())
-            })
-            .unwrap_or(first_visual_ix);
-        Some((
-            last_content_visual_ix,
-            self.markdown_preview_row_text_len(last_content_visual_ix, region),
-        ))
+        Some((row_ix, document.rows.get(row_ix)?.text.len()))
     }
 
-    /// Returns the text painted by the markdown preview row at `visible_ix`
-    /// for the given `region`. For file preview (added/deleted/untracked) only
-    /// `DiffTextRegion::Inline` is meaningful.
-    ///
-    /// `visible_ix` is a list position, which is a source row index only while
-    /// word wrap is off. With wrap on, a source row occupies several list rows
-    /// and each paints one slice of its text, so the wrap plan has to resolve
-    /// the index — otherwise selection, hit testing, and copy all operate on a
-    /// different row than the one under the pointer.
+    /// The text of the markdown preview row at `row_ix` in `region`. For
+    /// file preview (added/deleted/untracked) only `DiffTextRegion::Inline`
+    /// is meaningful.
     pub(in crate::view) fn markdown_preview_row_text(
         &self,
-        visible_ix: usize,
+        row_ix: usize,
         region: DiffTextRegion,
     ) -> SharedString {
-        self.markdown_preview_row_at(visible_ix, region)
-            .map(|(row, visual)| match visual {
-                Some(visual) => visual.text_slice(row),
-                None => row.text.clone(),
-            })
+        self.markdown_preview_row_at(row_ix, region)
+            .map(|row| row.text.clone())
             .unwrap_or_default()
     }
 
-    /// Byte length of [`Self::markdown_preview_row_text`] without building it.
-    ///
-    /// The selection overlay asks for this for every visible row on every
-    /// frame, and slicing a wrapped row allocates, so the length is taken
-    /// straight from the plan instead.
+    /// Byte length of [`Self::markdown_preview_row_text`] without cloning it.
     pub(in crate::view) fn markdown_preview_row_text_len(
         &self,
-        visible_ix: usize,
+        row_ix: usize,
         region: DiffTextRegion,
     ) -> usize {
-        self.markdown_preview_row_at(visible_ix, region)
-            .map(|(row, visual)| match visual {
-                Some(visual) => row.text.get(visual.byte_range.clone()).map_or(0, str::len),
-                None => row.text.len(),
-            })
-            .unwrap_or(0)
+        self.markdown_preview_row_at(row_ix, region)
+            .map_or(0, |row| row.text.len())
     }
 
     /// Arrange for the pane to repaint when a picture in the rendered preview
@@ -1265,7 +1211,7 @@ impl MainPaneView {
         self.is_markdown_preview_active()
             && self
                 .markdown_preview_row_at(visible_ix, region)
-                .is_some_and(|(row, _)| row.continues_a_picture())
+                .is_some_and(|row| row.continues_a_picture())
     }
 
     /// Directory that relative image paths in the rendered preview resolve
@@ -1333,33 +1279,20 @@ impl MainPaneView {
             return false;
         };
         let fragment = crate::view::rows::percent_decode_link_path(&fragment);
-        let Some((row_ix, visual_ix)) =
-            self.markdown_preview_list_for_region(region)
-                .and_then(|(list, document)| {
-                    let row_ix = markdown_preview_anchor_row(document, &fragment)?;
-                    let visual_ix = self
-                        .markdown_preview_wrap_plan(list)
-                        .map_or(row_ix, |plan| plan.visual_ix_for_row(row_ix));
-                    Some((row_ix, visual_ix))
-                })
+        let Some(row_ix) = self
+            .markdown_preview_document_for_region(region)
+            .and_then(|document| markdown_preview_anchor_row(document, &fragment))
         else {
             return false;
         };
         match self.markdown_search_surface() {
-            // The flowing document indexes rows, not wrapped lines.
-            Some(MarkdownSearchSurface::Worktree) => {
-                self.markdown_preview_reveal.request_top(row_ix)
-            }
-            Some(MarkdownSearchSurface::DiffInline) => self
-                .diff_scroll
-                .scroll_to_item_strict(visual_ix, gpui::ScrollStrategy::Top),
-            // Both sides share one visual row space, so one index moves both.
-            Some(MarkdownSearchSurface::DiffSplit) => {
-                self.diff_scroll
-                    .scroll_to_item_strict(visual_ix, gpui::ScrollStrategy::Top);
-                self.diff_split_right_scroll
-                    .scroll_to_item_strict(visual_ix, gpui::ScrollStrategy::Top);
-            }
+            // Flowing documents index rows, not wrapped lines; both split sides
+            // share one row space and one scroller.
+            Some(
+                MarkdownSearchSurface::Worktree
+                | MarkdownSearchSurface::DiffInline
+                | MarkdownSearchSurface::DiffSplit,
+            ) => self.markdown_preview_reveal.request_top(row_ix),
             Some(MarkdownSearchSurface::Conflict) | None => return false,
         }
         cx.notify();
@@ -1414,36 +1347,30 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
     ) -> Option<(SharedString, Range<usize>)> {
-        let (row, _, slice_start, span_ix) =
-            self.markdown_preview_link_span_ix_at(visible_ix, region, position)?;
+        let (row, span_ix) = self.markdown_preview_link_span_ix_at(visible_ix, region, position)?;
         let span = &row.inline_spans[span_ix];
-        let start = span.byte_range.start.saturating_sub(slice_start);
-        let end = span.byte_range.end.saturating_sub(slice_start);
-        Some((span.link_url.clone()?, start..end))
+        Some((span.link_url.clone()?, span.byte_range.clone()))
     }
 
-    /// The link span under `position`: its row, the row's document index, where
-    /// the painted slice starts in `row.text`, and the span's index. A point
+    /// The link span under `position`: its row and the span's index. A point
     /// beside the text is on no link, so hover and click agree on where a
     /// link ends.
     fn markdown_preview_link_span_ix_at(
         &self,
-        visible_ix: usize,
+        row_ix: usize,
         region: DiffTextRegion,
         position: Point<Pixels>,
-    ) -> Option<(&MarkdownPreviewRow, usize, usize, usize)> {
+    ) -> Option<(&MarkdownPreviewRow, usize)> {
         if !self.is_markdown_preview_active() {
             return None;
         }
-        let (row, visual) = self.markdown_preview_row_at(visible_ix, region)?;
-        let row_ix = visual.map_or(visible_ix, |visual| visual.row_ix);
-        let slice_start = visual.map_or(0, |visual| visual.byte_range.start);
-        let offset = slice_start + self.diff_text_offset_on_text(visible_ix, region, position)?;
+        let row = self.markdown_preview_row_at(row_ix, region)?;
+        let offset = self.diff_text_offset_on_text(row_ix, region, position)?;
         let span_ix = row
             .inline_spans
             .iter()
             .position(|span| span.byte_range.contains(&offset) && span.link_url.is_some())?;
-        Some((row, row_ix, slice_start, span_ix))
+        Some((row, span_ix))
     }
 
     /// Point the hovered-link underline and pointer cursor at the link under
@@ -1460,7 +1387,7 @@ impl MainPaneView {
         let hovered = (!button_held)
             .then(|| self.markdown_preview_link_span_ix_at(visible_ix, region, position))
             .flatten()
-            .map(|(row, row_ix, _, span_ix)| {
+            .map(|(row, span_ix)| {
                 // A link whose text changes style spans several runs; the whole
                 // link is what the pointer is on.
                 let spans = &row.inline_spans;
@@ -1480,7 +1407,7 @@ impl MainPaneView {
                 rows::MarkdownPreviewHoveredLink {
                     region,
                     visible_ix,
-                    row_ix,
+                    row_ix: visible_ix,
                     byte_range: spans[first].byte_range.start..spans[last].byte_range.end,
                 }
             });
@@ -1508,44 +1435,27 @@ impl MainPaneView {
         }
     }
 
-    /// The wrap plan `list` renders with, once it is confirmed to describe the
-    /// preview document currently loaded rather than one it replaced.
-    pub(in crate::view) fn markdown_preview_wrap_plan(
-        &self,
-        list: MarkdownPreviewList,
-    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
-        self.markdown_preview_wrap
-            .plan_for_rev(list, self.file_markdown_preview_seq)
-    }
-
-    /// The source row a list position paints, plus the visual row describing
-    /// which slice of it — `None` when the list is not wrapped.
+    /// The row at `row_ix` of the document `region` reads from.
     fn markdown_preview_row_at(
         &self,
-        visible_ix: usize,
+        row_ix: usize,
         region: DiffTextRegion,
-    ) -> Option<(&MarkdownPreviewRow, Option<&MarkdownPreviewVisualRow>)> {
-        let (list, document) = self.markdown_preview_list_for_region(region)?;
-        let Some(plan) = self.markdown_preview_wrap_plan(list) else {
-            return document.rows.get(visible_ix).map(|row| (row, None));
-        };
-        let visual = plan.get(visible_ix)?;
-        document
+    ) -> Option<&MarkdownPreviewRow> {
+        self.markdown_preview_document_for_region(region)?
             .rows
-            .get(visual.row_ix)
-            .map(|row| (row, Some(visual)))
+            .get(row_ix)
     }
 
-    /// The preview list and document a diff text region reads from.
-    fn markdown_preview_list_for_region(
+    /// The preview document a diff text region reads from.
+    fn markdown_preview_document_for_region(
         &self,
         region: DiffTextRegion,
-    ) -> Option<(MarkdownPreviewList, &MarkdownPreviewDocument)> {
+    ) -> Option<&MarkdownPreviewDocument> {
         if self.is_file_preview_active() {
             let Loadable::Ready(doc) = &self.worktree_markdown_preview else {
                 return None;
             };
-            return Some((MarkdownPreviewList::Worktree, doc.as_ref()));
+            return Some(doc.as_ref());
         }
 
         let Loadable::Ready(diff) = &self.file_markdown_preview else {
@@ -1553,12 +1463,10 @@ impl MainPaneView {
         };
 
         Some(match self.diff_view {
-            DiffViewMode::Inline => (MarkdownPreviewList::Inline, &diff.inline),
+            DiffViewMode::Inline => &diff.inline,
             DiffViewMode::Split => match region {
-                DiffTextRegion::SplitLeft | DiffTextRegion::Inline => {
-                    (MarkdownPreviewList::Old, &diff.old)
-                }
-                DiffTextRegion::SplitRight => (MarkdownPreviewList::New, &diff.new),
+                DiffTextRegion::SplitLeft | DiffTextRegion::Inline => &diff.old,
+                DiffTextRegion::SplitRight => &diff.new,
             },
         })
     }
@@ -1629,30 +1537,22 @@ impl MainPaneView {
         })
     }
 
-    /// The documents a markdown surface shows, in the order their lists are
-    /// laid out, each paired with the wrap plan its list renders through —
-    /// `None` for a list that paints one row per source row.
+    /// The documents a markdown surface shows, in the order they are laid out.
     pub(in crate::view) fn markdown_search_documents(
         &self,
         surface: MarkdownSearchSurface,
-    ) -> Vec<(Option<MarkdownPreviewList>, &MarkdownPreviewDocument)> {
+    ) -> Vec<&MarkdownPreviewDocument> {
         match surface {
             MarkdownSearchSurface::Worktree => match &self.worktree_markdown_preview {
-                // The flowing renderer wraps natively and keeps no plan.
-                Loadable::Ready(document) => vec![(None, document.as_ref())],
+                Loadable::Ready(document) => vec![document.as_ref()],
                 _ => Vec::new(),
             },
             MarkdownSearchSurface::DiffInline => match &self.file_markdown_preview {
-                Loadable::Ready(diff) => {
-                    vec![(Some(MarkdownPreviewList::Inline), &diff.inline)]
-                }
+                Loadable::Ready(diff) => vec![&diff.inline],
                 _ => Vec::new(),
             },
             MarkdownSearchSurface::DiffSplit => match &self.file_markdown_preview {
-                Loadable::Ready(diff) => vec![
-                    (Some(MarkdownPreviewList::Old), &diff.old),
-                    (Some(MarkdownPreviewList::New), &diff.new),
-                ],
+                Loadable::Ready(diff) => vec![&diff.old, &diff.new],
                 _ => Vec::new(),
             },
             MarkdownSearchSurface::Conflict => [
@@ -1664,7 +1564,7 @@ impl MainPaneView {
             .filter_map(|side| {
                 // The conflict columns are plain unwrapped lists.
                 match self.conflict_resolver.markdown_preview.document(side) {
-                    Loadable::Ready(document) => Some((None, document.as_ref())),
+                    Loadable::Ready(document) => Some(document.as_ref()),
                     _ => None,
                 }
             })

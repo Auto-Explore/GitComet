@@ -1702,8 +1702,7 @@ impl MainPaneView {
     ///
     /// Scans the text the preview *shows*, not the markdown behind it: Ctrl+F
     /// for `bold` finds a bolded word and does not match the `**` that made it
-    /// bold. Wrapped lists report the first visual row of the matching source
-    /// row, which is the row the reveal scrolls to.
+    /// bold.
     fn markdown_preview_search_scan(
         &mut self,
         surface: MarkdownSearchSurface,
@@ -1711,15 +1710,14 @@ impl MainPaneView {
     ) {
         // Collected before assigning: the documents are borrowed out of `self`.
         let mut matches = Vec::new();
-        for (list, document) in self.markdown_search_documents(surface) {
-            let plan = list.and_then(|list| self.markdown_preview_wrap_plan(list));
+        for document in self.markdown_search_documents(surface) {
             matches.extend(
                 document
                     .rows
                     .iter()
                     .enumerate()
                     .filter(|(_, row)| matcher.is_match(row.text.as_ref()))
-                    .map(|(row_ix, _)| plan.map_or(row_ix, |plan| plan.visual_ix_for_row(row_ix))),
+                    .map(|(row_ix, _)| row_ix),
             );
         }
         matches.sort_unstable();
@@ -2551,19 +2549,12 @@ impl MainPaneView {
                 None => {}
                 // No fixed row height and no `scroll_to_item` to hand this to,
                 // so the renderer measures the row and scrolls during prepaint.
-                Some(MarkdownSearchSurface::Worktree) => {
-                    self.markdown_preview_reveal.request(visible_ix)
-                }
-                Some(MarkdownSearchSurface::DiffInline) => self
-                    .diff_scroll
-                    .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center),
-                // Both sides share one visual row space, so one index moves both.
-                Some(MarkdownSearchSurface::DiffSplit) => {
-                    self.diff_scroll
-                        .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
-                    self.diff_split_right_scroll
-                        .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
-                }
+                // Both split sides share one row space and one scroller.
+                Some(
+                    MarkdownSearchSurface::Worktree
+                    | MarkdownSearchSurface::DiffInline
+                    | MarkdownSearchSurface::DiffSplit,
+                ) => self.markdown_preview_reveal.request(visible_ix),
                 Some(MarkdownSearchSurface::Conflict) => {
                     self.conflict_markdown_preview_reveal(visible_ix)
                 }

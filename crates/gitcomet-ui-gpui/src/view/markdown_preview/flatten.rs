@@ -54,6 +54,8 @@ pub(crate) fn flatten_to_rows(
     let mut row_ctx = MarkdownRowContext::default();
     let mut in_code_block = false;
     let mut in_table_row = false;
+    // Column alignments of the table being read, shared by its rows.
+    let mut table_info: Arc<MarkdownTableInfo> = Arc::default();
     let mut table_row_is_header = false;
     let mut code_block_start_byte: usize = 0;
     let mut code_block_starts_after_fence = false;
@@ -285,6 +287,20 @@ pub(crate) fn flatten_to_rows(
                 inline_spans.clear();
             }
 
+            Event::Start(Tag::Table(alignments)) => {
+                table_info = Arc::new(MarkdownTableInfo {
+                    alignments: alignments
+                        .iter()
+                        .map(|alignment| match alignment {
+                            pulldown_cmark::Alignment::None => MarkdownTableAlign::None,
+                            pulldown_cmark::Alignment::Left => MarkdownTableAlign::Left,
+                            pulldown_cmark::Alignment::Center => MarkdownTableAlign::Center,
+                            pulldown_cmark::Alignment::Right => MarkdownTableAlign::Right,
+                        })
+                        .collect(),
+                    column_widths: Vec::new(),
+                });
+            }
             Event::Start(Tag::TableHead) => {
                 text_buf.clear();
                 inline_spans.clear();
@@ -315,13 +331,20 @@ pub(crate) fn flatten_to_rows(
                     footnote_context.as_mut(),
                     &mut row_ctx,
                 )?;
+                // Cells are laid out once the whole table is read.
+                if let Some(row) = rows.last_mut() {
+                    row.table = Some(MarkdownTableRow {
+                        cells: Arc::from(Vec::new()),
+                        table: Arc::clone(&table_info),
+                    });
+                }
                 in_table_row = false;
                 table_row_is_header = false;
                 text_buf.clear();
                 inline_spans.clear();
             }
             Event::End(TagEnd::TableCell) => {
-                // Separate cells with a tab character for display.
+                // Cells end in a tab; `finish_table_blocks` trims the last one.
                 text_buf.push('\t');
             }
 
@@ -757,7 +780,7 @@ pub(crate) fn flatten_to_rows(
         }
     }
 
-    align_table_columns(&mut rows);
+    finish_table_blocks(&mut rows);
     insert_top_level_heading_spacer_rows(&mut rows);
     Some(rows)
 }

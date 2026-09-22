@@ -30,6 +30,7 @@ fn row(text: &str, spans: Vec<MarkdownInlineSpan>) -> MarkdownPreviewRow {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     }
 }
 

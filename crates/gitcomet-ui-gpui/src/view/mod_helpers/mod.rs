@@ -876,6 +876,9 @@ pub(super) struct DiffTextHitbox {
     /// several visual lines, so a click resolves through the layout they were
     /// painted with rather than through an x offset along one shaped line.
     pub(super) wrapped: Option<DiffTextWrappedHit>,
+    /// A table row's cells, each painted and hit-tested on its own; the row's
+    /// `bounds` then span them all.
+    pub(super) cells: Vec<DiffTextHitbox>,
 }
 
 /// A selectable document range painted by something other than text.
@@ -1136,14 +1139,14 @@ pub(super) struct DiffTextLayoutCacheEntry {
 }
 
 mod conflict_resolver_ui_state;
-mod markdown_wrap_cache;
+mod markdown_preview_state;
 mod mode_impls;
 mod status_sections;
 mod three_way;
 mod toasts;
 
 pub(super) use conflict_resolver_ui_state::*;
-pub(super) use markdown_wrap_cache::*;
+pub(super) use markdown_preview_state::*;
 pub use mode_impls::*;
 pub(super) use status_sections::*;
 pub(super) use three_way::*;

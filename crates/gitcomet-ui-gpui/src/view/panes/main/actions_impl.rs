@@ -260,14 +260,6 @@ impl MainPaneView {
             .then_some(visible_ix)
     }
 
-    /// Translate a source row index into the row the list actually scrolls to,
-    /// which differs once word wrap has split earlier rows.
-    fn markdown_preview_visual_ix(&self, list: MarkdownPreviewList, row_ix: usize) -> usize {
-        self.markdown_preview_wrap_plan(list)
-            .map(|plan| plan.visual_ix_for_row(row_ix))
-            .unwrap_or(row_ix)
-    }
-
     fn markdown_preview_change_visible_indices(&self) -> Vec<usize> {
         let Loadable::Ready(preview) = &self.file_markdown_preview else {
             return Vec::new();
@@ -281,7 +273,6 @@ impl MainPaneView {
                     })
                 })
                 .into_iter()
-                .map(|row_ix| self.markdown_preview_visual_ix(MarkdownPreviewList::Inline, row_ix))
                 .collect()
             }
             DiffViewMode::Split => {
@@ -294,7 +285,6 @@ impl MainPaneView {
                     })
                 })
                 .into_iter()
-                .map(|row_ix| self.markdown_preview_visual_ix(MarkdownPreviewList::Old, row_ix))
                 .collect()
             }
         }
@@ -344,6 +334,14 @@ impl MainPaneView {
         target: usize,
         strategy: gpui::ScrollStrategy,
     ) {
+        // The rendered markdown diff flows, so its rows are revealed once laid out.
+        if self.is_rendered_markdown_diff_active() {
+            match strategy {
+                gpui::ScrollStrategy::Top => self.markdown_preview_reveal.request_top(target),
+                _ => self.markdown_preview_reveal.request(target),
+            }
+            return;
+        }
         self.diff_scroll.scroll_to_item_strict(target, strategy);
         if self.diff_view == DiffViewMode::Split {
             self.diff_split_right_scroll

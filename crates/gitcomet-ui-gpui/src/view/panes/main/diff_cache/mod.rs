@@ -628,6 +628,7 @@ impl MainPaneView {
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let build_preview = move || {
+                    use markdown_preview::MarkdownPreviewRefusal;
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
                     let old_source = read_file_diff_markdown_source(
                         old_source.as_ref(),
@@ -637,17 +638,30 @@ impl MainPaneView {
                         new_source.as_ref(),
                         new_legacy_text.as_ref(),
                     )?;
-                    markdown_preview::build_markdown_diff_preview(
+                    let preview = markdown_preview::build_markdown_diff_preview(
                         old_source.as_ref(),
                         new_source.as_ref(),
                     )
-                    .map(Arc::new)
                     .ok_or_else(|| {
-                        markdown_preview::diff_preview_unavailable_reason(
-                            old_source.len() + new_source.len(),
+                        MarkdownPreviewRefusal::Unavailable(
+                            markdown_preview::diff_preview_unavailable_reason(
+                                old_source.len() + new_source.len(),
+                            )
+                            .to_string(),
                         )
-                        .to_string()
-                    })
+                    })?;
+                    // Each side flows like the file preview, under the same
+                    // budget; the text diff still reads fine past it.
+                    let rows = preview
+                        .old
+                        .rows
+                        .len()
+                        .max(preview.new.rows.len())
+                        .max(preview.inline.rows.len());
+                    if rows > markdown_preview::MAX_FLOWING_PREVIEW_ROWS {
+                        return Err(MarkdownPreviewRefusal::TooManyRowsToRender);
+                    }
+                    Ok(Arc::new(preview))
                 };
                 let result = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(build_preview).await
@@ -671,7 +685,19 @@ impl MainPaneView {
                     this.file_markdown_preview_cache_content_signature = Some(content_signature);
                     match result {
                         Ok(preview) => this.file_markdown_preview = Loadable::Ready(preview),
-                        Err(error) => this.file_markdown_preview = Loadable::Error(error),
+                        Err(refusal) => {
+                            // Too big to lay out, but readable: show the diff.
+                            if refusal.prefers_source() {
+                                this.rendered_preview_modes.set(
+                                    RenderedPreviewKind::Markdown,
+                                    RenderedPreviewMode::Source,
+                                );
+                            }
+                            this.file_markdown_preview = Loadable::Error(refusal.into_message());
+                        }
+                    }
+                    for scrolls in &this.markdown_diff_block_scrolls {
+                        scrolls.clear();
                     }
                     // See the single-document preview: a search opened while
                     // this was parsing found nothing and needs to rescan.

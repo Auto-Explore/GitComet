@@ -2315,12 +2315,9 @@ impl MainPaneView {
                                     )
                                 } else {
                                     // A single document lays out as one flowing
-                                    // element tree rather than a uniform row
-                                    // list: text wraps by itself, images sit at
-                                    // their own size, and the gaps around
+                                    // element tree: text wraps by itself, images
+                                    // sit at their own size, and the gaps around
                                     // headings are margins.
-                                    self.markdown_preview_wrap
-                                        .clear_list(MarkdownPreviewList::Worktree);
                                     let document = std::sync::Arc::clone(document);
                                     let image_base_dir = self
                                         .markdown_preview_image_base_dir()
@@ -2352,6 +2349,7 @@ impl MainPaneView {
                                             hovered_link: self
                                                 .markdown_preview_hovered_link
                                                 .clone(),
+                                            change_extents: None,
                                             scroll: Some(
                                                 self.worktree_preview_scroll
                                                     .0

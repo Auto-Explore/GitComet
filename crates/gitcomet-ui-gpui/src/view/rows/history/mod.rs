@@ -9,8 +9,7 @@ use palette::IntoColor;
 
 use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
-    MarkdownPreviewWrapPlan,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
 };
 use crate::view::panes::main::diff_search::DiffSearchMatcher;
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};

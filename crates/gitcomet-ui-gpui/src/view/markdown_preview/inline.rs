@@ -240,6 +240,7 @@ pub(crate) fn push_row(
         inline_images,
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
+        table: None,
     });
 
     (rows.len() <= MAX_PREVIEW_ROWS).then_some(())

@@ -30,6 +30,9 @@ pub(in crate::view) struct MarkdownFlowText {
     highlights: MarkdownFlowHighlights,
     inner: Option<gpui::StyledText>,
     layout: Option<gpui::TextLayout>,
+    /// Set when this paints one table cell: its range in the row text, and the
+    /// row text's length.
+    cell: Option<(Range<usize>, usize)>,
 }
 
 /// Paint layers for flowing Markdown text, in their visual stacking order.
@@ -65,7 +68,16 @@ impl MarkdownFlowText {
             highlights,
             inner: None,
             layout: None,
+            cell: None,
         }
+    }
+
+    /// Paint one table cell, `range` of a row whose text is `row_len` long.
+    /// The text given is the cell's own, which never holds a tab.
+    pub(in crate::view) fn cell(mut self, range: Range<usize>, row_len: usize) -> Self {
+        self.untabbed = None;
+        self.cell = Some((range, row_len));
+        self
     }
 
     /// Paint the selection behind the glyphs, one quad per visual line.
@@ -76,6 +88,17 @@ impl MarkdownFlowText {
             .diff_text_local_selection_range(self.row_ix, self.region)
         else {
             return;
+        };
+        let selected = match &self.cell {
+            Some((cell, _)) => {
+                let start = selected.start.max(cell.start);
+                let end = selected.end.min(cell.end);
+                if end <= start {
+                    return;
+                }
+                (start - cell.start)..(end - cell.start)
+            }
+            None => selected,
         };
         let start = self.painted_offset(selected.start);
         let end = self.painted_offset(selected.end);
@@ -419,6 +442,32 @@ impl gpui::Element for MarkdownFlowText {
 
         let row_ix = self.row_ix;
         let region = self.region;
+        if let Some((cell, row_len)) = self.cell.clone() {
+            let text = self.text.clone();
+            self.view.clone().update(cx, |this, _cx| {
+                this.add_diff_text_cell_hitbox(
+                    row_ix,
+                    region,
+                    row_len,
+                    DiffTextHitbox {
+                        bounds,
+                        layout_key: 0,
+                        source_visible_ix: row_ix,
+                        text_start_offset: cell.start,
+                        text_len: cell.len(),
+                        offset_map: None,
+                        painted_text: text,
+                        streamed_ascii_monospace_cell_width: None,
+                        wrapped: Some(DiffTextWrappedHit {
+                            layout,
+                            untabbed: None,
+                        }),
+                        cells: Vec::new(),
+                    },
+                );
+            });
+            return;
+        }
         let untabbed = self.untabbed.clone();
         let text_len = untabbed
             .as_ref()
@@ -439,6 +488,7 @@ impl gpui::Element for MarkdownFlowText {
                     painted_text: self.text.clone(),
                     streamed_ascii_monospace_cell_width: None,
                     wrapped: Some(DiffTextWrappedHit { layout, untabbed }),
+                    cells: Vec::new(),
                 },
             );
         });

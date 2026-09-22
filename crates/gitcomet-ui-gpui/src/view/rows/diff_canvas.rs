@@ -4195,6 +4195,7 @@ fn paint_selectable_diff_text(
         painted_text: paint_text.clone(),
         streamed_ascii_monospace_cell_width: hitbox_cell_width,
         wrapped: None,
+        cells: Vec::new(),
     };
 
     view.update(cx, |this, cx| {

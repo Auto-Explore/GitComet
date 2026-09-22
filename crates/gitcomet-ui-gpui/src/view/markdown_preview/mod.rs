@@ -12,13 +12,13 @@ pub(super) const MAX_DIFF_PREVIEW_SOURCE_BYTES: usize = 2 * 1_024 * 1_024; // 2 
 /// Maximum number of preview rows per document.
 pub(super) const MAX_PREVIEW_ROWS: usize = 20_000;
 
-/// Maximum number of rows the single-document preview renders.
+/// Maximum number of rows a flowing preview renders — the file preview, and
+/// each side of the rendered diff.
 ///
-/// That preview lays its whole document out at once so text can wrap and
-/// pictures can sit inline, which means every row costs layout on every frame —
-/// unlike the diff preview, which paints a virtualized window of a fixed row
-/// grid and is bounded by [`MAX_PREVIEW_ROWS`] instead. A document past this
-/// budget falls back to source mode rather than making the pane crawl.
+/// The flowing renderer lays its whole document out at once so text can wrap
+/// and pictures can sit inline, which means every row costs layout on every
+/// frame. A document past this budget shows a notice rather than making the
+/// pane crawl.
 pub(super) const MAX_FLOWING_PREVIEW_ROWS: usize = 4_000;
 
 /// Maximum number of inline spans per row before degrading to plain text.
@@ -33,9 +33,39 @@ pub(super) struct MarkdownPreviewDocument {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownPreviewDiff {
+    /// Both sides padded with spacer rows to the same aligned row indices.
     pub(super) old: MarkdownPreviewDocument,
     pub(super) new: MarkdownPreviewDocument,
     pub(super) inline: MarkdownPreviewDocument,
+    /// How the flowing renderer groups each document's rows.
+    pub(super) old_blocks: Vec<MarkdownBlock>,
+    pub(super) new_blocks: Vec<MarkdownBlock>,
+    pub(super) inline_blocks: Vec<MarkdownBlock>,
+    /// Side-by-side slices of `old`/`new` for the split view.
+    pub(super) bands: Vec<MarkdownDiffBand>,
+}
+
+impl MarkdownPreviewDiff {
+    pub(super) fn new(
+        old: MarkdownPreviewDocument,
+        new: MarkdownPreviewDocument,
+        inline: MarkdownPreviewDocument,
+    ) -> Self {
+        let old_blocks = markdown_document_blocks(&old);
+        let new_blocks = markdown_document_blocks(&new);
+        let inline_blocks = markdown_document_blocks(&inline);
+        let bands =
+            markdown_diff_bands(&old_blocks, &new_blocks, old.rows.len().max(new.rows.len()));
+        Self {
+            old,
+            new,
+            inline,
+            old_blocks,
+            new_blocks,
+            inline_blocks,
+            bands,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +88,35 @@ pub(super) struct MarkdownPreviewRow {
     pub(super) inline_images: Arc<[MarkdownInlineImage]>,
     pub(super) styled_text_cache: MarkdownPreviewRowStyledTextCache,
     pub(super) measured_width_px: MarkdownPreviewRowWidthCache,
+    /// Cell layout of a [`MarkdownPreviewRowKind::TableRow`]; `None` otherwise.
+    pub(super) table: Option<MarkdownTableRow>,
+}
+
+/// One table row's cells: byte ranges in the row text, whose cells are joined
+/// by `\t` so a copied selection reads as tab-separated values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownTableRow {
+    /// One range per column; a row shorter than the table gets empty cells.
+    pub(super) cells: Arc<[Range<usize>]>,
+    pub(super) table: Arc<MarkdownTableInfo>,
+}
+
+/// What the rows of one table share.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct MarkdownTableInfo {
+    /// One per column, from the `:---:` delimiter row.
+    pub(super) alignments: Vec<MarkdownTableAlign>,
+    /// Widest cell per column in chars, for the monospace row-list rendering.
+    pub(super) column_widths: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum MarkdownTableAlign {
+    #[default]
+    None,
+    Left,
+    Center,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

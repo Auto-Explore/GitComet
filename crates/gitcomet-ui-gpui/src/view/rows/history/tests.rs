@@ -43,6 +43,7 @@ fn markdown_row(kind: MarkdownPreviewRowKind) -> MarkdownPreviewRow {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     }
 }
 
@@ -272,6 +273,7 @@ fn markdown_preview_heading_typography_scales_above_body_text() {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     };
     let h1 = MarkdownPreviewRow {
         kind: MarkdownPreviewRowKind::Heading { level: 1 },
@@ -427,6 +429,7 @@ fn markdown_preview_row_marker_preserves_ordered_item_number() {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     };
 
     assert_eq!(
@@ -456,6 +459,7 @@ fn markdown_preview_row_marker_is_none_for_blockquotes_without_list_items() {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     };
 
     assert_eq!(markdown_preview_row_marker(&row), None);
@@ -480,6 +484,7 @@ fn markdown_preview_row_marker_uses_footnote_label_when_present() {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     };
 
     assert_eq!(
@@ -509,6 +514,7 @@ fn markdown_preview_row_marker_returns_unordered_bullet_inside_blockquote() {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     };
 
     assert_eq!(
@@ -989,6 +995,7 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
         measured_width_px: Default::default(),
+        table: None,
     };
 
     let dark_highlights = Arc::clone(&markdown_preview_row_styled_text(theme, &row).highlights);
@@ -1296,4 +1303,28 @@ fn local_link_availability_refuses_symlinks_out_of_the_repository() {
     );
 
     std::fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn the_read_only_row_list_draws_tables_padded_into_columns() {
+    use super::markdown_preview_list_row;
+    let doc = crate::view::markdown_preview::parse_markdown(
+        "Intro.\n\n| Name | Age |\n|---|---|\n| Alexander | 3 |\n",
+    )
+    .expect("parses");
+    let intro = &doc.rows[0];
+    assert!(
+        matches!(
+            markdown_preview_list_row(intro),
+            std::borrow::Cow::Borrowed(_)
+        ),
+        "a row that is not a table is drawn as is"
+    );
+    let texts: Vec<String> = doc
+        .rows
+        .iter()
+        .filter(|row| matches!(row.kind, MarkdownPreviewRowKind::TableRow { .. }))
+        .map(|row| markdown_preview_list_row(row).text.to_string())
+        .collect();
+    assert_eq!(texts, vec!["Name      | Age", "Alexander | 3"]);
 }

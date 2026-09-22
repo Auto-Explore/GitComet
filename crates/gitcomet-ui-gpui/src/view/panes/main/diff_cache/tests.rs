@@ -403,8 +403,8 @@ fn build_single_markdown_preview_document_from_deleted_markdown_table_preview_pa
         .collect::<Vec<_>>();
 
     assert_eq!(table_rows.len(), 2);
-    assert_eq!(table_rows[0].text.as_ref(), "Header Bold | B");
-    assert_eq!(table_rows[1].text.as_ref(), "link        | plain");
+    assert_eq!(table_rows[0].text.as_ref(), "Header Bold\tB");
+    assert_eq!(table_rows[1].text.as_ref(), "link\tplain");
 }
 
 #[test]

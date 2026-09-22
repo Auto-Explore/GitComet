@@ -60,7 +60,7 @@ pub(crate) fn build_markdown_diff_preview(
         plan.row_count,
     )?;
     let inline = build_inline_markdown_diff_document(&old, &new);
-    Some(MarkdownPreviewDiff { old, new, inline })
+    Some(MarkdownPreviewDiff::new(old, new, inline))
 }
 
 pub(crate) fn scrollbar_markers_for_diff_preview(
@@ -223,6 +223,7 @@ pub(crate) fn markdown_preview_spacer_row_with_range(
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
+        table: None,
     }
 }
 
@@ -327,6 +328,25 @@ pub(crate) fn scrollbar_markers_for_documents(
     super::super::diff_utils::scrollbar_markers_from_flags(bucket_count, |bucket_ix| {
         buckets.get(bucket_ix).copied().unwrap_or(0)
     })
+}
+
+/// Markers for changes measured at `(top, bottom, flag)` in a scroll content
+/// `content_height` tall.
+pub(crate) fn scrollbar_markers_for_extents(
+    extents: &[(f32, f32, u8)],
+    content_height: f32,
+) -> Vec<crate::view::components::ScrollbarMarker> {
+    const BUCKETS: usize = 240;
+    let mut buckets = [0u8; BUCKETS];
+    for &(top, bottom, flag) in extents {
+        let bucket = |y: f32| ((y / content_height).clamp(0.0, 1.0) * BUCKETS as f32) as usize;
+        let first = bucket(top).min(BUCKETS - 1);
+        let last = bucket(bottom).clamp(first, BUCKETS - 1);
+        for cell in &mut buckets[first..=last] {
+            *cell |= flag;
+        }
+    }
+    super::super::diff_utils::scrollbar_markers_from_flags(BUCKETS, |ix| buckets[ix])
 }
 
 pub(crate) fn scrollbar_flag_for_change_hint(hint: MarkdownChangeHint) -> u8 {

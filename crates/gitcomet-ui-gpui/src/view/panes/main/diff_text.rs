@@ -116,6 +116,56 @@ impl MainPaneView {
         self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
     }
 
+    /// Register one table cell of a row. The row's entry collects its cells,
+    /// and its bounds grow to span them, so row-level lookups see one row.
+    pub(in crate::view) fn add_diff_text_cell_hitbox(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        row_len: usize,
+        cell: DiffTextHitbox,
+    ) {
+        let row = self
+            .diff_text_hitboxes
+            .entry((visible_ix, region))
+            .or_insert_with(|| DiffTextHitbox {
+                bounds: cell.bounds,
+                layout_key: 0,
+                source_visible_ix: cell.source_visible_ix,
+                text_start_offset: 0,
+                text_len: row_len,
+                offset_map: None,
+                painted_text: SharedString::default(),
+                streamed_ascii_monospace_cell_width: None,
+                wrapped: None,
+                cells: Vec::new(),
+            });
+        row.bounds = row.bounds.union(&cell.bounds);
+        row.cells.push(cell);
+    }
+
+    /// The cell of a table row a point belongs to: the one it is in, else the
+    /// nearest, by the same line-first distance a drag uses between rows.
+    fn diff_text_cell_for_position(
+        hitbox: &DiffTextHitbox,
+        position: Point<Pixels>,
+    ) -> Option<&DiffTextHitbox> {
+        let distance = |bounds: &Bounds<Pixels>| {
+            let dy = (bounds.top() - position.y)
+                .max(position.y - bounds.bottom())
+                .max(px(0.0));
+            let dx = (bounds.left() - position.x)
+                .max(position.x - bounds.right())
+                .max(px(0.0));
+            (dy, dx)
+        };
+        hitbox.cells.iter().min_by(|a, b| {
+            distance(&a.bounds)
+                .partial_cmp(&distance(&b.bounds))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
     /// Register a painted non-text block as a logical target for an active
     /// selection drag. Unlike a text hitbox this does not make invisible copy
     /// text clickable or try to map horizontal positions into byte offsets.
@@ -238,6 +288,10 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
     ) -> Option<DiffTextHit> {
+        if !hitbox.cells.is_empty() {
+            let cell = Self::diff_text_cell_for_position(hitbox, position)?;
+            return self.diff_text_hit_in_hitbox(cell, region, position);
+        }
         if let Some(wrapped) = &hitbox.wrapped {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
@@ -315,6 +369,13 @@ impl MainPaneView {
         hitbox: &DiffTextHitbox,
         range: Range<usize>,
     ) -> Option<Bounds<Pixels>> {
+        if !hitbox.cells.is_empty() {
+            let cell = hitbox.cells.iter().find(|cell| {
+                (cell.text_start_offset..=cell.text_start_offset + cell.text_len)
+                    .contains(&range.start)
+            })?;
+            return self.diff_text_bounds_in_hitbox(cell, range);
+        }
         let local = |offset: usize| {
             offset
                 .saturating_sub(hitbox.text_start_offset)
@@ -469,8 +530,8 @@ impl MainPaneView {
             return false;
         };
         // A wrapped row has no off-screen right edge to chase; it already broke
-        // the line to fit the pane.
-        if hitbox.wrapped.is_some() {
+        // the line to fit the pane. Table cells wrap too.
+        if hitbox.wrapped.is_some() || !hitbox.cells.is_empty() {
             return true;
         }
 
@@ -2281,8 +2342,13 @@ impl MainPaneView {
         }
 
         if self.is_markdown_preview_active() {
+            // Preview selections are in raw row coordinates: a tab is one byte
+            // there (and separates table cells), not the spaces it paints as.
             let text = self.markdown_preview_row_text(source_visible_ix, region);
-            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            let end = range.end.min(text.len());
+            if let Some(slice) = text.get(range.start.min(end)..end) {
+                out.push_str(slice);
+            }
             return;
         }
 

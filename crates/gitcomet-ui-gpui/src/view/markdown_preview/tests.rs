@@ -546,111 +546,113 @@ fn footnote_definition_emits_label_only_for_first_rendered_row() {
 
 // ── Table ───────────────────────────────────────────────────────────
 
+fn table_rows(doc: &MarkdownPreviewDocument) -> Vec<&MarkdownPreviewRow> {
+    doc.rows
+        .iter()
+        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
+        .collect()
+}
+
+fn cell_texts(row: &MarkdownPreviewRow) -> Vec<&str> {
+    let table = row.table.as_ref().expect("a table row has cells");
+    table
+        .cells
+        .iter()
+        .map(|range| &row.text[range.clone()])
+        .collect()
+}
+
+fn list_text(row: &MarkdownPreviewRow) -> String {
+    markdown_table_row_display(row)
+        .expect("a table row has a list form")
+        .0
+}
+
 #[test]
 fn table_rows_are_flattened() {
     let doc = parse("| A | B |\n|---|---|\n| 1 | 2 |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
-    assert!(table_rows.len() >= 2);
+    let table_rows = table_rows(&doc);
+    assert_eq!(table_rows.len(), 2);
     assert!(matches!(
         table_rows[0].kind,
         MarkdownPreviewRowKind::TableRow { is_header: true }
     ));
-    assert_eq!(table_rows[0].text.as_ref(), "A | B");
-    assert_eq!(table_rows[1].text.as_ref(), "1 | 2");
+    // Cells joined by tabs, so a copied selection pastes as columns.
+    assert_eq!(table_rows[0].text.as_ref(), "A\tB");
+    assert_eq!(table_rows[1].text.as_ref(), "1\t2");
+    assert_eq!(cell_texts(table_rows[0]), vec!["A", "B"]);
+    assert_eq!(cell_texts(table_rows[1]), vec!["1", "2"]);
 }
 
 #[test]
-fn table_rows_align_columns_across_block() {
-    let doc = parse("| Name | Age |\n|---|---|\n| Alexander | 3 |\n| Bo | 27 |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
-    assert_eq!(table_rows.len(), 3);
-
-    let header_sep = table_rows[0]
-        .text
-        .find('|')
-        .expect("header row should contain a column separator");
-    let first_row_sep = table_rows[1]
-        .text
-        .find('|')
-        .expect("body row should contain a column separator");
-    let second_row_sep = table_rows[2]
-        .text
-        .find('|')
-        .expect("body row should contain a column separator");
-
-    assert_eq!(header_sep, first_row_sep);
-    assert_eq!(first_row_sep, second_row_sep);
+fn table_rows_share_column_alignments() {
+    let doc = parse("| L | C | R | N |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |\n");
+    let rows = table_rows(&doc);
+    let table = &rows[0].table.as_ref().expect("cells").table;
+    assert_eq!(
+        table.alignments,
+        vec![
+            MarkdownTableAlign::Left,
+            MarkdownTableAlign::Center,
+            MarkdownTableAlign::Right,
+            MarkdownTableAlign::None,
+        ]
+    );
+    assert!(
+        Arc::ptr_eq(table, &rows[1].table.as_ref().expect("cells").table),
+        "every row of a table shares one description"
+    );
 }
 
 #[test]
-fn table_alignment_without_inline_spans_keeps_rows_plain() {
+fn short_and_empty_table_cells_keep_the_grid_rectangular() {
+    let doc = parse("| A | B | C |\n|---|---|---|\n| 1 |\n| | x | |\n");
+    let rows = table_rows(&doc);
+    assert_eq!(cell_texts(rows[1]), vec!["1", "", ""]);
+    assert_eq!(cell_texts(rows[2]), vec!["", "x", ""]);
+    assert_eq!(rows[2].text.as_ref(), "\tx\t");
+}
+
+#[test]
+fn table_list_form_pads_columns_without_inline_spans() {
     let doc = parse("| Name | Age |\n|---|---|\n| Alexander | 3 |\n| Bo | 27 |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
+    let table_rows = table_rows(&doc);
 
     assert!(table_rows.iter().all(|row| row.inline_spans.is_empty()));
-    assert_eq!(table_rows[0].text.as_ref(), "Name      | Age");
-    assert_eq!(table_rows[1].text.as_ref(), "Alexander | 3");
-    assert_eq!(table_rows[2].text.as_ref(), "Bo        | 27");
+    assert_eq!(list_text(table_rows[0]), "Name      | Age");
+    assert_eq!(list_text(table_rows[1]), "Alexander | 3");
+    assert_eq!(list_text(table_rows[2]), "Bo        | 27");
 }
 
 #[test]
-fn table_alignment_preserves_inline_spans_after_padding_cells() {
+fn table_list_form_moves_inline_spans_with_the_padding() {
     let doc = parse(
         "| A | **Header Bold** |\n| --- | --- |\n| A much longer first column | [link](https://example.com) |\n",
     );
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
+    let table_rows = table_rows(&doc);
     assert_eq!(table_rows.len(), 2);
 
-    let header_sep = table_rows[0]
-        .text
-        .find('|')
-        .expect("header row should contain a column separator");
-    let body_sep = table_rows[1]
-        .text
-        .find('|')
-        .expect("body row should contain a column separator");
-    assert_eq!(header_sep, body_sep);
+    let (header, header_spans) = markdown_table_row_display(table_rows[0]).expect("list form");
+    let (body, body_spans) = markdown_table_row_display(table_rows[1]).expect("list form");
+    assert_eq!(header.find('|'), body.find('|'), "columns line up");
 
-    let header_bold = spans_with_style(table_rows[0], MarkdownInlineStyle::Bold);
-    assert_eq!(header_bold.len(), 1);
-    assert_eq!(
-        &table_rows[0].text.as_ref()[header_bold[0].byte_range.clone()],
-        "Header Bold"
-    );
-
-    let body_links = spans_with_style(table_rows[1], MarkdownInlineStyle::Link);
-    assert_eq!(body_links.len(), 1);
-    assert_eq!(
-        &table_rows[1].text.as_ref()[body_links[0].byte_range.clone()],
-        "link"
-    );
+    let bold = header_spans
+        .iter()
+        .find(|span| span.style == MarkdownInlineStyle::Bold)
+        .expect("bold span");
+    assert_eq!(&header[bold.byte_range.clone()], "Header Bold");
+    let link = body_spans
+        .iter()
+        .find(|span| span.style == MarkdownInlineStyle::Link)
+        .expect("link span");
+    assert_eq!(&body[link.byte_range.clone()], "link");
 }
 
 #[test]
-fn table_alignment_handles_inline_spans_in_earlier_cells() {
+fn table_cells_keep_their_inline_spans() {
     let doc =
         parse("| **Header Bold** | B |\n| --- | --- |\n| [link](https://example.com) | plain |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
+    let table_rows = table_rows(&doc);
     assert_eq!(table_rows.len(), 2);
 
     let header_bold = spans_with_style(table_rows[0], MarkdownInlineStyle::Bold);
@@ -1740,208 +1742,6 @@ fn diff_preview_unavailable_reason_reports_rows_for_normal_size() {
     );
 }
 
-// ── Word wrap ───────────────────────────────────────────────────────
-
-#[test]
-fn wrap_plan_keeps_one_visual_row_per_unwrapped_source_row() {
-    let doc = parse("# Title\n\nParagraph one.\n\nParagraph two.\n");
-    let plan = build_markdown_preview_wrap_plan(&doc, |_| Vec::new()).expect("plan fits");
-
-    assert_eq!(plan.len(), doc.rows.len());
-    for (visual_ix, row) in doc.rows.iter().enumerate() {
-        let visual = plan.get(visual_ix).expect("visual row");
-        assert_eq!(visual.row_ix, visual_ix);
-        assert_eq!(visual.wrap_ix, 0);
-        assert_eq!(visual.byte_range, 0..row.text.len());
-        assert!(!visual.is_continuation());
-    }
-}
-
-#[test]
-fn wrap_plan_expands_split_rows_and_maps_source_rows_to_their_first_visual_row() {
-    let doc = parse("First paragraph.\n\nSecond paragraph.\n");
-    // Split every row with text into two halves at a char boundary.
-    let plan = build_markdown_preview_wrap_plan(&doc, |row| {
-        let len = row.text.len();
-        if len < 4 {
-            return Vec::new();
-        }
-        let mut mid = len / 2;
-        while mid > 0 && !row.text.is_char_boundary(mid) {
-            mid -= 1;
-        }
-        vec![0..mid, mid..len]
-    })
-    .expect("plan fits");
-
-    let split_rows = doc.rows.iter().filter(|row| row.text.len() >= 4).count();
-    assert_eq!(plan.len(), doc.rows.len() + split_rows);
-
-    for row_ix in 0..doc.rows.len() {
-        let visual_ix = plan.visual_ix_for_row(row_ix);
-        let visual = plan.get(visual_ix).expect("first visual row");
-        assert_eq!(visual.row_ix, row_ix);
-        assert_eq!(visual.wrap_ix, 0);
-        assert!(!visual.is_continuation());
-    }
-
-    let continuations = (0..plan.len())
-        .filter_map(|ix| plan.get(ix))
-        .filter(|visual| visual.is_continuation())
-        .count();
-    assert_eq!(continuations, split_rows);
-}
-
-#[test]
-fn wrap_plan_slices_cover_the_whole_row_text() {
-    let doc = parse("A paragraph with several words in it.\n");
-    let plan = build_markdown_preview_wrap_plan(&doc, |row| {
-        let len = row.text.len();
-        if len >= 8 {
-            vec![0..4, 4..len]
-        } else {
-            Vec::new()
-        }
-    })
-    .expect("plan fits");
-
-    let mut covered: Vec<(usize, Range<usize>)> = Vec::new();
-    for ix in 0..plan.len() {
-        let visual = plan.get(ix).expect("visual row");
-        covered.push((visual.row_ix, visual.byte_range.clone()));
-    }
-    for (row_ix, row) in doc.rows.iter().enumerate() {
-        let mut cursor = 0usize;
-        for (_, range) in covered.iter().filter(|(ix, _)| *ix == row_ix) {
-            assert_eq!(range.start, cursor, "slices must be contiguous");
-            cursor = range.end;
-        }
-        assert_eq!(cursor, row.text.len(), "slices must cover the row text");
-    }
-}
-
-#[test]
-fn wrap_plan_reports_overflow_instead_of_truncating_the_document() {
-    // Wrapping every row into many visual rows blows past the cap. The
-    // builder must report that rather than hand back a plan whose tail
-    // rows are missing, which would make them unreachable in the list.
-    let paragraph = "w".repeat(900);
-    let source = format!("{paragraph}\n\n").repeat(200);
-    let doc = parse(&source);
-    // One visual row per byte overshoots MAX_PREVIEW_WRAPPED_ROWS, which
-    // a pane only a few pixels wide would do for real.
-    let plan = build_markdown_preview_wrap_plan(&doc, |row| {
-        let len = row.text.len();
-        (0..len).map(|ix| ix..ix + 1).collect()
-    });
-    assert!(
-        plan.is_none(),
-        "an oversized wrapped document must fall back to unwrapped rendering"
-    );
-}
-
-#[test]
-fn split_wrap_plans_keep_both_columns_row_aligned() {
-    let old = "# Title\n\nlong old paragraph that wraps\n\nshared tail\n";
-    let new = "# Title\n\nshort\n\nshared tail\n";
-    let preview = build_markdown_diff_preview(old, new).expect("diff preview should build");
-
-    // Wrap only rows longer than 10 bytes, into two halves.
-    let (old_plan, new_plan) =
-        build_markdown_preview_split_wrap_plans(&preview.old, &preview.new, |row| {
-            let len = row.text.len();
-            if len <= 10 {
-                return Vec::new();
-            }
-            let mut mid = len / 2;
-            while mid > 0 && !row.text.is_char_boundary(mid) {
-                mid -= 1;
-            }
-            vec![0..mid, mid..len]
-        })
-        .expect("split plans should fit");
-
-    assert_eq!(
-        old_plan.len(),
-        new_plan.len(),
-        "split columns must render the same number of visual rows"
-    );
-    for visual_ix in 0..old_plan.len() {
-        let old_visual = old_plan.get(visual_ix).expect("old visual row");
-        let new_visual = new_plan.get(visual_ix).expect("new visual row");
-        assert_eq!(
-            (old_visual.row_ix, old_visual.wrap_ix),
-            (new_visual.row_ix, new_visual.wrap_ix),
-            "visual row {visual_ix} must show the same source row on both sides"
-        );
-    }
-}
-
-#[test]
-fn split_wrap_plans_pad_the_short_side_with_empty_continuations() {
-    // The narrow column has to hold a blank row opposite each extra
-    // wrapped row on the wide side, or the two lists drift apart.
-    let old = "# Title\n\nlong paragraph on the old side\n";
-    let new = "# Title\n\nshort\n";
-    let preview = build_markdown_diff_preview(old, new).expect("diff preview should build");
-
-    let (old_plan, new_plan) =
-        build_markdown_preview_split_wrap_plans(&preview.old, &preview.new, |row| {
-            let len = row.text.len();
-            if len <= 10 {
-                return Vec::new();
-            }
-            vec![0..5, 5..len]
-        })
-        .expect("split plans should fit");
-
-    assert_eq!(old_plan.len(), new_plan.len());
-    let padded: Vec<_> = (0..new_plan.len())
-        .filter_map(|ix| new_plan.get(ix))
-        .filter(|visual| visual.is_continuation())
-        .collect();
-    assert!(
-        !padded.is_empty(),
-        "the short column should gain padding rows"
-    );
-    for visual in padded {
-        assert!(
-            visual.byte_range.is_empty(),
-            "a padding row paints nothing: {visual:?}"
-        );
-    }
-}
-
-#[test]
-fn visual_row_text_slice_returns_the_painted_portion() {
-    let doc = parse("first second third\n");
-    let row = doc
-        .rows
-        .iter()
-        .find(|row| row.kind == MarkdownPreviewRowKind::Paragraph)
-        .expect("paragraph row");
-
-    let visual = |wrap_ix, byte_range| MarkdownPreviewVisualRow {
-        row_ix: 0,
-        wrap_ix,
-        byte_range,
-    };
-
-    assert_eq!(
-        visual(0, 0..row.text.len()).text_slice(row).as_ref(),
-        "first second third"
-    );
-    assert_eq!(visual(1, 6..12).text_slice(row).as_ref(), "second");
-    // A padding row and an out-of-range slice both paint nothing.
-    assert_eq!(
-        visual(2, row.text.len()..row.text.len())
-            .text_slice(row)
-            .as_ref(),
-        ""
-    );
-    assert_eq!(visual(3, 1..2).text_slice(row).as_ref(), "i");
-}
-
 // ── Flowing document blocks ─────────────────────────────────────────
 
 #[test]
@@ -2007,12 +1807,20 @@ fn two_tables_that_touch_stay_separate() {
         .collect();
     assert_eq!(tables.len(), 2, "rows: {:?}", row_texts(&doc));
 
-    let width_of = |rows: &Range<usize>| doc.rows[rows.start].text.chars().count();
-    assert_ne!(
-        width_of(&tables[0]),
-        width_of(&tables[1]),
-        "each table is padded to its own columns, not the other's: {:?}",
-        row_texts(&doc)
+    let widths_of = |rows: &Range<usize>| {
+        doc.rows[rows.start]
+            .table
+            .as_ref()
+            .expect("cells")
+            .table
+            .column_widths
+            .clone()
+    };
+    assert_eq!(widths_of(&tables[0]), vec![1, 1]);
+    assert_eq!(
+        widths_of(&tables[1]),
+        vec![13, 1],
+        "each table measures its own columns, not the other's"
     );
 }
 
@@ -3035,4 +2843,106 @@ fn an_anchor_link_in_a_table_cell_keeps_its_destination() {
     );
     let spans: Vec<_> = doc.rows.iter().flat_map(link_spans).collect();
     assert_eq!(spans, vec![("Trust a GPG key", "#trust-a-gpg-key")]);
+}
+
+fn band_texts(diff: &MarkdownPreviewDiff) -> Vec<(Vec<String>, Vec<String>)> {
+    let texts = |doc: &MarkdownPreviewDocument, blocks: &[MarkdownBlock], range: &Range<usize>| {
+        blocks[range.clone()]
+            .iter()
+            .flat_map(|block| block.row_range())
+            .filter(|&ix| !matches!(doc.rows[ix].kind, MarkdownPreviewRowKind::Spacer))
+            .map(|ix| doc.rows[ix].text.to_string())
+            .collect::<Vec<_>>()
+    };
+    diff.bands
+        .iter()
+        .map(|band| {
+            (
+                texts(&diff.old, &diff.old_blocks, &band.old_blocks),
+                texts(&diff.new, &diff.new_blocks, &band.new_blocks),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_item_inserted_mid_list_keeps_the_list_one_block_per_side() {
+    let diff = build_markdown_diff_preview("- a\n- b\n- c\n", "- a\n- x\n- b\n- c\n")
+        .expect("diff builds");
+    assert_eq!(diff.old_blocks.len(), 1, "{:?}", diff.old_blocks);
+    assert!(matches!(diff.old_blocks[0], MarkdownBlock::List(_)));
+    assert_eq!(
+        band_texts(&diff),
+        vec![(
+            vec!["a".to_string(), "b".into(), "c".into()],
+            vec!["a".to_string(), "x".into(), "b".into(), "c".into()],
+        )],
+        "the whole list is one band, so blank space goes after it, not inside it"
+    );
+}
+
+#[test]
+fn an_added_paragraph_gets_a_band_with_nothing_on_the_old_side() {
+    let diff = build_markdown_diff_preview("First.\n\nLast.\n", "First.\n\nAdded here.\n\nLast.\n")
+        .expect("diff builds");
+    let bands = band_texts(&diff);
+    assert!(
+        bands.contains(&(Vec::new(), vec!["Added here.".to_string()])),
+        "{bands:?}"
+    );
+    assert_eq!(
+        bands.first(),
+        Some(&(vec!["First.".to_string()], vec!["First.".to_string()]))
+    );
+    assert_eq!(
+        bands.last(),
+        Some(&(vec!["Last.".to_string()], vec!["Last.".to_string()]))
+    );
+}
+
+#[test]
+fn a_band_never_splits_a_block_on_either_side() {
+    let diff = build_markdown_diff_preview(
+        "Intro.\n\nOne line.\n\nTwo line.\n\nEnd.\n",
+        "Intro.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nEnd.\n",
+    )
+    .expect("diff builds");
+    for band in &diff.bands {
+        for (blocks, range) in [
+            (&diff.old_blocks, &band.old_blocks),
+            (&diff.new_blocks, &band.new_blocks),
+        ] {
+            for block in &blocks[range.clone()] {
+                let rows = block.row_range();
+                assert!(
+                    band.rows.start <= rows.start && rows.end <= band.rows.end,
+                    "{block:?} crosses {band:?}"
+                );
+            }
+        }
+    }
+    // Every block of both sides is in exactly one band.
+    let covered = |pick: fn(&MarkdownDiffBand) -> Range<usize>| {
+        diff.bands
+            .iter()
+            .map(|band| pick(band).len())
+            .sum::<usize>()
+    };
+    assert_eq!(
+        covered(|band| band.old_blocks.clone()),
+        diff.old_blocks.len()
+    );
+    assert_eq!(
+        covered(|band| band.new_blocks.clone()),
+        diff.new_blocks.len()
+    );
+}
+
+#[test]
+fn measured_change_extents_become_markers_where_they_were_drawn() {
+    // 1000px of content, an addition drawn at 800..850.
+    let markers = scrollbar_markers_for_extents(&[(800.0, 850.0, 1)], 1000.0);
+    assert_eq!(markers.len(), 1, "{markers:?}");
+    assert!((markers[0].start - 0.8).abs() < 0.01, "{markers:?}");
+    assert!((markers[0].end - 0.85).abs() < 0.01, "{markers:?}");
 }

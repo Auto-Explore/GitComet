@@ -55,44 +55,13 @@ pub(in crate::view) struct MarkdownPreviewRowHorizontalPadding {
     pub(in crate::view) right_px: f32,
 }
 
-/// Inputs shared by every row of one wrap pass.
-pub(in crate::view) struct MarkdownPreviewWrapMeasure {
-    pub(in crate::view) key: MarkdownPreviewWrapKey,
-    pub(in crate::view) wrap_width: Pixels,
-    pub(in crate::view) editor_font_family: SharedString,
-    pub(in crate::view) ui_scale_percent: u32,
-}
-
-impl MarkdownPreviewWrapMeasure {
-    /// Per-row wrap callback for the plan builders.
-    pub(in crate::view) fn wrap_row_fn<'a>(
-        &'a self,
-        window: &'a mut Window,
-        theme: AppTheme,
-    ) -> impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>> + 'a {
-        move |row| {
-            markdown_preview_row_wrap_ranges(
-                window,
-                theme,
-                row,
-                self.wrap_width,
-                &self.editor_font_family,
-                self.ui_scale_percent,
-            )
-        }
-    }
-}
-
-pub(in crate::view) struct MarkdownPreviewRenderContext<'a> {
+pub(in crate::view) struct MarkdownPreviewRenderContext {
     pub(in crate::view) theme: AppTheme,
     pub(in crate::view) min_width: Pixels,
     pub(in crate::view) editor_font_family: SharedString,
     pub(in crate::view) ui_scale_percent: u32,
     pub(in crate::view) view: Option<Entity<MainPaneView>>,
     pub(in crate::view) text_region: DiffTextRegion,
-    /// Visual-row mapping when word wrap is on; `None` renders one row per
-    /// source row with horizontal overflow clipped.
-    pub(in crate::view) wrap_plan: Option<&'a MarkdownPreviewWrapPlan>,
     /// Directory relative image paths resolve against.
     pub(in crate::view) image_base_dir: Option<Arc<std::path::Path>>,
     pub(in crate::view) remote_image_access: MarkdownRemoteImageAccess,
@@ -173,38 +142,20 @@ impl MarkdownRemoteImageAccess {
 pub(in crate::view) fn render_markdown_preview_document_rows(
     document: &MarkdownPreviewDocument,
     range: Range<usize>,
-    context: &MarkdownPreviewRenderContext<'_>,
+    context: &MarkdownPreviewRenderContext,
 ) -> Vec<AnyElement> {
     let requested_rows = range.len();
     let mut rows = Vec::with_capacity(requested_rows);
-    if let Some(plan) = context.wrap_plan {
-        let start = range.start.min(plan.len());
-        let end = range.end.min(plan.len());
-        for visual_ix in start..end {
-            let Some(visual_row) = plan.get(visual_ix) else {
-                continue;
-            };
-            let Some(row) = document.rows.get(visual_row.row_ix) else {
-                continue;
-            };
-            rows.push(markdown_preview_row_element(
-                row,
-                visual_ix,
-                Some(visual_row),
-                context,
-            ));
-        }
-    } else {
-        let start = range.start.min(document.rows.len());
-        let end = range.end.min(document.rows.len());
-        for (offset, row) in document.rows[start..end].iter().enumerate() {
-            rows.push(markdown_preview_row_element(
-                row,
-                start + offset,
-                None,
-                context,
-            ));
-        }
+    let start = range.start.min(document.rows.len());
+    let end = range.end.min(document.rows.len());
+    for (offset, row) in document.rows[start..end].iter().enumerate() {
+        // Nothing selects in a read-only list, so its tables can draw padded.
+        let row = if context.view.is_none() {
+            markdown_preview_list_row(row)
+        } else {
+            std::borrow::Cow::Borrowed(row)
+        };
+        rows.push(markdown_preview_row_element(&row, start + offset, context));
     }
     perf::record_row_batch(
         ViewPerfRenderLane::MarkdownPreview,
@@ -307,11 +258,28 @@ impl gpui::IntoElement for MarkdownPreviewSharedHighlightsText {
     }
 }
 
+/// `row` as the monospace row list draws it: a table row's cells padded into
+/// columns and joined by ` | `. Other rows are unchanged.
+pub(in crate::view) fn markdown_preview_list_row(
+    row: &MarkdownPreviewRow,
+) -> std::borrow::Cow<'_, MarkdownPreviewRow> {
+    let Some((text, spans)) = crate::view::markdown_preview::markdown_table_row_display(row) else {
+        return std::borrow::Cow::Borrowed(row);
+    };
+    std::borrow::Cow::Owned(MarkdownPreviewRow {
+        text: text.into(),
+        inline_spans: Arc::new(spans),
+        styled_text_cache: Default::default(),
+        measured_width_px: Default::default(),
+        table: None,
+        ..row.clone()
+    })
+}
+
 pub(in crate::view) fn markdown_preview_row_element(
     row: &MarkdownPreviewRow,
     row_ix: usize,
-    visual_row: Option<&MarkdownPreviewVisualRow>,
-    context: &MarkdownPreviewRenderContext<'_>,
+    context: &MarkdownPreviewRenderContext,
 ) -> AnyElement {
     let min_width = context.min_width;
     let text_region = context.text_region;
@@ -413,12 +381,10 @@ pub(in crate::view) fn markdown_preview_row_element(
             .into_any_element();
     }
 
-    let is_continuation = visual_row.is_some_and(MarkdownPreviewVisualRow::is_continuation);
     let row_layout = markdown_preview_row_layout(row, ui_scale_percent);
     let typography =
         markdown_preview_row_typography(theme, row, &context.editor_font_family, ui_scale_percent);
-    let doc_row_ix = visual_row.map_or(row_ix, |visual| visual.row_ix);
-    let full_styled = markdown_preview_styled_row_with_query(
+    let styled = markdown_preview_styled_row_with_query(
         theme,
         row,
         row_ix,
@@ -426,45 +392,15 @@ pub(in crate::view) fn markdown_preview_row_element(
         MarkdownPreviewHoveredLink::range_in_row(
             context.hovered_link.as_ref(),
             text_region,
-            doc_row_ix,
+            row_ix,
         ),
     );
-    let full_styled = full_styled.as_ref();
-    // Wrapped rows paint one slice of the row's text each; the marker and
-    // alert badge belong to the first slice so continuations stay aligned
-    // under the text they continue.
-    let sliced_styled = visual_row
-        .filter(|visual| visual.byte_range != (0..row.text.len()))
-        .map(|visual| {
-            slice_cached_diff_styled_text(
-                full_styled,
-                markdown_preview_expanded_slice_range(
-                    row.text.as_ref(),
-                    full_styled.text.len(),
-                    &visual.byte_range,
-                ),
-            )
-        });
-    let styled = sliced_styled.as_ref().unwrap_or(full_styled);
+    let styled = styled.as_ref();
     let horizontal_padding = markdown_preview_row_horizontal_padding(row, ui_scale_percent);
-    // Continuations keep the marker slot but leave it blank, so wrapped list
-    // and footnote text stays indented under the first line instead of
-    // sliding back under the bullet.
-    let marker = markdown_preview_row_marker(row).map(|marker| {
-        if is_continuation {
-            SharedString::default()
-        } else {
-            marker
-        }
-    });
-    let alert_title = markdown_preview_alert_title_label(row).filter(|_| !is_continuation);
-    // Pictures written on this line. A wrapped continuation already showed
-    // them on its first visual row.
-    let inline_images: &[MarkdownInlineImage] = if is_continuation {
-        &[]
-    } else {
-        row.inline_images.as_ref()
-    };
+    let marker = markdown_preview_row_marker(row);
+    let alert_title = markdown_preview_alert_title_label(row);
+    // Pictures written on this line.
+    let inline_images: &[MarkdownInlineImage] = row.inline_images.as_ref();
 
     // Rows that need a content_shell wrapper for border/background styling.
     let needs_content_shell = matches!(
@@ -619,12 +555,9 @@ pub(in crate::view) fn markdown_preview_row_element(
         if let Some(view) = context.view.clone() {
             // Hit testing and copy resolve rows through
             // `markdown_preview_row_text`, which works in `row.text`
-            // coordinates, so the overlay shapes the raw slice rather than the
+            // coordinates, so the overlay shapes the raw text rather than the
             // tab-expanded one this row paints.
-            let selection_text = match visual_row {
-                Some(visual) if sliced_styled.is_some() => visual.text_slice(row),
-                _ => row.text.clone(),
-            };
+            let selection_text = row.text.clone();
             content = content.child(
                 div()
                     .absolute()
@@ -1055,120 +988,6 @@ pub(in crate::view) fn markdown_preview_row_chrome_width(
     };
 
     width
-}
-
-/// Byte ranges of `row.text` that fit `available_width`, one per visual row.
-///
-/// Returns fewer than two ranges when the row needs no wrapping, which
-/// `build_markdown_preview_wrap_plan` collapses back to a single visual row.
-/// Wrapping is measured with the row's own typography — headings, code, and
-/// body text all use different fonts — via `gpui`'s line wrapper rather than a
-/// character-count approximation, because preview text is proportional.
-///
-/// Ranges are in `row.text` coordinates; the renderer maps them onto the
-/// tab-expanded text it paints (see `markdown_preview_expanded_slice_range`).
-pub(in crate::view) fn markdown_preview_row_wrap_ranges(
-    window: &mut Window,
-    theme: AppTheme,
-    row: &MarkdownPreviewRow,
-    available_width: Pixels,
-    editor_font_family: &SharedString,
-    ui_scale_percent: u32,
-) -> Vec<Range<usize>> {
-    if row.text.is_empty()
-        || matches!(
-            row.kind,
-            MarkdownPreviewRowKind::Spacer | MarkdownPreviewRowKind::ThematicBreak
-        )
-    {
-        return Vec::new();
-    }
-
-    // Rows that already fit need no wrapper pass at all. The required width is
-    // cached per row and keyed only by font, so on a resize this is a hash and
-    // a comparison rather than a re-measure — which is what keeps a wide
-    // document from re-shaping every row on every frame of a resize drag.
-    if markdown_preview_row_required_width(window, theme, row, editor_font_family, ui_scale_percent)
-        <= available_width
-    {
-        return Vec::new();
-    }
-
-    let chrome = markdown_preview_row_chrome_width(theme, window, row, ui_scale_percent);
-    let wrap_width = available_width - chrome;
-    if wrap_width <= px(0.0) {
-        return Vec::new();
-    }
-
-    let typography =
-        markdown_preview_row_typography(theme, row, editor_font_family, ui_scale_percent);
-    let mut font = window.text_style().font();
-    if let Some(font_family) = typography.font_family.clone() {
-        font.family = font_family;
-    }
-    if let Some(font_weight) = typography.font_weight {
-        font.weight = font_weight;
-    }
-
-    let text = row.text.clone();
-    // A tab is painted as four spaces, so it is fed to the wrapper as an
-    // element of that width rather than as a single character.
-    let tab_width = text.contains('\t').then(|| {
-        markdown_preview_shape_text_width(
-            window,
-            "    ",
-            typography.font_size,
-            typography.font_weight.unwrap_or(FontWeight::NORMAL),
-            typography.font_family.as_ref().map(SharedString::as_ref),
-            &[],
-        )
-    });
-    let mut handle = window
-        .text_system()
-        .line_wrapper(font, px(typography.font_size));
-    // Prose has no tabs, so the common case stays on the stack.
-    let tabbed_fragments =
-        tab_width.map(|width| markdown_preview_wrap_fragments(text.as_ref(), width));
-    let plain_fragment = [gpui::LineFragment::text(text.as_ref())];
-    let fragments: &[gpui::LineFragment<'_>] = match tabbed_fragments.as_deref() {
-        Some(fragments) => fragments,
-        None => &plain_fragment,
-    };
-    let mut ranges = Vec::new();
-    let mut start = 0usize;
-    for boundary in handle.wrap_line(fragments, wrap_width) {
-        if boundary.ix <= start || !text.is_char_boundary(boundary.ix) {
-            continue;
-        }
-        ranges.push(start..boundary.ix);
-        start = boundary.ix;
-    }
-    if ranges.is_empty() {
-        return Vec::new();
-    }
-    ranges.push(start..text.len());
-    ranges
-}
-
-/// Split `text` into wrap fragments, giving each tab the width it is painted
-/// at ([`DIFF_WRAP_TAB_EXPANDED_COLUMNS`] spaces) instead of a single character.
-pub(in crate::view) fn markdown_preview_wrap_fragments(
-    text: &str,
-    tab_width: Pixels,
-) -> Vec<gpui::LineFragment<'_>> {
-    let mut fragments = Vec::new();
-    let mut segment_start = 0usize;
-    for (ix, _) in text.match_indices('\t') {
-        if ix > segment_start {
-            fragments.push(gpui::LineFragment::text(&text[segment_start..ix]));
-        }
-        fragments.push(gpui::LineFragment::element(tab_width, 1));
-        segment_start = ix + 1;
-    }
-    if segment_start < text.len() {
-        fragments.push(gpui::LineFragment::text(&text[segment_start..]));
-    }
-    fragments
 }
 
 /// Map a `row.text` byte range onto the tab-expanded text that is painted.
@@ -2163,7 +1982,7 @@ pub(in crate::view) fn markdown_preview_image_placeholder_element(
 /// Stand-in for a source that could not be resolved at all.
 pub(in crate::view) fn markdown_preview_image_placeholder(
     row: &MarkdownPreviewRow,
-    context: &MarkdownPreviewRenderContext<'_>,
+    context: &MarkdownPreviewRenderContext,
     reason: &str,
 ) -> gpui::Div {
     markdown_preview_image_placeholder_element(
@@ -2181,7 +2000,7 @@ pub(in crate::view) fn markdown_preview_image_row(
     row_ix: usize,
     slice_ix: u8,
     slice_count: u8,
-    context: &MarkdownPreviewRenderContext<'_>,
+    context: &MarkdownPreviewRenderContext,
 ) -> AnyElement {
     let theme = context.theme;
     let ui_scale_percent = context.ui_scale_percent;
@@ -2287,14 +2106,6 @@ pub(in crate::view) fn markdown_preview_image_row(
             ),
     )
     .into_any_element()
-}
-
-pub(in crate::view) fn markdown_preview_font_family_hash(font_family: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = FxHasher::default();
-    font_family.hash(&mut hasher);
-    hasher.finish()
 }
 
 pub(in crate::view) fn markdown_preview_row_width_cache_key(

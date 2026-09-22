@@ -25,8 +25,8 @@ use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::view::markdown_preview::{
     MAX_FLOWING_PREVIEW_ROWS, MarkdownBlock, MarkdownInlineImage, MarkdownInlineStyle,
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
-    TOO_MANY_ROWS_TO_RENDER_MESSAGE, markdown_document_blocks,
+    MarkdownPreviewDiff, MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
+    MarkdownTableAlign, TOO_MANY_ROWS_TO_RENDER_MESSAGE, markdown_document_blocks,
 };
 use crate::view::perf::{self, ViewPerfRenderLane};
 use rustc_hash::FxHashMap;
@@ -64,6 +64,27 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) scroll: Option<gpui::ScrollHandle>,
     /// The link under the pointer.
     pub(in crate::view) hovered_link: Option<crate::view::rows::MarkdownPreviewHoveredLink>,
+    /// Where changed blocks were laid out, for the diff's scrollbar markers.
+    pub(in crate::view) change_extents: Option<MarkdownChangeExtents>,
+}
+
+/// Vertical extents of changed blocks in scroll-content coordinates, recorded
+/// during prepaint so scrollbar markers sit where the changes are drawn rather
+/// than where a row count guesses.
+#[derive(Clone, Default)]
+pub(in crate::view) struct MarkdownChangeExtents(
+    std::rc::Rc<std::cell::RefCell<Vec<(f32, f32, u8)>>>,
+);
+
+impl MarkdownChangeExtents {
+    /// The extents the last frame recorded, leaving the list empty for this one.
+    pub(in crate::view) fn take(&self) -> Vec<(f32, f32, u8)> {
+        std::mem::take(&mut self.0.borrow_mut())
+    }
+
+    fn record(&self, top: f32, bottom: f32, flag: u8) {
+        self.0.borrow_mut().push((top, bottom, flag));
+    }
 }
 
 /// Gap between two blocks, and the extra break a heading opens above itself.
@@ -123,47 +144,25 @@ pub(in crate::view) fn render_markdown_document(
     document: &Arc<MarkdownPreviewDocument>,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
+    let blocks = context.blocks.blocks(document);
+    render_markdown_document_with_blocks(document, &blocks, context)
+}
+
+/// As [`render_markdown_document`], for a document whose blocks are already
+/// grouped — the inline diff keeps them with the document.
+pub(in crate::view) fn render_markdown_document_with_blocks(
+    document: &MarkdownPreviewDocument,
+    blocks: &[MarkdownBlock],
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
     // The budget belongs to this renderer, so this is where it is enforced —
     // a caller that skips the check its document was built with still cannot
     // make the pane lay out an unbounded tree.
     if document.rows.len() > MAX_FLOWING_PREVIEW_ROWS {
-        return div()
-            .w_full()
-            .p(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
-            .text_color(context.theme.colors.foreground.secondary)
-            .child(TOO_MANY_ROWS_TO_RENDER_MESSAGE)
-            .into_any_element();
+        return too_many_rows(context);
     }
-
-    let blocks = context.blocks.blocks(document);
-    // The whole document lays out at once, so the rows the blocks cover are the
-    // render cost. Spacers are not among them: the block builder drops them and
-    // the flowing layout spends one interactive gap between blocks instead.
-    perf::record_row_batch(
-        ViewPerfRenderLane::MarkdownPreview,
-        document.rows.len(),
-        blocks.iter().map(|block| block.row_range().len()).sum(),
-    );
-    let mut column = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w(px(0.0))
-        .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
-        .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, context))
-        .text_color(context.theme.colors.foreground.primary);
-
-    for (ix, block) in blocks.iter().enumerate() {
-        if ix > 0 {
-            let gap = if matches!(block, MarkdownBlock::Heading { .. }) {
-                HEADING_GAP_PX
-            } else {
-                BLOCK_GAP_PX
-            };
-            column = column.child(render_block_gap(ix, block.row_range().start, gap, context));
-        }
-        column = column.child(render_block(document, block, context));
-    }
+    record_flowing_rows(document, blocks);
+    let column = render_block_column(document, blocks, 0, context);
 
     // The change bar is one element spanning the whole document rather than a
     // segment per row: a flowing layout puts gaps between blocks, and a
@@ -195,6 +194,253 @@ pub(in crate::view) fn render_markdown_document(
         surface = surface.child(flowing_diff_text_empty_space(view, context.text_region));
     }
     surface.into_any_element()
+}
+
+/// The split markdown diff: each band's old and new blocks side by side, so
+/// the shorter side of a band is left blank and the two stay lined up.
+pub(in crate::view) fn render_markdown_diff_split(
+    diff: &MarkdownPreviewDiff,
+    left: &MarkdownDocumentContext,
+    right: &MarkdownDocumentContext,
+) -> AnyElement {
+    if diff.old.rows.len().max(diff.new.rows.len()) > MAX_FLOWING_PREVIEW_ROWS {
+        return too_many_rows(left);
+    }
+    record_flowing_rows(&diff.old, &diff.old_blocks);
+    record_flowing_rows(&diff.new, &diff.new_blocks);
+    let divider = left.theme.colors.stroke.default;
+
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w(px(0.0))
+        .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, left))
+        .text_color(left.theme.colors.foreground.primary);
+    for (band_ix, band) in diff.bands.iter().enumerate() {
+        let old_blocks = &diff.old_blocks[band.old_blocks.clone()];
+        let new_blocks = &diff.new_blocks[band.new_blocks.clone()];
+        if band_ix > 0 {
+            let opens_heading = old_blocks
+                .iter()
+                .chain(new_blocks)
+                .next()
+                .is_some_and(|block| matches!(block, MarkdownBlock::Heading { .. }));
+            let gap = if opens_heading {
+                HEADING_GAP_PX
+            } else {
+                BLOCK_GAP_PX
+            };
+            let gap_side = |context: &MarkdownDocumentContext, side: usize| {
+                div().flex_1().min_w(px(0.0)).child(render_block_gap(
+                    band_ix * 2 + side,
+                    band.rows.start,
+                    gap,
+                    context,
+                ))
+            };
+            column = column.child(
+                div()
+                    .flex()
+                    .w_full()
+                    .child(gap_side(left, 0))
+                    .child(div().w(px(1.0)).flex_none().bg(divider))
+                    .child(gap_side(right, 1)),
+            );
+        }
+        let side = |document, blocks, context: &MarkdownDocumentContext| {
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(render_block_column(document, blocks, band_ix, context))
+        };
+        column = column.child(
+            div()
+                .id(("markdown_diff_band", band_ix))
+                .debug_selector(move || format!("markdown_diff_band_{band_ix}"))
+                .flex()
+                .items_stretch()
+                .w_full()
+                .child(side(&diff.old, old_blocks, left))
+                .child(div().w(px(1.0)).flex_none().bg(divider))
+                .child(side(&diff.new, new_blocks, right)),
+        );
+    }
+
+    let mut surface = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w(px(0.0))
+        .min_h_full()
+        .child(column);
+    if let (Some(left_view), Some(right_view)) = (left.view.clone(), right.view.clone()) {
+        surface = surface.child(
+            div()
+                .flex()
+                .flex_1()
+                .w_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(flowing_diff_text_empty_space(left_view, left.text_region)),
+                )
+                .child(div().w(px(1.0)).flex_none().bg(divider))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(flowing_diff_text_empty_space(right_view, right.text_region)),
+                ),
+        );
+    }
+    surface.into_any_element()
+}
+
+fn too_many_rows(context: &MarkdownDocumentContext) -> AnyElement {
+    div()
+        .w_full()
+        .p(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
+        .text_color(context.theme.colors.foreground.secondary)
+        .child(TOO_MANY_ROWS_TO_RENDER_MESSAGE)
+        .into_any_element()
+}
+
+/// The whole document lays out at once, so the rows the blocks cover are the
+/// render cost. Spacers are not among them: the block builder drops them and
+/// the flowing layout spends one interactive gap between blocks instead.
+fn record_flowing_rows(document: &MarkdownPreviewDocument, blocks: &[MarkdownBlock]) {
+    perf::record_row_batch(
+        ViewPerfRenderLane::MarkdownPreview,
+        document.rows.len(),
+        blocks.iter().map(|block| block.row_range().len()).sum(),
+    );
+}
+
+/// Blocks stacked with the gaps between them. `gap_key` keeps gap ids unique
+/// when several columns render into one tree.
+fn render_block_column(
+    document: &MarkdownPreviewDocument,
+    blocks: &[MarkdownBlock],
+    gap_key: usize,
+    context: &MarkdownDocumentContext,
+) -> gpui::Div {
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w(px(0.0))
+        .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
+        .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, context))
+        .text_color(context.theme.colors.foreground.primary);
+
+    for (ix, block) in blocks.iter().enumerate() {
+        if ix > 0 {
+            let gap = if matches!(block, MarkdownBlock::Heading { .. }) {
+                HEADING_GAP_PX
+            } else {
+                BLOCK_GAP_PX
+            };
+            // The worktree document keeps its original gap ids.
+            let gap_ix = if gap_key == 0 {
+                ix
+            } else {
+                (gap_key << 20) | (usize::from(context.text_region.order()) << 16) | ix
+            };
+            column = column.child(render_block_gap(
+                gap_ix,
+                block.row_range().start,
+                gap,
+                context,
+            ));
+        }
+        let rendered = record_change_extent(
+            document,
+            block,
+            context,
+            render_block(document, block, context),
+        );
+        column = column.child(match block_change_bar(document, block, context) {
+            // A wholly added or removed block is marked down its whole height,
+            // gaps and padding included, so it reads as one change.
+            Some(color) => div()
+                .flex()
+                .items_stretch()
+                .w_full()
+                .min_w(px(0.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(scaled(MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX, context))
+                        .mr(scaled(MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX, context))
+                        .bg(color)
+                        .debug_selector(|| "markdown_preview_block_change_bar".to_string()),
+                )
+                .child(div().flex_1().min_w(px(0.0)).child(rendered))
+                .into_any_element(),
+            None => rendered,
+        });
+    }
+    column
+}
+
+/// Wrap a changed block so it reports where it was laid out.
+fn record_change_extent(
+    document: &MarkdownPreviewDocument,
+    block: &MarkdownBlock,
+    context: &MarkdownDocumentContext,
+    rendered: AnyElement,
+) -> AnyElement {
+    let (Some(extents), Some(scroll)) = (context.change_extents.clone(), context.scroll.clone())
+    else {
+        return rendered;
+    };
+    let flag = RowRun::new(document, block.row_range())
+        .iter()
+        .fold(0u8, |flag, (_, row)| {
+            flag | crate::view::markdown_preview::scrollbar_flag_for_change_hint(row.change_hint)
+        });
+    if flag == 0 {
+        return rendered;
+    }
+    div()
+        .w_full()
+        .min_w(px(0.0))
+        .on_children_prepainted(move |children, _window, _cx| {
+            let Some((top, height)) = crate::view::rows::markdown_preview_row_extent(&children)
+            else {
+                return;
+            };
+            // Prepaint bounds are in window space with the scroll applied.
+            let top = top - scroll.bounds().origin.y - scroll.offset().y;
+            extents.record(f32::from(top), f32::from(top + height), flag);
+        })
+        .child(rendered)
+        .into_any_element()
+}
+
+/// The bar colour for a block every row of which was added, or removed.
+fn block_change_bar(
+    document: &MarkdownPreviewDocument,
+    block: &MarkdownBlock,
+    context: &MarkdownDocumentContext,
+) -> Option<gpui::Rgba> {
+    use crate::view::markdown_preview::MarkdownChangeHint;
+    let rows = RowRun::new(document, block.row_range());
+    let mut hints = rows.iter().map(|(_, row)| row.change_hint);
+    let first = hints.next()?;
+    if !hints.all(|hint| hint == first) {
+        return None;
+    }
+    let colors = &context.theme.colors.status;
+    match first {
+        MarkdownChangeHint::Added => Some(colors.success.foreground),
+        MarkdownChangeHint::Removed => Some(colors.danger.foreground),
+        MarkdownChangeHint::Modified | MarkdownChangeHint::None => None,
+    }
 }
 
 fn render_block_gap(
@@ -363,6 +609,8 @@ impl<'a> RowRun<'a> {
         self.range
             .clone()
             .filter_map(move |row_ix| document.rows.get(row_ix).map(|row| (row_ix, row)))
+            // Alignment padding inside a diff block draws nothing.
+            .filter(|(_, row)| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))
     }
 
     fn first(&self) -> Option<(usize, &'a MarkdownPreviewRow)> {
@@ -376,10 +624,7 @@ impl<'a> RowRun<'a> {
 /// to exceed it, so these rows size to their text. Every other row fills its
 /// line, which is what lets its text wrap.
 fn row_scrolls_sideways(kind: MarkdownPreviewRowKind) -> bool {
-    matches!(
-        kind,
-        MarkdownPreviewRowKind::CodeLine { .. } | MarkdownPreviewRowKind::TableRow { .. }
-    )
+    matches!(kind, MarkdownPreviewRowKind::CodeLine { .. })
 }
 
 /// The row div, carrying the quick-search reveal when this is the target row.
@@ -464,6 +709,16 @@ fn row_shell(
             |shell| shell.px(scaled(MARKDOWN_PREVIEW_SHELL_PAD_X_PX, context)),
         );
 
+    row_interactions(shell, row_ix, context)
+}
+
+/// What makes a row's box behave as text: selection, links, the context menu.
+/// A table row spreads these over each of its cells.
+fn row_interactions(
+    shell: gpui::Stateful<gpui::Div>,
+    row_ix: usize,
+    context: &MarkdownDocumentContext,
+) -> gpui::Stateful<gpui::Div> {
     let Some(view) = context.view.clone() else {
         return shell;
     };
@@ -938,54 +1193,180 @@ fn render_code_padding(
         .into_any_element()
 }
 
+/// A table as a grid: columns sized to their content that shrink and wrap
+/// when the pane is narrow, dividers between cells, a header band, and
+/// alternating rows.
 fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElement {
     let first_row_ix = rows.first().map(|(row_ix, _)| row_ix).unwrap_or_default();
-    let mut table = div()
-        .flex()
-        .flex_col()
-        // As with a code block: sized to its widest row so it can scroll, and at
-        // least as wide as the block so a narrow table still spans it.
-        .flex_none()
-        .min_w(relative(1.0))
-        .font_family(context.editor_font_family.clone());
+    let Some(table) = rows
+        .first()
+        .and_then(|(_, row)| row.table.as_ref())
+        .map(|cells| Arc::clone(&cells.table))
+    else {
+        return div().into_any_element();
+    };
+    let column_count = table.alignments.len();
+    if column_count == 0 {
+        return div().into_any_element();
+    }
+    let theme = context.theme;
+    let divider = with_alpha(
+        theme.colors.stroke.default,
+        if theme.is_dark { 0.70 } else { 0.60 },
+    );
+    let header_band = with_alpha(
+        theme.colors.surface.raised,
+        if theme.is_dark { 0.64 } else { 0.86 },
+    );
+    let stripe = with_alpha(
+        theme.colors.surface.raised,
+        if theme.is_dark { 0.32 } else { 0.55 },
+    );
 
-    for (row_ix, row) in rows.iter() {
+    // `minmax(min-content, 1fr)` on a grid that sizes to its content: columns
+    // hug their text while it fits, wrap when the pane is narrow, and stop at
+    // the longest word, past which the table scrolls.
+    let mut grid = div()
+        .grid()
+        .grid_cols_max_content(column_count as u16)
+        .flex_none()
+        .max_w(relative(1.0))
+        .whitespace_normal()
+        .border_1()
+        .border_color(divider)
+        .rounded(px(theme.radii.row));
+    let mut body_ix = 0usize;
+    for (grid_row, (row_ix, row)) in rows.iter().enumerate() {
+        let Some(cells) = row.table.as_ref() else {
+            continue;
+        };
         let is_header = matches!(
             row.kind,
             MarkdownPreviewRowKind::TableRow { is_header: true }
         );
-        // The header band is the stronger of the two so the first row reads as
-        // labels rather than data.
-        let cell_background = with_alpha(
-            context.theme.colors.surface.raised,
-            match (is_header, context.theme.is_dark) {
-                (true, true) => 0.64,
-                (true, false) => 0.86,
-                (false, true) => 0.42,
-                (false, false) => 0.72,
-            },
-        );
-        let mut line = row_shell(row_ix, row, context)
-            .px(scaled(TABLE_CELL_PAD_X_PX, context))
-            .py(scaled(TABLE_CELL_PAD_Y_PX, context))
-            .bg(cell_background)
-            .child(render_row_line(row_ix, row, context));
-        if is_header {
-            line = line.font_weight(FontWeight::BOLD);
+        // A change tint wins; otherwise the header band, then every other row.
+        let background = crate::view::rows::markdown_preview_row_background(theme, row)
+            .or(is_header.then_some(header_band))
+            .or((!is_header && body_ix % 2 == 1).then_some(stripe));
+        if !is_header {
+            body_ix += 1;
         }
-        table = table.child(line.border_b_1().border_color(with_alpha(
-            context.theme.colors.stroke.default,
-            if context.theme.is_dark { 0.70 } else { 0.60 },
-        )));
+        for (column, range) in cells.cells.iter().enumerate() {
+            let align = if is_header {
+                MarkdownTableAlign::Center
+            } else {
+                table.alignments.get(column).copied().unwrap_or_default()
+            };
+            // The search reveal needs one box per row; the first cell stands in.
+            let shell = if column == 0 {
+                reveal_listener(row_ix, context)
+            } else {
+                div()
+            };
+            let cell = shell
+                .id(("md_preview_table_cell", row_ix * column_count + column))
+                .debug_selector(move || format!("markdown_preview_cell_box_{row_ix}_{column}"))
+                .px(scaled(TABLE_CELL_PAD_X_PX, context))
+                .py(scaled(TABLE_CELL_PAD_Y_PX, context))
+                .when(column > 0, |cell| cell.border_l_1())
+                .when(grid_row > 0, |cell| cell.border_t_1())
+                .border_color(divider)
+                .when_some(background, |cell, background| cell.bg(background))
+                .when(is_header, |cell| cell.font_weight(FontWeight::SEMIBOLD))
+                // The text box moves, not the glyphs inside it: `gpui` hit-tests
+                // and places selections as if every line started at the left.
+                .flex()
+                .map(|cell| match align {
+                    MarkdownTableAlign::Center => cell.justify_center(),
+                    MarkdownTableAlign::Right => cell.justify_end(),
+                    MarkdownTableAlign::None | MarkdownTableAlign::Left => cell,
+                })
+                .child(render_cell_text(
+                    row_ix,
+                    row,
+                    column,
+                    range.clone(),
+                    context,
+                ));
+            grid = grid.child(row_interactions(cell, row_ix, context));
+        }
     }
 
+    // The table hugs its columns; a word too long to wrap still scrolls.
     scrolling_block(
         "markdown_document_table",
         "markdown_document_table_scrollbar",
         first_row_ix,
         context,
-        |block| block.child(table),
+        |block| block.child(div().flex().w_full().min_w(px(0.0)).child(grid)),
     )
+}
+
+/// One table cell's text: its slice of the row, styled as the row is and
+/// selectable in row coordinates.
+fn render_cell_text(
+    row_ix: usize,
+    row: &MarkdownPreviewRow,
+    column: usize,
+    range: std::ops::Range<usize>,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    let styled = crate::view::rows::markdown_preview_styled_row_with_query(
+        context.theme,
+        row,
+        row_ix,
+        context.query.as_ref(),
+        crate::view::rows::MarkdownPreviewHoveredLink::range_in_row(
+            context.hovered_link.as_ref(),
+            context.text_region,
+            row_ix,
+        ),
+    );
+    let styled = super::diff_text::slice_cached_diff_styled_text(
+        styled.as_ref(),
+        super::history::markdown_preview_expanded_slice_range(
+            row.text.as_ref(),
+            styled.text.len(),
+            &range,
+        ),
+    );
+    // No percentage width: while the grid sizes its columns a `w_full` box
+    // measures its text at width 0, and `gpui` keeps that one-glyph-per-line
+    // size for every later probe. The column stretches the box anyway.
+    let text = div().min_w(px(0.0)).when(
+        row.inline_spans[..].iter().any(|span| {
+            span.style == MarkdownInlineStyle::Code
+                && span.byte_range.start < range.end
+                && range.start < span.byte_range.end
+        }),
+        |text| text.font_family(context.editor_font_family.clone()),
+    );
+    let Some(view) = context.view.clone() else {
+        return text
+            .child(crate::view::rows::markdown_preview_highlighted_text(
+                styled.text.clone(),
+                Arc::clone(&styled.highlights),
+            ))
+            .into_any_element();
+    };
+    text.cursor(crate::view::rows::MarkdownPreviewHoveredLink::cursor(
+        context.hovered_link.as_ref(),
+        context.text_region,
+        row_ix,
+    ))
+    .debug_selector(move || format!("markdown_preview_cell_text_box_{row_ix}_{column}"))
+    .child(
+        MarkdownFlowText::new(
+            view,
+            row_ix,
+            context.text_region,
+            styled.text.clone(),
+            styled.text.clone(),
+            Arc::clone(&styled.highlights),
+        )
+        .cell(range, row.text.len()),
+    )
+    .into_any_element()
 }
 
 /// Where each sideways-scrolling block is scrolled to, kept across frames.

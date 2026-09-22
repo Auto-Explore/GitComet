@@ -397,7 +397,6 @@ fn render_conflict_markdown_preview_rows(
             ui_scale_percent: crate::ui_scale::current(cx).percent,
             view: None,
             text_region: DiffTextRegion::Inline,
-            wrap_plan: None,
             image_base_dir: None,
             remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
             query: this.markdown_preview_search_query(),

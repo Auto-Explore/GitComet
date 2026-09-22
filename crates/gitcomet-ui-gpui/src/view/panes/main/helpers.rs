@@ -3420,7 +3420,6 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
     pub(in crate::view) file_markdown_preview_seq: u64,
     pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
-    pub(in crate::view) markdown_preview_wrap: MarkdownPreviewWrapCache,
     /// Row the quick-search cursor wants revealed in the flowing markdown
     /// preview, shared with the renderer that measures it. See
     /// [`rows::MarkdownPreviewRevealRequest`].
@@ -3468,6 +3467,15 @@ pub(crate) struct MainPaneView {
     /// Where each sideways-scrolling block of the rendered preview is scrolled
     /// to, so its scrollbar has something to read.
     pub(in crate::view) worktree_markdown_preview_block_scrolls: rows::MarkdownDocumentBlockScrolls,
+    /// The same for the rendered markdown diff's old, new, and inline
+    /// documents, whose row indices overlap.
+    pub(in crate::view) markdown_diff_block_scrolls: [rows::MarkdownDocumentBlockScrolls; 3],
+    /// Where the rendered markdown diff drew its changes last frame, which
+    /// preview and layout that frame drew, and the one a follow-up frame was
+    /// already asked for to measure.
+    pub(in crate::view) markdown_diff_change_extents: rows::MarkdownChangeExtents,
+    pub(in crate::view) markdown_diff_change_extents_key: Option<(u64, DiffViewMode)>,
+    pub(in crate::view) markdown_diff_change_extents_requested: Option<(u64, DiffViewMode)>,
     /// Block grouping of the document the rendered preview last drew, so it is
     /// not re-derived on every frame.
     pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,

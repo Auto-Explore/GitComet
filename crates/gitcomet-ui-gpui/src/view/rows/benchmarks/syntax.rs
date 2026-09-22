@@ -1704,7 +1704,6 @@ fn render_markdown_preview_window(
             ui_scale_percent: crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
             view: None,
             text_region: DiffTextRegion::Inline,
-            wrap_plan: None,
             image_base_dir: None,
             remote_image_access: Default::default(),
             query: None,
@@ -2277,6 +2276,7 @@ fn build_markdown_preview_row(
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
+        table: None,
     }
 }
 
