@@ -93,7 +93,7 @@ impl PopoverHost {
     pub(super) fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
-        let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker));
+        let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker { .. }));
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.title_bar.update(cx, |title_bar, cx| {
@@ -2513,7 +2513,7 @@ impl PopoverHost {
         self.request_lazy_popover_repo_data(&kind);
         if matches!(
             kind,
-            PopoverKind::RepoPicker | PopoverKind::RepoTabMenu { .. }
+            PopoverKind::RepoPicker { .. } | PopoverKind::RepoTabMenu { .. }
         ) {
             self.cached_workspaces = crate::workspaces::workspaces(cx);
             // This method can run from a listener owned by the root view, so
@@ -2675,7 +2675,7 @@ impl PopoverHost {
                     self.hook_activity_output_scroll = ScrollHandle::new();
                     self.hook_activity_output_scroll.scroll_to_bottom();
                 }
-                PopoverKind::RepoPicker => {
+                PopoverKind::RepoPicker { .. } => {
                     let ui_session = session::load();
                     self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);
                     self.cached_recent_repos = ui_session.recent_repos;
@@ -3467,7 +3467,7 @@ impl PopoverHost {
     /// it can read the filter without knowing which picker it is over.
     pub(super) fn open_picker_search_input(&self) -> Option<&Entity<components::TextInput>> {
         match &self.popover {
-            Some(PopoverKind::RepoPicker) => self.repo_picker_search_input.as_ref(),
+            Some(PopoverKind::RepoPicker { .. }) => self.repo_picker_search_input.as_ref(),
             Some(PopoverKind::FileHistory { .. }) => self.file_history_search_input.as_ref(),
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_search_input.as_ref(),
             Some(PopoverKind::Repo {
@@ -3485,7 +3485,7 @@ impl PopoverHost {
     /// say so.
     pub(super) fn open_picker_selected_index(&mut self) -> Option<&mut Option<usize>> {
         match &self.popover {
-            Some(PopoverKind::RepoPicker) => Some(&mut self.repo_picker_selected_index),
+            Some(PopoverKind::RepoPicker { .. }) => Some(&mut self.repo_picker_selected_index),
             Some(PopoverKind::FileHistory { .. }) => Some(&mut self.file_history_selected_index),
             Some(PopoverKind::BranchPicker { .. }) => Some(&mut self.branch_picker_selected_index),
             Some(PopoverKind::Repo {
@@ -3498,7 +3498,7 @@ impl PopoverHost {
 
     pub(super) fn open_picker_selected_index_value(&self) -> Option<usize> {
         match &self.popover {
-            Some(PopoverKind::RepoPicker) => self.repo_picker_selected_index,
+            Some(PopoverKind::RepoPicker { .. }) => self.repo_picker_selected_index,
             Some(PopoverKind::FileHistory { .. }) => self.file_history_selected_index,
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_selected_index,
             Some(PopoverKind::Repo {

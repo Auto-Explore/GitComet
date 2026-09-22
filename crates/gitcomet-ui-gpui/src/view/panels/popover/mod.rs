@@ -869,7 +869,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
-        PopoverKind::RepoPicker
+        PopoverKind::RepoPicker { .. }
         | PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
         } => Some(PICKER_WIDTH),

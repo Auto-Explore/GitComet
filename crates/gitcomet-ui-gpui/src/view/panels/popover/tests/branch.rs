@@ -1456,7 +1456,9 @@ fn replacing_branch_exists_prompt_cancels_it_and_allows_the_same_collision_to_re
         });
         assert!(matches!(
             view.read(app).popover_host.read(app).popover,
-            Some(PopoverKind::RepoPicker)
+            Some(PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All
+            })
         ));
         view.update(app, |this, cx| {
             this.popover_host

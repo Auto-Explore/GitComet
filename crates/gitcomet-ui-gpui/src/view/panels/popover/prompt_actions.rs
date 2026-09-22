@@ -55,7 +55,7 @@ impl PopoverHost {
                 repo_id,
                 operation_id,
             } => hook_activity::panel(self, repo_id, operation_id, window, cx),
-            PopoverKind::RepoPicker => repo_picker::panel(self, cx),
+            PopoverKind::RepoPicker { .. } => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::UpstreamPicker { repo_id, branch } => {
                 upstream_picker::panel(self, repo_id, branch, cx)

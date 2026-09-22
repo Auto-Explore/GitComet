@@ -58,6 +58,15 @@ pub(super) fn model_with_update_checks_disabled(
         false,
         AppMenuAction::Settings,
     );
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_open_workspace",
+        "Open Workspace…",
+        Shortcut::Secondary("Shift+R"),
+        false,
+        AppMenuAction::OpenWorkspace,
+    );
     if external_editor_configured {
         push_entry(
             &mut items,
@@ -203,6 +212,11 @@ pub(super) fn activate(
         AppMenuAction::Settings => {
             this.close_popover_and_restore_focus(window, cx);
             cx.defer(crate::view::open_settings_window);
+        }
+        AppMenuAction::OpenWorkspace => {
+            this.close_popover_and_restore_focus(window, cx);
+            // Dispatched: opening the chooser updates this host again.
+            window.dispatch_action(Box::new(crate::app::OpenWorkspace), cx);
         }
         AppMenuAction::OpenInCodeEditor { path } => {
             if let Some(path) = path {

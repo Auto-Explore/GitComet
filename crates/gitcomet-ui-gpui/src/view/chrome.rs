@@ -771,7 +771,9 @@ impl Render for TitleBarView {
                                     Bounds::new(e.position(), gpui::size(px(0.0), px(0.0)))
                                 });
                             this.open_popover_for_bounds(
-                                PopoverKind::RepoPicker,
+                                PopoverKind::RepoPicker {
+                                    scope: RepoPickerScope::All,
+                                },
                                 anchor_bounds,
                                 window,
                                 cx,

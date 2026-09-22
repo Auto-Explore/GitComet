@@ -15,6 +15,7 @@ pub(in crate::view) enum AppMenuAction {
     /// Open the active repository's remote in the browser, or its picker.
     OpenRemoteInBrowser,
     Settings,
+    OpenWorkspace,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
     },

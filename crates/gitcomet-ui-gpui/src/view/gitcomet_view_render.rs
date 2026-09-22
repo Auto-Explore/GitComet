@@ -591,6 +591,14 @@ impl Render for GitCometView {
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::OpenWorkspace, window, cx| {
+                    // Claimed either way so the app-level handler cannot toggle
+                    // the chooser a second time.
+                    this.toggle_workspace_picker(window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleRevealCommit, window, cx| {
                 // The availability gate lives in `toggle_reveal_commit`, which
                 // the app-level handler reaches too. Claiming the action either

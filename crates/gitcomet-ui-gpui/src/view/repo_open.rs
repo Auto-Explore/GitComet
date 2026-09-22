@@ -89,25 +89,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self
-            .popover_host
-            .read(cx)
-            .is_kind_open(&PopoverKind::RepoPicker)
-        {
-            self.popover_host.update(cx, |host, cx| {
-                host.close_popover_and_restore_focus(window, cx)
-            });
-            return;
-        }
-
-        // The chevron has no painted bounds yet in a window that has not drawn
-        // its titlebar (the "open a new window, then show the switcher" path),
-        // so fall back to the centred placement there.
-        let Some(anchor) = self.title_bar.read(cx).repo_picker_toggle_bounds() else {
-            self.open_repository_switcher_centered(window, cx);
-            return;
-        };
-        self.open_popover_for_bounds(PopoverKind::RepoPicker, anchor, window, cx);
+        self.toggle_repo_picker(RepoPickerScope::All, window, cx);
     }
 
     /// Command-palette entry point: the palette itself is centred, so the
@@ -117,7 +99,60 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.open_popover_centered(PopoverKind::RepoPicker, window, cx);
+        self.open_popover_centered(
+            PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Open Workspace: the same picker, listing only workspaces.
+    pub(crate) fn toggle_workspace_picker(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toggle_repo_picker(RepoPickerScope::WorkspacesOnly, window, cx);
+    }
+
+    pub(crate) fn open_workspace_picker_centered(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover_centered(
+            PopoverKind::RepoPicker {
+                scope: RepoPickerScope::WorkspacesOnly,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn toggle_repo_picker(
+        &mut self,
+        scope: RepoPickerScope,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let kind = PopoverKind::RepoPicker { scope };
+        if self.popover_host.read(cx).is_kind_open(&kind) {
+            self.popover_host.update(cx, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+            return;
+        }
+
+        // The chevron has no painted bounds in a window that has not drawn it
+        // (a new window, or Home without a workspace), so fall back to the
+        // centred placement there.
+        let Some(anchor) = self.title_bar.read(cx).repo_picker_toggle_bounds() else {
+            self.open_popover_centered(kind, window, cx);
+            return;
+        };
+        self.open_popover_for_bounds(kind, anchor, window, cx);
     }
 
     pub(crate) fn show_open_repo_panel_fallback(

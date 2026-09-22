@@ -2,7 +2,10 @@ use super::*;
 
 #[test]
 fn popover_width_spec_scales_with_zoom() {
-    let spec = popover_width_spec(&PopoverKind::RepoPicker).expect("repo picker width");
+    let spec = popover_width_spec(&PopoverKind::RepoPicker {
+        scope: RepoPickerScope::All,
+    })
+    .expect("repo picker width");
     let default_scale = ui_scale::UiScale::from_percent(100);
     let zoomed_scale = ui_scale::UiScale::from_percent(200);
 

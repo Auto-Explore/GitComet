@@ -23,6 +23,7 @@ These shortcuts apply in the normal GitComet window.
 | Open a new window | `Cmd-N`, `Cmd-Shift-N` | `Ctrl-N`, `Ctrl-Shift-N` | |
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
+| Open a workspace | `Cmd-Shift-R` | `Ctrl-Shift-R` | Lists saved workspaces. In an empty window the chosen workspace opens there; otherwise its own window is focused or opened. Also in the command palette and the app menu. |
 | Go to a commit | `Cmd-G` | `Ctrl-G` | Opens the Go to dialog. Accepts a full or short SHA (4+ characters, unique), a branch, a tag, or any revision such as `HEAD~3`; matches are exact. In an embedded terminal the shell keeps `Ctrl-G`. |
 | Toggle open and recently closed repositories | `Ctrl-Shift-A`, `Cmd-Shift-O`, `Option-Cmd-O` | `Ctrl-Shift-A`, `Ctrl-Shift-O` | In an embedded terminal on Windows/Linux, `Ctrl-Shift-A` keeps its terminal “Select All” behavior. |
 | Open active repository in external code editor | `Cmd-Shift-E` | `Ctrl-Shift-E` | Only active when an external code editor is configured. |

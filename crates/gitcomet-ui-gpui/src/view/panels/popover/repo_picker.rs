@@ -110,11 +110,20 @@ pub(super) fn persist_sort(sort: RepoPickerSort) {
     });
 }
 
+/// The open picker's scope; `All` when the picker is not what is open.
+fn scope(this: &PopoverHost) -> RepoPickerScope {
+    match this.popover {
+        Some(PopoverKind::RepoPicker { scope }) => scope,
+        _ => RepoPickerScope::All,
+    }
+}
+
 /// Section labels the picker should fold away right now. A query overrides
 /// collapse entirely: typing searches every section, the way the branch
-/// sidebar's filter force-expands its own.
+/// sidebar's filter force-expands its own. The workspace chooser ignores a
+/// fold made in the full picker, or it could open to an empty list.
 fn collapsed_sections(this: &PopoverHost, query: &str) -> BTreeSet<gpui::SharedString> {
-    if !query.is_empty() {
+    if !query.is_empty() || scope(this) == RepoPickerScope::WorkspacesOnly {
         return BTreeSet::new();
     }
     SECTIONS
@@ -218,6 +227,12 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
     };
 
     let workspace_rows = workspace_rows(this.cached_workspaces.clone(), sort);
+    if scope(this) == RepoPickerScope::WorkspacesOnly {
+        return workspace_rows
+            .into_iter()
+            .map(|row| (row.entry, row.item))
+            .collect();
+    }
 
     // A pin outlives both the recents cap and the repository being closed, so
     // this section is built from the pin list itself and nothing else.
@@ -492,6 +507,7 @@ fn rows_signature(this: &PopoverHost) -> u64 {
 
     super::rows_cache::signature(|hasher| {
         this.repo_picker_sort.hash(hasher);
+        scope(this).hash(hasher);
         this.cached_workspaces.hash(hasher);
         this.cached_workspace_id.hash(hasher);
         this.cached_pinned_repos.hash(hasher);
@@ -805,6 +821,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         let remove_entries = std::rc::Rc::clone(&built.payloads);
 
         let row_menu = this.picker_row_menu.as_ref();
+        let workspaces_only = scope(this) == RepoPickerScope::WorkspacesOnly;
         let mut prompt = components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
             // Prebuilt items and layout: the cache already filtered, sorted and
             // folded them, so `render` must not repeat that work. The collapsed
@@ -818,7 +835,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             // navigation scrolls by the row geometry to match
             // (`scroll_picker_prompt_to_row`), which has to be told the same
             .tooltip_host(this.tooltip_host.clone())
-            .empty_text("No workspaces or repositories")
+            .empty_text(match workspaces_only {
+                true => "No workspaces",
+                false => "No workspaces or repositories",
+            })
             .max_height(scaled_px(REPO_PICKER_LIST_MAX_HEIGHT_PX))
             // While a row menu is open the arrow keys walk its actions, so the
             // list's highlight marks the invoking row instead — without the
@@ -843,8 +863,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     }
                     picker_row_menu::open(this, target, event.display_index, event.position, cx);
                 },
-            ))
-            .query_row_trailing(sort_toggle(this, cx));
+            ));
+        if !workspaces_only {
+            prompt = prompt.query_row_trailing(sort_toggle(this, cx));
+        }
         // A query suspends collapse, so the headers are plain labels while one
         // is active: leaving them clickable would let a click flip the persisted
         // fold with nothing moving on screen to show for it.

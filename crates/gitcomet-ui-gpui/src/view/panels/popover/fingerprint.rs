@@ -39,7 +39,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 }
             }
         },
-        PopoverKind::RepoPicker => {
+        PopoverKind::RepoPicker { .. } => {
             state.active_repo.hash(&mut hasher);
             state.repos.len().hash(&mut hasher);
             // Repo picker list is usually small; hashing all ids+workdirs is fine and avoids stale lists.
@@ -137,7 +137,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
 
 fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'a RepoState> {
     let repo_id = match popover {
-        PopoverKind::RepoPicker
+        PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::CommitFileSortMenu { .. }
@@ -471,7 +471,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::TerminalMenu { .. }
-        | PopoverKind::RepoPicker
+        | PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::CommitPrompt { .. } => {}
@@ -494,7 +494,10 @@ fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
 
 fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     match kind {
-        PopoverKind::RepoPicker => 0u8.hash(hasher),
+        PopoverKind::RepoPicker { scope } => {
+            0u8.hash(hasher);
+            scope.hash(hasher);
+        }
         PopoverKind::AddRepoMenu => 66u8.hash(hasher),
         PopoverKind::BranchPicker { purpose } => {
             1u8.hash(hasher);
@@ -1408,8 +1411,18 @@ mod tests {
             ..AppState::test_default()
         };
 
-        let before = notify_fingerprint(&base, &PopoverKind::RepoPicker);
-        let after = notify_fingerprint(&with_active_repo, &PopoverKind::RepoPicker);
+        let before = notify_fingerprint(
+            &base,
+            &PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All,
+            },
+        );
+        let after = notify_fingerprint(
+            &with_active_repo,
+            &PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All,
+            },
+        );
 
         assert_ne!(before, after);
     }

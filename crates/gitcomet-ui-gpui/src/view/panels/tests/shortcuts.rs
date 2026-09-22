@@ -6135,3 +6135,43 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
 mod hook_activity;
 mod status_selection;
 mod window_and_file_actions;
+
+#[gpui::test]
+fn open_workspace_shortcut_opens_the_workspace_chooser_with_nothing_focused(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("secondary-shift-r");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    // One press opens it: a chord handled twice would toggle it shut again.
+    assert_eq!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app)),
+        Some(PopoverKind::RepoPicker {
+            scope: RepoPickerScope::WorkspacesOnly
+        }),
+        "Ctrl/Cmd+Shift+R opens the workspace chooser"
+    );
+
+    cx.simulate_keystrokes("secondary-shift-r");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app)),
+        None,
+        "pressing it again closes the chooser"
+    );
+}

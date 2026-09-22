@@ -189,7 +189,9 @@ fn repository_sort_preserves_its_open_fill_on_hover_and_clears_when_closed(
     cx.update(|window, app| {
         view.update(app, |view, cx| {
             view.open_popover_at(
-                PopoverKind::RepoPicker,
+                PopoverKind::RepoPicker {
+                    scope: RepoPickerScope::All,
+                },
                 point(px(72.0), px(72.0)),
                 window,
                 cx,

@@ -57,6 +57,7 @@ actions!(
         CloneRepository,
         InitializeRepository,
         SwitchRepository,
+        OpenWorkspace,
         ApplyPatch,
         CheckForUpdates,
         ShowReflog,
@@ -1124,6 +1125,11 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             open_repository_switcher_in_existing_or_new_window(cx, backend);
         });
     });
+    let workspace_picker_backend = Arc::clone(&backend);
+    cx.on_action(move |_: &OpenWorkspace, cx| {
+        let backend = Arc::clone(&workspace_picker_backend);
+        cx.defer(move |cx| open_workspace_picker_in_existing_or_new_window(cx, backend));
+    });
     let command_palette_backend = Arc::clone(&backend);
     cx.on_action(move |_: &ToggleCommandPalette, cx| {
         let backend = Arc::clone(&command_palette_backend);
@@ -1316,6 +1322,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", SwitchRepository, None),
         KeyBinding::new("secondary-shift-a", SwitchRepository, None),
+        KeyBinding::new("secondary-shift-r", OpenWorkspace, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
@@ -1421,6 +1428,7 @@ fn macos_app_menus_with_options(
             InitializeRepository,
         ),
         MenuItem::action("Switch Repository…", SwitchRepository),
+        MenuItem::action("Open Workspace…", OpenWorkspace),
     ];
 
     let recent_repo_items = recent_repo_menu_items();
@@ -2593,6 +2601,30 @@ fn open_repository_switcher_in_window(cx: &mut App, window: &GitCometWindowEntry
     }
 }
 
+/// Open Workspace in the active window, or in a new (Home) window.
+fn open_workspace_picker_in_existing_or_new_window(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    let toggle =
+        |view: &mut GitCometView, window: &mut Window, cx: &mut gpui::Context<GitCometView>| {
+            view.toggle_workspace_picker(window, cx);
+        };
+    if let Some(entry) = find_normal_gitcomet_window(cx) {
+        let _ = entry.handle.update(cx, |root_view, window, cx| {
+            if let Ok(view) = root_view.downcast::<GitCometView>() {
+                view.update(cx, |view, cx| toggle(view, window, cx));
+            }
+        });
+        if cx.active_window().map(|active| active.window_id()) != Some(entry.handle.window_id()) {
+            activate_gitcomet_window(cx, entry.handle);
+        }
+        return;
+    }
+    let launch = normal_empty_launch_config(None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    let _ = window.update(cx, |view, window, cx| toggle(view, window, cx));
+    activate_gitcomet_window(cx, window.into());
+    cx.activate(true);
+}
+
 fn open_repository_switcher_in_existing_or_new_window(cx: &mut App, backend: Arc<dyn GitBackend>) {
     if let Some(window) = find_normal_gitcomet_window(cx) {
         open_repository_switcher_in_window(cx, &window);
@@ -3308,6 +3340,10 @@ mod tests {
                 (
                     "Switch Repository…".to_string(),
                     SwitchRepository.name().to_string(),
+                ),
+                (
+                    "Open Workspace…".to_string(),
+                    OpenWorkspace.name().to_string(),
                 ),
                 (
                     crate::menu_labels::OPEN_IN_CODE_EDITOR.to_string(),

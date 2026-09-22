@@ -77,13 +77,22 @@ impl AutosquashMode {
     }
 }
 
+/// What the repository picker lists. `WorkspacesOnly` is the Open Workspace chooser.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RepoPickerScope {
+    All,
+    WorkspacesOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     HookActivity {
         repo_id: RepoId,
         operation_id: Option<GitOperationId>,
     },
-    RepoPicker,
+    RepoPicker {
+        scope: RepoPickerScope,
+    },
     BranchPicker {
         purpose: BranchPickerPurpose,
     },

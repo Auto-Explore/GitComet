@@ -16,7 +16,9 @@ fn repo_picker_escape_closes(cx: &mut gpui::TestAppContext) {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -200,7 +202,9 @@ fn repo_picker_lists_recently_closed_repositories_subprocess(cx: &mut gpui::Test
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -313,7 +317,9 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -383,7 +389,9 @@ fn repo_picker_sort_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1767,7 +1775,9 @@ fn open_repo_picker(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTest
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1832,7 +1842,9 @@ fn popover_feeds_pointer_positions_to_the_tooltip_host(cx: &mut gpui::TestAppCon
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1964,4 +1976,77 @@ fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::T
             other => panic!("expected RebaseOntoConfirm popover, got {other:?}"),
         }
     });
+}
+
+#[gpui::test]
+fn workspace_chooser_lists_only_workspaces_and_ignores_a_folded_section(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut client = session::Workspace::new(vec!["/work/zeta".into()]);
+    client.custom_name = Some("Client".into());
+    let other = session::Workspace::new(vec!["/work/beta".into()]);
+    let client_id = client.id;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| crate::workspaces::initialize_for_test(app, vec![client, other]));
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    let open = |cx: &mut gpui::VisualTestContext, scope: RepoPickerScope| {
+        cx.update(|window, app| {
+            popover_host.update(app, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::RepoPicker { scope },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                // A recent repository and a Workspaces section folded in the
+                // full picker; the chooser must show neither effect.
+                host.cached_recent_repos = vec!["/work/gamma".into()];
+                host.cached_collapsed_picker_sections
+                    .insert("window_groups".to_string());
+            });
+            let _ = window.draw(app);
+        });
+    };
+    let payloads = |cx: &mut gpui::VisualTestContext, query: &str| {
+        cx.update(|_window, app| repo_picker::filtered_layout(popover_host.read(app), query).0)
+    };
+
+    open(cx, RepoPickerScope::WorkspacesOnly);
+    let rows = payloads(cx, "");
+    assert_eq!(
+        rows.len(),
+        2,
+        "only the two workspaces are listed: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|entry| matches!(entry, repo_picker::RepoPickerEntry::Workspace(_)))
+    );
+    assert_eq!(
+        payloads(cx, "zeta"),
+        vec![repo_picker::RepoPickerEntry::Workspace(client_id)],
+        "a workspace is found by the repositories it holds"
+    );
+
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            host.close_popover_and_restore_focus(window, cx)
+        });
+    });
+    open(cx, RepoPickerScope::All);
+    let rows = payloads(cx, "");
+    assert!(
+        rows.iter()
+            .all(|entry| !matches!(entry, repo_picker::RepoPickerEntry::Workspace(_))),
+        "the full picker still honours the fold: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|entry| matches!(entry, repo_picker::RepoPickerEntry::Closed(_))),
+        "and lists recent repositories"
+    );
 }

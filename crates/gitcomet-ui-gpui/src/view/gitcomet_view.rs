@@ -326,6 +326,11 @@ impl GitCometView {
                     self.open_repository_switcher_centered(window, cx);
                 }
             }
+            "open-workspace" => {
+                if let Some(window) = window {
+                    self.open_workspace_picker_centered(window, cx);
+                }
+            }
             "clone-repository" => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::CloneRepo, window, cx);

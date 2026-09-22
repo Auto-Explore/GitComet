@@ -188,7 +188,7 @@ impl PopoverHost {
                 &input,
                 window,
                 cx,
-                |this| matches!(this.popover, Some(PopoverKind::RepoPicker)),
+                |this| matches!(this.popover, Some(PopoverKind::RepoPicker { .. })),
                 |this| &mut this.repo_picker_selected_index,
                 // Navigation walks the same filtered order the picker renders,
                 // so Enter can't land on a different repository than the
