@@ -13,7 +13,7 @@ This document is the release test plan for GitComet's multi-window support. It c
 - Saved windowed bounds, display, maximized state, fullscreen state, and relative stacking order are restored when possible. Bounds are rebased and clamped when the saved display is missing or smaller.
 - Tiled or snapped placement (tiling window managers, Windows Snap) is owned by the window manager and cannot be requested back. The tiled edges are recorded for diagnostics and the window reopens at its last frame.
 - `gitcomet <repository>` sends the request to the running browser process. The default target is the active window; the General setting can instead request a new window. A repository already open in any window is focused instead of duplicated.
-- Zoom remains available through menus and shortcuts but is not shown in individual window footers because it is process-wide.
+- Zoom is process-wide, so it lives in menus (the in-app menu on Linux and Windows, the Window menu on macOS), shortcuts, the command palette, and Settings, never in an individual window's footer.
 - Right-clicking a workspace in the repository picker exposes its title-bar color. The choice is per workspace, survives closing/relaunching, and **Default** returns to the theme-derived color.
 - **Settings › Workspaces** renames a workspace, sets its title-bar color and an optional theme override, opens it, or deletes it. A theme override applies only to that workspace's window; changing the app theme leaves overridden windows alone.
 - **Open Workspace** (`Ctrl/Cmd+Shift+R`, the command palette, the app menu) lists only workspaces. From an empty window the chosen workspace opens in that window; otherwise its own window is focused or opened.

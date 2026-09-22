@@ -149,6 +149,28 @@ pub(super) fn model_with_update_checks_disabled(
     );
     items.push(ContextMenuItem::Separator);
 
+    for (debug_selector, label, shortcut, action) in [
+        ("app_menu_zoom_in", "Zoom In", "=", AppMenuAction::ZoomIn),
+        ("app_menu_zoom_out", "Zoom Out", "-", AppMenuAction::ZoomOut),
+        (
+            "app_menu_actual_size",
+            "Actual Size",
+            "0",
+            AppMenuAction::ActualSize,
+        ),
+    ] {
+        push_entry(
+            &mut items,
+            &mut debug_selectors,
+            debug_selector,
+            label,
+            Shortcut::Secondary(shortcut),
+            false,
+            action,
+        );
+    }
+    items.push(ContextMenuItem::Separator);
+
     // Only platforms with a real desktop-entry story get the row at all; a
     // permanently inert entry is noise everywhere else.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -212,6 +234,15 @@ pub(super) fn activate(
         AppMenuAction::Settings => {
             this.close_popover_and_restore_focus(window, cx);
             cx.defer(crate::view::open_settings_window);
+        }
+        AppMenuAction::ZoomIn | AppMenuAction::ZoomOut | AppMenuAction::ActualSize => {
+            this.close_popover_and_restore_focus(window, cx);
+            let action: Box<dyn gpui::Action> = match action {
+                AppMenuAction::ZoomIn => Box::new(crate::app::IncreaseUiScale),
+                AppMenuAction::ZoomOut => Box::new(crate::app::DecreaseUiScale),
+                _ => Box::new(crate::app::ResetUiScale),
+            };
+            window.dispatch_action(action, cx);
         }
         AppMenuAction::OpenWorkspace => {
             this.close_popover_and_restore_focus(window, cx);

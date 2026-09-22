@@ -439,3 +439,35 @@ fn app_menu_disables_update_check_when_environment_override_is_present(
         assert_eq!(disabled, Some(true));
     });
 }
+
+#[gpui::test]
+fn app_menu_zoom_in_raises_the_app_wide_scale(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = open_app_menu(cx);
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+    });
+    for selector in [
+        "app_menu_zoom_in",
+        "app_menu_zoom_out",
+        "app_menu_actual_size",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "expected {selector}");
+    }
+    let before = cx.update(|_window, app| crate::ui_scale::current(app).percent);
+
+    let center = cx
+        .debug_bounds("app_menu_zoom_in")
+        .expect("zoom in")
+        .center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let after = cx.update(|_window, app| crate::ui_scale::current(app).percent);
+    assert!(
+        after > before,
+        "Zoom In should raise the scale ({before}% -> {after}%)"
+    );
+    cx.update(|_window, app| crate::ui_scale::set_current(app, before));
+}

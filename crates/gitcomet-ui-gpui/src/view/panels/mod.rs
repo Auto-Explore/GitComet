@@ -16,6 +16,10 @@ pub(in crate::view) enum AppMenuAction {
     OpenRemoteInBrowser,
     Settings,
     OpenWorkspace,
+    /// Zoom is app-wide, so it lives in the menu rather than a window's footer.
+    ZoomIn,
+    ZoomOut,
+    ActualSize,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
     },
