@@ -980,7 +980,12 @@ pub struct GitCometView {
     pub(super) persisted_workspace_active_repository: Option<std::path::PathBuf>,
     pub(super) window_placement: Option<gitcomet_state::session::PortableWindowPlacement>,
     pub(super) native_window_title: String,
+    /// Always the global preference; the override lives beside it.
     pub(super) theme_mode: ThemeMode,
+    /// The window's workspace theme, winning over `theme_mode` when set.
+    pub(super) workspace_theme_mode: Option<ThemeMode>,
+    /// Cached so the theme can be re-resolved from snapshot paths with no `Window`.
+    pub(super) window_appearance: gpui::WindowAppearance,
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
     pub(super) sidebar_pane: Entity<SidebarPaneView>,

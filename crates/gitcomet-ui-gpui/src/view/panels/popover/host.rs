@@ -3310,24 +3310,10 @@ impl PopoverHost {
         });
     }
 
-    pub(in crate::view) fn set_theme_mode(
-        &mut self,
-        next: ThemeMode,
-        appearance: gpui::WindowAppearance,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.theme_mode == next {
-            return;
-        }
-
-        self.theme_mode = next.clone();
-        self.set_theme(next.resolve_theme(appearance), cx);
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_theme_mode(next.clone(), appearance, cx);
-            });
-        });
+    /// Track the global theme preference, which `schedule_ui_settings_persist`
+    /// writes back. The visual theme arrives separately through `set_theme`.
+    pub(in crate::view) fn sync_global_theme_mode(&mut self, next: ThemeMode) {
+        self.theme_mode = next;
     }
 
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {

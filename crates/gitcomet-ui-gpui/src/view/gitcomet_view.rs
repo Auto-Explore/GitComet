@@ -1022,8 +1022,9 @@ impl GitCometView {
             persisted_workspace_repo_paths,
             persisted_workspace_active_repository,
             initial_window_placement,
+            workspace_theme_key,
         ) = match workspace {
-            WorkspaceBootstrap::LegacySession => (None, Vec::new(), None, None),
+            WorkspaceBootstrap::LegacySession => (None, Vec::new(), None, None, None),
             WorkspaceBootstrap::Empty => {
                 ui_session.open_repos.clear();
                 ui_session.active_repo = None;
@@ -1032,7 +1033,7 @@ impl GitCometView {
                 ui_session.sidebar_collapsed = Some(false);
                 ui_session.change_tracking_height = None;
                 ui_session.untracked_height = None;
-                (None, Vec::new(), None, None)
+                (None, Vec::new(), None, None, None)
             }
             WorkspaceBootstrap::Saved(workspace) => {
                 let workspace = *workspace;
@@ -1050,6 +1051,7 @@ impl GitCometView {
                     workspace.repositories,
                     workspace.active_repository,
                     Some(workspace.placement),
+                    workspace.theme_mode,
                 )
             }
         };
@@ -1081,8 +1083,12 @@ impl GitCometView {
         let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
-        let initial_theme = theme_mode
-            .resolve_theme(window.appearance())
+        let workspace_theme_mode = workspace_theme_key.as_deref().and_then(ThemeMode::from_key);
+        let window_appearance = window.appearance();
+        let initial_theme = workspace_theme_mode
+            .as_ref()
+            .unwrap_or(&theme_mode)
+            .resolve_theme(window_appearance)
             .with_appearance(crate::appearance::current(cx));
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
@@ -1458,10 +1464,13 @@ impl GitCometView {
                     return;
                 }
                 let _ = view.update(app, |this, cx| {
-                    if !this.theme_mode.is_automatic() {
+                    this.window_appearance = window.appearance();
+                    if !this.effective_theme_mode().is_automatic() {
                         return;
                     }
-                    let theme = this.theme_mode.resolve_theme(window.appearance());
+                    let theme = this
+                        .effective_theme_mode()
+                        .resolve_theme(this.window_appearance);
                     this.set_theme(theme, cx);
                     cx.notify();
                 });
@@ -1616,6 +1625,8 @@ impl GitCometView {
             )),
             native_window_title: "GitComet".to_string(),
             theme_mode,
+            workspace_theme_mode,
+            window_appearance,
             theme: initial_theme,
             title_bar,
             sidebar_pane,

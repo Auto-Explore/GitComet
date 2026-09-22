@@ -6222,3 +6222,105 @@ fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppCont
 }
 
 mod open_remote_in_browser;
+
+fn theme_panel_color(key: &str) -> gpui::Rgba {
+    crate::theme::AppTheme::from_key(key)
+        .unwrap_or_else(|| panic!("embedded theme `{key}`"))
+        .colors
+        .surface
+        .panel
+}
+
+/// A view restored into a customized, empty workspace with `theme_key` as its override.
+fn view_in_themed_workspace<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    theme_key: &str,
+) -> (
+    gpui::Entity<GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    gitcomet_state::session::WorkspaceId,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Themed".to_string());
+    workspace.theme_mode = Some(theme_key.to_string());
+    let workspace_id = workspace.id;
+    cx.update(|app| crate::workspaces::initialize_for_test(app, vec![workspace.clone()]));
+    let config = GitCometViewConfig {
+        workspace: WorkspaceBootstrap::Saved(Box::new(workspace)),
+        ..GitCometViewConfig::normal(None)
+    };
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    (view, cx, workspace_id)
+}
+
+#[gpui::test]
+fn workspace_theme_override_beats_the_global_preference(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx, _workspace_id) = view_in_themed_workspace(cx, "tokyo_night");
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).theme.colors.surface.panel),
+        theme_panel_color("tokyo_night"),
+        "the window starts in its workspace theme"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.set_theme_mode(
+                ThemeMode::Named("sunset_veil".to_string()),
+                window.appearance(),
+                cx,
+            );
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| test_support::sync_store_snapshot(view, cx));
+    });
+
+    let (global, panel) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (view.theme_mode.clone(), view.theme.colors.surface.panel)
+    });
+    assert_eq!(global, ThemeMode::Named("sunset_veil".to_string()));
+    assert_eq!(
+        panel,
+        theme_panel_color("tokyo_night"),
+        "a global theme change must not repaint an overridden workspace"
+    );
+}
+
+#[gpui::test]
+fn clearing_the_workspace_theme_override_falls_back_to_the_global_preference(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx, workspace_id) = view_in_themed_workspace(cx, "tokyo_night");
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.set_theme_mode(
+                ThemeMode::Named("sunset_veil".to_string()),
+                window.appearance(),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|_window, app| {
+        assert!(crate::workspaces::set_workspace_theme_mode(
+            app,
+            workspace_id,
+            None
+        ));
+        view.update(app, |view, cx| view.sync_workspace_theme_override(cx));
+    });
+
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).theme.colors.surface.panel),
+        theme_panel_color("sunset_veil")
+    );
+}

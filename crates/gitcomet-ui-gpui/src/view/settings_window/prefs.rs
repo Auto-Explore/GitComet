@@ -572,9 +572,7 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_theme_mode(mode.clone(), root_window.appearance(), cx);
-            });
+            view.set_theme_mode(mode.clone(), root_window.appearance(), cx);
         });
         cx.notify();
     }

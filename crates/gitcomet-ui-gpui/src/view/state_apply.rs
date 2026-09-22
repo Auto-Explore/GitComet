@@ -123,6 +123,7 @@ impl GitCometView {
             Arc::clone(&self.synced_repo_paths),
             synchronized_active_repository,
         );
+        self.sync_workspace_theme_override(cx);
         if let Some(placement) = self.window_placement.clone() {
             crate::workspaces::record_window_placement(
                 cx,
