@@ -321,6 +321,21 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::AnnexWhereisLoaded {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("AnnexWhereisLoaded")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
+            InternalMsg::AnnexUnusedLoaded { repo_id, result } => f
+                .debug_struct("AnnexUnusedLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::FileBrowserLoaded {
                 repo_id,
                 source,

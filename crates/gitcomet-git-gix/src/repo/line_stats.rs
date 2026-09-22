@@ -169,6 +169,12 @@ fn unstaged_entry_line_stats(
     if !read_commit_stats_blob(repo, index_id, index_blob) {
         return LineStats::UNKNOWN;
     }
+    // Comparing needs git-annex's clean filter, which hashes the whole file and
+    // writes its keys database on every refresh. Annexed content is rarely
+    // line-oriented anyway.
+    if gitcomet_core::annex::key_from_pointer(index_blob).is_some() {
+        return LineStats::UNKNOWN;
+    }
 
     worktree.clear();
     if entry.kind != FileStatusKind::Deleted

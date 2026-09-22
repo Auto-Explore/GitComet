@@ -456,6 +456,19 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadAnnexWhereis { repo_id, path } => {
+            send(Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+                repo_id,
+                path,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
+        Effect::LoadAnnexUnused { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::LoadFileHistory {
             repo_id,
             path,
@@ -1931,6 +1944,33 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_lfs_locks(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadAnnexWhereis { repo_id, path } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_annex_whereis(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    path,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadAnnexUnused { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_annex_unused(
                     metadata_executor,
                     repos,
                     msg_tx,

@@ -198,6 +198,18 @@ impl MainPaneView {
             // the toolbar; without this the pane would not re-render for it.
             repo.diff_state.edit_mode.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
+            // The large-file card's buttons and "Where is it?" list.
+            repo.annex_whereis_rev.hash(&mut hasher);
+            state
+                .large_file_tools
+                .git_lfs
+                .is_not_found()
+                .hash(&mut hasher);
+            state
+                .large_file_tools
+                .git_annex
+                .is_not_found()
+                .hash(&mut hasher);
 
             // Only include status changes when viewing a working tree diff.
             let status_rev = if matches!(

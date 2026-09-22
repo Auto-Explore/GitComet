@@ -1099,3 +1099,35 @@ fn tag_file_changes_refresh_tags() {
         "branch ref file should produce tags: false"
     );
 }
+
+/// git-annex writes its keys database and journal while GitComet reads
+/// status-related data (line stats, `git annex find`). Treating those writes
+/// as Git state changes re-ran the same reads forever.
+#[test]
+fn annex_bookkeeping_writes_cannot_schedule_another_refresh() {
+    let dir = unique_temp_dir("gitcomet-annex-policy");
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
+    init_repo_for_ignore_tests(workdir);
+    let git_dir = workdir.join(".git");
+    let mut rules = load_gitignore_rules(workdir);
+    for path in [
+        "annex/keysdb/db-wal",
+        "annex/journal/abc.log",
+        "annex/index",
+        "annex/restage.log",
+        "annex/objects/Xk/Wq/KEY/KEY",
+    ] {
+        for kind in [
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Remove(RemoveKind::File),
+        ] {
+            let event = notify::Event::new(kind).add_path(git_dir.join(path));
+            assert_eq!(
+                classify_change(workdir, Some(&git_dir), &mut rules, &event),
+                None,
+                "{path}"
+            );
+        }
+    }
+}

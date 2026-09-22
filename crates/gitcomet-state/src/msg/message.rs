@@ -233,6 +233,7 @@ pub enum Msg {
     },
     SetRemoteSettings(RemoteSettings),
     SetFileBrowserSettings(FileBrowserSettings),
+    SetLargeFileSettings(crate::model::LargeFileSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -748,6 +749,15 @@ pub enum Msg {
     },
     /// Reload Git LFS locks from the server; never polled.
     LoadLfsLocks {
+        repo_id: RepoId,
+    },
+    /// Ask git-annex where the content of `path` is.
+    LoadAnnexWhereis {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    /// List local annexed content no file uses any more.
+    LoadAnnexUnused {
         repo_id: RepoId,
     },
     Commit {
@@ -1288,6 +1298,15 @@ pub enum InternalMsg {
     LfsLocksLoaded {
         repo_id: RepoId,
         result: Result<Vec<gitcomet_core::large_files::LfsLock>, Error>,
+    },
+    AnnexWhereisLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<gitcomet_core::large_files::AnnexWhereis, Error>,
+    },
+    AnnexUnusedLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::large_files::AnnexUnused, Error>,
     },
     FileBrowserLoaded {
         repo_id: RepoId,

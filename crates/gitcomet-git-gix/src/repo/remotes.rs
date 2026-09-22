@@ -373,6 +373,22 @@ fn remote_name_is_config_key_safe(remote: &str) -> bool {
 /// Read a boolean directly from the matching `[remote "..."]` sections. This
 /// avoids interpolating the remote name into a dotted config key, where names
 /// containing `=` can be parsed as part of the value instead.
+/// A `[remote]` section git-annex wrote for a special remote (S3, directory,
+/// httpalso, ...): it carries `annex-uuid` but no URL, so Git cannot fetch it.
+fn is_annex_special_remote(config: &gix::config::Snapshot<'_>, remote_name: &str) -> bool {
+    let has = |key: &str| {
+        config
+            .sections_by_name("remote")
+            .into_iter()
+            .flatten()
+            .filter(|section| {
+                section.header().subsection_name() == Some(remote_name.as_bytes().as_bstr())
+            })
+            .any(|section| section.value(key).is_some())
+    };
+    has("annex-uuid") && !has("url")
+}
+
 fn remote_config_boolean(
     config: &gix::config::Snapshot<'_>,
     remote_name: &str,
@@ -569,11 +585,26 @@ impl GixRepo {
             let skipped = ["skipFetchAll", "skipDefaultUpdate"]
                 .into_iter()
                 .any(|key| remote_config_boolean(&config, &name, key).unwrap_or(false));
-            if !skipped {
+            if !skipped && !is_annex_special_remote(&config, &name) {
                 names.push(name);
             }
         }
         Ok(names)
+    }
+
+    /// Git-annex special remotes Git itself would still try to fetch.
+    fn unfetchable_annex_remotes(&self) -> Result<Vec<String>> {
+        let repo = self.reopen_repo()?;
+        let config = repo.config_snapshot();
+        Ok(repo
+            .remote_names()
+            .into_iter()
+            .map(|name| name.to_str_lossy().into_owned())
+            .filter(|name| {
+                !remote_config_boolean(&config, name, "skipFetchAll").unwrap_or(false)
+                    && is_annex_special_remote(&config, name)
+            })
+            .collect())
     }
 
     /// Configured branch upstreams. `tracking_ref` is populated only when the
@@ -991,13 +1022,33 @@ impl GixRepo {
 
     fn fetch_all_command_impl(&self, prune: bool, capture_output: bool) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("fetch").arg("--all");
+        cmd.arg("fetch");
+        // `--all` would also try a git-annex special remote left without
+        // `skipFetchAll`, and fail. Name the fetchable remotes instead.
+        let explicit = if self.unfetchable_annex_remotes()?.is_empty() {
+            cmd.arg("--all");
+            None
+        } else {
+            cmd.arg("--multiple");
+            Some(self.fetch_all_remote_names()?)
+        };
         if prune {
             cmd.arg("--prune");
         } else {
             cmd.arg("--no-prune");
         }
         cmd.arg("--no-prune-tags");
+        if let Some(remotes) = explicit {
+            if remotes.is_empty() {
+                return Ok(CommandOutput {
+                    command: "git fetch".to_string(),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                });
+            }
+            cmd.arg("--").args(remotes);
+        }
         run_git_command_with_optional_output(
             cmd,
             if prune {

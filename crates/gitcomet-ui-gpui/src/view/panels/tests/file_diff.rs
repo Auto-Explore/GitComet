@@ -7689,3 +7689,78 @@ fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::T
         });
     }
 }
+
+/// An annexed file without local content offers Get, and "Where is it?"
+/// results appear under the card once loaded for that path.
+#[gpui::test]
+fn missing_annex_content_offers_get_and_lists_copies(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(884);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_annex_card",
+        std::process::id()
+    ));
+    let path = PathBuf::from("data/scan.tif");
+    let side = gitcomet_core::large_files::LargeFileSide {
+        pointer: gitcomet_core::large_files::LargeFilePointer::Annex(
+            gitcomet_core::annex::parse_key("SHA256E-s4200000--abc.tif").unwrap(),
+        ),
+        content: gitcomet_core::large_files::LargeFileContent::Unknown,
+    };
+
+    let push = |cx: &mut gpui::VisualTestContext, whereis: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    path.clone(),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                repo.diff_state.diff_file_rev = 1;
+                repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                    gitcomet_core::domain::FileDiffText::new(
+                        path.clone(),
+                        Some("/annex/objects/SHA256E-s4200000--abc.tif\n".to_string()),
+                        Some("/annex/objects/SHA256E-s4200000--abc.tif\n".to_string()),
+                    )
+                    .with_large_sides(Some(side.clone()), Some(side.clone())),
+                )));
+                if whereis {
+                    repo.annex_whereis = Some((
+                        path.clone(),
+                        gitcomet_state::model::Loadable::Ready(Arc::new(
+                            gitcomet_core::large_files::AnnexWhereis {
+                                key: "SHA256E-s4200000--abc.tif".into(),
+                                copies: vec![gitcomet_core::large_files::AnnexLocation {
+                                    uuid: "u-backup".into(),
+                                    description: "[backup]".into(),
+                                    here: false,
+                                }],
+                                untrusted: Vec::new(),
+                            },
+                        )),
+                    ));
+                    repo.annex_whereis_rev = 1;
+                }
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    push(cx, false);
+    assert!(cx.debug_bounds("large_file_card").is_some());
+    assert!(cx.debug_bounds("large_file_card_annex_get").is_some());
+    assert!(cx.debug_bounds("large_file_card_annex_whereis").is_some());
+    assert!(cx.debug_bounds("large_file_card_whereis").is_none());
+    push(cx, true);
+    assert!(
+        cx.debug_bounds("large_file_card_whereis").is_some(),
+        "loaded copies are listed under the card"
+    );
+}

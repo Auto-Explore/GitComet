@@ -1470,6 +1470,75 @@ pub(super) fn schedule_load_lfs_locks(
     );
 }
 
+pub(super) fn schedule_load_annex_unused(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.annex_unused_cancellable(&cancellation);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_annex_whereis(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+    cancellation: CancellationToken,
+) {
+    let missing_path = path.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.annex_whereis_cancellable(&path, &cancellation);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+                    repo_id,
+                    path,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+                    repo_id,
+                    path: missing_path,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_file_browser(
     executor: &TaskExecutor,
     repos: &RepoMap,

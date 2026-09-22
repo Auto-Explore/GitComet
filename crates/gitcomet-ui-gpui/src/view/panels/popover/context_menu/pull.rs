@@ -84,4 +84,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         this.active_repo(),
     ));
     model
+        .items
+        .extend(super::annex::pull_items(&this.state, this.active_repo()));
+    model
 }

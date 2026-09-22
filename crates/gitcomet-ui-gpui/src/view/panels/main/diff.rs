@@ -96,44 +96,154 @@ impl MainPaneView {
 
     /// "Download content" for an LFS file whose content is not here; `None`
     /// for annex files (their commands come later) or without a repo.
-    pub(super) fn large_file_download_button(
+    /// Buttons under the large-file card, and for git-annex the list of
+    /// repositories holding the content once "Where is it?" has run.
+    /// `content_shown`: the real diff is below, so only lookups make sense.
+    pub(super) fn large_file_card_actions(
         &mut self,
         theme: AppTheme,
         old: Option<&gitcomet_core::large_files::LargeFileSide>,
         new: Option<&gitcomet_core::large_files::LargeFileSide>,
+        content_shown: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
-        use gitcomet_core::large_files::LargeFileContent;
-        let missing_lfs = [old, new]
-            .into_iter()
-            .flatten()
-            .any(|side| side.pointer.is_lfs() && side.content == LargeFileContent::MissingLocally);
+        use gitcomet_core::large_files::{LargeFileCommand, LargeFileContent, LargeFilePointer};
+        if self.is_inline_submodule_diff_active() {
+            return None;
+        }
         let repo = self.active_repo()?;
         let repo_id = repo.id;
         let target = self.rendered_diff_target()?.clone();
-        if !missing_lfs || self.is_inline_submodule_diff_active() {
-            return None;
-        }
-        let tool_missing = self.large_file_tools().git_lfs.is_not_found();
-        let label = if tool_missing {
-            "Download content (install git-lfs)"
-        } else {
-            "Download content"
-        };
-        Some(
-            components::Button::new("large_file_card_download", label)
+        let sides: Vec<_> = [old, new].into_iter().flatten().collect();
+        let mut buttons = div().flex().flex_wrap().gap_2();
+        let mut any = false;
+
+        let missing_lfs = sides
+            .iter()
+            .any(|side| side.pointer.is_lfs() && side.content == LargeFileContent::MissingLocally);
+        if missing_lfs && !content_shown {
+            let tool_missing = self.large_file_tools().git_lfs.is_not_found();
+            let target = target.clone();
+            any = true;
+            buttons = buttons.child(
+                components::Button::new(
+                    "large_file_card_download",
+                    if tool_missing {
+                        "Download content (install git-lfs)"
+                    } else {
+                        "Download content"
+                    },
+                )
                 .style(components::ButtonStyle::Filled)
                 .disabled(tool_missing)
                 .on_click(theme, cx, move |this, _e, _w, _cx| {
                     this.store.dispatch(Msg::RunLargeFileCommand {
                         repo_id,
-                        command: gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+                        command: LargeFileCommand::LfsFetchForDiff {
                             target: target.clone(),
                         },
                     });
-                })
-                .into_any_element(),
-        )
+                }),
+            );
+        }
+
+        let annex_missing_tool = self.large_file_tools().git_annex.is_not_found();
+        let annex_keys: Vec<String> = sides
+            .iter()
+            .filter(|side| side.content != LargeFileContent::Available)
+            .filter_map(|side| match &side.pointer {
+                LargeFilePointer::Annex(key) => Some(key.raw.to_string()),
+                LargeFilePointer::Lfs(_) => None,
+            })
+            .collect();
+        let has_annex = sides
+            .iter()
+            .any(|side| matches!(side.pointer, LargeFilePointer::Annex(_)));
+        if !annex_keys.is_empty() && !content_shown {
+            any = true;
+            buttons = buttons.child(
+                components::Button::new(
+                    "large_file_card_annex_get",
+                    if annex_missing_tool {
+                        "Get content (install git-annex)"
+                    } else {
+                        "Get content"
+                    },
+                )
+                .style(components::ButtonStyle::Filled)
+                .disabled(annex_missing_tool)
+                .on_click(theme, cx, move |this, _e, _w, _cx| {
+                    this.store.dispatch(Msg::RunLargeFileCommand {
+                        repo_id,
+                        command: LargeFileCommand::AnnexGetKeys {
+                            keys: annex_keys.clone(),
+                        },
+                    });
+                }),
+            );
+        }
+        let path = match &target {
+            gitcomet_core::domain::DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+            gitcomet_core::domain::DiffTarget::Commit { path, .. }
+            | gitcomet_core::domain::DiffTarget::CommitRange { path, .. } => path.clone(),
+        };
+        let mut whereis_lines = None;
+        if has_annex && let Some(path) = path {
+            let path = path
+                .strip_prefix(&repo.spec.workdir)
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or(path);
+            whereis_lines = repo.annex_whereis_for(&path).map(|loaded| match loaded {
+                Loadable::Ready(whereis) if whereis.copies.is_empty() => {
+                    vec!["No known copies.".to_string()]
+                }
+                Loadable::Ready(whereis) => whereis
+                    .copies
+                    .iter()
+                    .map(|copy| {
+                        let trust = if whereis.untrusted.iter().any(|u| u.uuid == copy.uuid) {
+                            " (untrusted)"
+                        } else {
+                            ""
+                        };
+                        let here = if copy.here { " · this clone" } else { "" };
+                        format!("{}{here}{trust}", copy.description)
+                    })
+                    .collect(),
+                Loadable::Error(error) => vec![error.clone()],
+                Loadable::Loading | Loadable::NotLoaded => vec!["Looking up copies…".to_string()],
+            });
+            any = true;
+            buttons = buttons.child(
+                components::Button::new("large_file_card_annex_whereis", "Where is it?")
+                    .style(components::ButtonStyle::Outlined)
+                    .disabled(annex_missing_tool)
+                    .on_click(theme, cx, move |this, _e, _w, _cx| {
+                        this.store.dispatch(Msg::LoadAnnexWhereis {
+                            repo_id,
+                            path: path.clone(),
+                        });
+                    }),
+            );
+        }
+        if !any {
+            return None;
+        }
+        let mut column = div().flex().flex_col().gap_1().child(buttons);
+        if let Some(lines) = whereis_lines {
+            let mut list = div()
+                .debug_selector(|| "large_file_card_whereis".to_string())
+                .flex()
+                .flex_col()
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child("Copies git-annex knows about:");
+            for line in lines {
+                list = list.child(div().pl_2().child(line));
+            }
+            column = column.child(list);
+        }
+        Some(column.into_any_element())
     }
 
     pub(super) fn render_selected_file_diff(

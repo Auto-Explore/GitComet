@@ -176,6 +176,10 @@ impl GitCometView {
     pub(super) fn command_palette_context(&self, cx: &App) -> command_palette::PaletteContext {
         let repo = self.active_repo();
         let host = self.popover_host.read(cx);
+        let annex = repo.and_then(|repo| match &repo.large_file_support {
+            gitcomet_state::model::Loadable::Ready(support) => Some(&support.annex),
+            _ => None,
+        });
         command_palette::PaletteContext {
             has_active_repo: repo.is_some(),
             external_editor: crate::external_editor::configured_setting().is_some(),
@@ -196,6 +200,10 @@ impl GitCometView {
                     gitcomet_state::model::Loadable::Ready(support) if support.lfs.in_use()
                 )
             }),
+            git_annex_missing: self.state.large_file_tools.git_annex.is_not_found(),
+            repo_uses_annex: annex.is_some_and(|annex| annex.in_use()),
+            annex_initialized: annex.is_some_and(|annex| annex.initialized()),
+            annex_adjusted: annex.is_some_and(|annex| annex.adjusted.is_some()),
         }
     }
 
@@ -363,6 +371,56 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store
                         .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+                }
+            }
+            "annex-sync"
+            | "annex-pull"
+            | "annex-push"
+            | "annex-get-all"
+            | "annex-fsck"
+            | "annex-adjust-unlocked"
+            | "annex-leave-adjusted"
+            | "annex-init"
+            | "annex-restage" => {
+                use gitcomet_core::large_files::LargeFileCommand as C;
+                let content = self.state.large_file_settings.annex_sync_content;
+                let base = self
+                    .active_repo()
+                    .and_then(|repo| repo.annex_adjusted_branch())
+                    .map(|(base, _)| base.clone());
+                let command = match command_id {
+                    "annex-sync" => Some(C::AnnexSync { content }),
+                    "annex-pull" => Some(C::AnnexPull { content }),
+                    "annex-push" => Some(C::AnnexPush { content }),
+                    "annex-get-all" => Some(C::AnnexGet {
+                        paths: vec![std::path::PathBuf::from(".")],
+                        from: None,
+                    }),
+                    "annex-fsck" => Some(C::AnnexFsck),
+                    "annex-restage" => Some(C::AnnexRestage),
+                    "annex-adjust-unlocked" => Some(C::AnnexAdjust {
+                        mode: gitcomet_core::large_files::AnnexAdjustMode::Unlock,
+                    }),
+                    "annex-leave-adjusted" => base.map(|base| C::AnnexLeaveAdjusted { base }),
+                    _ => Some(C::AnnexInit),
+                };
+                if let (Some(repo_id), Some(command)) = (self.active_repo_id(), command) {
+                    self.store
+                        .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+                }
+            }
+            "annex-unused" | "annex-webapp" => {
+                let prompt = if command_id == "annex-unused" {
+                    AnnexPrompt::Unused
+                } else {
+                    AnnexPrompt::Webapp
+                };
+                if let (Some(window), Some(repo_id)) = (window, self.active_repo_id()) {
+                    self.open_popover_centered(
+                        PopoverKind::annex(repo_id, AnnexPopoverKind::Prompt(prompt)),
+                        window,
+                        cx,
+                    );
                 }
             }
             "lfs-refresh-locks" => {
@@ -1111,6 +1169,7 @@ impl GitCometView {
         store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
             follow_selected_commit: ui_preferences.history.files_follow_selected_commit,
         }));
+        store.dispatch(Msg::SetLargeFileSettings(ui_preferences.large_files));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;

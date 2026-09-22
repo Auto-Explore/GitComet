@@ -100,7 +100,7 @@ impl LfsRepoInfo {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct AnnexRepoInfo {
     /// `.git/annex` exists.
     pub has_annex_dir: bool,
@@ -111,6 +111,144 @@ pub struct AnnexRepoInfo {
     /// HEAD is an adjusted branch: `(base branch, mode)`.
     pub adjusted: Option<(String, String)>,
     pub crippled_filesystem: bool,
+    /// `.git/annex/restage.log` lists files whose content git-annex replaced
+    /// without refreshing Git's index (an interrupted or failed command). They
+    /// read as modified until `git annex restage` runs.
+    pub restage_pending: bool,
+    /// The git-annex assistant (started by the webapp) is running here.
+    pub assistant_running: bool,
+    /// Known repositories and special remotes, from `git annex info`; empty
+    /// when git-annex is not installed or the clone is not initialized.
+    pub repositories: Vec<AnnexRepository>,
+    /// Desired number of copies, when set.
+    pub numcopies: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AnnexTrust {
+    Trusted,
+    Semitrusted,
+    Untrusted,
+}
+
+impl AnnexTrust {
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::Trusted => "trust",
+            Self::Semitrusted => "semitrust",
+            Self::Untrusted => "untrust",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::Semitrusted => "semitrusted",
+            Self::Untrusted => "untrusted",
+        }
+    }
+}
+
+/// A repository git-annex knows about: this clone, another clone reachable as
+/// a git remote, or a special remote (directory, S3, rsync, ...).
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AnnexRepository {
+    pub uuid: String,
+    pub description: String,
+    /// Local git remote name, when this clone can reach it directly.
+    pub remote_name: Option<String>,
+    /// Special remote type (`directory`, `S3`, ...); `None` for git repositories.
+    pub special_type: Option<String>,
+    /// A special remote's name from `remote.log`: what `enableremote` takes.
+    pub special_name: Option<String>,
+    pub trust: AnnexTrust,
+    pub here: bool,
+}
+
+impl AnnexRepository {
+    /// Built-in pseudo-remotes git-annex always lists (web, bittorrent).
+    pub fn is_builtin(&self) -> bool {
+        self.uuid.starts_with("00000000-0000-0000-0000-00000000000")
+    }
+
+    /// Name for menus: the remote name, else the description.
+    pub fn display_name(&self) -> &str {
+        self.remote_name.as_deref().unwrap_or(&self.description)
+    }
+}
+
+/// Where an annexed file's content is, from `git annex whereis`. It reflects
+/// the location log, not a fresh check of each remote.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct AnnexWhereis {
+    pub key: String,
+    pub copies: Vec<AnnexLocation>,
+    pub untrusted: Vec<AnnexLocation>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AnnexLocation {
+    pub uuid: String,
+    pub description: String,
+    pub here: bool,
+}
+
+/// Local content no file refers to any more, from `git annex unused`.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct AnnexUnused {
+    pub entries: Vec<AnnexUnusedEntry>,
+}
+
+impl AnnexUnused {
+    /// Sum of the sizes the keys record; keys without one are left out.
+    pub fn known_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .filter_map(|entry| crate::annex::parse_key(&entry.key)?.size)
+            .sum()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AnnexUnusedEntry {
+    pub key: String,
+    pub kind: AnnexUnusedKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AnnexUnusedKind {
+    /// Old versions no branch or tag uses.
+    Unused,
+    /// Content `fsck` found corrupt and moved aside.
+    Bad,
+    /// Partial downloads.
+    Temporary,
+}
+
+/// Adjusted-branch modes GitComet offers (`git annex adjust --<mode>`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AnnexAdjustMode {
+    Unlock,
+    Lock,
+    HideMissing,
+}
+
+impl AnnexAdjustMode {
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::Unlock => "--unlock",
+            Self::Lock => "--lock",
+            Self::HideMissing => "--hide-missing",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unlock => "unlocked",
+            Self::Lock => "locked",
+            Self::HideMissing => "hide missing",
+        }
+    }
 }
 
 impl AnnexRepoInfo {
@@ -209,6 +347,95 @@ pub enum LargeFileCommand {
         lockable: bool,
         renormalize: Vec<PathBuf>,
     },
+    /// Get content from whichever repository has it, or from `from`.
+    AnnexGet {
+        paths: Vec<PathBuf>,
+        from: Option<String>,
+    },
+    /// Get content by key: a diff's historical versions, which the current
+    /// file path no longer names.
+    AnnexGetKeys {
+        keys: Vec<String>,
+    },
+    /// Drop local content (or content on `from`). git-annex refuses when the
+    /// required copies cannot be verified elsewhere, unless `force`.
+    AnnexDrop {
+        paths: Vec<PathBuf>,
+        from: Option<String>,
+        force: bool,
+    },
+    AnnexCopy {
+        paths: Vec<PathBuf>,
+        to: String,
+    },
+    AnnexMove {
+        paths: Vec<PathBuf>,
+        to: String,
+    },
+    /// Make files editable (pointer files) or read-only (symlinks) again.
+    AnnexUnlock {
+        paths: Vec<PathBuf>,
+    },
+    AnnexLock {
+        paths: Vec<PathBuf>,
+    },
+    /// Add files to the annex rather than to git.
+    AnnexAdd {
+        paths: Vec<PathBuf>,
+    },
+    /// Fetch and merge from remotes, including the `git-annex` branch.
+    AnnexPull {
+        content: bool,
+    },
+    AnnexPush {
+        content: bool,
+    },
+    /// Pull then push. Never commits: GitComet owns commits.
+    AnnexSync {
+        content: bool,
+    },
+    AnnexInit,
+    AnnexAdjust {
+        mode: AnnexAdjustMode,
+    },
+    /// Check out the base branch of the current adjusted branch.
+    AnnexLeaveAdjusted {
+        base: String,
+    },
+    /// Enable another clone's special remote here. Some types need local
+    /// settings again (`directory=` for a directory remote).
+    AnnexEnableRemote {
+        name: String,
+        params: Vec<String>,
+    },
+    /// Create a special remote: `params` are `key=value` pairs after the type.
+    AnnexInitRemote {
+        name: String,
+        special_type: String,
+        params: Vec<String>,
+    },
+    AnnexTrust {
+        repository: String,
+        trust: AnnexTrust,
+    },
+    AnnexDescribe {
+        repository: String,
+        description: String,
+    },
+    AnnexNumcopies {
+        copies: u32,
+    },
+    AnnexFsck,
+    /// Refresh Git's index for files git-annex changed but could not record.
+    AnnexRestage,
+    /// Drop everything `git annex unused` currently lists. git-annex refuses
+    /// keys without enough verified copies elsewhere, unless `force`.
+    AnnexDropUnused {
+        force: bool,
+    },
+    /// Start git-annex's own web interface (and its assistant) in the background.
+    AnnexWebapp,
+    AnnexStopAssistant,
 }
 
 impl LargeFileCommand {
@@ -224,7 +451,91 @@ impl LargeFileCommand {
             Self::LfsLock { .. } => "LFS lock",
             Self::LfsUnlock { .. } => "LFS unlock",
             Self::LfsTrack { .. } => "Track in LFS",
+            Self::AnnexGet { .. } | Self::AnnexGetKeys { .. } => "annex get",
+            Self::AnnexDrop { .. } => "annex drop",
+            Self::AnnexCopy { .. } => "annex copy",
+            Self::AnnexMove { .. } => "annex move",
+            Self::AnnexUnlock { .. } => "annex unlock",
+            Self::AnnexLock { .. } => "annex lock",
+            Self::AnnexAdd { .. } => "annex add",
+            Self::AnnexPull { .. } => "annex pull",
+            Self::AnnexPush { .. } => "annex push",
+            Self::AnnexSync { .. } => "annex sync",
+            Self::AnnexInit => "Initialize git-annex",
+            Self::AnnexAdjust { .. } => "annex adjust",
+            Self::AnnexLeaveAdjusted { .. } => "Leave adjusted branch",
+            Self::AnnexEnableRemote { .. } => "Enable special remote",
+            Self::AnnexInitRemote { .. } => "Add special remote",
+            Self::AnnexTrust { .. } => "annex trust",
+            Self::AnnexDescribe { .. } => "annex describe",
+            Self::AnnexNumcopies { .. } => "annex numcopies",
+            Self::AnnexFsck => "annex check",
+            Self::AnnexRestage => "Refresh annexed files",
+            Self::AnnexDropUnused { .. } => "annex drop unused",
+            Self::AnnexWebapp => "Open git-annex webapp",
+            Self::AnnexStopAssistant => "Stop git-annex assistant",
         }
+    }
+
+    pub fn is_annex(&self) -> bool {
+        !matches!(
+            self,
+            Self::LfsPull { .. }
+                | Self::LfsFetchForDiff { .. }
+                | Self::LfsFetchAll
+                | Self::LfsPushAll { .. }
+                | Self::LfsPrune
+                | Self::LfsFsck
+                | Self::LfsInstall
+                | Self::LfsLock { .. }
+                | Self::LfsUnlock { .. }
+                | Self::LfsTrack { .. }
+        )
+    }
+
+    /// Content was added to or removed from a store, so presence shown for
+    /// the selected diff and rows is stale.
+    pub fn changes_object_store(&self) -> bool {
+        matches!(
+            self,
+            Self::LfsPull { .. }
+                | Self::LfsFetchForDiff { .. }
+                | Self::LfsFetchAll
+                | Self::LfsPrune
+                | Self::LfsFsck
+                | Self::AnnexGet { .. }
+                | Self::AnnexGetKeys { .. }
+                | Self::AnnexDrop { .. }
+                | Self::AnnexCopy { .. }
+                | Self::AnnexMove { .. }
+                | Self::AnnexUnlock { .. }
+                | Self::AnnexLock { .. }
+                | Self::AnnexPull { .. }
+                | Self::AnnexPush { .. }
+                | Self::AnnexSync { .. }
+                | Self::AnnexFsck
+                | Self::AnnexRestage
+                | Self::AnnexDropUnused { .. }
+        )
+    }
+
+    /// git-annex restages the index at the end of these; a failed or cancelled
+    /// run skips that and leaves files reading as modified.
+    pub fn restages_after(&self) -> bool {
+        matches!(
+            self,
+            Self::AnnexGet { .. }
+                | Self::AnnexGetKeys { .. }
+                | Self::AnnexDrop { .. }
+                | Self::AnnexCopy { .. }
+                | Self::AnnexMove { .. }
+                | Self::AnnexUnlock { .. }
+                | Self::AnnexLock { .. }
+                | Self::AnnexAdd { .. }
+                | Self::AnnexPull { .. }
+                | Self::AnnexPush { .. }
+                | Self::AnnexSync { .. }
+        )
     }
 
     /// Talks to a server, so it may need credentials.
@@ -237,6 +548,16 @@ impl LargeFileCommand {
                 | Self::LfsPushAll { .. }
                 | Self::LfsLock { .. }
                 | Self::LfsUnlock { .. }
+                | Self::AnnexGet { .. }
+                | Self::AnnexGetKeys { .. }
+                | Self::AnnexDrop { .. }
+                | Self::AnnexCopy { .. }
+                | Self::AnnexMove { .. }
+                | Self::AnnexPull { .. }
+                | Self::AnnexPush { .. }
+                | Self::AnnexSync { .. }
+                | Self::AnnexEnableRemote { .. }
+                | Self::AnnexInitRemote { .. }
         )
     }
 

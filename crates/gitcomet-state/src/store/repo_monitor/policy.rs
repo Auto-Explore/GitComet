@@ -275,8 +275,11 @@ impl WatchInputs {
         let info = backend.repository_watch_info(workdir)?.unwrap_or_else(|| {
             let mut info = RepositoryWatchInfo::default();
             if let Some(root) = root_git {
-                info.cache_dirs
-                    .extend([root.join("objects"), root.join("lfs")]);
+                info.cache_dirs.extend([
+                    root.join("objects"),
+                    root.join("lfs"),
+                    root.join("annex"),
+                ]);
                 info.ignore_inputs
                     .extend([root.join("config"), root.join("info/exclude")]);
                 info.git_dirs.push(root);

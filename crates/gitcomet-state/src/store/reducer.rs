@@ -494,6 +494,29 @@ fn clear_stale_clone_banner_error(state: &mut AppState) {
     }
 }
 
+/// On an annex adjusted branch, Pull and Push go through git-annex: its pull
+/// propagates to the base branch and syncs the `git-annex` branch, where a
+/// plain merge would commit adjusted content to the wrong branch.
+fn annex_takeover(state: &mut AppState, repo_id: RepoId, pull: bool) -> Option<Vec<Effect>> {
+    let settings = state.large_file_settings;
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    if !settings.annex_pull_push || repo.annex_adjusted_branch().is_none() {
+        return None;
+    }
+    let content = settings.annex_sync_content;
+    let command = if pull {
+        gitcomet_core::large_files::LargeFileCommand::AnnexPull { content }
+    } else {
+        gitcomet_core::large_files::LargeFileCommand::AnnexPush { content }
+    };
+    begin_local_action(state, repo_id);
+    Some(vec![Effect::RunLargeFileCommand {
+        repo_id,
+        command,
+        auth: None,
+    }])
+}
+
 #[cfg(test)]
 pub(crate) fn repo_command_replay_msg_for_test(
     repo_id: RepoId,
@@ -1133,6 +1156,13 @@ fn reduce_inner(
         }
         Msg::SetRemoteSettings(settings) => {
             state.remote_settings = settings;
+            Vec::new()
+        }
+        Msg::SetLargeFileSettings(settings) => {
+            state.large_file_settings = settings;
+            for repo in &mut state.repos {
+                repo.sync_annex_refs_hidden(settings.hide_annex_refs);
+            }
             Vec::new()
         }
         Msg::SetFileBrowserSettings(settings) => {
@@ -1943,6 +1973,53 @@ fn reduce_inner(
                 auth: None,
             }]
         }
+        Msg::LoadAnnexWhereis { repo_id, path } => {
+            match state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                Some(repo) => {
+                    repo.set_annex_whereis(Some((path.clone(), Loadable::Loading)));
+                    vec![Effect::LoadAnnexWhereis { repo_id, path }]
+                }
+                None => Vec::new(),
+            }
+        }
+        Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+            repo_id,
+            path,
+            result,
+        }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+                // A newer request for another path supersedes this reply.
+                && repo
+                    .annex_whereis
+                    .as_ref()
+                    .is_some_and(|(loaded, _)| *loaded == path)
+            {
+                let loaded = match result {
+                    Ok(whereis) => Loadable::Ready(Arc::new(whereis)),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+                repo.set_annex_whereis(Some((path, loaded)));
+            }
+            Vec::new()
+        }
+        Msg::LoadAnnexUnused { repo_id } => {
+            match state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                Some(repo) => {
+                    repo.set_annex_unused(Loadable::Loading);
+                    vec![Effect::LoadAnnexUnused { repo_id }]
+                }
+                None => Vec::new(),
+            }
+        }
+        Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo.set_annex_unused(match result {
+                    Ok(unused) => Loadable::Ready(Arc::new(unused)),
+                    Err(error) => Loadable::Error(error.to_string()),
+                });
+            }
+            Vec::new()
+        }
         Msg::LoadLfsLocks { repo_id } => state
             .repos
             .iter_mut()
@@ -1993,7 +2070,10 @@ fn reduce_inner(
         Msg::PruneLocalTags { repo_id } => {
             actions_emit_effects::prune_local_tags(repos, state, repo_id)
         }
-        Msg::Pull { repo_id, mode } => actions_emit_effects::pull(repos, state, repo_id, mode),
+        Msg::Pull { repo_id, mode } => match annex_takeover(state, repo_id, true) {
+            Some(effects) => effects,
+            None => actions_emit_effects::pull(repos, state, repo_id, mode),
+        },
         Msg::PullBranch {
             repo_id,
             remote,
@@ -2057,7 +2137,10 @@ fn reduce_inner(
             }
             vec![]
         }
-        Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
+        Msg::Push { repo_id } => match annex_takeover(state, repo_id, false) {
+            Some(effects) => effects,
+            None => actions_emit_effects::push(repos, state, repo_id),
+        },
         Msg::PushAfterCommit {
             repo_id,
             target,

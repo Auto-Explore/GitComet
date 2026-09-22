@@ -235,7 +235,7 @@ jobs:
     steps:
       - name: Install native dependencies
         run: |
-          dnf -y install bash curl findutils fontconfig-devel gcc gcc-c++ git git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
+          dnf -y install bash curl findutils fontconfig-devel gcc gcc-c++ git git-annex git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
           pkg-config --libs --cflags fontconfig
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
@@ -251,6 +251,10 @@ jobs:
         run: |
           git --version
           git lfs version
+          # The only lane with git-annex: Ubuntu 22.04 ships 8.x, which has no
+          # `annex pull`/`push`. Its integration tests fail rather than skip here.
+          git annex version | head -1
+          echo "GITCOMET_REQUIRE_GIT_ANNEX=1" >> "$GITHUB_ENV"
       - name: Compile and inventory workspace tests
         run: python3 scripts/ci/run.py compile --context workspace
       - name: Execute workspace tests

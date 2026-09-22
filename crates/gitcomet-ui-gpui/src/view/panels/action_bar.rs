@@ -601,8 +601,13 @@ impl Render for ActionBarView {
             // Detached HEAD surfaces as the literal "HEAD"; label it as such
             // rather than pretending it is a branch.
             let detached = head == "HEAD";
+            // An annex adjusted branch reads as its base branch plus the mode:
+            // commits made here propagate to the base via git-annex.
+            let adjusted = gitcomet_core::annex::adjusted_branch(head);
             let label: SharedString = if detached {
                 "detached".into()
+            } else if let Some((base, mode)) = adjusted {
+                truncate_badge_label_to(&format!("{base} · adjusted ({mode})"), badge_label_max_chars)
             } else {
                 truncate_badge_label_to(head, badge_label_max_chars)
             };
@@ -612,6 +617,8 @@ impl Render for ActionBarView {
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
             let tooltip: SharedString = if detached {
                 "Detached HEAD — click to check out a branch".into()
+            } else if let Some((base, _)) = adjusted {
+                format!("On git-annex adjusted branch {head}; commits propagate to {base} through git-annex sync, pull and push").into()
             } else {
                 format!("On branch {head} — click to switch").into()
             };

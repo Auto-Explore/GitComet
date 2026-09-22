@@ -98,6 +98,28 @@ impl Default for RemoteSettings {
     }
 }
 
+/// How GitComet treats Git LFS and git-annex repositories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LargeFileSettings {
+    /// Hide `git-annex` and `synced/*` branches from branch lists.
+    pub hide_annex_refs: bool,
+    /// On an adjusted branch, Pull and Push run `git annex pull` / `push`:
+    /// a plain merge into an adjusted branch is git-annex's documented footgun.
+    pub annex_pull_push: bool,
+    /// Annex pull, push and sync also move annexed content.
+    pub annex_sync_content: bool,
+}
+
+impl Default for LargeFileSettings {
+    fn default() -> Self {
+        Self {
+            hide_annex_refs: true,
+            annex_pull_push: true,
+            annex_sync_content: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileBrowserSettings {
     /// Active file browsing follows the selected history row.
@@ -729,6 +751,7 @@ pub struct AppState {
     pub signing_tools: SigningToolsState,
     /// Whether Git can run `git lfs` / `git annex`; gates their commands.
     pub large_file_tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+    pub large_file_settings: LargeFileSettings,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
@@ -1804,6 +1827,19 @@ pub struct RepoState {
     pub large_files_rev: u64,
     pub lfs_locks: Loadable<Arc<Vec<gitcomet_core::large_files::LfsLock>>>,
     pub lfs_locks_rev: u64,
+    /// `git annex whereis` for one path, loaded on demand by the diff card.
+    pub annex_whereis: Option<(
+        PathBuf,
+        Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>,
+    )>,
+    pub annex_whereis_rev: u64,
+    /// `git annex unused`, loaded when its prompt opens.
+    pub annex_unused: Loadable<Arc<gitcomet_core::large_files::AnnexUnused>>,
+    pub annex_unused_rev: u64,
+    /// Branch lists leave out `git-annex` and `synced/*`: the repo uses
+    /// git-annex and the preference is on. Kept here so sidebar caches,
+    /// which key on repo data, see it change.
+    pub annex_refs_hidden: bool,
     pub submodule_add_in_flight: Option<SubmoduleAddProgressState>,
     pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
@@ -1909,6 +1945,11 @@ impl RepoState {
             large_files_rev: 0,
             lfs_locks: Loadable::NotLoaded,
             lfs_locks_rev: 0,
+            annex_whereis: None,
+            annex_whereis_rev: 0,
+            annex_unused: Loadable::NotLoaded,
+            annex_unused_rev: 0,
+            annex_refs_hidden: false,
             submodule_add_in_flight: None,
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
@@ -2147,6 +2188,8 @@ impl RepoState {
         }
         self.large_file_support = support;
         self.large_file_support_rev = self.large_file_support_rev.wrapping_add(1);
+        // The Annex sidebar section is built from this summary.
+        self.bump_branch_sidebar_rev();
         if !self.large_file_support_active() {
             self.set_uncommitted_large_files(Arc::default());
         }
@@ -2178,6 +2221,65 @@ impl RepoState {
         }
         self.lfs_locks = locks;
         self.lfs_locks_rev = self.lfs_locks_rev.wrapping_add(1);
+    }
+
+    /// True for a git-annex bookkeeping branch the user asked to hide.
+    pub fn hides_annex_ref(&self, branch_name: &str) -> bool {
+        self.annex_refs_hidden && gitcomet_core::annex::is_annex_ref(branch_name)
+    }
+
+    /// Recompute whether annex bookkeeping branches are hidden.
+    pub(crate) fn sync_annex_refs_hidden(&mut self, hide_preference: bool) {
+        let hidden = hide_preference
+            && matches!(&self.large_file_support, Loadable::Ready(support) if support.annex.in_use());
+        if self.annex_refs_hidden != hidden {
+            self.annex_refs_hidden = hidden;
+            self.bump_branch_sidebar_rev();
+        }
+    }
+
+    pub(crate) fn set_annex_whereis(
+        &mut self,
+        whereis: Option<(
+            PathBuf,
+            Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>,
+        )>,
+    ) {
+        if self.annex_whereis == whereis {
+            return;
+        }
+        self.annex_whereis = whereis;
+        self.annex_whereis_rev = self.annex_whereis_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_annex_unused(
+        &mut self,
+        unused: Loadable<Arc<gitcomet_core::large_files::AnnexUnused>>,
+    ) {
+        if self.annex_unused == unused {
+            return;
+        }
+        self.annex_unused = unused;
+        self.annex_unused_rev = self.annex_unused_rev.wrapping_add(1);
+    }
+
+    /// Where the content of `path` is, when that was loaded for it.
+    pub fn annex_whereis_for(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<&Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>> {
+        self.annex_whereis
+            .as_ref()
+            .filter(|(loaded, _)| loaded == path)
+            .map(|(_, whereis)| whereis)
+    }
+
+    /// The adjusted branch HEAD is on, as `(base, mode)`, in an annex repo.
+    pub fn annex_adjusted_branch(&self) -> Option<&(String, String)> {
+        match &self.large_file_support {
+            Loadable::Ready(support) => support.annex.adjusted.as_ref(),
+            _ => None,
+        }
     }
 
     /// The lock held on `path`, when the lock list has loaded.

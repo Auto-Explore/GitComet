@@ -1306,6 +1306,20 @@ pub(super) fn repo_command_finished(
     {
         extra_effects.push(effect);
     }
+    if command_succeeded
+        && matches!(&command, RepoCommandKind::LargeFile { command } if command.is_annex() && command.changes_object_store())
+        && let Some((path, _)) = repo_state.annex_whereis.clone()
+    {
+        repo_state.set_annex_whereis(Some((path.clone(), Loadable::Loading)));
+        extra_effects.push(Effect::LoadAnnexWhereis { repo_id, path });
+    }
+    // A listing that was shown is stale once content moved.
+    if matches!(&command, RepoCommandKind::LargeFile { command } if command.is_annex() && command.changes_object_store())
+        && !matches!(repo_state.annex_unused, Loadable::NotLoaded)
+    {
+        repo_state.set_annex_unused(Loadable::Loading);
+        extra_effects.push(Effect::LoadAnnexUnused { repo_id });
+    }
     // Lock and unlock change server state the rows show.
     if matches!(&command, RepoCommandKind::LargeFile { command } if command.changes_locks())
         && let Some(effect) = super::effects::request_lfs_locks_effect(repo_state)
@@ -1317,13 +1331,7 @@ pub(super) fn repo_command_finished(
     if command_succeeded
         && matches!(
             &command,
-            RepoCommandKind::LargeFile {
-                command: gitcomet_core::large_files::LargeFileCommand::LfsPull { .. }
-                    | gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff { .. }
-                    | gitcomet_core::large_files::LargeFileCommand::LfsFetchAll
-                    | gitcomet_core::large_files::LargeFileCommand::LfsPrune
-                    | gitcomet_core::large_files::LargeFileCommand::LfsFsck
-            }
+            RepoCommandKind::LargeFile { command } if command.changes_object_store()
         )
     {
         if let Some(target) = repo_state.diff_state.diff_target.clone() {

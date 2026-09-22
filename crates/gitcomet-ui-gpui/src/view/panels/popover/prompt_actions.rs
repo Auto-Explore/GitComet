@@ -154,6 +154,14 @@ impl PopoverHost {
                         worktree_remove_confirm::panel(self, repo_id, path, branch, cx)
                     }
                 },
+                RepoPopoverKind::Annex(annex_kind) => match annex_kind {
+                    AnnexPopoverKind::SectionMenu | AnnexPopoverKind::RepositoryMenu { .. } => {
+                        self.context_menu_view(PopoverKind::annex(repo_id, annex_kind), cx)
+                    }
+                    AnnexPopoverKind::Prompt(prompt) => {
+                        annex_prompt::panel(self, repo_id, &prompt, cx)
+                    }
+                },
                 RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
                     SubmodulePopoverKind::SectionMenu => self.context_menu_view(
                         PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),

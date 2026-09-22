@@ -60,6 +60,9 @@ pub struct UiSettings {
     pub history_relative_dates: Option<bool>,
     pub history_highlight_commit_chain: Option<bool>,
     pub file_browser_follow_selected_commit: Option<bool>,
+    pub annex_hide_bookkeeping_refs: Option<bool>,
+    pub annex_pull_push_on_adjusted: Option<bool>,
+    pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -163,6 +166,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, history_highlight_commit_chain);
         apply_setting!(settings, file, file_browser_follow_selected_commit);
+        apply_setting!(settings, file, annex_hide_bookkeeping_refs);
+        apply_setting!(settings, file, annex_pull_push_on_adjusted);
+        apply_setting!(settings, file, annex_sync_content);
         apply_setting!(settings, file, history_relative_dates);
         apply_setting!(settings, file, history_tag_fetch_mode);
         if let Some(value) = settings.default_history_mode {

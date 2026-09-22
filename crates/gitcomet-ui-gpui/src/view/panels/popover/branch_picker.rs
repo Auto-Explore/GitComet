@@ -183,6 +183,9 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
     if let Loadable::Ready(branches) = &repo.branches {
         for branch in branches.iter() {
             local_names.push(branch.name.as_str());
+            if repo.hides_annex_ref(&branch.name) && head_branch != Some(branch.name.as_str()) {
+                continue;
+            }
             if head_branch == Some(branch.name.as_str()) {
                 marked_index = Some(items.len());
             }
@@ -202,7 +205,7 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
         for remote_branch in remote_branches.iter() {
             // `refs/remotes/<remote>/HEAD` is a symref, not a branch anyone
             // checks out by that name.
-            if remote_branch.name == "HEAD" {
+            if remote_branch.name == "HEAD" || repo.hides_annex_ref(&remote_branch.name) {
                 continue;
             }
             let display = format!("{}/{}", remote_branch.remote, remote_branch.name);
@@ -310,6 +313,7 @@ fn ref_rows_signature(repo: &RepoState, spec: RefRowsSpec) -> u64 {
         repo.id.hash(hasher);
         repo.head_branch_rev.hash(hasher);
         repo.branches_rev.hash(hasher);
+        repo.annex_refs_hidden.hash(hasher);
         if spec.with_refs {
             repo.tags_rev.hash(hasher);
         }
@@ -355,7 +359,10 @@ pub(super) fn ref_rows_cached(
         }
         if let Loadable::Ready(branches) = &repo.branches {
             for branch in branches.iter() {
-                if spec.hide_current_branch && head_branch == Some(branch.name.as_str()) {
+                let is_head = head_branch == Some(branch.name.as_str());
+                if (spec.hide_current_branch && is_head)
+                    || (repo.hides_annex_ref(&branch.name) && !is_head)
+                {
                     continue;
                 }
                 push(branch.name.clone(), "icons/git_branch.svg");
@@ -417,6 +424,7 @@ pub(super) fn rows_signature(repo: &RepoState) -> u64 {
         repo.branches_rev.hash(hasher);
         repo.remote_branches_rev.hash(hasher);
         repo.ref_metadata_rev.hash(hasher);
+        repo.annex_refs_hidden.hash(hasher);
         super::rows_cache::date_bucket(std::time::SystemTime::now()).hash(hasher);
     })
 }
@@ -648,7 +656,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             ),
                     );
                 } else {
-                    for (ix, branch) in branches.iter().enumerate() {
+                    for (ix, branch) in branches
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, branch)| !repo.hides_annex_ref(&branch.name))
+                    {
                         let repo_id = repo.id;
                         let name = branch.name.clone();
                         let label: SharedString = name.clone().into();
@@ -723,5 +735,71 @@ fn branch_picker_status_panel(
             Some(this.tooltip_host.clone()),
             cx,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{Branch, CommitId, RemoteBranch};
+    use std::sync::Arc;
+
+    fn branch(name: &str) -> Branch {
+        Branch {
+            name: name.to_string(),
+            target: CommitId("a".repeat(40).into()),
+            upstream: None,
+            divergence: None,
+        }
+    }
+
+    fn targets(repo: &RepoState) -> Vec<String> {
+        rows(repo, "", std::time::SystemTime::UNIX_EPOCH)
+            .rows
+            .into_iter()
+            .map(|target| match target {
+                BranchPickerNavTarget::Ref(name) => name,
+                BranchPickerNavTarget::RemoteBranch { remote, branch } => {
+                    format!("{remote}/{branch}")
+                }
+                BranchPickerNavTarget::CreateBranch(name) => format!("+{name}"),
+                BranchPickerNavTarget::RowAction(ix) => format!("#{ix}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn checkout_rows_hide_annex_bookkeeping_branches_unless_checked_out() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/annex_picker"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("synced/main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main"),
+            branch("git-annex"),
+            branch("synced/main"),
+            branch("synced/other"),
+        ]));
+        repo.remote_branches = Loadable::Ready(Arc::new(
+            ["main", "git-annex", "synced/main"]
+                .into_iter()
+                .map(|name| RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: name.to_string(),
+                    target: CommitId("a".repeat(40).into()),
+                })
+                .collect(),
+        ));
+        let all = targets(&repo);
+        assert_eq!(all.len(), 7, "{all:?}");
+
+        repo.annex_refs_hidden = true;
+        assert_eq!(targets(&repo), ["main", "synced/main", "origin/main"]);
+        let before = rows_signature(&repo);
+        repo.annex_refs_hidden = false;
+        assert_ne!(before, rows_signature(&repo));
     }
 }

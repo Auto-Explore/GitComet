@@ -3326,6 +3326,94 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx)));
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+    assert!(
+        !rail_has_annex_icon(cx),
+        "a repository without git-annex must not get the rail icon"
+    );
+
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.uuid = Some("u-here".into());
+    support.annex.has_annex_branch = true;
+    support.annex.repositories = vec![gitcomet_core::large_files::AnnexRepository {
+        uuid: "u-here".into(),
+        description: "laptop".into(),
+        remote_name: None,
+        special_type: None,
+        special_name: None,
+        trust: gitcomet_core::large_files::AnnexTrust::Semitrusted,
+        here: true,
+    }];
+    state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    test_support::redraw(cx);
+    assert!(
+        rail_has_annex_icon(cx),
+        "large-file support landing must add the rail icon"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Annex, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+    assert!(
+        cx.debug_bounds("annex_repository_0").is_some(),
+        "the popover must list the annex repositories"
+    );
+    let menu = cx
+        .debug_bounds("collapsed_popover_section_menu")
+        .expect("the popover header must expose the annex section menu");
+    cx.simulate_click(menu.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::annex(RepoId(1), AnnexPopoverKind::SectionMenu)),
+        );
+    });
+
+    // Switching to data without annex closes the popover and drops the icon.
+    state.repos[0].large_file_support = Loadable::Ready(Arc::new(
+        gitcomet_core::large_files::LargeFileSupport::default(),
+    ));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+    assert!(!rail_has_annex_icon(cx));
+    cx.update(|_window, app| {
+        assert_eq!(view.read(app).sidebar_collapsed_popover, None);
+    });
+}
+
+fn rail_has_annex_icon(cx: &mut gpui::VisualTestContext) -> bool {
+    test_support::redraw(cx);
+    cx.debug_bounds("collapsed_sidebar_icon_annex").is_some()
+}
+
+#[gpui::test]
 fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

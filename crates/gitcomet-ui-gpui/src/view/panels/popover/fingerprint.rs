@@ -243,6 +243,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             repo.tags_rev.hash(hasher);
+            repo.annex_refs_hidden.hash(hasher);
             // The checkout picker's rows carry each ref's author, date and
             // summary on their detail line, so metadata landing while the picker
             // is open has to repaint it — the rows change height, not just text.
@@ -288,6 +289,15 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             ..
         } => {
             repo.submodules_rev.hash(hasher);
+        }
+
+        // Annex menus list repositories and remotes from the support summary.
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Annex(_),
+            ..
+        } => {
+            repo.large_file_support_rev.hash(hasher);
+            repo.annex_unused_rev.hash(hasher);
         }
 
         PopoverKind::StashPrompt => {
@@ -1092,6 +1102,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 path.hash(hasher);
             }
         },
+        RepoPopoverKind::Annex(annex_kind) => {
+            90u8.hash(hasher);
+            repo_id.hash(hasher);
+            annex_kind.hash(hasher);
+        }
     }
 }
 

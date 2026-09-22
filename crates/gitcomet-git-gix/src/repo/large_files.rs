@@ -55,6 +55,28 @@ fn classify_git_form(bytes: &[u8]) -> Option<Classified> {
     classify_bytes(bytes, false).or_else(|| classify_bytes(bytes, true))
 }
 
+/// Drop the git-annex filter driver from this handle's in-memory config (never
+/// the file on disk). Background reads use it: git-annex's clean filter hashes
+/// whole files and writes its keys database, and `git status` does not run it
+/// for status either, reporting stale annexed files as modified instead.
+pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
+    let has_annex_filter = repo
+        .config_snapshot()
+        .plumbing()
+        .sections_by_name("filter")
+        .into_iter()
+        .flatten()
+        .any(|section| section.header().subsection_name() == Some("annex".into()));
+    if !has_annex_filter {
+        return;
+    }
+    let mut config = repo.config_snapshot_mut();
+    while config
+        .remove_section("filter", Some(gix::bstr::BStr::new("annex")))
+        .is_some()
+    {}
+}
+
 pub(crate) fn lfs_filter_configured(config: &gix::config::File) -> bool {
     ["filter.lfs.process", "filter.lfs.clean"]
         .iter()
@@ -193,6 +215,16 @@ impl LockableLookup<'_> {
 }
 
 impl super::GixRepo {
+    /// Local content of an unlocked annex key; its object directory is hashed,
+    /// so only git-annex can say where it is. Skipped for uninitialized clones.
+    fn annex_local_content(&self, repo: &gix::Repository, key: &str) -> Option<PathBuf> {
+        if !repo.common_dir().join("annex").is_dir() {
+            return None;
+        }
+        self.annex_content_location(key)
+            .filter(|path| path.is_file())
+    }
+
     /// Describe one side of a text diff whose git form is a pointer, and point
     /// it at the real content when that is here and small enough to diff.
     /// `worktree` sides may find content in the working tree itself.
@@ -235,7 +267,10 @@ impl super::GixRepo {
                         .filter(|path| path.is_file());
                     (path, Some(format!("annex:{}", key.raw)))
                 }
-                (LargeFilePointer::Annex(_), None) => (None, None),
+                (LargeFilePointer::Annex(key), None) => (
+                    self.annex_local_content(repo, &key.raw),
+                    Some(format!("annex:{}", key.raw)),
+                ),
             },
         };
         let content = match &content_path {
@@ -294,14 +329,19 @@ impl super::GixRepo {
                 .join(logical_path)
                 .parent()?
                 .join(gix::path::try_from_byte_slice(target).ok()?),
-            (LargeFilePointer::Annex(_), None) => {
-                return Some((
-                    LargeFileSide {
-                        pointer: classified.pointer,
-                        content: LargeFileContent::Unknown,
-                    },
-                    None,
-                ));
+            (LargeFilePointer::Annex(key), None) => {
+                match self.annex_local_content(repo, &key.raw) {
+                    Some(path) => path,
+                    None => {
+                        return Some((
+                            LargeFileSide {
+                                pointer: classified.pointer,
+                                content: LargeFileContent::Unknown,
+                            },
+                            None,
+                        ));
+                    }
+                }
             }
         };
         let (content, bytes) = match std::fs::metadata(&path) {
@@ -377,7 +417,17 @@ impl super::GixRepo {
                 annex::adjusted_branch(head).map(|(base, mode)| (base.to_owned(), mode.to_owned()))
             }),
             crippled_filesystem: config.boolean("annex.crippledfilesystem").unwrap_or(false),
+            restage_pending: std::fs::metadata(repo.common_dir().join("annex").join("restage.log"))
+                .is_ok_and(|metadata| metadata.len() > 0),
+            assistant_running: super::annex::assistant_running(&repo.common_dir().join("annex")),
+            repositories: Vec::new(),
+            numcopies: None,
         };
+        let mut annex = annex;
+        if annex.initialized() {
+            cancellation.check_cancelled()?;
+            (annex.repositories, annex.numcopies) = self.annex_repositories(&repo, cancellation);
+        }
         Ok(LargeFileSupport { lfs, annex })
     }
 
@@ -505,6 +555,25 @@ impl super::GixRepo {
             if let Some((classified, worktree)) = self.classify_unstaged_row(&repo, &index, entry) {
                 let state = finish(classified, Some(worktree), &entry.path, &mut lockable);
                 result.unstaged.insert(entry.path.clone(), state);
+            }
+        }
+        // Unlocked annex content lives under a hashed path only git-annex
+        // knows; one `find` over those rows tells which are present here.
+        let unknown: Vec<&Path> = result
+            .staged
+            .iter()
+            .chain(result.unstaged.iter())
+            .filter(|(_, state)| state.in_local_store.is_none())
+            .map(|(path, _)| path.as_path())
+            .collect();
+        if !unknown.is_empty()
+            && repo.common_dir().join("annex").is_dir()
+            && let Some(present) = self.annex_present_paths(&unknown)
+        {
+            for (path, state) in result.staged.iter_mut().chain(result.unstaged.iter_mut()) {
+                if state.in_local_store.is_none() {
+                    state.in_local_store = Some(present.contains(path));
+                }
             }
         }
         Ok(result)

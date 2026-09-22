@@ -1922,6 +1922,56 @@ impl Render for SettingsWindowView {
                                 ),
                         );
 
+                    let large_files = self.large_file_settings;
+                    let large_file_toggle = |id: &'static str,
+                                             label: &'static str,
+                                             enabled: bool,
+                                             update: fn(&mut gitcomet_state::model::LargeFileSettings)| {
+                        self.toggle_row(id, label, enabled, theme).on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                                let mut next = this.large_file_settings;
+                                update(&mut next);
+                                this.set_large_file_settings(next, cx);
+                            }),
+                        )
+                    };
+                    let large_file_note = |text: &'static str| {
+                        div()
+                            .px_2()
+                            .pb_2()
+                            .text_size(theme.ui_text(12.0))
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(text)
+                    };
+                    let large_files_card = self
+                        .card("settings_window_large_files_card", "Large files", theme)
+                        .child(large_file_toggle(
+                            "settings_window_annex_hide_refs",
+                            "Hide git-annex bookkeeping branches",
+                            large_files.hide_annex_refs,
+                            |s| s.hide_annex_refs = !s.hide_annex_refs,
+                        ))
+                        .child(large_file_note(
+                            "The git-annex branch and synced/* branches are managed by git-annex itself.",
+                        ))
+                        .child(large_file_toggle(
+                            "settings_window_annex_pull_push",
+                            "Use git-annex pull and push on adjusted branches",
+                            large_files.annex_pull_push,
+                            |s| s.annex_pull_push = !s.annex_pull_push,
+                        ))
+                        .child(large_file_note(
+                            "A plain merge into an adjusted branch commits the adjusted files to the wrong branch; git-annex propagates changes to the base branch instead.",
+                        ))
+                        .child(large_file_toggle(
+                            "settings_window_annex_sync_content",
+                            "git-annex pull, push and sync also move file content",
+                            large_files.annex_sync_content,
+                            |s| s.annex_sync_content = !s.annex_sync_content,
+                        ));
+
                     let tags_card = self
                         .card("settings_window_tags_card", "Tags", theme)
                         .child(
@@ -2262,6 +2312,7 @@ impl Render for SettingsWindowView {
                         SettingsCategory::FileEditing => file_editing_card,
                         SettingsCategory::GitLog => git_log_card,
                         SettingsCategory::Remotes => remotes_card,
+                        SettingsCategory::LargeFiles => large_files_card,
                         SettingsCategory::Tags => tags_card,
                         SettingsCategory::GitExecutable => git_executable_card,
                         SettingsCategory::Environment => environment_card,

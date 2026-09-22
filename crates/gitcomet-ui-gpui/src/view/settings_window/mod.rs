@@ -337,6 +337,7 @@ enum SettingsCategory {
     FileEditing,
     GitLog,
     Remotes,
+    LargeFiles,
     Tags,
     GitExecutable,
     Environment,
@@ -353,6 +354,7 @@ impl SettingsCategory {
         SettingsCategory::FileEditing,
         SettingsCategory::GitLog,
         SettingsCategory::Remotes,
+        SettingsCategory::LargeFiles,
         SettingsCategory::Tags,
         SettingsCategory::GitExecutable,
         SettingsCategory::Environment,
@@ -369,6 +371,7 @@ impl SettingsCategory {
             Self::FileEditing => "File editing",
             Self::GitLog => "Git log",
             Self::Remotes => "Remotes",
+            Self::LargeFiles => "Large files",
             Self::Tags => "Tags",
             Self::GitExecutable => "Executables",
             Self::Environment => "Environment",
@@ -386,6 +389,7 @@ impl SettingsCategory {
             Self::FileEditing => "icons/pencil.svg",
             Self::GitLog => "icons/history.svg",
             Self::Remotes => "icons/cloud.svg",
+            Self::LargeFiles => "icons/disk.svg",
             Self::Tags => "icons/tag.svg",
             Self::GitExecutable => "icons/git_branch.svg",
             Self::Environment => "icons/computer.svg",
@@ -403,6 +407,7 @@ impl SettingsCategory {
             Self::FileEditing => "settings_window_nav_file_editing",
             Self::GitLog => "settings_window_nav_git_log",
             Self::Remotes => "settings_window_nav_remotes",
+            Self::LargeFiles => "settings_window_nav_large_files",
             Self::Tags => "settings_window_nav_tags",
             Self::GitExecutable => "settings_window_nav_git_executable",
             Self::Environment => "settings_window_nav_environment",
@@ -439,6 +444,10 @@ impl SettingsCategory {
                  verify commit signatures verification signing key trust"
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
+            Self::LargeFiles => {
+                "large files git lfs git-annex annex synced branches adjusted branch pull push \
+                 sync content"
+            }
             Self::Tags => "tags automatically fetch tags",
             Self::GitExecutable => {
                 "executables git executable custom path system path version gpg gnupg \
@@ -562,6 +571,7 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     prune_deleted_remote_branches_on_fetch: bool,
+    large_file_settings: gitcomet_state::model::LargeFileSettings,
     current_view: SettingsView,
     selected_category: SettingsCategory,
     search_query: String,
@@ -945,6 +955,7 @@ impl SettingsWindowView {
         let prune_deleted_remote_branches_on_fetch = ui_preferences
             .remotes
             .prune_deleted_remote_branches_on_fetch;
+        let large_file_settings = ui_preferences.large_files;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
         // installed editors are detected once the row is expanded, see
@@ -1228,6 +1239,7 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             prune_deleted_remote_branches_on_fetch,
+            large_file_settings,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
             search_query: String::new(),

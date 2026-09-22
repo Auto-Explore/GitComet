@@ -873,7 +873,12 @@ impl GitCometView {
         let icon_muted = theme.colors.foreground.secondary;
         let slot = scaled_px(28.0);
 
-        let icons = CollapsedSidebarSection::ALL.into_iter().map(|section| {
+        let repo = self.active_repo();
+        let sections: Vec<_> = CollapsedSidebarSection::ALL
+            .into_iter()
+            .filter(|section| section.is_available(repo))
+            .collect();
+        let icons = sections.into_iter().map(|section| {
             let is_active = active == Some(section);
             let icon_color = if is_active {
                 theme.colors.foreground.primary
@@ -882,6 +887,7 @@ impl GitCometView {
             };
             div()
                 .id(section.element_id())
+                .debug_selector(move || section.element_id().to_string())
                 .flex()
                 .items_center()
                 .justify_center()

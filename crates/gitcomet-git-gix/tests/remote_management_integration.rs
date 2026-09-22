@@ -2367,3 +2367,68 @@ fn delete_remote_branch_succeeds_when_the_upstream_cleanup_cannot_write_config()
         "the remote branch deletion itself must still take effect"
     );
 }
+
+/// A git-annex special remote is a `[remote]` section with `annex-*` keys and
+/// no URL. `git annex init` can auto-enable one without setting
+/// `skipFetchAll`, and `git fetch --all` then fails on it ("'name' does not
+/// appear to be a git repository"), taking every real remote down with it.
+#[test]
+fn fetch_all_skips_git_annex_special_remotes_without_a_url() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+    for (key, value) in [
+        ("remote.computecanada-public.annex-httpalso", "true"),
+        (
+            "remote.computecanada-public.annex-uuid",
+            "bedc0087-3c8e-4519-a212-17ff40f8b29b",
+        ),
+    ] {
+        run_git(&work_repo, &["config", key, value]);
+    }
+
+    // A new commit on the real remote proves the fetch still reached it.
+    let other = dir.path().join("other");
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            git_remote_url(&remote_repo).as_str(),
+            other.to_str().unwrap(),
+        ],
+    );
+    configure_repo_with_user(&other);
+    fs::write(other.join("new.txt"), "new\n").expect("write new file");
+    run_git(&other, &["add", "new.txt"]);
+    run_git(
+        &other,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "new"],
+    );
+    run_git(&other, &["push", "-q", "origin", "main"]);
+    let new_commit = run_git_capture(&other, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+
+    let opened = GixBackend.open(&work_repo).expect("open work repo");
+    for prune in [false, true] {
+        opened
+            .fetch_all_with_output_prune(prune)
+            .unwrap_or_else(|e| {
+                panic!("fetch all (prune={prune}) must skip the special remote: {e}")
+            });
+    }
+    assert_eq!(
+        run_git_capture(&work_repo, &["rev-parse", "refs/remotes/origin/main"]).trim(),
+        new_commit
+    );
+    assert_eq!(
+        run_git_capture(
+            &work_repo,
+            &["config", "--get", "remote.computecanada-public.annex-uuid"]
+        )
+        .trim(),
+        "bedc0087-3c8e-4519-a212-17ff40f8b29b",
+        "the user's remote configuration is left untouched"
+    );
+}

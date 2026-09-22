@@ -260,6 +260,9 @@ impl GitCometView {
                             history_highlight_commit_chain: Some(history_highlight_commit_chain),
                             // Owned by the settings window, which persists it itself.
                             file_browser_follow_selected_commit: None,
+                            annex_hide_bookkeeping_refs: None,
+                            annex_pull_push_on_adjusted: None,
+                            annex_sync_content: None,
                             terminal_external_mode: None,
                             terminal_external_program: None,
                             terminal_external_args: None,

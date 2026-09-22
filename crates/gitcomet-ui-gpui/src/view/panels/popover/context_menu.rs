@@ -1,6 +1,7 @@
 use super::*;
 use crate::kit::interaction::ControlInteractionExt as _;
 
+mod annex;
 mod branch;
 mod branch_group;
 mod branch_section;
@@ -500,6 +501,14 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::Menu { path }),
             } => Some(submodule::model(self, *repo_id, path)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::SectionMenu),
+            } => Some(annex::section_model(self, *repo_id)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::RepositoryMenu { uuid }),
+            } => Some(annex::repository_model(self, *repo_id, uuid)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,

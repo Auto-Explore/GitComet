@@ -74,7 +74,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
-        let repo = self.repo();
+        let repo = self.status_repo();
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         cancellation.check_cancelled()?;
@@ -205,7 +205,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
-        let repo = self.repo();
+        let repo = self.status_repo();
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();

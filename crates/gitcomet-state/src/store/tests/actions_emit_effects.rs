@@ -5398,3 +5398,172 @@ fn large_file_command_replays_after_an_auth_prompt() {
         "{replay:?}"
     );
 }
+
+fn adjusted_annex_support() -> gitcomet_core::large_files::LargeFileSupport {
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.uuid = Some("u".into());
+    support.annex.adjusted = Some(("main".into(), "unlocked".into()));
+    support
+}
+
+/// On an adjusted branch a plain merge would commit adjusted content to the
+/// wrong branch, so Pull and Push run git-annex's own pull and push.
+#[test]
+fn pull_and_push_on_adjusted_branch_use_git_annex() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    state.repos[0].large_file_support = Loadable::Ready(Arc::new(adjusted_annex_support()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Default,
+        },
+    );
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::RunLargeFileCommand {
+                command: LargeFileCommand::AnnexPull { content: false },
+                ..
+            }]
+        ),
+        "{effects:?}"
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+
+    state.large_file_settings.annex_sync_content = true;
+    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::RunLargeFileCommand {
+                command: LargeFileCommand::AnnexPush { content: true },
+                ..
+            }]
+        ),
+        "{effects:?}"
+    );
+
+    state.large_file_settings.annex_pull_push = false;
+    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::RunLargeFileCommand { .. })),
+        "turning the setting off restores plain push"
+    );
+}
+
+#[test]
+fn whereis_replies_for_a_superseded_path_are_dropped() {
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let load = |path: &str| Msg::LoadAnnexWhereis {
+        repo_id,
+        path: PathBuf::from(path),
+    };
+    let effects = reduce(&mut repos, &id_alloc, &mut state, load("a.bin"));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadAnnexWhereis { .. }]
+    ));
+    reduce(&mut repos, &id_alloc, &mut state, load("b.bin"));
+
+    let loaded = |path: &str| {
+        Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+            repo_id,
+            path: PathBuf::from(path),
+            result: Ok(gitcomet_core::large_files::AnnexWhereis {
+                key: path.into(),
+                ..Default::default()
+            }),
+        })
+    };
+    reduce(&mut repos, &id_alloc, &mut state, loaded("a.bin"));
+    assert!(matches!(
+        state.repos[0].annex_whereis_for(std::path::Path::new("b.bin")),
+        Some(Loadable::Loading)
+    ));
+    reduce(&mut repos, &id_alloc, &mut state, loaded("b.bin"));
+    assert!(matches!(
+        state.repos[0].annex_whereis_for(std::path::Path::new("b.bin")),
+        Some(Loadable::Ready(whereis)) if whereis.key == "b.bin"
+    ));
+}
+
+#[test]
+fn unused_listing_loads_on_request_and_reloads_after_content_moves() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let finished = |command| {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LargeFile { command },
+            result: Ok(CommandOutput::default()),
+        })
+    };
+    let reloads = |effects: &[Effect]| {
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadAnnexUnused { .. }))
+    };
+    // Never shown: nothing to keep fresh.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        finished(LargeFileCommand::AnnexDropUnused { force: false }),
+    );
+    assert!(!reloads(&effects), "{effects:?}");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadAnnexUnused { repo_id },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadAnnexUnused { .. }]
+    ));
+    assert!(matches!(state.repos[0].annex_unused, Loadable::Loading));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded {
+            repo_id,
+            result: Ok(gitcomet_core::large_files::AnnexUnused {
+                entries: vec![gitcomet_core::large_files::AnnexUnusedEntry {
+                    key: "SHA256E-s4--old.bin".into(),
+                    kind: gitcomet_core::large_files::AnnexUnusedKind::Unused,
+                }],
+            }),
+        }),
+    );
+    assert!(matches!(
+        &state.repos[0].annex_unused,
+        Loadable::Ready(unused) if unused.entries.len() == 1
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        finished(LargeFileCommand::AnnexDropUnused { force: false }),
+    );
+    assert!(reloads(&effects), "a shown listing reloads: {effects:?}");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        finished(LargeFileCommand::AnnexDescribe {
+            repository: "here".into(),
+            description: "x".into(),
+        }),
+    );
+    assert!(!reloads(&effects), "no content moved: {effects:?}");
+}

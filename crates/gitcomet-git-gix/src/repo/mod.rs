@@ -40,6 +40,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
     }
 }
 
+mod annex;
 mod blame;
 mod conflict_stages;
 mod diff;
@@ -459,6 +460,14 @@ impl GixRepo {
         self._repo.to_thread_local()
     }
 
+    /// For index-vs-worktree status: never starts git-annex (see
+    /// [`large_files::strip_annex_filter`]).
+    pub(super) fn status_repo(&self) -> gix::Repository {
+        let mut repo = self.repo();
+        large_files::strip_annex_filter(&mut repo);
+        repo
+    }
+
     /// A fresh open, for operations that must see config/ref changes made after
     /// this repository was opened (e.g. upstream tracking written by the CLI).
     /// Prefer [`Self::repo`]: an open re-parses every config file.
@@ -731,6 +740,21 @@ impl GitRepository for GixRepo {
         command: &gitcomet_core::large_files::LargeFileCommand,
     ) -> Result<CommandOutput> {
         self.run_large_file_command_impl(command)
+    }
+
+    fn annex_whereis_cancellable(
+        &self,
+        path: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::AnnexWhereis> {
+        self.annex_whereis_impl(path, cancellation)
+    }
+
+    fn annex_unused_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::AnnexUnused> {
+        self.annex_unused_impl(cancellation)
     }
 
     fn lfs_locks_cancellable(

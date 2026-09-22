@@ -2287,8 +2287,13 @@ impl MainPaneView {
             new_large.as_ref(),
         );
         let body: AnyElement = if has_large_file && !show_large_file_content {
-            let action =
-                self.large_file_download_button(theme, old_large.as_ref(), new_large.as_ref(), cx);
+            let action = self.large_file_card_actions(
+                theme,
+                old_large.as_ref(),
+                new_large.as_ref(),
+                false,
+                cx,
+            );
             crate::view::large_file_card::large_file_card(
                 theme,
                 old_large.as_ref(),
@@ -3197,6 +3202,13 @@ impl MainPaneView {
             }
         };
         let body = if has_large_file && show_large_file_content {
+            let action = self.large_file_card_actions(
+                theme,
+                old_large.as_ref(),
+                new_large.as_ref(),
+                true,
+                cx,
+            );
             div()
                 .size_full()
                 .min_h(px(0.0))
@@ -3207,7 +3219,7 @@ impl MainPaneView {
                     old_large.as_ref(),
                     new_large.as_ref(),
                     true,
-                    None,
+                    action,
                 ))
                 .child(div().flex_1().min_h(px(0.0)).flex().flex_col().child(body))
                 .into_any_element()

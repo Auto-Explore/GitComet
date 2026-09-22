@@ -2516,12 +2516,16 @@ pub(super) fn large_file_support_loaded(
     result: std::result::Result<gitcomet_core::large_files::LargeFileSupport, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
+    let hide_preference = state.large_file_settings.hide_annex_refs;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return effects;
     };
     let was_active = repo_state.large_file_support_active();
     match result {
-        Ok(support) => repo_state.set_large_file_support(Loadable::Ready(support)),
+        Ok(support) => {
+            repo_state.set_large_file_support(Loadable::Ready(support));
+            repo_state.sync_annex_refs_hidden(hide_preference);
+        }
         // Detection is advisory: keep what was known, never raise a banner.
         Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {}
         Err(e) => {

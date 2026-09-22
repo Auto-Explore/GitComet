@@ -71,6 +71,9 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         this.active_repo(),
         remote,
     ));
+    model
+        .items
+        .extend(super::annex::push_items(&this.state, this.active_repo()));
     // Last, and fenced off: the one entry here that rewrites published history
     // should not sit under a cursor aimed at the ordinary pushes above it.
     model.items.push(ContextMenuItem::Separator);

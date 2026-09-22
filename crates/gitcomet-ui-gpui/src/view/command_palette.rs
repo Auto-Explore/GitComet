@@ -49,6 +49,12 @@ pub(crate) enum Needs {
     GitLfsTool,
     /// Git can run `git lfs` and the repository uses it.
     GitLfsRepo,
+    /// Git can run `git annex` and the repository uses git-annex.
+    GitAnnexRepo,
+    /// As `GitAnnexRepo`, and this clone has run `git annex init`.
+    GitAnnexInitialized,
+    /// As `GitAnnexInitialized`, on an adjusted branch.
+    GitAnnexAdjusted,
 }
 
 /// The app state commands are enabled against, taken from the root view.
@@ -70,6 +76,11 @@ pub(crate) struct PaletteContext {
     pub(crate) git_lfs_missing: bool,
     /// The active repository tracks or stores Git LFS files.
     pub(crate) repo_uses_lfs: bool,
+    /// Git cannot run `git annex`.
+    pub(crate) git_annex_missing: bool,
+    pub(crate) repo_uses_annex: bool,
+    pub(crate) annex_initialized: bool,
+    pub(crate) annex_adjusted: bool,
 }
 
 const GIT_LFS_MISSING: &str = "Install Git LFS where Git can find it first";
@@ -113,6 +124,19 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
             .then_some("Only available on Linux"),
         Needs::GitLfsTool => ctx.git_lfs_missing.then_some(GIT_LFS_MISSING),
+        Needs::GitAnnexRepo | Needs::GitAnnexInitialized | Needs::GitAnnexAdjusted => {
+            if ctx.git_annex_missing {
+                Some("Install git-annex where Git can find it first")
+            } else if !ctx.repo_uses_annex {
+                Some("This repository does not use git-annex")
+            } else if needs != Needs::GitAnnexRepo && !ctx.annex_initialized {
+                Some("Initialize git-annex in this clone first")
+            } else if needs == Needs::GitAnnexAdjusted && !ctx.annex_adjusted {
+                Some("Only available on a git-annex adjusted branch")
+            } else {
+                None
+            }
+        }
         Needs::GitLfsRepo => {
             if ctx.git_lfs_missing {
                 Some(GIT_LFS_MISSING)
@@ -816,6 +840,105 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         keywords: "lfs install setup hooks filters",
         requires_repo: true,
         needs: Needs::GitLfsTool,
+    },
+    CommandEntry {
+        id: "annex-sync",
+        label: "Sync with git-annex Remotes",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex sync pull push remotes",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-pull",
+        label: "Pull with git-annex",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex pull fetch merge",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-push",
+        label: "Push with git-annex",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex push upload",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-get-all",
+        label: "Get All Annexed Content",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex get download content",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-fsck",
+        label: "Check Annexed Content",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex fsck verify integrity",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-adjust-unlocked",
+        label: "Switch to Adjusted Branch (Unlocked)",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex adjust unlock editable",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-leave-adjusted",
+        label: "Leave git-annex Adjusted Branch",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex adjusted base branch",
+        requires_repo: true,
+        needs: Needs::GitAnnexAdjusted,
+    },
+    CommandEntry {
+        id: "annex-unused",
+        label: "Find Unused Annexed Content",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex unused dropunused clean old versions disk space",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-webapp",
+        label: "Open git-annex Webapp",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex webapp assistant browser",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-restage",
+        label: "Refresh Annexed Files Left Stale",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex restage refresh index modified interrupted",
+        requires_repo: true,
+        needs: Needs::GitAnnexInitialized,
+    },
+    CommandEntry {
+        id: "annex-init",
+        label: "Initialize git-annex in This Clone",
+        shortcut: Shortcut::None,
+        category: "git-annex",
+        keywords: "annex init setup",
+        requires_repo: true,
+        needs: Needs::GitAnnexRepo,
     },
 ];
 
@@ -1528,6 +1651,49 @@ fn fuzzy_subsequence_match(label: &str, query: &str) -> Option<(i32, Vec<usize>)
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn git_annex_commands_explain_each_missing_precondition() {
+        let base = PaletteContext {
+            has_active_repo: true,
+            repo_uses_annex: true,
+            annex_initialized: true,
+            ..Default::default()
+        };
+        assert_eq!(unavailable_reason(Needs::GitAnnexInitialized, &base), None);
+        assert_eq!(
+            unavailable_reason(Needs::GitAnnexAdjusted, &base),
+            Some("Only available on a git-annex adjusted branch")
+        );
+        let uninitialized = PaletteContext {
+            annex_initialized: false,
+            ..base.clone()
+        };
+        assert_eq!(
+            unavailable_reason(Needs::GitAnnexRepo, &uninitialized),
+            None
+        );
+        assert!(unavailable_reason(Needs::GitAnnexInitialized, &uninitialized).is_some());
+        let missing = PaletteContext {
+            git_annex_missing: true,
+            ..base
+        };
+        assert!(
+            unavailable_reason(Needs::GitAnnexRepo, &missing)
+                .unwrap()
+                .contains("Install git-annex")
+        );
+    }
+
+    #[test]
+    fn annex_restage_needs_an_initialized_annex() {
+        let entry = COMMANDS
+            .iter()
+            .find(|entry| entry.id == "annex-restage")
+            .expect("palette lists the restage command");
+        assert!(matches!(entry.needs, Needs::GitAnnexInitialized));
+        assert!(entry.requires_repo);
+    }
 
     #[test]
     fn git_lfs_commands_explain_missing_tool_and_unused_repo() {

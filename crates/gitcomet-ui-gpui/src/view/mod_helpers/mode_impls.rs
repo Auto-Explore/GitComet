@@ -432,6 +432,41 @@ pub(crate) enum RepoPopoverKind {
     Remote(RemotePopoverKind),
     Worktree(WorktreePopoverKind),
     Submodule(SubmodulePopoverKind),
+    Annex(AnnexPopoverKind),
+}
+
+/// The git-annex sidebar section's menus and its one text prompt.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum AnnexPopoverKind {
+    SectionMenu,
+    /// Menu for one repository or special remote, by annex UUID.
+    RepositoryMenu {
+        uuid: String,
+    },
+    Prompt(AnnexPrompt),
+}
+
+/// What the annex prompt asks for. `ForceDrop` is a confirmation without text.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum AnnexPrompt {
+    AddSpecialRemote,
+    EnableSpecialRemote {
+        name: String,
+    },
+    Describe {
+        repository: String,
+        current: String,
+    },
+    Numcopies {
+        current: Option<u32>,
+    },
+    ForceDrop {
+        paths: Vec<std::path::PathBuf>,
+    },
+    /// Lists `git annex unused` and drops it.
+    Unused,
+    /// Explains the assistant before starting the webapp.
+    Webapp,
 }
 
 /// `OpenInBrowserMenu` picks which remote's web page to open when several
@@ -497,6 +532,13 @@ impl PopoverKind {
         Self::Repo {
             repo_id,
             kind: RepoPopoverKind::Submodule(kind),
+        }
+    }
+
+    pub(crate) fn annex(repo_id: RepoId, kind: AnnexPopoverKind) -> Self {
+        Self::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Annex(kind),
         }
     }
 }

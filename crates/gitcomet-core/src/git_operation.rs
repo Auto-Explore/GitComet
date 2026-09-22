@@ -47,16 +47,22 @@ pub struct TransferProgress {
 }
 
 impl TransferProgress {
-    /// One line for activity rows, e.g. `LFS download 3/10 files · 12 MB of 40 MB`.
+    /// One line for activity rows: `LFS download 3/10 files · 12 MB of 40 MB`,
+    /// or for git-annex, which reports one file at a time,
+    /// `annex get big.bin · 12 MB of 40 MB`.
     pub fn summary(&self) -> String {
         use crate::text_utils::human_readable_bytes;
-        format!(
-            "LFS {} {}/{} files · {} of {}",
-            self.direction,
-            self.files_done,
-            self.files_total,
+        let bytes = format!(
+            "{} of {}",
             human_readable_bytes(self.bytes_done),
             human_readable_bytes(self.bytes_total)
+        );
+        if let Some(command) = self.direction.strip_prefix("annex ") {
+            return format!("annex {command} {} · {bytes}", self.name);
+        }
+        format!(
+            "LFS {} {}/{} files · {bytes}",
+            self.direction, self.files_done, self.files_total
         )
     }
 }

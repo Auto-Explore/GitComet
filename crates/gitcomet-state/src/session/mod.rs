@@ -77,6 +77,9 @@ pub struct UiSession {
     pub history_relative_dates: Option<bool>,
     pub history_highlight_commit_chain: Option<bool>,
     pub file_browser_follow_selected_commit: Option<bool>,
+    pub annex_hide_bookkeeping_refs: Option<bool>,
+    pub annex_pull_push_on_adjusted: Option<bool>,
+    pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -169,6 +172,12 @@ struct UiSessionFile {
     history_relative_dates: Option<bool>,
     history_highlight_commit_chain: Option<bool>,
     file_browser_follow_selected_commit: Option<bool>,
+    #[serde(default)]
+    annex_hide_bookkeeping_refs: Option<bool>,
+    #[serde(default)]
+    annex_pull_push_on_adjusted: Option<bool>,
+    #[serde(default)]
+    annex_sync_content: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
@@ -295,6 +304,9 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_relative_dates: file.history_relative_dates,
         history_highlight_commit_chain: file.history_highlight_commit_chain,
         file_browser_follow_selected_commit: file.file_browser_follow_selected_commit,
+        annex_hide_bookkeeping_refs: file.annex_hide_bookkeeping_refs,
+        annex_pull_push_on_adjusted: file.annex_pull_push_on_adjusted,
+        annex_sync_content: file.annex_sync_content,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,

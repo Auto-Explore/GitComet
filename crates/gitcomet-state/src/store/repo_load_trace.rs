@@ -144,6 +144,8 @@ pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
         InternalMsg::SubmodulesLoaded { .. } => "SubmodulesLoaded",
         InternalMsg::LargeFileSupportLoaded { .. } => "LargeFileSupportLoaded",
         InternalMsg::LfsLocksLoaded { .. } => "LfsLocksLoaded",
+        InternalMsg::AnnexWhereisLoaded { .. } => "AnnexWhereisLoaded",
+        InternalMsg::AnnexUnusedLoaded { .. } => "AnnexUnusedLoaded",
         InternalMsg::RebaseStateLoaded { .. } => "RebaseStateLoaded",
         InternalMsg::MergeCommitMessageLoaded { .. } => "MergeCommitMessageLoaded",
         _ => "InternalMsg",
@@ -174,6 +176,8 @@ pub(super) fn effect_name(effect: &Effect) -> &'static str {
         Effect::LoadSubmodules { .. } => "LoadSubmodules",
         Effect::LoadLargeFileSupport { .. } => "LoadLargeFileSupport",
         Effect::LoadLfsLocks { .. } => "LoadLfsLocks",
+        Effect::LoadAnnexWhereis { .. } => "LoadAnnexWhereis",
+        Effect::LoadAnnexUnused { .. } => "LoadAnnexUnused",
         Effect::LoadRebaseAndMergeState { .. } => "LoadRebaseAndMergeState",
         Effect::LoadRebaseState { .. } => "LoadRebaseState",
         Effect::LoadMergeCommitMessage { .. } => "LoadMergeCommitMessage",
@@ -207,6 +211,8 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadSubmodules { repo_id }
         | Effect::LoadLargeFileSupport { repo_id }
         | Effect::LoadLfsLocks { repo_id }
+        | Effect::LoadAnnexWhereis { repo_id, .. }
+        | Effect::LoadAnnexUnused { repo_id }
         | Effect::LoadRebaseAndMergeState { repo_id }
         | Effect::LoadRebaseState { repo_id }
         | Effect::LoadMergeCommitMessage { repo_id } => Some(*repo_id),

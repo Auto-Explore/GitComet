@@ -389,6 +389,14 @@ pub(super) fn model(
             &paths,
             is_untracked,
         ));
+        items.extend(super::annex::status_file_items(
+            &this.state,
+            repo,
+            area,
+            path,
+            &paths,
+            is_untracked,
+        ));
     }
 
     items.push(ContextMenuItem::Separator);

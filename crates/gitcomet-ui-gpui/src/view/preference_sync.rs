@@ -768,6 +768,17 @@ impl GitCometView {
         self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
+    pub(in crate::view) fn set_large_file_settings_preference(
+        &mut self,
+        settings: gitcomet_state::model::LargeFileSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.large_files = settings;
+        });
+        self.store.dispatch(Msg::SetLargeFileSettings(settings));
+    }
+
     pub(in crate::view) fn set_remote_prune_preference(
         &mut self,
         enabled: bool,

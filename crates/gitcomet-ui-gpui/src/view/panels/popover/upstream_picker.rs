@@ -65,6 +65,7 @@ fn rows_signature(repo: &RepoState, branch: &str) -> u64 {
         repo.remotes_rev.hash(hasher);
         repo.remote_branches_rev.hash(hasher);
         repo.ref_metadata_rev.hash(hasher);
+        repo.annex_refs_hidden.hash(hasher);
         super::rows_cache::loadable_kind(&repo.branches).hash(hasher);
         super::rows_cache::loadable_kind(&repo.remotes).hash(hasher);
         super::rows_cache::loadable_kind(&repo.remote_branches).hash(hasher);
@@ -103,7 +104,7 @@ pub(super) fn cached(
             {
                 continue;
             }
-            if remote_branch.name == "HEAD" {
+            if remote_branch.name == "HEAD" || repo.hides_annex_ref(&remote_branch.name) {
                 continue;
             }
             targets.push(UpstreamTarget {

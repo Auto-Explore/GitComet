@@ -706,6 +706,22 @@ impl PopoverHost {
             },
             |this, window, cx| this.submit_submodule_change_pointer(window, cx),
         ));
+        // The annex prompt reuses the single-line ref input.
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &submodule_ref_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
+                        ..
+                    })
+                )
+            },
+            |this, window, cx| this.submit_annex_prompt(window, cx),
+        ));
         for input in [&remote_name_input, &remote_url_input] {
             prompt_input_subscriptions.push(Self::prompt_enter_subscription(
                 input,
@@ -1556,6 +1572,10 @@ impl PopoverHost {
             | Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
                 ..
+            })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
+                ..
             }) => self.dismiss_inline_popover(window, cx),
             Some(PopoverKind::CloneRepo)
             | Some(PopoverKind::CreateTagPrompt { .. })
@@ -1697,6 +1717,36 @@ impl PopoverHost {
         let dest = std::path::PathBuf::from(parent).join(repo_name);
         self.store.dispatch(Msg::CloneRepo { url, dest });
         self.close_popover(cx);
+    }
+
+    pub(super) fn submit_annex_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(prompt)),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let text = self
+            .submodule_ref_input
+            .read_with(cx, |input, _| input.text().to_string());
+        let Ok(command) = annex_prompt::prompt_command(&prompt, &text) else {
+            return;
+        };
+        // Enter must not drop while the listing is loading or empty.
+        if matches!(prompt, AnnexPrompt::Unused)
+            && annex_prompt::droppable_unused(self.state.repos.iter().find(|r| r.id == repo_id))
+                .is_none()
+        {
+            return;
+        }
+        self.store
+            .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+        self.dismiss_inline_popover(window, cx);
     }
 
     pub(super) fn submit_submodule_change_pointer(
@@ -2966,6 +3016,26 @@ impl PopoverHost {
                     self.submodule_ref_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .submodule_ref_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(prompt)),
+                } => {
+                    if matches!(prompt, AnnexPrompt::Unused) {
+                        self.store
+                            .dispatch(Msg::LoadAnnexUnused { repo_id: *repo_id });
+                    }
+                    let theme = self.theme;
+                    let text = annex_prompt::initial_text(prompt);
+                    self.submodule_ref_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(text, cx);
                         cx.notify();
                     });
                     let focus = self

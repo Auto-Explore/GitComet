@@ -231,7 +231,9 @@ pub(crate) fn repository_watch_info(
     }
     for dir in &info.git_dirs {
         info.cache_dirs
-            .extend([dir.join("objects"), dir.join("lfs")]);
+            // git-annex writes its keys database and journal while GitComet
+            // only reads (line stats, `git annex find`): private, like LFS.
+            .extend([dir.join("objects"), dir.join("lfs"), dir.join("annex")]);
         info.ignore_inputs.extend(
             ["config", "config.worktree", "commondir", "info/exclude"]
                 .into_iter()

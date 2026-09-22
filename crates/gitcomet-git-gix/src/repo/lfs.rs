@@ -83,6 +83,7 @@ impl super::GixRepo {
                 lockable,
                 renormalize,
             } => self.lfs_track(patterns, *filename, *lockable, renormalize),
+            annex => self.run_annex_command(annex),
         }
     }
 

@@ -79,6 +79,9 @@ impl SettingsWindowView {
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
             fetch_prune_deleted_remote_branches: Some(self.prune_deleted_remote_branches_on_fetch),
+            annex_hide_bookkeeping_refs: Some(self.large_file_settings.hide_annex_refs),
+            annex_pull_push_on_adjusted: Some(self.large_file_settings.annex_pull_push),
+            annex_sync_content: Some(self.large_file_settings.annex_sync_content),
             commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
             terminal_external_mode: None,
@@ -1039,6 +1042,22 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_default_tag_type_preference(tag_type, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_large_file_settings(
+        &mut self,
+        settings: gitcomet_state::model::LargeFileSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.large_file_settings == settings {
+            return;
+        }
+        self.large_file_settings = settings;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_large_file_settings_preference(settings, cx);
         });
         cx.notify();
     }

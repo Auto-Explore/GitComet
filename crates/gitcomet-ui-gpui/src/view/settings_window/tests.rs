@@ -1738,6 +1738,10 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
         ),
         (SettingsCategory::GitLog, "settings_window_git_log_card"),
         (SettingsCategory::Remotes, "settings_window_remotes_card"),
+        (
+            SettingsCategory::LargeFiles,
+            "settings_window_large_files_card",
+        ),
         (SettingsCategory::Tags, "settings_window_tags_card"),
         (
             SettingsCategory::GitExecutable,

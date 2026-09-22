@@ -781,6 +781,27 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Where an annexed file's content is, per git-annex's location log.
+    fn annex_whereis_cancellable(
+        &self,
+        _path: &Path,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::large_files::AnnexWhereis> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git-annex is not supported by this backend",
+        )))
+    }
+
+    /// Local content no file uses any more, per `git annex unused`.
+    fn annex_unused_cancellable(
+        &self,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::large_files::AnnexUnused> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git-annex is not supported by this backend",
+        )))
+    }
+
     /// Current Git LFS locks for the repository (a server round trip).
     fn lfs_locks_cancellable(
         &self,

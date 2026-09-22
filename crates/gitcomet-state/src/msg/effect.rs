@@ -152,6 +152,13 @@ pub enum Effect {
     LoadLfsLocks {
         repo_id: RepoId,
     },
+    LoadAnnexWhereis {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LoadAnnexUnused {
+        repo_id: RepoId,
+    },
     LoadFileBrowser {
         repo_id: RepoId,
         source: FileSource,

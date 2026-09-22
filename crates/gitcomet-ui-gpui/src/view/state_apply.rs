@@ -88,6 +88,7 @@ impl GitCometView {
         let git_runtime_changed = self.state.git_runtime != next.git_runtime;
         let prev_git_runtime_available = self.state.git_runtime.is_available();
         let prev_had_repos = !self.state.repos.is_empty();
+        let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
@@ -445,6 +446,11 @@ impl GitCometView {
                 .update(cx, |host, cx| host.close_popover(cx));
             self.open_repo_panel = false;
         }
+        // The rail's git-annex icon comes and goes with the active repository.
+        let annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
+        if !annex_rail && self.sidebar_collapsed_popover == Some(CollapsedSidebarSection::Annex) {
+            self.close_sidebar_collapsed_popover(cx);
+        }
         self.sync_title_bar_workspace_actions(cx);
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
@@ -459,6 +465,7 @@ impl GitCometView {
         );
 
         git_runtime_changed
+            || prev_annex_rail != annex_rail
             || prev_banner_error != next_banner_error
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
