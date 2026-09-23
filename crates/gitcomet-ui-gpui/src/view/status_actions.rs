@@ -12,11 +12,6 @@ pub(in crate::view) fn stage_or_unstage_paths(
     paths: impl Into<RepoPathList>,
 ) {
     let paths = paths.into();
-    store.dispatch(Msg::ClearDiffSelectionForStatusAction {
-        repo_id,
-        area,
-        paths: paths.clone(),
-    });
     store.dispatch(match area {
         DiffArea::Unstaged => Msg::StagePaths { repo_id, paths },
         DiffArea::Staged => Msg::UnstagePaths { repo_id, paths },

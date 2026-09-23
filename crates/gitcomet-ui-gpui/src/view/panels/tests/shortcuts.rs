@@ -5520,7 +5520,7 @@ fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
-fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
+fn space_keeps_the_diff_when_the_selected_files_cannot_be_staged(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -5579,18 +5579,22 @@ fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
         "staging the selection must consume it"
     );
 
-    // The single-file path would advance the diff to the next unstaged file;
-    // acting on the whole selection clears it instead.
-    wait_until(cx, "the diff selection to be cleared", |cx| {
+    // This fixture has no repository handle, so staging fails. Consuming the
+    // selection must not close the diff or advance it to another file.
+    wait_until(cx, "the staging failure", |cx| {
         cx.update(|_window, app| {
             let snapshot = view.read(app).store.snapshot();
             snapshot
                 .repos
                 .iter()
                 .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| repo.diff_state.diff_target.is_none())
+                .is_some_and(|repo| {
+                    repo.local_actions_in_flight == 0 && repo.feedback.last_error.is_some()
+                })
         })
     });
+    sync_store_snapshot(cx, &view);
+    assert_eq!(active_worktree_diff_target_path(cx, &view), Some(first));
 }
 
 /// Ctrl+S must resolve the multi-file selection before confirming, the way

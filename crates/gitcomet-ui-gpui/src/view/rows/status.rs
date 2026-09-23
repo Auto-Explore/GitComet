@@ -818,8 +818,6 @@ fn status_row(
 
             crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
 
-            this.clear_status_multi_selection(repo_id);
-
             cx.notify();
         })
         .debug_selector(move || {

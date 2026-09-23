@@ -404,7 +404,12 @@ impl MainPaneView {
                     return true;
                 }
                 self.clear_status_selection_for_shortcut(repo_id, cx);
-                self.stage_or_unstage_status_paths(repo_id, area, paths);
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    area,
+                    paths,
+                );
                 self.rebuild_diff_cache(cx);
                 return true;
             }
@@ -544,7 +549,12 @@ impl MainPaneView {
                             return true;
                         }
                         self.clear_status_selection_for_shortcut(repo_id, cx);
-                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
                         self.rebuild_diff_cache(cx);
                         return true;
                     }
@@ -618,7 +628,12 @@ impl MainPaneView {
                             return true;
                         }
                         self.clear_status_selection_for_shortcut(repo_id, cx);
-                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
                         self.rebuild_diff_cache(cx);
                         return true;
                     }

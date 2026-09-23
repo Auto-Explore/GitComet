@@ -674,21 +674,20 @@ impl GitCometView {
                 );
             }
             "unstage-all" => {
+                // An empty list unstages from the index, like the Unstage all
+                // button; the status list omits a staged rename's source path.
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
-                {
-                    let paths: Vec<_> = repo
+                    && repo
                         .staged_status_entries()
-                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    if !paths.is_empty() {
-                        crate::view::status_actions::stage_or_unstage_paths(
-                            &self.store,
-                            repo_id,
-                            DiffArea::Staged,
-                            paths,
-                        );
-                    }
+                        .is_some_and(|entries| !entries.is_empty())
+                {
+                    crate::view::status_actions::stage_or_unstage_paths(
+                        &self.store,
+                        repo_id,
+                        DiffArea::Staged,
+                        Vec::new(),
+                    );
                 }
             }
             "discard-all" => {

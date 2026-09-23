@@ -2048,17 +2048,6 @@ impl MainPaneView {
         true
     }
 
-    /// Stage (or unstage) a whole status selection in one batch, closing only
-    /// the affected diff in this status area.
-    pub(in crate::view) fn stage_or_unstage_status_paths(
-        &mut self,
-        repo_id: RepoId,
-        area: DiffArea,
-        paths: Vec<std::path::PathBuf>,
-    ) {
-        crate::view::status_actions::stage_or_unstage_paths(&self.store, repo_id, area, paths);
-    }
-
     pub(in crate::view) fn clear_status_multi_selection(
         &mut self,
         repo_id: RepoId,

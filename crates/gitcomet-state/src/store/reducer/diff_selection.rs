@@ -608,33 +608,97 @@ pub(super) fn select_conflict_diff(
     start_conflict_target_reload_with_mode(repo_state, &path, ConflictFileLoadMode::CurrentOnly)
 }
 
+pub(super) fn clear_diff_selection_after_discard(
+    state: &mut AppState,
+    repo_id: RepoId,
+    paths: &[std::path::PathBuf],
+) {
+    // Discard treats an empty list as a no-op. A staged addition without
+    // worktree changes is removed from both the index and disk; otherwise
+    // discarding only removes the worktree changes and retains the staged diff.
+    if paths.is_empty() {
+        return;
+    }
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return;
+    };
+    // Classify at most the two viewed targets, rather than scanning the status
+    // lists again for every path in a potentially large discard selection.
+    let removed_staged_paths: Vec<_> = [
+        repo.diff_state.diff_target.as_ref(),
+        repo.diff_state
+            .edit_return_view
+            .as_ref()
+            .map(|view| &view.target),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|target| {
+        let DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Staged,
+        } = target
+        else {
+            return None;
+        };
+        (paths.contains(path)
+            && repo
+                .status_entry_for_path(DiffArea::Staged, path)
+                .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Added)
+            && repo
+                .status_entry_for_path(DiffArea::Unstaged, path)
+                .is_none())
+        .then(|| path.clone())
+    })
+    .collect();
+    clear_diff_selection_for_status_action(state, repo_id, DiffArea::Unstaged, paths);
+    if !removed_staged_paths.is_empty() {
+        clear_diff_selection_for_status_action(
+            state,
+            repo_id,
+            DiffArea::Staged,
+            &removed_staged_paths,
+        );
+    }
+}
+
 pub(super) fn clear_diff_selection_for_status_action(
     state: &mut AppState,
     repo_id: RepoId,
     area: DiffArea,
     paths: &[std::path::PathBuf],
-) -> Vec<Effect> {
-    let should_close = state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .is_some_and(|repo| {
-            let diff = &repo.diff_state;
-            !diff.content_preview
-            && !diff.edit_mode
-            // An inline diff is the displayed target, even when its parent
-            // happens to match the status action's path.
-            && diff.inline_submodule_diff.is_none()
-            && matches!(
-                &diff.diff_target,
-                Some(DiffTarget::WorkingTree { path, area: selected_area })
-                    if *selected_area == area && (paths.is_empty() || paths.contains(path))
-            )
-        });
+) {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return;
+    };
+    let matches_target = |target: &DiffTarget| {
+        matches!(
+            target,
+            DiffTarget::WorkingTree { path, area: selected_area }
+                if *selected_area == area && (paths.is_empty() || paths.contains(path))
+        )
+    };
+    // Keep the editor buffer, but do not return to a diff that was staged away.
+    // Without an origin, exiting the editor falls back to its content preview.
+    if repo
+        .diff_state
+        .edit_return_view
+        .as_ref()
+        .is_some_and(|view| !view.content_preview && matches_target(&view.target))
+    {
+        repo.diff_state.edit_return_view = None;
+        repo.bump_diff_state_rev();
+    }
+    // An inline submodule diff belongs to its parent status entry. Retiring
+    // that entry must also retire the inline view and its now-empty summary.
+    let should_close = !repo.diff_state.content_preview
+        && repo
+            .diff_state
+            .diff_target
+            .as_ref()
+            .is_some_and(matches_target);
     if should_close {
-        clear_diff_selection(state, repo_id)
-    } else {
-        Vec::new()
+        clear_diff_selection(state, repo_id);
     }
 }
 
