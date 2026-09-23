@@ -44,6 +44,7 @@ def histogram_distribution(buckets):
             remaining -= frequency
             if remaining <= 0:
                 return value / 1e6
+        return ordered[-1][0] / 1e6
     return {"count": count, "mean": sum(v * n for v, n in ordered) / count / 1e6,
             "p50": quantile(.5), "p95": quantile(.95), "max": ordered[-1][0] / 1e6}
 

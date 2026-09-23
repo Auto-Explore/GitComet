@@ -280,8 +280,7 @@ impl GixRepo {
                 .filter(|entry| {
                     entry.file == file_stamp
                         && entry.attributes_fingerprint == attributes_fingerprint
-                        && DiskFileStamp::acquire_for_verification_memo(&entry.cache_path)
-                            .map(|guard| guard.stamp)
+                        && DiskFileStamp::cache_file_stamp_for_memo_hit(&entry.cache_path)
                             == Some(entry.cache_file)
                 })
                 .cloned()
@@ -298,6 +297,8 @@ impl GixRepo {
         let file_stamp = attributes_fingerprint.and_then(|_| {
             DiskFileStamp::acquire_for_verification_recording(&full).map(|guard| guard.stamp)
         });
+        #[cfg(test)]
+        WORKTREE_FILTER_RUNS.with(|runs| runs.set(runs.get() + 1));
         let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "gix worktree filter pipeline: {e}"
@@ -338,7 +339,18 @@ impl GixRepo {
         let cache_file_stamp = file_stamp.and_then(|_| {
             DiskFileStamp::acquire_for_verification_recording(&cache_path).map(|guard| guard.stamp)
         });
-        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        let created = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        // A file this call created is private to it (0600, content-addressed,
+        // never rewritten), so fresh timestamps cannot hide a later write.
+        // Windows still requires the sealed, aged identity taken above.
+        #[cfg(unix)]
+        let cache_file_stamp = cache_file_stamp.or_else(|| {
+            (file_stamp.is_some() && created)
+                .then(|| DiskFileStamp::read(&cache_path))
+                .flatten()
+        });
+        #[cfg(not(unix))]
+        let _ = created;
         let identity: Arc<str> = Arc::from(format!("worktree-git:{identity}"));
 
         if let (Some(file_stamp), Some(attributes_fingerprint), Some(cache_file)) = (
@@ -658,26 +670,11 @@ impl GixRepo {
             return Ok(Some(cache_path));
         }
 
-        let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
         let mut command = self.git_workdir_cmd();
         command.arg("cat-file").arg("blob").arg(blob_id.to_string());
-        // Use the same owned-child cancellation and stderr draining as diff.
-        // A cancelled read must not leave cat-file or a partial cache behind.
-        let mut tmp_file = run_git_parsed_stdout_cancellable(
-            command,
-            "git cat-file",
-            true,
-            cancellation,
-            move |mut stdout| {
-                std::io::copy(&mut stdout, &mut tmp_file).map_err(io_err_to_error)?;
-                Ok(tmp_file)
-            },
-        )?;
-        cancellation.check_cancelled()?;
-        tmp_file.flush().map_err(io_err_to_error)?;
+        let tmp_file = copy_git_stdout_to_temp_file(command, "git cat-file", cancellation)?;
 
-        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        let _ = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
         // Do not memoize newly materialized files. They must be hashed again
         // outside the timestamp race window before their stamp can be trusted.
         Ok(Some(cache_path))
@@ -1054,6 +1051,31 @@ fn canonicalize_existing_path_prefix(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Streams a command's stdout into a temp file. Uses the same owned-child
+/// cancellation and stderr draining as diff; any non-zero exit is an error,
+/// since a truncated stream must never be persisted as a content-addressed cache.
+fn copy_git_stdout_to_temp_file(
+    command: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<tempfile::NamedTempFile> {
+    let mut tmp_file =
+        tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+    let mut tmp_file = run_git_parsed_stdout_cancellable(
+        command,
+        label,
+        false,
+        cancellation,
+        move |mut stdout| {
+            std::io::copy(&mut stdout, &mut tmp_file).map_err(io_err_to_error)?;
+            Ok(tmp_file)
+        },
+    )?;
+    cancellation.check_cancelled()?;
+    tmp_file.flush().map_err(io_err_to_error)?;
+    Ok(tmp_file)
+}
+
 fn ensure_image_diff_side_size(path: &Path, bytes: u64) -> Result<()> {
     if bytes > MAX_IMAGE_DIFF_SIDE_BYTES {
         return Err(Error::new(ErrorKind::Backend(format!(
@@ -1386,6 +1408,16 @@ fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path:
         .map(|_| full)
 }
 
+#[cfg(test)]
+thread_local! {
+    static WORKTREE_FILTER_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn worktree_filter_runs_for_test() -> usize {
+    WORKTREE_FILTER_RUNS.with(std::cell::Cell::get)
+}
+
 fn copy_and_hash(
     reader: &mut impl Read,
     writer: &mut impl Write,
@@ -1545,15 +1577,16 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
 /// Move `tmp_file` to the content-addressed `cache_path`, keeping an existing
 /// regular file only when its bytes are identical. Shared by the worktree and
 /// preview caches, both of which live in the shared temp directory.
+/// Returns whether this call created the file at `cache_path`.
 fn persist_worktree_git_cache_file(
     tmp_file: tempfile::NamedTempFile,
     cache_path: &Path,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
     }
     match tmp_file.persist_noclobber(cache_path) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(true),
         Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let tmp_file = err.file;
             // A symlink is replaced even when the bytes it reaches match: its
@@ -1565,7 +1598,7 @@ fn persist_worktree_git_cache_file(
                 // both cheaper and semantically important: replacing it changes
                 // filesystem metadata that open diff rows use as a freshness
                 // guard, despite the normalized bytes being unchanged.
-                return Ok(());
+                return Ok(false);
             }
 
             // A corrupt file or the exceptionally unlikely hash collision must
@@ -1573,7 +1606,7 @@ fn persist_worktree_git_cache_file(
             std::fs::remove_file(cache_path).map_err(io_err_to_error)?;
             tmp_file
                 .persist_noclobber(cache_path)
-                .map(|_| ())
+                .map(|_| true)
                 .map_err(|err| io_err_to_error(err.error))
         }
         Err(err) => Err(io_err_to_error(err.error)),
@@ -1874,6 +1907,20 @@ mod tests {
             .set_modified(stamp.modified.unwrap())
             .unwrap();
         assert!(!repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blob_copy_rejects_partial_output_with_exit_code_one() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf partial; exit 1"]);
+        let error =
+            copy_git_stdout_to_temp_file(command, "git cat-file", &CancellationToken::new())
+                .expect_err("a failed cat-file must not produce a cache candidate");
+        assert!(
+            !matches!(error.kind(), ErrorKind::Cancelled),
+            "unexpected error kind: {error:?}"
+        );
     }
 
     #[test]

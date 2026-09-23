@@ -632,26 +632,43 @@ fn resolved_output_line_ix_matches_query(
     if raw_text.len() <= FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES {
         return query.is_match(raw_text.as_ref());
     }
+    line_text_chunks_any(
+        raw_text,
+        query.as_bytes().len().saturating_sub(1),
+        || false,
+        |chunk| query.is_match(chunk),
+    )
+}
 
-    let overlap = query.as_bytes().len().saturating_sub(1);
-    let mut chunk_start = 0usize;
-    while chunk_start < raw_text.len() {
-        let scan_start = chunk_start.saturating_sub(overlap);
-        let scan_end = chunk_start
+/// Scans a long line in bounded chunks that overlap by `overlap` bytes, so a
+/// match can straddle two chunks. Chunks are resolved to char boundaries:
+/// `slice_text` returns "" for a split character, which skipped whole chunks.
+fn line_text_chunks_any(
+    text: &gitcomet_core::file_diff::FileDiffLineText,
+    overlap: usize,
+    is_cancelled: impl Fn() -> bool,
+    mut is_match: impl FnMut(&str) -> bool,
+) -> bool {
+    let len = text.len();
+    let mut start = 0usize;
+    while start < len && !is_cancelled() {
+        let end = start
             .saturating_add(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES)
-            .min(raw_text.len());
-        let slice = raw_text
-            .slice_text(scan_start..scan_end)
-            .unwrap_or_default();
-        if query.is_match(slice.as_ref()) {
+            .min(len);
+        let Some((chunk, resolved)) = text.slice_text_resolved(start.saturating_sub(overlap)..end)
+        else {
+            return false;
+        };
+        if is_match(chunk.as_ref()) {
             return true;
         }
-        if scan_end >= raw_text.len() {
-            break;
-        }
-        chunk_start = scan_end;
+        // A character split by `end` starts the next chunk.
+        start = if resolved.end > start {
+            resolved.end
+        } else {
+            end
+        };
     }
-
     false
 }
 
@@ -1547,27 +1564,38 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.diff_search_pending_finalize = DiffSearchFinalizeMode::ScrollToFirst;
-        self.diff_search_queue_recompute(previous_query, cx);
+        // The document is unchanged, so the previous matches stay valid rows
+        // and ranges. Keep them on screen until the worker publishes instead
+        // of blanking highlights and the counter on every keystroke.
+        self.diff_search_queue_recompute(previous_query, false, cx);
     }
 
     pub(super) fn diff_search_schedule_preserving_current(&mut self, cx: &mut gpui::Context<Self>) {
-        // A previous edit already cleared the displayed matches while its
-        // worker runs. Further edits must retain that worker's resume anchor.
-        if self.diff_search_match_ix.is_some()
-            || !(self.diff_search_worker_running
-                || self.diff_search_pending_previous_query.is_some())
-        {
+        // While a result is pending, the displayed matches are either cleared
+        // by a previous edit or stale; keep the anchor that worker will use.
+        if !self.diff_search_result_pending() {
             self.diff_search_pending_finalize = DiffSearchFinalizeMode::preserve_current(
                 self.diff_search_match_ix,
                 self.diff_search_current_match_visible_ix(),
             );
         }
-        self.diff_search_queue_recompute(self.diff_search_query.clone(), cx);
+        // The edited text invalidates the editor's byte ranges: clear them.
+        self.diff_search_queue_recompute(self.diff_search_query.clone(), true, cx);
+    }
+
+    /// A worker result for the current query is still to come. A worker whose
+    /// sequence was superseded (e.g. by a synchronous recompute) publishes
+    /// nothing, so it must not hold back navigation.
+    fn diff_search_result_pending(&self) -> bool {
+        self.diff_search_pending_previous_query.is_some()
+            || self.diff_search_worker_running
+                && self.diff_search_worker_seq == self.diff_search_debounce_seq
     }
 
     fn diff_search_queue_recompute(
         &mut self,
         previous_query: SharedString,
+        document_changed: bool,
         cx: &mut gpui::Context<Self>,
     ) {
         if !self.diff_search_active {
@@ -1587,9 +1615,11 @@ impl MainPaneView {
         if let Some(token) = &self.diff_search_cancellation {
             token.cancel();
         }
-        self.diff_search_matches.clear();
-        self.diff_search_match_ix = None;
-        self.file_editor_search_clear();
+        if document_changed {
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
+            self.file_editor_search_clear();
+        }
         self.diff_search_start_background(cx);
     }
 
@@ -2546,7 +2576,7 @@ impl MainPaneView {
             return;
         }
 
-        if self.diff_search_worker_running || self.diff_search_pending_previous_query.is_some() {
+        if self.diff_search_result_pending() {
             self.diff_search_pending_navigation =
                 self.diff_search_pending_navigation.saturating_sub(1);
             return;
@@ -2576,7 +2606,7 @@ impl MainPaneView {
             return;
         }
 
-        if self.diff_search_worker_running || self.diff_search_pending_previous_query.is_some() {
+        if self.diff_search_result_pending() {
             self.diff_search_pending_navigation =
                 self.diff_search_pending_navigation.saturating_add(1);
             return;

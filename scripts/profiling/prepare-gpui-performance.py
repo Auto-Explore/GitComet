@@ -22,8 +22,14 @@ def prepare(checkout, config, patch_path):
     patch_path = patch_path.resolve()
     patch = patch_path.read_bytes()
     lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
+    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    # The workspace renames the dependency (`gpui = { package = "gpui-ce" }`);
+    # the lockfile records the package name.
+    name = manifest["workspace"]["dependencies"]["gpui"].get("package", "gpui")
     # Resolve the dependency from this checkout, not a revision from a past run.
-    dependency = next(p for p in lock["package"] if p["name"] == "gpui")
+    dependency = next((p for p in lock["package"] if p["name"] == name), None)
+    if dependency is None:
+        raise ValueError(f"Cargo.lock has no {name} package")
     pinned = dependency.get("source", "")
     if not pinned.startswith("git+") or "#" not in pinned:
         raise ValueError("Expected a pinned Git dependency for gpui")

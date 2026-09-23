@@ -6194,3 +6194,143 @@ fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::Tes
         assert!(pane.diff_search_pending_previous_query.is_none());
     });
 }
+
+// A diff reload recomputes synchronously and cancels the running worker, whose
+// result is then discarded. Navigation must act on the fresh synchronous
+// matches instead of queueing behind a worker that will never publish.
+#[gpui::test]
+fn diff_search_navigation_after_synchronous_recompute_is_not_lost(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70547);
+    let commit_id = CommitId("1122334455667747".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_cancelled_worker_nav",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    let navigated = cx.update(|_, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.rebuild_diff_cache(cx);
+            pane.ensure_diff_visible_indices();
+            pane.diff_search_active = true;
+            let previous = std::mem::replace(&mut pane.diff_search_query, "new".into());
+            pane.diff_search_schedule_query_recompute(previous, cx);
+            assert!(pane.diff_search_worker_running);
+            // What a diff reload does while the worker is still running.
+            pane.diff_search_recompute_matches();
+            assert_eq!(pane.diff_search_matches.len(), 2);
+            let before = pane.diff_search_match_ix;
+            pane.diff_search_next_match();
+            assert_ne!(
+                pane.diff_search_match_ix, before,
+                "F3 must step through the synchronously recomputed matches"
+            );
+            pane.diff_search_match_ix
+        })
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_matches.len(), 2);
+        assert_eq!(pane.diff_search_match_ix, navigated);
+        assert_eq!(pane.diff_search_pending_navigation, 0);
+        assert!(!pane.diff_search_worker_running);
+    });
+}
+
+// A query edit leaves the document unchanged, so the previous matches stay
+// valid. Clearing them on every keystroke blanked the highlights and counter
+// until the worker published.
+#[gpui::test]
+fn diff_search_query_edit_keeps_previous_matches_until_the_worker_publishes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70549);
+    let commit_id = CommitId("1122334455667749".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_keeps_matches",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    let schedule = |cx: &mut gpui::VisualTestContext, query: &'static str| {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.clone();
+            pane.update(app, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                pane.diff_search_active = true;
+                let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                pane.diff_search_schedule_query_recompute(previous, cx);
+                (pane.diff_search_matches.clone(), pane.diff_search_match_ix)
+            })
+        })
+    };
+    schedule(cx, "new");
+    draw_and_drain_test_window(cx);
+    let published = cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_search_matches
+            .clone()
+    });
+    assert_eq!(published.len(), 2);
+
+    let (while_pending, ix_while_pending) = schedule(cx, "ne");
+    assert_eq!(
+        while_pending, published,
+        "the previous query's matches stay on screen while the worker runs"
+    );
+    assert!(ix_while_pending.is_some());
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "ne");
+        assert!(!pane.diff_search_worker_running);
+        assert_eq!(pane.diff_search_match_ix, Some(0));
+    });
+}

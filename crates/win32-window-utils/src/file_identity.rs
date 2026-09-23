@@ -9,9 +9,9 @@ use std::time::SystemTime;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_BASIC_INFO,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_NAME_OPENED, FILE_SHARE_READ, FileBasicInfo,
-    FileIdInfo, GetDriveTypeW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
-    GetVolumeInformationByHandleW, VOLUME_NAME_GUID,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_NAME_OPENED, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FileBasicInfo, FileIdInfo, GetDriveTypeW, GetFileInformationByHandleEx,
+    GetFinalPathNameByHandleW, GetVolumeInformationByHandleW, VOLUME_NAME_GUID,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
@@ -84,8 +84,10 @@ fn file_usn(handle: HANDLE) -> Option<i64> {
     (usn > 0).then_some(usn)
 }
 
-/// Keeps writers and replacement handles excluded until content verification
-/// finishes. Windows may defer timestamps until the last writer closes.
+/// Keeps in-place writers excluded until content verification finishes:
+/// Windows may defer timestamps until the last writer closes. Rename-over and
+/// delete stay allowed, so a user's editor save or `git checkout` never fails
+/// on this handle; a replaced path has a new file ID, which stamps detect.
 /// Acquisition never waits for a sharing violation; callers use their normal
 /// uncached path when this optimization is unavailable.
 pub struct FileIdentityGuard {
@@ -112,7 +114,7 @@ impl FileIdentityGuard {
         }
         let file = OpenOptions::new()
             .read(true)
-            .share_mode(FILE_SHARE_READ)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)?;
         let handle = file.as_raw_handle();
@@ -276,6 +278,42 @@ mod tests {
             );
             assert!(flushed && unmapped && closed);
         }
+    }
+
+    #[test]
+    fn held_identity_allows_rename_over_and_delete_but_not_writers() {
+        let root = std::env::temp_dir().join(format!(
+            "gitcomet-identity-sharing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("user.txt");
+        std::fs::write(&path, b"before").unwrap();
+        let Some(original) = FileIdentityGuard::try_open(&path).unwrap() else {
+            // Unsupported filesystems/journal access deliberately disable reuse.
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        assert!(
+            OpenOptions::new().write(true).open(&path).is_err(),
+            "in-place writers stay excluded while the identity is read"
+        );
+        // An editor's atomic save renames a new file over the original.
+        let replacement = root.join("replacement.txt");
+        std::fs::write(&replacement, b"after").unwrap();
+        std::fs::rename(&replacement, &path).expect("rename over a held file");
+        assert_eq!(std::fs::read(&path).unwrap(), b"after");
+        let replaced = FileIdentityGuard::try_open(&path).unwrap().unwrap();
+        assert_ne!(replaced.identity().file_id, original.identity().file_id);
+        // `git checkout` unlinks a file before writing its new version.
+        std::fs::remove_file(&path).expect("delete a held file");
+        drop(replaced);
+        drop(original);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

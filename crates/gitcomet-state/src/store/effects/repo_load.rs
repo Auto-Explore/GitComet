@@ -2111,7 +2111,7 @@ pub(super) fn schedule_load_diff_file_image(
 
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
-    slots: &[super::super::executor::LatestTaskSlot; 5],
+    slots: &super::super::executor::SelectedDiffSlots,
     repos: &RepoMap,
     thread_state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: StoreWorkerSender,
@@ -2129,7 +2129,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
-            &slots[0],
+            &slots.patch,
             repos,
             repo_id,
             msg_tx,
@@ -2156,7 +2156,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
-            &slots[4],
+            &slots.file_text,
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2182,7 +2182,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
-            &slots[1],
+            &slots.submodule_summary,
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2208,7 +2208,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
-            &slots[2],
+            &slots.file_image,
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2234,7 +2234,7 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
-            &slots[3],
+            &slots.preview_text,
             repos,
             repo_id,
             msg_tx.clone(),

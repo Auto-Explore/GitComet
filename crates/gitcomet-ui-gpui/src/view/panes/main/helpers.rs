@@ -3322,6 +3322,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_search_debounce_seq: u64,
     pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
     pub(in crate::view) diff_search_worker_running: bool,
+    /// `diff_search_debounce_seq` the running worker may publish under.
+    pub(in crate::view) diff_search_worker_seq: u64,
     pub(in crate::view) diff_search_pending_finalize: super::diff_search::DiffSearchFinalizeMode,
     pub(in crate::view) diff_search_cancellation:
         Option<gitcomet_core::services::CancellationToken>,

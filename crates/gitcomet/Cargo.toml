@@ -43,6 +43,7 @@ wayland-client = { workspace = true }
 gitcomet-core = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
 signal-hook = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

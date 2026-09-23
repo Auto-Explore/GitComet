@@ -113,6 +113,45 @@ impl LaunchChild {
             self.stopped = true;
         }
     }
+
+    /// Polls the leader and, once it has exited, stops the rest of the tree
+    /// before reaping it. On Unix the group ID is the leader's PID: killing
+    /// after the reap could signal an unrelated group that reused it.
+    fn try_wait_stopping_tree(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        #[cfg(unix)]
+        {
+            if !leader_exited_unreaped(self.child.id())? {
+                return Ok(None);
+            }
+            self.stop_tree();
+            self.child.try_wait()
+        }
+        #[cfg(not(unix))]
+        {
+            // The job object handle is owned, so ordering is irrelevant here.
+            let status = self.child.try_wait()?;
+            if status.is_some() {
+                self.stop_tree();
+            }
+            Ok(status)
+        }
+    }
+}
+
+/// Whether `pid` has exited, without reaping it. WNOWAIT leaves the zombie in
+/// place, which keeps its PID, and so its process group ID, reserved.
+#[cfg(unix)]
+fn leader_exited_unreaped(pid: u32) -> std::io::Result<bool> {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    let pid = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| std::io::Error::other("invalid child PID"))?;
+    let status = waitid(
+        WaitId::Pid(pid),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )?;
+    Ok(status.is_some())
 }
 
 impl std::ops::Deref for LaunchChild {
@@ -358,13 +397,12 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
             return Err(err);
         }
 
+        // Closing inherited pipes must not depend on the already-exited app
+        // keeping its background process ownership alive.
         if let Some(status) = child
-            .try_wait()
+            .try_wait_stopping_tree()
             .map_err(|err| format!("failed to poll child process: {err}"))?
         {
-            // Closing inherited pipes must not depend on the already-exited
-            // app keeping its background process ownership alive.
-            child.stop_tree();
             let _ = reader.join();
             drain_probe_channel(
                 &rx,
@@ -522,7 +560,7 @@ fn run_first_interactive_probe(
         }
 
         if let Some(status) = child
-            .try_wait()
+            .try_wait_stopping_tree()
             .map_err(|err| format!("failed to poll {stage}: {err}"))?
         {
             child_status = Some(status);
@@ -1354,6 +1392,28 @@ mod tests {
             Ok("descendant") => thread::sleep(Duration::from_secs(60)),
             _ => {} // Ordinary test runs do not launch a fixture.
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_child_stops_its_group_before_reaping_the_leader() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]).stdin(Stdio::null());
+        let mut child = LaunchChild::spawn(command).unwrap();
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !leader_exited_unreaped(pid).unwrap() {
+            assert!(Instant::now() < deadline, "leader did not exit");
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Peeking must not reap: the zombie keeps the group ID reserved.
+        assert!(leader_exited_unreaped(pid).unwrap());
+        let raw = rustix::process::Pid::from_raw(pid as i32).unwrap();
+        rustix::process::test_kill_process(raw).expect("the zombie leader still exists");
+        assert!(!child.stopped);
+        let status = child.try_wait_stopping_tree().unwrap().unwrap();
+        assert_eq!(status.code(), Some(3));
+        assert!(child.stopped, "the tree is stopped before the reap");
     }
 
     #[test]

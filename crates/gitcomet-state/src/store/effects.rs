@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::RepoId;
-use super::executor::{LatestTaskSlot, TaskExecutor};
+use super::executor::{SelectedDiffSlots, TaskExecutor};
 use super::repo_load_trace;
 use super::worker_channel::StoreWorkerSender;
 
@@ -39,9 +39,7 @@ pub(super) struct RepoTaskToken {
     // The revision distinguishes refreshes of the same path. All loads for one
     // selection share a child token, so superseding it leaves log/status work alive.
     selected_diff: Arc<Mutex<Option<(DiffTarget, u64, CancellationToken)>>>,
-    // Separate slots for patch, submodule, image, preview and text loads: sharing
-    // one slot would let complementary results replace each other before running.
-    selected_diff_slots: [LatestTaskSlot; 5],
+    selected_diff_slots: SelectedDiffSlots,
 }
 
 impl RepoTaskToken {
@@ -51,7 +49,7 @@ impl RepoTaskToken {
             cancellation: CancellationToken::new(),
             log_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
             selected_diff: Arc::new(Mutex::new(None)),
-            selected_diff_slots: std::array::from_fn(|_| LatestTaskSlot::default()),
+            selected_diff_slots: SelectedDiffSlots::default(),
         }
     }
 

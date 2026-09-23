@@ -296,31 +296,41 @@ fn command_is_known_hook_free(cmd: &Command) -> bool {
     if cmd.get_program() != "git" {
         return false;
     }
+    let Some((subcommand, mut args)) = git_subcommand(cmd, true) else {
+        return false;
+    };
+    match subcommand {
+        "remote" => args.next().is_some_and(|arg| arg == "set-url"),
+        "config" => args.next().is_some_and(|arg| {
+            matches!(
+                arg.to_str(),
+                Some("--get" | "--get-all" | "--get-regexp" | "--list" | "get" | "list")
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// Skips Git's global options and returns the subcommand with the arguments
+/// after it. `None` for a non-UTF-8 argument or no subcommand. `strict` also
+/// rejects global options outside a known side-effect-free set.
+fn git_subcommand(cmd: &Command, strict: bool) -> Option<(&str, std::process::CommandArgs<'_>)> {
     let mut args = cmd.get_args();
     while let Some(arg) = args.next() {
-        let Some(arg) = arg.to_str() else {
-            return false;
-        };
-        match arg {
+        match arg.to_str()? {
             "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
-                if args.next().is_none() {
-                    return false;
-                }
+                args.next()?;
             }
             "--no-optional-locks" | "--no-pager" | "--literal-pathspecs" => {}
-            "remote" => return args.next().is_some_and(|arg| arg == "set-url"),
-            "config" => {
-                return args.next().is_some_and(|arg| {
-                    matches!(
-                        arg.to_str(),
-                        Some("--get" | "--get-all" | "--get-regexp" | "--list" | "get" | "list")
-                    )
-                });
+            value if value.starts_with('-') => {
+                if strict {
+                    return None;
+                }
             }
-            _ => return false,
+            subcommand => return Some((subcommand, args)),
         }
     }
-    false
+    None
 }
 
 impl Drop for Trace2Monitor {
@@ -502,28 +512,28 @@ pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
 }
 
 fn command_may_require_auth(cmd: &Command) -> bool {
-    let mut args = cmd.get_args();
-    while let Some(arg) = args.next() {
-        let Some(arg) = arg.to_str() else {
-            return false;
-        };
-        match arg {
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
-                let _ = args.next();
-            }
-            value if value.starts_with('-') => {}
-            // Network commands need credentials. The remaining commands can
-            // create signatures and, with `gpg.format = ssh`, invoke
-            // `ssh-keygen -Y sign`, which also obtains its passphrase through
-            // askpass.
-            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit"
-            | "commit-tree" | "tag" | "merge" | "rebase" | "cherry-pick" | "revert" | "am" => {
-                return true;
-            }
-            _ => return false,
-        }
-    }
-    false
+    // Network commands need credentials. The remaining commands can create
+    // signatures and, with `gpg.format = ssh`, invoke `ssh-keygen -Y sign`,
+    // which also obtains its passphrase through askpass.
+    git_subcommand(cmd, false).is_some_and(|(subcommand, _)| {
+        matches!(
+            subcommand,
+            "clone"
+                | "fetch"
+                | "pull"
+                | "push"
+                | "submodule"
+                | "ls-remote"
+                | "commit"
+                | "commit-tree"
+                | "tag"
+                | "merge"
+                | "rebase"
+                | "cherry-pick"
+                | "revert"
+                | "am"
+        )
+    })
 }
 
 fn git_timeout_error(

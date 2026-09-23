@@ -434,6 +434,7 @@ impl MainPaneView {
             diff_search_debounce_seq: 0,
             diff_search_pending_previous_query: None,
             diff_search_worker_running: false,
+            diff_search_worker_seq: 0,
             diff_search_pending_finalize:
                 super::super::diff_search::DiffSearchFinalizeMode::ScrollToFirst,
             diff_search_cancellation: None,

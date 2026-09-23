@@ -61,6 +61,8 @@ struct ProbeLog {
 enum ProbeRecord {
     Text(String),
     Json(Value),
+    /// Acknowledged once every earlier record is written and flushed.
+    Flush(mpsc::SyncSender<()>),
 }
 static NEXT_ACTION: AtomicU64 = AtomicU64::new(1);
 
@@ -114,6 +116,15 @@ fn probe_writer(rx: mpsc::Receiver<ProbeRecord>, file: Option<File>, jsonl: Opti
                             file.write_all(b"\n")?;
                         }
                     }
+                    ProbeRecord::Flush(ack) => {
+                        if let Some(file) = file.as_mut() {
+                            file.flush()?;
+                        }
+                        if let Some(file) = jsonl.as_mut() {
+                            file.flush()?;
+                        }
+                        let _ = ack.send(());
+                    }
                 }
             }
             if let Some(file) = file.as_mut() {
@@ -128,6 +139,34 @@ fn probe_writer(rx: mpsc::Receiver<ProbeRecord>, file: Option<File>, jsonl: Opti
     if let Err(error) = result {
         write_stderr_line(format_args!("ui-probe writer failed: {error}"));
     }
+}
+
+/// Waits, at most `timeout`, until everything logged so far is written. The
+/// writer thread is detached, so records still queued at exit are otherwise lost.
+pub(crate) fn flush(timeout: Duration) {
+    let Some(log) = LOG.get() else {
+        return;
+    };
+    flush_writer(&log.writer, timeout);
+}
+
+fn flush_writer(writer: &mpsc::SyncSender<ProbeRecord>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+    let mut record = ProbeRecord::Flush(ack_tx);
+    // Never block on a full queue: a writer stuck on a closed stderr pipe
+    // must not hang the app's quit.
+    loop {
+        match writer.try_send(record) {
+            Ok(()) => break,
+            Err(mpsc::TrySendError::Full(returned)) if Instant::now() < deadline => {
+                record = returned;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(_) => return,
+        }
+    }
+    let _ = ack_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
 }
 
 /// A diagnostic action starts at application handling, not at hardware input.
@@ -264,6 +303,12 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
         drop(ping_rx);
         return;
     }
+
+    cx.on_app_quit(|_| {
+        flush(Duration::from_secs(2));
+        async {}
+    })
+    .detach();
 
     // Do not turn on process-wide frame collection until a collector and the
     // pinger that drives it are both guaranteed to exist.
@@ -564,6 +609,26 @@ impl MainThreadCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flush_returns_after_every_queued_record_is_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("probe.jsonl");
+        let (tx, rx) = mpsc::sync_channel(8192);
+        let file = File::create(&path).unwrap();
+        let writer = std::thread::spawn(move || probe_writer(rx, None, Some(file)));
+        // Large enough that the writer is still busy when this thread reads.
+        let padding = "x".repeat(2048);
+        for id in 0..4000 {
+            tx.try_send(ProbeRecord::Json(json!({ "id": id, "padding": padding })))
+                .unwrap();
+        }
+        flush_writer(&tx, Duration::from_secs(10));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written.lines().count(), 4000);
+        drop(tx);
+        writer.join().unwrap();
+    }
 
     #[test]
     fn submission_time_is_separate_from_cpu_drawing_and_raw_timestamps() {

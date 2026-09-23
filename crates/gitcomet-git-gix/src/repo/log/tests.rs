@@ -1401,6 +1401,42 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
     );
 }
 
+// A settled worktree file must memoize on its first read even though that read
+// creates the cache file: the file is private to this process, so its fresh
+// timestamps cannot hide a later write. Real time, not RacyClockSkew, because
+// the skew would also age the cache file and mask the difference.
+#[cfg(unix)]
+#[test]
+fn worktree_file_source_memo_trusts_a_cache_file_it_just_created() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_repo(tmp.path());
+    commit_file(tmp.path(), "settled.txt", "settled\n", "base");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+
+    let repo = open_repo(tmp.path());
+    let handle = repo.repo();
+    let read = || {
+        repo.cached_git_normalized_worktree_file_source(&handle, Path::new("settled.txt"))
+            .expect("source")
+            .expect("file exists")
+    };
+    let first = read();
+    assert_eq!(
+        repo.worktree_source_memo.lock().expect("memo").len(),
+        1,
+        "the first read of a settled file must memoize"
+    );
+    let filtered = crate::repo::diff::worktree_filter_runs_for_test();
+    let second = read();
+    assert_eq!(
+        crate::repo::diff::worktree_filter_runs_for_test(),
+        filtered,
+        "a read within 2 s of creating the cache file must still hit the memo"
+    );
+    assert_eq!(first.path, second.path);
+    assert_eq!(first.identity, second.identity);
+}
+
 #[cfg(unix)]
 #[test]
 fn worktree_file_source_memo_invalidates_on_gitattributes_change() {

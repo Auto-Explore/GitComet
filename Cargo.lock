@@ -2205,6 +2205,7 @@ dependencies = [
  "process-wrap",
  "rustc-hash 2.1.3",
  "rustfs-mimalloc",
+ "rustix",
  "serde",
  "serde_json",
  "signal-hook",

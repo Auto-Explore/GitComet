@@ -389,6 +389,17 @@ impl DiskFileStamp {
         Self::acquire(path).filter(|guard| !guard.stamp.is_racy_at(now))
     }
 
+    /// Stamp compared against a memoized cache file. On Unix a recorded stamp
+    /// either was aged when recorded or belongs to a file the recorder created
+    /// privately, so equality suffices. Windows also needs the guard's
+    /// open-writer exclusion.
+    fn cache_file_stamp_for_memo_hit(path: &Path) -> Option<Self> {
+        #[cfg(windows)]
+        return Self::acquire_for_verification_memo(path).map(|guard| guard.stamp);
+        #[cfg(not(windows))]
+        Self::read(path)
+    }
+
     // Windows may coalesce journal updates while handles remain open. Seal a
     // verified read before recording its identity, otherwise a later mapped write
     // could reuse that identity. Failure disables the memo, never verification.

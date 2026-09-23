@@ -101,6 +101,27 @@ mod tests {
         }
     }
 
+    // `slice_text` returns "" for a range that splits a character, which made
+    // both scanners skip the whole 32 KiB chunk the match was in.
+    #[test]
+    fn long_line_match_survives_a_chunk_ending_inside_a_character() {
+        let mut line = "x".repeat(100);
+        line.push_str("needle");
+        line.push_str(&"x".repeat(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES - line.len() - 1));
+        line.push('é');
+        line.push_str(&"y".repeat(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES));
+        assert!(!line.is_char_boundary(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES));
+        let text: FileDiffLineText = line.into();
+
+        let matcher = DiffSearchMatcher::new("NEEDLE", DiffSearchOptions::default());
+        assert!(RowDocument::matches_text(&matcher, &text));
+        let needle = AsciiCaseInsensitiveNeedle::new("NEEDLE").unwrap();
+        assert!(resolved_output_line_ix_matches_query(&text, needle));
+        // A match in the chunk after the split character is still found.
+        let matcher = DiffSearchMatcher::new("xéy", DiffSearchOptions::default());
+        assert!(RowDocument::matches_text(&matcher, &text));
+    }
+
     #[test]
     fn background_search_cancellation_does_not_cache_partial_results() {
         let token = CancellationToken::new();
@@ -200,19 +221,12 @@ impl SearchDocument {
 
 impl RowDocument {
     fn matches_text(matcher: &DiffSearchMatcher, text: &FileDiffLineText) -> bool {
-        let overlap = matcher.query().len().saturating_sub(1);
-        let mut start = 0;
-        while start < text.len() && !matcher.is_cancelled() {
-            let end = (start + FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES).min(text.len());
-            let slice = text
-                .slice_text(start.saturating_sub(overlap)..end)
-                .unwrap_or_default();
-            if matcher.is_match(slice.as_ref()) {
-                return true;
-            }
-            start = end;
-        }
-        false
+        line_text_chunks_any(
+            text,
+            matcher.query().len().saturating_sub(1),
+            || matcher.is_cancelled(),
+            |chunk| matcher.is_match(chunk),
+        )
     }
 
     fn visual_row(&self, source: usize, column: usize, offset: usize) -> usize {
@@ -595,6 +609,8 @@ impl MainPaneView {
         }
         if self.diff_search_query.is_empty() {
             self.diff_search_regex_error = None;
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
             self.file_editor_search_clear();
             self.diff_search_probe_render = self.diff_search_probe_action;
             crate::ui_probe::action_phase(
@@ -622,6 +638,7 @@ impl MainPaneView {
         self.diff_search_cancellation = Some(cancellation.clone());
         self.diff_search_worker_running = true;
         let sequence = self.diff_search_debounce_seq;
+        self.diff_search_worker_seq = sequence;
         let action = self.diff_search_probe_action;
         let finalize = self.diff_search_pending_finalize;
         let query = self.diff_search_query.clone();
