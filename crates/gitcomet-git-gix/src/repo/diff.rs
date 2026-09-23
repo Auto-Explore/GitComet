@@ -1933,6 +1933,10 @@ mod tests {
         let handle = repo.repo();
         let token = CancellationToken::new();
         assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+        assert!(
+            repo.preview_blob_verified.lock().unwrap().is_empty(),
+            "Windows must verify preview contents even outside the timestamp race window"
+        );
         let modified = std::fs::metadata(&cache).unwrap().modified().unwrap();
         let mut writer = std::fs::OpenOptions::new()
             .write(true)
@@ -2169,7 +2173,8 @@ mod tests {
         );
     }
 
-    #[cfg(any(unix, windows))]
+    // Injecting a real memo stamp requires Unix; Windows always rehashes.
+    #[cfg(unix)]
     #[test]
     fn preview_blob_verification_memo_rechecks_matching_racy_stamp() {
         let tmp = tempfile::tempdir().expect("tempdir");
