@@ -2027,6 +2027,126 @@ fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver ui-scale fixture");
 }
 
+#[gpui::test]
+fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext) {
+    use crate::view::conflict_resolver::ThreeWayVisibleItem;
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = tempfile::tempdir().expect("conflict fixture directory");
+    let path = Path::new("context.txt");
+    let prefix: String = (0..80)
+        .map(|ix| {
+            if [10, 40, 70].contains(&ix) {
+                format!("needle context {ix}\n")
+            } else {
+                format!("context {ix}\n")
+            }
+        })
+        .collect();
+    let current = format!("{prefix}<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n");
+    std::fs::write(workdir.path().join(path), &current).expect("write conflict fixture");
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(198),
+        workdir.path(),
+        path,
+        &format!("{prefix}base\n"),
+        &format!("{prefix}ours\n"),
+        &format!("{prefix}theirs\n"),
+        &current,
+    );
+    draw_and_drain_test_window(cx);
+    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            assert_eq!(pane.conflict_resolver.path.as_deref(), Some(path));
+            pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+            if pane.conflict_resolver.collapse_context {
+                pane.conflict_resolver_toggle_collapse_context(cx);
+            }
+            pane.diff_search_active = true;
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let assert_matches = |cx: &mut gpui::VisualTestContext, expected_lines: &[usize]| {
+        cx.update(|_, app| {
+            let pane = main_pane.read(app);
+            assert!(!pane.diff_search_worker_running);
+            assert!(pane.diff_search_pending_previous_query.is_none());
+            let expected: Vec<_> = expected_lines
+                .iter()
+                .map(|&line| {
+                    pane.conflict_resolver
+                        .visible_index_for_aligned_row(line)
+                        .expect("matching context line is visible")
+                })
+                .collect();
+            assert_eq!(pane.diff_search_matches, expected);
+        });
+    };
+    let search = |cx: &mut gpui::VisualTestContext, query: &'static str, expected: &[usize]| {
+        cx.update(|_, app| {
+            main_pane.update(app, |pane, cx| {
+                let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                pane.diff_search_schedule_query_recompute(previous, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert_matches(cx, expected);
+    };
+
+    // Warm the snapshot before folding. Query edits must use the new projection.
+    search(cx, "needle", &[10, 40, 70]);
+    let fold_id = cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_toggle_collapse_context(cx);
+            match pane.conflict_resolver.three_way_visible_item(0) {
+                Some(ThreeWayVisibleItem::CollapsedContext { fold_id, .. }) => fold_id,
+                other => panic!("expected the leading context fold, got {other:?}"),
+            }
+        })
+    });
+    search(cx, "needle context", &[]);
+
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_reveal_context_fold(fold_id, true, cx);
+        });
+    });
+    search(cx, "NEEDLE", &[10]);
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_reveal_context_fold(fold_id, false, cx);
+        });
+    });
+    search(cx, "needle context", &[10, 70]);
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_expand_context_fold(fold_id, cx);
+        });
+    });
+    search(cx, "needle", &[10, 40, 70]);
+
+    // A worker already using the expanded snapshot must also discard its
+    // result and retry if the context folds before it can publish.
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            let previous = std::mem::replace(&mut pane.diff_search_query, "need".into());
+            pane.diff_search_schedule_query_recompute(previous, cx);
+            assert!(pane.diff_search_worker_running);
+            pane.conflict_resolver_toggle_collapse_context(cx);
+            pane.conflict_resolver_toggle_collapse_context(cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_matches(cx, &[]);
+}
+
 /// Ctrl+F in the merge tool must bring the hit into view — in the input
 /// columns *and* in the resolved output.
 ///

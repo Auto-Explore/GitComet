@@ -22,6 +22,7 @@ pub(in crate::view) struct SearchDocumentKey {
     markdown: u64,
     markdown_wrap: [Option<MarkdownPreviewWrapKey>; 4],
     conflict: (u64, Option<u64>, u64, ConflictResolverViewMode, bool),
+    conflict_projection: u64,
     surface: (bool, bool, bool, bool),
 }
 
@@ -463,6 +464,7 @@ impl MainPaneView {
                 self.conflict_resolver.view_mode,
                 self.conflict_resolver.hide_resolved,
             ),
+            conflict_projection: self.conflict_resolver.visible_projection_rev,
             surface: (
                 self.is_file_editor_active(),
                 self.is_file_preview_active(),

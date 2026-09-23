@@ -73,14 +73,6 @@ On Linux, use `profile-gitcomet-process-tree.sh --binary PATH --out-dir PATH
 choose its output. `build_release_debug.sh` builds the symbolized profile and
 forwards additional Cargo build arguments.
 
-`prepare-gpui-performance.py --checkout /path/outside/GitComet/gpui --config
-target/gpui-performance.toml` prepares the bundled GPUI patch in a separate
-checkout. It derives the source and revision from `Cargo.lock`, checks the patch
-before applying it, and refuses unrelated changes. `--patch` selects another
-reviewed patch. Build with `cargo --config target/gpui-performance.toml ...`.
-The bundled patch requires compatible GPUI source; rebase it when updating the
-dependency. The helper does not edit Cargo's global cache or dependency pin.
-
 ## Suites and workflow timing
 
 | Driver | Purpose |
