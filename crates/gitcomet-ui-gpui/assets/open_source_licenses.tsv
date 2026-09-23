@@ -142,6 +142,7 @@ ctor	1.0.13	Apache-2.0 OR MIT
 cursor-icon	1.2.0	MIT OR Apache-2.0 OR Zlib
 dashmap	6.2.1	MIT
 data-url	0.3.2	MIT OR Apache-2.0
+defmt	0.3.100	MIT OR Apache-2.0
 defmt	1.1.1	MIT OR Apache-2.0
 defmt-macros	1.1.1	MIT OR Apache-2.0
 defmt-parser	1.0.0	MIT OR Apache-2.0
@@ -177,7 +178,7 @@ euclid	0.22.14	MIT OR Apache-2.0
 event-listener	5.4.2	Apache-2.0 OR MIT
 event-listener-strategy	0.5.4	Apache-2.0 OR MIT
 exr	1.74.2	BSD-3-Clause
-faster-hex	0.10.0	MIT
+faster-hex	0.10.1	MIT
 fastrand	2.5.0	Apache-2.0 OR MIT
 fax	0.2.7	MIT
 fdeflate	0.3.7	MIT OR Apache-2.0
@@ -372,7 +373,7 @@ libc	0.2.189	MIT OR Apache-2.0
 libfuzzer-sys	0.4.13	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
-libredox	0.1.24	MIT
+libredox	0.1.25	MIT
 libz-sys	1.1.29	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
 link-section	0.19.3	Apache-2.0 OR MIT
@@ -383,7 +384,7 @@ litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.34	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.18.4	MIT
+lru	0.18.5	MIT
 lyon	1.0.19	MIT OR Apache-2.0
 lyon_algorithms	1.0.21	MIT OR Apache-2.0
 lyon_geom	1.0.19	MIT OR Apache-2.0
