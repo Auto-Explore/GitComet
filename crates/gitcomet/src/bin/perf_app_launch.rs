@@ -4,6 +4,7 @@ use gitcomet_ui_gpui::perf_ram_guard::{
     benchmark_ram_limit_kib, install_benchmark_process_ram_guard, process_rss_kib,
 };
 use gitcomet_ui_gpui::perf_sidecar::{PerfSidecarReport, write_criterion_sidecar};
+use process_wrap::std::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, json};
 use std::collections::VecDeque;
@@ -83,6 +84,106 @@ struct HarnessRunResult {
     repos_loaded: u64,
     repos_total: u64,
     stderr_tail: Vec<String>,
+}
+
+/// The app can exit while a background Git probe is starting. On Windows that
+/// can leave a suspended descendant holding stderr open. Own the whole tree
+/// before the app starts, including descendants whose direct parent has exited.
+struct LaunchChild {
+    child: Box<dyn ChildWrapper>,
+    stopped: bool,
+}
+
+impl LaunchChild {
+    fn spawn(command: Command) -> std::io::Result<Self> {
+        let mut command = CommandWrap::from(command);
+        #[cfg(windows)]
+        command.wrap(JobObject);
+        #[cfg(unix)]
+        command.wrap(ProcessGroup::leader());
+        Ok(Self {
+            child: command.spawn()?,
+            stopped: false,
+        })
+    }
+
+    fn stop_tree(&mut self) {
+        if !self.stopped {
+            let _ = self.child.start_kill();
+            self.stopped = true;
+        }
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        // process-wrap 10's JobObjectChild::try_wait consumes completion-port
+        // messages without remembering that the job finished. Poll only the
+        // leader, leaving those messages for the final whole-job wait.
+        #[cfg(windows)]
+        return self.child.inner_mut().try_wait();
+        #[cfg(not(windows))]
+        self.child.try_wait()
+    }
+
+    /// Polls the leader and, once it has exited, stops the rest of the tree
+    /// before reaping it. On Unix the group ID is the leader's PID: killing
+    /// after the reap could signal an unrelated group that reused it.
+    fn try_wait_stopping_tree(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        #[cfg(unix)]
+        {
+            if !leader_exited_unreaped(self.child.id())? {
+                return Ok(None);
+            }
+            self.stop_tree();
+            self.try_wait()
+        }
+        #[cfg(not(unix))]
+        {
+            // The job object handle is owned, so ordering is irrelevant here.
+            let status = self.try_wait()?;
+            if status.is_some() {
+                self.stop_tree();
+            }
+            Ok(status)
+        }
+    }
+}
+
+/// Whether `pid` has exited, without reaping it. WNOWAIT leaves the zombie in
+/// place, which keeps its PID, and so its process group ID, reserved.
+#[cfg(unix)]
+fn leader_exited_unreaped(pid: u32) -> std::io::Result<bool> {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    let pid = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| std::io::Error::other("invalid child PID"))?;
+    let status = waitid(
+        WaitId::Pid(pid),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )?;
+    Ok(status.is_some())
+}
+
+impl std::ops::Deref for LaunchChild {
+    type Target = dyn ChildWrapper;
+    fn deref(&self) -> &Self::Target {
+        self.child.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for LaunchChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.child.as_mut()
+    }
+}
+
+impl Drop for LaunchChild {
+    fn drop(&mut self) {
+        if !self.stopped {
+            self.stop_tree();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -244,12 +345,11 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
         command.env("GITCOMET_PERF_STARTUP_DISABLE_AUTO_RESTORE", "1");
     }
 
-    let mut child = command
-        .spawn()
+    let mut child = LaunchChild::spawn(command)
         .map_err(|err| format!("failed to spawn launch probe child process: {err}"))?;
 
     let stderr = child
-        .stderr
+        .stderr()
         .take()
         .ok_or_else(|| "child process stderr pipe was not available".to_string())?;
     let (tx, rx) = mpsc::channel();
@@ -307,8 +407,10 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
             return Err(err);
         }
 
+        // Closing inherited pipes must not depend on the already-exited app
+        // keeping its background process ownership alive.
         if let Some(status) = child
-            .try_wait()
+            .try_wait_stopping_tree()
             .map_err(|err| format!("failed to poll child process: {err}"))?
         {
             let _ = reader.join();
@@ -402,12 +504,11 @@ fn run_first_interactive_probe(
         command.env("GITCOMET_PERF_STARTUP_DISABLE_AUTO_RESTORE", "1");
     }
 
-    let mut child = command
-        .spawn()
+    let mut child = LaunchChild::spawn(command)
         .map_err(|err| format!("failed to spawn {stage} process: {err}"))?;
 
     let stderr = child
-        .stderr
+        .stderr()
         .take()
         .ok_or_else(|| format!("{stage} stderr pipe was not available"))?;
     let (tx, rx) = mpsc::channel();
@@ -469,7 +570,7 @@ fn run_first_interactive_probe(
         }
 
         if let Some(status) = child
-            .try_wait()
+            .try_wait_stopping_tree()
             .map_err(|err| format!("failed to poll {stage}: {err}"))?
         {
             child_status = Some(status);
@@ -481,9 +582,8 @@ fn run_first_interactive_probe(
         }
     }
 
-    if child_status.is_none() {
-        let _ = terminate_child(&mut child);
-    }
+    // Even a successful leader exit can leave inherited pipes in descendants.
+    let _ = terminate_child(&mut child);
     let _ = reader.join();
     drain_probe_channel(
         &rx,
@@ -648,15 +748,15 @@ fn build_launch_sidecar_metrics(
     metrics
 }
 
-fn terminate_child(child: &mut std::process::Child) -> Result<ExitStatus, String> {
-    let _ = child.kill();
+fn terminate_child(child: &mut LaunchChild) -> Result<ExitStatus, String> {
+    child.stop_tree();
     child
         .wait()
         .map_err(|err| format!("failed to wait for terminated child process: {err}"))
 }
 
 fn enforce_child_ram_limit(
-    child: &mut std::process::Child,
+    child: &mut LaunchChild,
     rss_limit_kib: Option<u64>,
     label: &str,
 ) -> Result<(), String> {
@@ -1276,6 +1376,124 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use tempfile::tempdir;
+
+    fn pipe_fixture_command(mode: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--exact", "tests::launch_pipe_fixture", "--nocapture"])
+            .env("GITCOMET_LAUNCH_PIPE_FIXTURE", mode);
+        command
+    }
+
+    #[test]
+    #[allow(clippy::zombie_processes)] // Exercise a leader exiting before its descendant.
+    fn launch_pipe_fixture() {
+        match env::var("GITCOMET_LAUNCH_PIPE_FIXTURE").as_deref() {
+            Ok("parent") => {
+                let mut command = pipe_fixture_command("descendant");
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt as _;
+                    // Reproduce app exit during a background probe's job setup.
+                    command.creation_flags(0x0800_0004); // NO_WINDOW | SUSPENDED
+                }
+                let _descendant = command.spawn().unwrap();
+            }
+            Ok("descendant") => thread::sleep(Duration::from_secs(60)),
+            _ => {} // Ordinary test runs do not launch a fixture.
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_child_cleanup_after_repeated_exit_polls_finishes() {
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut command = pipe_fixture_command("exit");
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut child = LaunchChild::spawn(command).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while child.try_wait_stopping_tree().unwrap().is_none() {
+                assert!(Instant::now() < deadline, "fixture leader did not exit");
+                thread::sleep(Duration::from_millis(5));
+            }
+            // Drain every queued notification in the old implementation,
+            // including ACTIVE_PROCESS_ZERO, before exercising the warm-up
+            // probe's unconditional cleanup.
+            for _ in 0..128 {
+                assert!(child.try_wait().unwrap().unwrap().success());
+            }
+            tx.send(terminate_child(&mut child)).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10))
+                .expect("cleanup must not wait for an already-consumed job notification")
+                .unwrap()
+                .success()
+        );
+        worker.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_child_stops_its_group_before_reaping_the_leader() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]).stdin(Stdio::null());
+        let mut child = LaunchChild::spawn(command).unwrap();
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !leader_exited_unreaped(pid).unwrap() {
+            assert!(Instant::now() < deadline, "leader did not exit");
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Peeking must not reap: the zombie keeps the group ID reserved.
+        assert!(leader_exited_unreaped(pid).unwrap());
+        let raw = rustix::process::Pid::from_raw(pid as i32).unwrap();
+        rustix::process::test_kill_process(raw).expect("the zombie leader still exists");
+        assert!(!child.stopped);
+        let status = child.try_wait_stopping_tree().unwrap().unwrap();
+        assert_eq!(status.code(), Some(3));
+        assert!(child.stopped, "the tree is stopped before the reap");
+    }
+
+    #[test]
+    fn exited_launch_child_cannot_leave_descendants_holding_stderr() {
+        let mut command = pipe_fixture_command("parent");
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = LaunchChild::spawn(command).unwrap();
+        let mut pipe = child.stderr().take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            use std::io::Read as _;
+            let mut bytes = Vec::new();
+            let result = pipe.read_to_end(&mut bytes);
+            tx.send(result).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            assert!(Instant::now() < deadline, "fixture leader did not exit");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "descendant must retain stderr before cleanup"
+        );
+        child.stop_tree();
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("owned descendants must release stderr")
+            .unwrap();
+        reader.join().unwrap();
+    }
 
     #[test]
     fn parse_cli_args_defaults_to_harness_mode() {
