@@ -12,6 +12,21 @@ if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
 )
 :arch_set
 
+rem The CI runner resolves these once per Cargo invocation. Keep standalone
+rem Cargo builds on the discovery path and reject incomplete/stale bootstrap.
+if not defined GITCOMET_LINKER_EXE goto :discover
+if not exist "%GITCOMET_LINKER_EXE%" goto :discover
+if not defined GITCOMET_LINKER_LIB goto :discover
+if not defined GITCOMET_LINKER_LIBPATH goto :discover
+if not defined GITCOMET_LINKER_INCLUDE goto :discover
+if /i not "%GITCOMET_LINKER_ARCH%"=="%GITCOMET_TARGET_ARCH%" goto :discover
+set "LINK_EXE=%GITCOMET_LINKER_EXE%"
+set "LIB=%GITCOMET_LINKER_LIB%"
+set "LIBPATH=%GITCOMET_LINKER_LIBPATH%"
+set "INCLUDE=%GITCOMET_LINKER_INCLUDE%"
+goto :invoke
+:discover
+
 if /i "%GITCOMET_TARGET_ARCH%"=="arm64" (
   set "VS_COMPONENT=Microsoft.VisualStudio.Component.VC.Tools.ARM64"
   set "SDK_ARCH=arm64"
@@ -119,6 +134,16 @@ rem ── Invoke rust-lld in MSVC mode ─────────────�
 rem GitComet's GPUI diff/render paths are substantially deeper in debug builds.
 rem The Windows default 1 MiB main-thread stack is not enough there, which can
 rem abort the process with a stack overflow before Rust's panic hook runs.
+:invoke
+rem `cmd /u` lets Python read these builtin outputs as UTF-16, including paths
+rem containing non-ASCII characters. `set` does not evaluate the values as code.
+if "%~1"=="--gitcomet-print-env" (
+  set LINK_EXE
+  set LIB
+  set INCLUDE
+  set GITCOMET_TARGET_ARCH
+  exit /b 0
+)
 if "%GITCOMET_LINK_STACK_RESERVE%"=="" set "GITCOMET_LINK_STACK_RESERVE=8388608"
 
 "%LINK_EXE%" -flavor link /STACK:%GITCOMET_LINK_STACK_RESERVE% %*

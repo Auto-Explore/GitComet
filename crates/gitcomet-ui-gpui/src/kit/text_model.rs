@@ -5,6 +5,12 @@ use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(test)]
+thread_local! {
+    /// `slice` calls that had to copy a range spanning rope chunks.
+    pub(crate) static OWNED_SLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 static NEXT_MODEL_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The document, plus the caches that let legacy `&str`/`&[usize]` callers keep
@@ -377,7 +383,11 @@ impl TextModelSnapshot {
         match (chunks.next(), chunks.next()) {
             (None, _) => Cow::Borrowed(""),
             (Some(only), None) => Cow::Borrowed(only),
-            _ => Cow::Owned(self.core.rope.text_for_range(range)),
+            _ => {
+                #[cfg(test)]
+                OWNED_SLICES.with(|count| count.set(count.get() + 1));
+                Cow::Owned(self.core.rope.text_for_range(range))
+            }
         }
     }
 

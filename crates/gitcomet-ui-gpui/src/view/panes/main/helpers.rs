@@ -3210,7 +3210,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_cache_rev: u64,
     pub(in crate::view) diff_cache_content_signature: Option<u64>,
     pub(in crate::view) diff_cache_target: Option<DiffTarget>,
-    pub(in crate::view) diff_cache: Vec<AnnotatedDiffLine>,
+    pub(in crate::view) diff_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) diff_row_provider: Option<Arc<super::diff_cache::PagedPatchDiffRows>>,
     pub(in crate::view) diff_split_row_provider:
         Option<Arc<super::diff_cache::PagedPatchSplitRows>>,
@@ -3222,7 +3222,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_visual_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_hide_unified_header_for_src_ix: Vec<bool>,
     pub(in crate::view) diff_header_display_cache: FxHashMap<usize, SharedString>,
-    pub(in crate::view) diff_split_cache: Vec<PatchSplitRow>,
+    pub(in crate::view) diff_split_cache: Arc<[PatchSplitRow]>,
     pub(in crate::view) diff_split_cache_len: usize,
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
     pub(in crate::view) diff_autoscroll_pending: bool,
@@ -3230,14 +3230,14 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) submodule_summary_cache:
         Option<super::submodule_summary::SubmoduleSummaryCache>,
     pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,
-    pub(in crate::view) diff_visible_indices: Vec<usize>,
+    pub(in crate::view) diff_visible_indices: Arc<[usize]>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
-    pub(in crate::view) diff_wrap_visible_rows: Vec<DiffWrapVisualRow>,
+    pub(in crate::view) diff_wrap_visible_rows: Arc<[DiffWrapVisualRow]>,
     pub(in crate::view) diff_wrap_visible_cache_key: Option<DiffWrapVisibleCacheKey>,
     pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
     pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: FxHashMap<usize, usize>,
     pub(in crate::view) collapsed_diff_reveals: FxHashMap<usize, CollapsedDiffReveal>,
-    pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
+    pub(in crate::view) collapsed_diff_visible_rows: Arc<[CollapsedDiffVisibleRow]>,
     pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
     pub(in crate::view) collapsed_diff_header_display_cache: FxHashMap<usize, SharedString>,
     pub(in crate::view) collapsed_diff_projection_identity: Option<CollapsedDiffProjectionIdentity>,
@@ -3321,6 +3321,19 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_search_match_ix: Option<usize>,
     pub(in crate::view) diff_search_debounce_seq: u64,
     pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
+    pub(in crate::view) diff_search_worker_running: bool,
+    /// `diff_search_debounce_seq` the running worker may publish under.
+    pub(in crate::view) diff_search_worker_seq: u64,
+    pub(in crate::view) diff_search_pending_finalize: super::diff_search::DiffSearchFinalizeMode,
+    pub(in crate::view) diff_search_cancellation:
+        Option<gitcomet_core::services::CancellationToken>,
+    pub(in crate::view) diff_search_document: Option<(
+        super::diff_search::SearchDocumentKey,
+        Arc<super::diff_search::SearchDocument>,
+    )>,
+    pub(in crate::view) diff_search_pending_navigation: isize,
+    pub(in crate::view) diff_search_probe_action: u64,
+    pub(in crate::view) diff_search_probe_render: u64,
     pub(in crate::view) diff_search_scroll: ScrollHandle,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
@@ -3333,7 +3346,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_cache_error: Option<String>,
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
-    pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
+    pub(in crate::view) file_diff_cache_rows: Arc<[FileDiffRow]>,
     pub(in crate::view) file_diff_row_provider: Option<Arc<super::diff_cache::PagedFileDiffRows>>,
     /// Text read back from a source-backed side for a click, kept alive.
     ///
@@ -3390,7 +3403,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
     pub(in crate::view) file_diff_new_line_to_inline_row: Arc<[Option<usize>]>,
-    pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
+    pub(in crate::view) file_diff_inline_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,
     pub(in crate::view) file_diff_inline_text: SharedString,

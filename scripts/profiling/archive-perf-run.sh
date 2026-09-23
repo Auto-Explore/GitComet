@@ -3,9 +3,9 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/archive-perf-run.sh [wrapper-options] [run-full-perf-suite options]
+Usage: scripts/profiling/archive-perf-run.sh [wrapper-options] [run-full-perf-suite options]
 
-Runs scripts/run-full-perf-suite.sh, captures its console log, and snapshots
+Runs scripts/profiling/run-full-perf-suite.sh, captures its console log, and snapshots
 the resulting benchmark artifacts into a timestamped archive directory.
 
 Wrapper options:
@@ -15,7 +15,7 @@ Wrapper options:
                         Default: UTC timestamp (YYYYMMDD-HHMMSSZ)
   -h, --help            Show this help.
 
-All other arguments are passed through to scripts/run-full-perf-suite.sh.
+All other arguments are passed through to scripts/profiling/run-full-perf-suite.sh.
 
 Reserved passthrough options:
   --criterion-root
@@ -35,9 +35,9 @@ Artifacts written per archived run:
   criterion/            Snapshotted Criterion + sidecar artifact tree
 
 Examples:
-  scripts/archive-perf-run.sh
-  scripts/archive-perf-run.sh --run-id linux-main --profile full --strict
-  scripts/archive-perf-run.sh --archive-root tmp/perf-records-local --profile balanced
+  scripts/profiling/archive-perf-run.sh
+  scripts/profiling/archive-perf-run.sh --run-id linux-main --profile full --strict
+  scripts/profiling/archive-perf-run.sh --archive-root tmp/perf-records-local --profile balanced
 EOF
 }
 
@@ -47,7 +47,7 @@ quote_args() {
   printf '%s\n' "${quoted% }"
 }
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
 archive_root="tmp/perf-records"
@@ -129,7 +129,7 @@ suite_cmd=(
   GITCOMET_PERF_PRINT_BENCH_SUMMARY=1
   GITCOMET_PERF_SUMMARY_LOG="${summary_log}"
   GITCOMET_PERF_SUMMARY_JSONL="${summary_jsonl}"
-  bash scripts/run-full-perf-suite.sh
+  bash scripts/profiling/run-full-perf-suite.sh
   --fresh-reference "${fresh_reference}"
 )
 suite_cmd+=("${suite_args[@]}")

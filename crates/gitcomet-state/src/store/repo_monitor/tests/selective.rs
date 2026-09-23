@@ -888,7 +888,7 @@ fn native_barrier_waits_for_debounced_refresh_without_counting_its_cookie() {
 #[test]
 fn native_sync_checkpoint_waits_for_refresh_and_policy_rebuild() {
     let (_temp, root) = repository();
-    let monitor = RunningMonitor::start(&root);
+    let monitor = RunningMonitor::start_for_unique_path(&root);
     let mut generation = monitor
         .checkpoint_native(Instant::now() + SYNC_TIMEOUT)
         .unwrap();

@@ -205,6 +205,14 @@ impl PagedPatchDiffRows {
         Some(page)
     }
 
+    /// A line's text without building (and caching) its page.
+    pub(in crate::view) fn line_text(
+        &self,
+        ix: usize,
+    ) -> Option<gitcomet_core::domain::SharedLineText> {
+        self.diff.lines.get(ix).map(|line| line.text.clone())
+    }
+
     fn row_at(&self, ix: usize) -> Option<AnnotatedDiffLine> {
         if ix >= self.diff.lines.len() {
             return None;
@@ -618,7 +626,7 @@ struct PatchInlineVisibleRun {
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct PatchInlineVisibleMap {
     visible_len: usize,
-    visible_runs: Vec<PatchInlineVisibleRun>,
+    visible_runs: Arc<[PatchInlineVisibleRun]>,
 }
 
 impl PatchInlineVisibleMap {
@@ -659,7 +667,7 @@ impl PatchInlineVisibleMap {
 
         Self {
             visible_len,
-            visible_runs,
+            visible_runs: visible_runs.into(),
         }
     }
 
@@ -668,7 +676,7 @@ impl PatchInlineVisibleMap {
     }
 
     pub(in crate::view) fn for_each_visible_src_ix(&self, mut visit: impl FnMut(usize, usize)) {
-        for run in &self.visible_runs {
+        for run in self.visible_runs.iter() {
             for offset in 0..run.len {
                 visit(run.start_visible_ix + offset, run.start_src_ix + offset);
             }

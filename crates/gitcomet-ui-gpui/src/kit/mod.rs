@@ -21,7 +21,7 @@ pub use text_input::{
     End, Enter, HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste,
     Redo, Right, SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectPageDown,
     SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShiftEnter, TextInput,
-    TextInputOptions, Undo, Up, WordLeft, WordRight,
+    TextInputChanged, TextInputOptions, Undo, Up, WordLeft, WordRight,
 };
 #[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{

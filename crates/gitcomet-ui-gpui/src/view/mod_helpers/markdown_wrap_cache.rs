@@ -66,6 +66,10 @@ pub(in crate::view) struct MarkdownPreviewWrapCache {
 }
 
 impl MarkdownPreviewWrapCache {
+    pub(in crate::view) fn keys(&self) -> [Option<MarkdownPreviewWrapKey>; 4] {
+        std::array::from_fn(|ix| self.slots[ix].as_ref().map(|slot| slot.key))
+    }
+
     pub(crate) fn slot(list: MarkdownPreviewList) -> usize {
         match list {
             MarkdownPreviewList::Worktree => 0,

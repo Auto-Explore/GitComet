@@ -1335,7 +1335,7 @@ impl MainPaneView {
         self.file_diff_style_cache_epochs.bump_both();
         self.file_diff_cache_path = None;
         self.file_diff_cache_language = None;
-        self.file_diff_cache_rows.clear();
+        self.file_diff_cache_rows = Arc::from([]);
         self.file_diff_row_provider = None;
         self.file_diff_old_source_path = None;
         self.file_diff_new_source_path = None;
@@ -1349,7 +1349,7 @@ impl MainPaneView {
         self.file_diff_new_line_starts = Arc::default();
         self.file_diff_new_line_to_row = Arc::default();
         self.file_diff_new_line_to_inline_row = Arc::default();
-        self.file_diff_inline_cache.clear();
+        self.file_diff_inline_cache = Arc::from([]);
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
         self.reset_file_diff_word_highlight_caches();

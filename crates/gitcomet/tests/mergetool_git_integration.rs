@@ -1,5 +1,7 @@
 use gitcomet_core::process::background_command as no_window_command;
-use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+};
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 #[path = "support/test_git_env.rs"]
@@ -169,15 +171,16 @@ fn configure_gitcomet_mergetool(repo: &Path) {
         "{bin_q} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
     );
 
-    run_git(repo, &["config", "merge.tool", "gitcomet"]);
-    run_git(repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
-    run_git(
+    append_config(
         repo,
-        &["config", "mergetool.gitcomet.trustExitCode", "true"],
+        &[
+            ("merge.tool", "gitcomet"),
+            ("mergetool.gitcomet.cmd", &cmd),
+            ("mergetool.gitcomet.trustExitCode", "true"),
+            ("mergetool.prompt", "false"),
+            ("mergetool.keepBackup", "false"),
+        ],
     );
-    run_git(repo, &["config", "mergetool.prompt", "false"]);
-    // Disable backup file creation for cleaner assertions.
-    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
 fn configure_gitcomet_mergetool_with_alias_flags(repo: &Path) {
@@ -187,52 +190,56 @@ fn configure_gitcomet_mergetool_with_alias_flags(repo: &Path) {
         "{bin_q} mergetool -o \"$MERGED\" --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --L1 \"BASE_ALIAS\" --L2 \"LOCAL_ALIAS\" --L3 \"REMOTE_ALIAS\""
     );
 
-    run_git(repo, &["config", "merge.tool", "gitcomet"]);
-    run_git(repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
-    run_git(
+    append_config(
         repo,
-        &["config", "mergetool.gitcomet.trustExitCode", "true"],
+        &[
+            ("merge.tool", "gitcomet"),
+            ("mergetool.gitcomet.cmd", &cmd),
+            ("mergetool.gitcomet.trustExitCode", "true"),
+            ("mergetool.prompt", "false"),
+            ("mergetool.keepBackup", "false"),
+        ],
     );
-    run_git(repo, &["config", "mergetool.prompt", "false"]);
-    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
 fn configure_kdiff3_path_override_to_gitcomet(repo: &Path, trust_exit_code: bool) {
     let bin = gitcomet_bin();
     let bin_path = bin.to_string_lossy().to_string();
 
-    run_git(repo, &["config", "merge.tool", "kdiff3"]);
-    run_git(repo, &["config", "mergetool.kdiff3.path", &bin_path]);
-    run_git(
+    append_config(
         repo,
         &[
-            "config",
-            "mergetool.kdiff3.trustExitCode",
-            if trust_exit_code { "true" } else { "false" },
+            ("merge.tool", "kdiff3"),
+            ("mergetool.kdiff3.path", &bin_path),
+            (
+                "mergetool.kdiff3.trustExitCode",
+                if trust_exit_code { "true" } else { "false" },
+            ),
+            ("mergetool.prompt", "false"),
+            ("mergetool.keepBackup", "false"),
         ],
     );
-    run_git(repo, &["config", "mergetool.prompt", "false"]);
-    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
 fn configure_meld_path_override_to_gitcomet(repo: &Path, trust_exit_code: bool) {
     let bin = gitcomet_bin();
     let bin_path = bin.to_string_lossy().to_string();
 
-    run_git(repo, &["config", "merge.tool", "meld"]);
-    run_git(repo, &["config", "mergetool.meld.path", &bin_path]);
-    run_git(repo, &["config", "mergetool.meld.hasOutput", "true"]);
-    run_git(repo, &["config", "mergetool.meld.useAutoMerge", "true"]);
-    run_git(
+    append_config(
         repo,
         &[
-            "config",
-            "mergetool.meld.trustExitCode",
-            if trust_exit_code { "true" } else { "false" },
+            ("merge.tool", "meld"),
+            ("mergetool.meld.path", &bin_path),
+            ("mergetool.meld.hasOutput", "true"),
+            ("mergetool.meld.useAutoMerge", "true"),
+            (
+                "mergetool.meld.trustExitCode",
+                if trust_exit_code { "true" } else { "false" },
+            ),
+            ("mergetool.prompt", "false"),
+            ("mergetool.keepBackup", "false"),
         ],
     );
-    run_git(repo, &["config", "mergetool.prompt", "false"]);
-    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
 /// Create a mergetool command that echoes a marker to stderr and resolves
@@ -450,15 +457,9 @@ fn setup_overlapping_conflict(repo: &Path) {
 /// Create a repo with a genuine merge conflict (overlapping changes) at a
 /// caller-provided path.
 fn setup_overlapping_conflict_at_path(repo: &Path, path: &str) {
+    let _timer = FixtureTimer::new("setup", "overlapping-conflict");
     init_repo(repo);
-    write_file(repo, path, "aaa\nbbb\nccc\n");
-    commit_all(repo, "base");
-
-    run_git(repo, &["checkout", "-b", "feature"]);
-    write_file(repo, path, "aaa\nREMOTE\nccc\n");
-    commit_all(repo, "feature: change line 2");
-
-    run_git(repo, &["checkout", "main"]);
+    import_conflict_base_and_theirs(repo, path, "aaa\nREMOTE\nccc\n", "feature: change line 2");
     write_file(repo, path, "aaa\nLOCAL\nccc\n");
     commit_all(repo, "main: change line 2");
 
@@ -478,16 +479,15 @@ fn setup_whitespace_only_conflict(repo: &Path) {
 
 /// Create a whitespace-only overlapping conflict at a caller-provided path.
 fn setup_whitespace_only_conflict_at_path(repo: &Path, path: &str) {
+    let _timer = FixtureTimer::new("setup", "whitespace-conflict");
     init_repo(repo);
-    write_file(repo, path, "aaa\nbbb\nccc\n");
-    commit_all(repo, "base");
-
-    run_git(repo, &["checkout", "-b", "feature"]);
     // Remote adds trailing tab to line 2.
-    write_file(repo, path, "aaa\nbbb\t\nccc\n");
-    commit_all(repo, "feature: add tab to line 2");
-
-    run_git(repo, &["checkout", "main"]);
+    import_conflict_base_and_theirs(
+        repo,
+        path,
+        "aaa\nbbb\t\nccc\n",
+        "feature: add tab to line 2",
+    );
     // Local adds trailing spaces to line 2.
     write_file(repo, path, "aaa\nbbb  \nccc\n");
     commit_all(repo, "main: add spaces to line 2");
@@ -497,6 +497,33 @@ fn setup_whitespace_only_conflict_at_path(repo: &Path, path: &str) {
         !output.status.success(),
         "expected merge to fail with whitespace-only conflict"
     );
+}
+
+fn import_conflict_base_and_theirs(repo: &Path, path: &str, theirs: &str, message: &str) {
+    let mut command = no_window_command("git");
+    apply_isolated_git_config_env(&mut command);
+    command.arg("-C").arg(repo);
+    import_linear_history(
+        &mut command,
+        "feature",
+        [
+            LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_000,
+                message: "base",
+                path,
+                contents: "aaa\nbbb\nccc\n",
+            },
+            LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_001,
+                message,
+                path,
+                contents: theirs,
+            },
+        ],
+    );
+    run_git(repo, &["checkout", "-B", "main", "feature^"]);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────

@@ -197,7 +197,7 @@ impl MainPaneView {
             self.collapsed_diff_reveals.clear();
             self.collapsed_diff_projection_identity = None;
         }
-        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_visible_rows = Arc::from([]);
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
@@ -208,7 +208,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn invalidate_collapsed_diff_visible_projection(&mut self) {
-        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_visible_rows = Arc::from([]);
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);

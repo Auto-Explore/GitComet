@@ -1515,6 +1515,7 @@ impl MainPaneView {
             open_summary_counts,
             open_summary_announced,
             conflict_rev: repo.conflict_state.conflict_rev,
+            visible_projection_rev: self.conflict_resolver.visible_projection_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),

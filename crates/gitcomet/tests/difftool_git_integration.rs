@@ -166,27 +166,46 @@ fn configure_difftool_selection(
 }
 
 fn configure_gitcomet_difftool(repo: &Path) {
-    configure_difftool_command(repo, "gitcomet", &gitcomet_difftool_cmd("gitcomet", None));
-    configure_difftool_trust_exit_code(repo, true);
-    configure_difftool_selection(repo, "gitcomet", None, None);
+    append_config(
+        repo,
+        &[
+            (
+                "difftool.gitcomet.cmd",
+                &gitcomet_difftool_cmd("gitcomet", None),
+            ),
+            ("difftool.trustExitCode", "true"),
+            ("diff.tool", "gitcomet"),
+            ("difftool.prompt", "false"),
+        ],
+    );
 }
 
 fn configure_kdiff3_path_override_to_gitcomet(repo: &Path) {
     let bin = gitcomet_bin();
     let bin_path = bin.to_string_lossy().to_string();
-    run_git(repo, &["config", "diff.tool", "kdiff3"]);
-    run_git(repo, &["config", "difftool.kdiff3.path", &bin_path]);
-    run_git(repo, &["config", "difftool.trustExitCode", "true"]);
-    run_git(repo, &["config", "difftool.prompt", "false"]);
+    append_config(
+        repo,
+        &[
+            ("diff.tool", "kdiff3"),
+            ("difftool.kdiff3.path", &bin_path),
+            ("difftool.trustExitCode", "true"),
+            ("difftool.prompt", "false"),
+        ],
+    );
 }
 
 fn configure_meld_path_override_to_gitcomet(repo: &Path) {
     let bin = gitcomet_bin();
     let bin_path = bin.to_string_lossy().to_string();
-    run_git(repo, &["config", "diff.tool", "meld"]);
-    run_git(repo, &["config", "difftool.meld.path", &bin_path]);
-    run_git(repo, &["config", "difftool.trustExitCode", "true"]);
-    run_git(repo, &["config", "difftool.prompt", "false"]);
+    append_config(
+        repo,
+        &[
+            ("diff.tool", "meld"),
+            ("difftool.meld.path", &bin_path),
+            ("difftool.trustExitCode", "true"),
+            ("difftool.prompt", "false"),
+        ],
+    );
 }
 
 fn output_text(output: &Output) -> String {

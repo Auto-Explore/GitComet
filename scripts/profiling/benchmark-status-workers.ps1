@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$FixtureRoot,
     [Parameter(Mandatory)][string]$OutputFile,
-    [string]$Binary = (Join-Path $PSScriptRoot '../target/release-with-debug/examples/status-refresh-bench.exe'),
+    [string]$Binary = (Join-Path $PSScriptRoot '../../target/release-with-debug/examples/status-refresh-bench.exe'),
     [int]$Rounds = 5,
     [string[]]$Workers = @('auto', '1', '4', '8', 'production')
 )

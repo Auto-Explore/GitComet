@@ -1,5 +1,7 @@
 use gitcomet_core::process::background_command as no_window_command;
-use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+};
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 use gitcomet_test_bin::gitcomet_bin;
@@ -2405,6 +2407,31 @@ fn setup_e2e_commit(repo: &Path, message: &str) {
     );
 }
 
+/// Seed ordinary history only. Keep the other branch's commit and the actual
+/// merge in the test, so Git still constructs the conflicted index itself.
+fn setup_e2e_import_base_and_ours(command: &mut Command, path: &str) {
+    import_linear_history(
+        command,
+        "ours",
+        [
+            LinearCommit {
+                author: "Test <test@test.com>",
+                timestamp: 1_600_000_000,
+                message: "base",
+                path,
+                contents: "line1\nline2\nline3\n",
+            },
+            LinearCommit {
+                author: "Test <test@test.com>",
+                timestamp: 1_600_000_001,
+                message: "ours",
+                path,
+                contents: "line1\nOURS_CHANGE\nline3\n",
+            },
+        ],
+    );
+}
+
 struct IsolatedGlobalGitEnv {
     home_dir: PathBuf,
     xdg_config_home: PathBuf,
@@ -2445,6 +2472,7 @@ fn setup_e2e_git_capture_with_env(
     args: &[&str],
     env: &IsolatedGlobalGitEnv,
 ) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut command = no_window_command("git");
     env.apply_to_command(&mut command);
     command
@@ -2520,14 +2548,8 @@ fn setup_local_enables_git_mergetool_end_to_end() {
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
 
     // 2. Create a merge conflict (both sides modify line 2).
-    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
-    setup_e2e_commit(repo, "base");
-
-    setup_e2e_git(repo, &["checkout", "-b", "ours"]);
-    write_file(&repo.join("file.txt"), "line1\nOURS_CHANGE\nline3\n");
-    setup_e2e_commit(repo, "ours");
-
-    setup_e2e_git(repo, &["checkout", "main"]);
+    setup_e2e_import_base_and_ours(no_window_command("git").arg("-C").arg(repo), "file.txt");
+    setup_e2e_git(repo, &["checkout", "-B", "main", "ours^"]);
     write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit(repo, "theirs");
 
@@ -2620,14 +2642,8 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    write_file(&repo.join(conflict_path), "line1\nline2\nline3\n");
-    setup_e2e_commit(repo, "base");
-
-    setup_e2e_git(repo, &["checkout", "-b", "ours"]);
-    write_file(&repo.join(conflict_path), "line1\nOURS_CHANGE\nline3\n");
-    setup_e2e_commit(repo, "ours");
-
-    setup_e2e_git(repo, &["checkout", "main"]);
+    setup_e2e_import_base_and_ours(no_window_command("git").arg("-C").arg(repo), conflict_path);
+    setup_e2e_git(repo, &["checkout", "-B", "main", "ours^"]);
     write_file(&repo.join(conflict_path), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit(repo, "theirs");
 
@@ -2743,14 +2759,10 @@ fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
         "setup without --local should not set repo-local merge.tool"
     );
 
-    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
-    setup_e2e_commit_with_env(&repo, "base", &env);
-
-    setup_e2e_git_with_env(&repo, &["checkout", "-b", "ours"], &env);
-    write_file(&repo.join("file.txt"), "line1\nOURS_CHANGE\nline3\n");
-    setup_e2e_commit_with_env(&repo, "ours", &env);
-
-    setup_e2e_git_with_env(&repo, &["checkout", "main"], &env);
+    let mut command = no_window_command("git");
+    env.apply_to_command(&mut command);
+    setup_e2e_import_base_and_ours(command.arg("-C").arg(&repo), "file.txt");
+    setup_e2e_git_with_env(&repo, &["checkout", "-B", "main", "ours^"], &env);
     write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit_with_env(&repo, "theirs", &env);
 

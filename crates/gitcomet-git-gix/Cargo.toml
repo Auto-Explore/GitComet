@@ -17,6 +17,10 @@ benchmarks = ["gitcomet-core/benchmarks"]
 name = "status-refresh-bench"
 required-features = ["benchmarks"]
 
+[[example]]
+name = "operation-context-probe"
+required-features = ["benchmarks"]
+
 # Cargo builds this fixture for integration tests. Application packages depend
 # only on this package's library, so it is not part of application distributions.
 [[bin]]

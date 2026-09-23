@@ -124,7 +124,7 @@ widths and UI scales. The normal wheel/thumb refresh test covers thumb input.
 uses the shipping release profile and existing allocation sidecars. Set
 `GITCOMET_BENCH_COMMITS=2000000` for the large suite. `build_graph`, `first_touch`,
 `warm` and `distant_jump` are distinct Criterion cases. Backend paired runs use
-`scripts/benchmark-indexed-history.py` with two compiled integration-test binaries
+`scripts/profiling/benchmark-indexed-history.py` with two compiled integration-test binaries
 and three `--repository` arguments. It rejects changes to refs or commit-graph
 files during the five paired runs and alternates execution order.
 
@@ -134,7 +134,7 @@ construction storage, checkpoint bytes and paint-row materializations. Peak inde
 storage is a conservative topology estimate, including external-parent capacity
 growth, rather than a measurement of the process RSS.
 
-`scripts/benchmark-indexed-history-frames.py --before BEFORE --after AFTER
+`scripts/profiling/benchmark-indexed-history-frames.py --before BEFORE --after AFTER
 --profile test --output OUTPUT` runs five alternating pairs of the ignored GPUI
 frame probe. It records binary hashes, the 20k-commit fixture, the 38-row viewport,
 100 frames per sample, draw and input/publication latency, and draw allocations.
@@ -148,7 +148,7 @@ layout and path submission in its test platform; they exclude compositor and GPU
 presentation latency.
 
 On the dedicated runner, archive five accepted **release** Criterion roots and
-run `scripts/calibrate-indexed-history.py --runs ROOT1 ROOT2 ROOT3 ROOT4 ROOT5
+run `scripts/profiling/calibrate-indexed-history.py --runs ROOT1 ROOT2 ROOT3 ROOT4 ROOT5
 --runner NAME --output baseline.json`. Set `GITCOMET_INDEXED_HISTORY_BASELINE`
 (or the workflow's `PERF_HISTORY_BASELINE`) to that file. The existing budget
 report then limits each calibrated case to 125% of its five-run median. Invalid

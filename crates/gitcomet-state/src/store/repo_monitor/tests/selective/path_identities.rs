@@ -177,9 +177,16 @@ fn inactive_unresolvable_include_keeps_source_coverage() {
     assert!(!info.discovery_incomplete);
     assert!(info.ignore_inputs.contains(&root.join(".git/config")));
     assert!(info.ignore_inputs.contains(&include));
-    let monitor = RunningMonitor::start(&root);
-    fs::write(root.join("source/file.txt"), "observed").unwrap();
-    monitor.refresh();
+    let monitor = RunningMonitor::start_for_unique_path(&root);
+    let source = root.join("source/file.txt");
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "observed").unwrap())
+            .worktree
+    );
+    // External config is revalidated rather than natively observed. Drain the
+    // preceding source burst before checking that independent policy refresh.
+    monitor.settle();
     fs::write(&include, "[core]\n    ignoreCase = true\n").unwrap();
     monitor.revalidate();
     monitor.refresh();

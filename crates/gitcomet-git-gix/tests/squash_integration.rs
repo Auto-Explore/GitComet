@@ -1,5 +1,6 @@
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{GitBackend, GitRepository, InteractiveRebaseAction};
+use gitcomet_core::test_support::git_fixture::append_config;
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -47,9 +48,14 @@ fn git_stdout(repo: &Path, args: &[&str]) -> String {
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");
     run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 }
 
 fn commit_file(repo: &Path, name: &str, content: &str, message: &str) {

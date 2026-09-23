@@ -40,3 +40,13 @@ inherits = "ci"
 [[profile.ci-git-limited.overrides]]
 filter = 'package(=gitcomet-git-gix) | binary(=difftool_git_integration) | binary(=mergetool_git_integration) | binary(=standalone_tool_mode_integration)'
 test-group = 'git-heavy'
+
+# Local scheduling experiment: start the six longest measured watcher cases
+# early, leaving other slots for CPU/process-heavy tests while these await OS
+# events. Keep their settling and negative quiet windows unchanged.
+[profile.ci-watch-first]
+inherits = "ci"
+
+[[profile.ci-watch-first.overrides]]
+filter = 'package(=gitcomet-state) & (test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_directory_recreation_stops_stale_callbacks_and_keeps_crud_visible) | test(=store::repo_monitor::tests::selective::efficiency::ignored_directory_replaced_by_file_keeps_creation_and_edits_visible) | test(=store::repo_monitor::tests::selective::native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves) | test(=store::repo_monitor::tests::selective::native_lifecycle::replacing_repository_root_detaches_old_tree_and_watches_replacement) | test(=store::repo_monitor::tests::selective::native_lifecycle::recreated_external_policy_parent_is_revalidated_without_native_watches) | test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_atomic_file_replacement_keeps_later_in_place_edits_visible))'
+priority = 100

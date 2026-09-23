@@ -348,6 +348,9 @@ pub(crate) struct ConflictResolverUiState {
     /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
     /// that don't change the underlying file content.
     pub(crate) conflict_rev: u64,
+    /// Local revision of the source-row projections, including context folds
+    /// that change without updating the store's conflict revision.
+    pub(crate) visible_projection_rev: u64,
     /// Sequence token for debounced resolved-output outline recompute tasks.
     pub(crate) resolver_pending_recompute_seq: u64,
     /// Resolved-output outline metadata (provenance, conflict markers, source index).
@@ -414,6 +417,7 @@ impl Default for ConflictResolverUiState {
             open_summary_counts: None,
             open_summary_announced: false,
             conflict_rev: 0,
+            visible_projection_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),
@@ -1669,6 +1673,7 @@ impl ConflictResolverUiState {
                 s.three_way_visible_projection = three_way_visible_projection;
             }
         }
+        self.visible_projection_rev = self.visible_projection_rev.wrapping_add(1);
         self.three_way_visible_state_ready = true;
         self.refresh_three_way_horizontal_measure_rows();
         self.rebuild_minimap_bands();
@@ -1723,6 +1728,7 @@ impl ConflictResolverUiState {
                 );
             }
         }
+        self.visible_projection_rev = self.visible_projection_rev.wrapping_add(1);
         self.debug_assert_rendering_mode_invariants();
         self.refresh_two_way_horizontal_measure_rows();
     }

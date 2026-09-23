@@ -9,7 +9,7 @@ impl MainPaneView {
             return;
         }
         self.diff_split_cache_len = self.diff_cache.len();
-        self.diff_split_cache = build_patch_split_rows(&self.diff_cache);
+        self.diff_split_cache = build_patch_split_rows(&self.diff_cache).into();
     }
 
     pub(super) fn diff_scrollbar_markers_patch(&self) -> Vec<components::ScrollbarMarker> {
@@ -29,7 +29,10 @@ impl MainPaneView {
             DiffViewMode::Split => {
                 if self.diff_split_row_provider.is_some() && !self.diff_word_wrap {
                     let meta = self.patch_split_visible_meta_from_source();
-                    debug_assert_eq!(meta.visible_indices.as_slice(), self.diff_visible_indices);
+                    debug_assert_eq!(
+                        meta.visible_indices.as_slice(),
+                        self.diff_visible_indices.as_ref()
+                    );
                     return scrollbar_markers_from_visible_flags(meta.visible_flags.as_slice());
                 }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
@@ -169,6 +172,14 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn ensure_diff_visible_indices(&mut self) {
+        self.ensure_diff_visible_indices_inner(true);
+    }
+
+    pub(in crate::view::panes::main) fn ensure_diff_visible_indices_for_search(&mut self) {
+        self.ensure_diff_visible_indices_inner(false);
+    }
+
+    fn ensure_diff_visible_indices_inner(&mut self, recompute_search: bool) {
         let is_file_view = self.is_file_diff_view_active();
         let collapsed_projection_active = self.is_collapsed_diff_projection_active();
         let projection_rev = if collapsed_projection_active {
@@ -215,7 +226,7 @@ impl MainPaneView {
         self.diff_visible_view = self.diff_view;
         self.diff_visible_is_file_view = is_file_view;
         self.diff_visible_cache_projection_rev = projection_rev;
-        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows = Arc::from([]);
         self.diff_wrap_visible_cache_key = None;
         if !preserve_horizontal_width {
             self.reset_diff_horizontal_scroll_state();
@@ -224,9 +235,9 @@ impl MainPaneView {
         self.diff_search_inline_patch_trigram_index = None;
 
         if collapsed_projection_active {
-            self.diff_visible_indices.clear();
+            self.diff_visible_indices = Arc::from([]);
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_has_query() {
+            if recompute_search && self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
@@ -235,7 +246,7 @@ impl MainPaneView {
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_has_query() {
+            if recompute_search && self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
@@ -248,7 +259,7 @@ impl MainPaneView {
                     self.diff_visible_inline_map = Some(PatchInlineVisibleMap::from_hidden_flags(
                         self.diff_hide_unified_header_for_src_ix.as_slice(),
                     ));
-                    self.diff_visible_indices = Vec::new();
+                    self.diff_visible_indices = Arc::from([]);
                 } else {
                     self.diff_visible_indices = self
                         .patch_diff_rows_slice(0, current_len)
@@ -264,7 +275,7 @@ impl MainPaneView {
                 if self.diff_split_row_provider.is_some() {
                     let meta = self.patch_split_visible_meta_from_source();
                     debug_assert_eq!(meta.total_rows, current_len);
-                    self.diff_visible_indices = meta.visible_indices;
+                    self.diff_visible_indices = meta.visible_indices.into();
                     split_visible_flags = Some(meta.visible_flags);
                 } else {
                     self.ensure_diff_split_cache();
@@ -290,7 +301,7 @@ impl MainPaneView {
             .map(|flags| scrollbar_markers_from_visible_flags(flags.as_slice()))
             .unwrap_or_else(|| self.compute_diff_scrollbar_markers());
 
-        if self.diff_search_has_query() {
+        if recompute_search && self.diff_search_has_query() {
             self.diff_search_recompute_matches_for_current_view_preserving_current();
         }
     }

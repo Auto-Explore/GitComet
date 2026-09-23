@@ -3,9 +3,9 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/compare-perf-runs.sh [options] BASE_RUN CANDIDATE_RUN
+Usage: scripts/profiling/compare-perf-runs.sh [options] BASE_RUN CANDIDATE_RUN
 
-Compare two archived performance runs produced by scripts/archive-perf-run.sh.
+Compare two archived performance runs produced by scripts/profiling/archive-perf-run.sh.
 Matching is done by benchmark name, with fallbacks for alternate field names.
 
 Run arguments may be:
@@ -41,9 +41,9 @@ Options:
   -h, --help            Show this help.
 
 Examples:
-  scripts/compare-perf-runs.sh linux-before linux-after
-  scripts/compare-perf-runs.sh --kind idle linux-before linux-after
-  scripts/compare-perf-runs.sh --metric mean_ns --metric avg_cpu_pct --metric alloc_bytes linux-before linux-after
+  scripts/profiling/compare-perf-runs.sh linux-before linux-after
+  scripts/profiling/compare-perf-runs.sh --kind idle linux-before linux-after
+  scripts/profiling/compare-perf-runs.sh --metric mean_ns --metric avg_cpu_pct --metric alloc_bytes linux-before linux-after
 EOF
 }
 

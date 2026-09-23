@@ -4652,8 +4652,8 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
                 hidden[0] = true;
                 pane.diff_visible_inline_map =
                     Some(PatchInlineVisibleMap::from_hidden_flags(hidden.as_slice()));
-                pane.diff_visible_indices.clear();
-                pane.diff_wrap_visible_rows.clear();
+                pane.diff_visible_indices = Arc::from([]);
+                pane.diff_wrap_visible_rows = Arc::from([]);
                 pane.diff_wrap_visible_cache_key = None;
                 pane.diff_selection_anchor = None;
                 pane.diff_selection_range = None;

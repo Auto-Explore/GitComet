@@ -5,7 +5,7 @@ app_launch_environment_blocker_exit_code=3
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-full-perf-suite.sh [options]
+Usage: scripts/profiling/run-full-perf-suite.sh [options]
 
 Runs the full local performance suite:
   1. Criterion benchmark suite
@@ -692,7 +692,7 @@ if [[ ${skip_idle_memory_growth} -eq 1 && ${strict_report} -eq 1 && ${run_report
   exit 2
 fi
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 export GITCOMET_PERF_CRITERION_ROOT="${criterion_root}"
 

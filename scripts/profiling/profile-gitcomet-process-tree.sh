@@ -4,7 +4,7 @@ shopt -s nullglob
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-gitcomet-process-tree.sh [options] REPO_PATH [-- extra_gitcomet_args...]
+Usage: scripts/profiling/profile-gitcomet-process-tree.sh [options] REPO_PATH [-- extra_gitcomet_args...]
 
 Launch GitComet under a process-tree profiling wrapper that captures:
   - callgrind outputs for the parent process and traced child processes
@@ -23,11 +23,11 @@ Options:
   -h, --help                Show this help.
 
 Examples:
-  scripts/profile-gitcomet-process-tree.sh /home/sampo/chromium/src
-  scripts/profile-gitcomet-process-tree.sh --timeout 60 /home/sampo/chromium/src
-  scripts/profile-gitcomet-process-tree.sh \
+  scripts/profiling/profile-gitcomet-process-tree.sh /path/to/repository
+  scripts/profiling/profile-gitcomet-process-tree.sh --timeout 60 /path/to/repository
+  scripts/profiling/profile-gitcomet-process-tree.sh \
     --manual-instrumentation \
-    /home/sampo/chromium/src -- --version
+    /path/to/repository -- --version
 EOF
 }
 
@@ -337,7 +337,7 @@ cleanup_on_exit() {
 }
 
 orig_cwd="$PWD"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 
 binary_raw=""
 out_dir_raw=""
@@ -475,7 +475,7 @@ if ((manual_instrumentation == 1)); then
 fi
 
 if [[ ! -x "$binary_path" ]]; then
-  die "GitComet binary not found or not executable at ${binary_path}. Build it with: bash scripts/build_release_debug.sh"
+  die "GitComet binary not found or not executable at ${binary_path}. Build it with: bash scripts/profiling/build_release_debug.sh"
 fi
 verify_strace_usable
 

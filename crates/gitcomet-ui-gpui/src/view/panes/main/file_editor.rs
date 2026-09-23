@@ -373,7 +373,11 @@ impl MainPaneView {
     /// list can never describe a revision the buffer has left behind. Gating the
     /// re-scan on the revision is also what keeps this off the install-provider →
     /// notify → observe cycle: a rebind moves no text, so the second lap stops.
-    fn file_editor_search_source_changed(&mut self, snapshot: TextModelSnapshot) {
+    fn file_editor_search_source_changed(
+        &mut self,
+        snapshot: TextModelSnapshot,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let previous = self
             .file_editor_search_source
             .as_ref()
@@ -384,7 +388,7 @@ impl MainPaneView {
             return;
         }
         if self.diff_search_has_query() {
-            self.diff_search_recompute_matches_preserving_current();
+            self.diff_search_schedule_preserving_current(cx);
         }
     }
 
@@ -688,7 +692,7 @@ impl MainPaneView {
         // Wholesale replacement: whatever edits the old watermark described are
         // not in this text. A restored stash puts its own back afterwards.
         self.file_editor_first_dirty_line = None;
-        self.file_editor_search_source_changed(snapshot.clone());
+        self.file_editor_search_source_changed(snapshot.clone(), cx);
         self.refresh_file_editor_syntax(&snapshot, None, cx);
         cx.notify();
     }
@@ -716,7 +720,7 @@ impl MainPaneView {
         // revision rather than on the deltas: a wholesale `set_text` (a reload
         // from disk, a restored stash) records none, so the delta test would miss
         // it and leave the match list describing text that is gone.
-        self.file_editor_search_source_changed(snapshot.clone());
+        self.file_editor_search_source_changed(snapshot.clone(), cx);
 
         // Read before the edit is handed to the parser, which consumes it. The
         // coalesced start is the earliest byte the batch touched, and everything
