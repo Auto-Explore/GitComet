@@ -3589,12 +3589,12 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
                     preview_content_rev: 0,
                     reveal_whitespace_chars: false,
                 });
-                pane.diff_wrap_visible_rows = vec![DiffWrapVisualRow {
+                pane.diff_wrap_visible_rows = Arc::from([DiffWrapVisualRow {
                     source_visible_ix: 0,
                     wrap_ix: 0,
                     primary_range: rows::DiffWrapByteRange { start: 0, end: 4 },
                     secondary_range: rows::DiffWrapByteRange::default(),
-                }];
+                }]);
                 pane.set_diff_reveal_whitespace_chars(true, cx);
             });
         });
@@ -6171,8 +6171,11 @@ fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::Tes
             pane.rebuild_diff_cache(cx);
             pane.ensure_diff_visible_indices();
             pane.diff_search_active = true;
-            for query in ["absent", "old", "new"] {
+            for query in ["old", "absent", "new"] {
                 let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                // A stale projection must be rebuilt without scanning on the
+                // UI thread before the background search even starts.
+                pane.diff_visible_cache_len = usize::MAX;
                 pane.diff_search_schedule_query_recompute(previous, cx);
                 assert!(
                     pane.diff_search_matches.is_empty(),

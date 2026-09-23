@@ -1261,7 +1261,7 @@ impl MainPaneView {
         self.conflict_three_way_segments_cache.clear();
         self.conflict_three_way_query_segments_cache.clear();
         self.diff_wrap_visible_cache_key = None;
-        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows = Arc::from([]);
         cx.notify();
     }
 
@@ -1272,7 +1272,7 @@ impl MainPaneView {
 
         self.diff_word_wrap = next;
         self.diff_wrap_visible_cache_key = None;
-        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows = Arc::from([]);
         self.reset_diff_horizontal_scroll_state();
         cx.notify();
     }

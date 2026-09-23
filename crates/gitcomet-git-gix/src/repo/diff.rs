@@ -263,8 +263,6 @@ impl GixRepo {
         // row re-opens on every status refresh. A file modified within the
         // last two seconds is never memoized (git's racy-file rule): a write
         // inside mtime granularity would otherwise be missed.
-        // Acquire briefly for each stamp: an open writer disables the memo,
-        // but a large filter/copy must not lock the user's file against edits.
         // Recording requires the same identity again after the complete read.
         let file_stamp =
             DiskFileStamp::acquire_for_verification_memo(&full).map(|guard| guard.stamp);
@@ -280,8 +278,7 @@ impl GixRepo {
                 .filter(|entry| {
                     entry.file == file_stamp
                         && entry.attributes_fingerprint == attributes_fingerprint
-                        && DiskFileStamp::cache_file_stamp_for_memo_hit(&entry.cache_path)
-                            == Some(entry.cache_file)
+                        && DiskFileStamp::read(&entry.cache_path) == Some(entry.cache_file)
                 })
                 .cloned()
         {
@@ -291,11 +288,9 @@ impl GixRepo {
             )));
         }
 
-        // Timestamp-only identities miss mapped writes on Windows. Start a
-        // journal boundary before verification, so even coalesced writes made
-        // while another reader stays open invalidate any recorded memo.
+        // Record the identity before verification and check it again afterwards.
         let file_stamp = attributes_fingerprint.and_then(|_| {
-            DiskFileStamp::acquire_for_verification_recording(&full).map(|guard| guard.stamp)
+            DiskFileStamp::acquire_for_verification_memo(&full).map(|guard| guard.stamp)
         });
         #[cfg(test)]
         WORKTREE_FILTER_RUNS.with(|runs| runs.set(runs.get() + 1));
@@ -334,15 +329,13 @@ impl GixRepo {
 
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
         let cache_path = worktree_git_cache_path(path, &identity);
-        // Capture the journal boundary before comparing an existing output's
-        // contents. A mapped write after comparison must prevent memoization.
+        // Capture the identity before comparing an existing output's contents.
         let cache_file_stamp = file_stamp.and_then(|_| {
-            DiskFileStamp::acquire_for_verification_recording(&cache_path).map(|guard| guard.stamp)
+            DiskFileStamp::acquire_for_verification_memo(&cache_path).map(|guard| guard.stamp)
         });
         let created = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
         // A file this call created is private to it (0600, content-addressed,
         // never rewritten), so fresh timestamps cannot hide a later write.
-        // Windows still requires the sealed, aged identity taken above.
         #[cfg(unix)]
         let cache_file_stamp = cache_file_stamp.or_else(|| {
             (file_stamp.is_some() && created)
@@ -1119,7 +1112,7 @@ fn read_worktree_image_file_bytes_cancellable(
     let mut chunk = [0u8; 64 * 1024];
     loop {
         cancellation.check_cancelled()?;
-        let read = std::io::Read::read(&mut file, &mut chunk).map_err(io_err_to_error)?;
+        let read = read_chunk_cancellable(&mut file, &mut chunk, cancellation)?;
         cancellation.check_cancelled()?;
         if read == 0 {
             return Ok(Some(bytes));
@@ -1418,6 +1411,20 @@ pub(crate) fn worktree_filter_runs_for_test() -> usize {
     WORKTREE_FILTER_RUNS.with(std::cell::Cell::get)
 }
 
+fn read_chunk_cancellable(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    cancellation: &CancellationToken,
+) -> Result<usize> {
+    loop {
+        cancellation.check_cancelled()?;
+        match reader.read(buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => return result.map_err(io_err_to_error),
+        }
+    }
+}
+
 fn copy_and_hash(
     reader: &mut impl Read,
     writer: &mut impl Write,
@@ -1427,7 +1434,7 @@ fn copy_and_hash(
     let mut buffer = [0u8; 64 * 1024];
     loop {
         cancellation.check_cancelled()?;
-        let read = reader.read(&mut buffer).map_err(io_err_to_error)?;
+        let read = read_chunk_cancellable(reader, &mut buffer, cancellation)?;
         cancellation.check_cancelled()?;
         if read == 0 {
             return Ok(());
@@ -1468,7 +1475,7 @@ fn cached_preview_blob_matches(
         if cancellation.is_cancelled() {
             return false;
         }
-        let Ok(count) = file.read(&mut buffer) else {
+        let Ok(count) = read_chunk_cancellable(&mut file, &mut buffer, cancellation) else {
             return false;
         };
         if count == 0 {
@@ -1493,7 +1500,6 @@ impl GixRepo {
         blob_id: gix::ObjectId,
         cancellation: &CancellationToken,
     ) -> bool {
-        // Scoped so the Windows handle closes before the recording guard opens.
         {
             let guard = DiskFileStamp::acquire_for_verification_memo(cache_path);
             if let Some(stamp) = guard.as_ref().map(|guard| guard.stamp)
@@ -1507,7 +1513,7 @@ impl GixRepo {
                 return true;
             }
         }
-        let guard = DiskFileStamp::acquire_for_verification_recording(cache_path);
+        let guard = DiskFileStamp::acquire_for_verification_memo(cache_path);
         let stamp = guard.as_ref().map(|guard| guard.stamp);
         let matches = cached_preview_blob_matches(repo, cache_path, blob_id, cancellation);
         // Require a non-racy stamp from BEFORE hashing as well as an unchanged
@@ -1843,42 +1849,78 @@ fn unified_body_line_count(text: &str) -> usize {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
     #[test]
-    fn windows_file_identity_excludes_writers_and_detects_replacements() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("identity.txt");
-        std::fs::write(&path, b"before").unwrap();
-        let original = DiskFileStamp::acquire(&path).expect("local NTFS identity");
-        let mtime = original.stamp.modified.unwrap();
-        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
-        let before = original.stamp;
-        drop(original);
-        let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        assert!(DiskFileStamp::acquire(&path).is_none());
-        writer.write_all(b"edited").unwrap();
-        writer.set_modified(mtime).unwrap();
-        drop(writer);
-        let after = DiskFileStamp::read(&path).unwrap();
-        assert_eq!(before.len, after.len);
-        assert_eq!(before.modified, after.modified);
-        if before == after {
-            // Windows can coalesce same-tick ChangeTime updates. Such a stamp
-            // must remain excluded by the race window, even with writer guards.
-            assert!(after.is_racy_at(std::time::SystemTime::now()));
+    fn chunked_reads_retry_interruptions_and_remain_cancellable() {
+        struct InterruptedReader {
+            interruptions: usize,
+            cancellation: Option<CancellationToken>,
+            bytes: &'static [u8],
         }
-        let replacement = tmp.path().join("replacement.txt");
-        std::fs::write(&replacement, b"edited").unwrap();
-        std::fs::remove_file(&path).unwrap();
-        std::fs::rename(replacement, &path).unwrap();
-        assert_ne!(after.inode, DiskFileStamp::read(&path).unwrap().inode);
-        assert!(DiskFileStamp::read(tmp.path()).is_none());
-        assert!(DiskFileStamp::read(Path::new("relative.txt")).is_none());
+        impl Read for InterruptedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.interruptions > 0 {
+                    self.interruptions -= 1;
+                    if let Some(token) = &self.cancellation {
+                        token.cancel();
+                    }
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.bytes.read(buffer)
+            }
+        }
+        let mut reader = InterruptedReader {
+            interruptions: 3,
+            cancellation: None,
+            bytes: b"complete contents",
+        };
+        let mut output = Vec::new();
+        copy_and_hash(
+            &mut reader,
+            &mut output,
+            &mut FxHasher::default(),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(output, b"complete contents");
+
+        let token = CancellationToken::new();
+        let mut reader = InterruptedReader {
+            interruptions: 3,
+            cancellation: Some(token.clone()),
+            bytes: b"never read",
+        };
+        let error = read_chunk_cancellable(&mut reader, &mut [0; 32], &token).unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert_eq!(
+            reader.interruptions, 2,
+            "cancellation is checked between retries"
+        );
     }
 
     #[cfg(windows)]
     #[test]
-    fn windows_preview_memo_reuses_verified_file_and_rechecks_same_length_edit() {
+    fn windows_memo_checks_allow_in_place_saves_and_replacements() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("identity.txt");
+        std::fs::write(&path, b"before").unwrap();
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let guard = DiskFileStamp::acquire_for_verification_memo(&path);
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("memo lookup must allow in-place editor saves");
+        writer.write_all(b"edited").unwrap();
+        drop(writer);
+        let replacement = tmp.path().join("replacement.txt");
+        std::fs::write(&replacement, b"replacement").unwrap();
+        std::fs::rename(&replacement, &path).expect("memo lookup must allow atomic saves");
+        std::fs::remove_file(&path).expect("memo lookup must allow deletion");
+        drop(guard);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_preview_verification_rechecks_same_length_edit_with_open_writer() {
         let tmp = tempfile::tempdir().unwrap();
         init_test_repo(tmp.path());
         let blob_id = stage_blob(tmp.path(), "asset.bin", b"real blob bytes");
@@ -1887,25 +1929,19 @@ mod tests {
             .cached_preview_blob_file_path(blob_id, Path::new("asset.bin"))
             .unwrap()
             .unwrap();
-        // ChangeTime cannot be safely backdated through std::fs. Let the real
-        // identity leave the race window before asserting that it is reusable.
-        std::thread::sleep(std::time::Duration::from_millis(2100));
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
         let handle = repo.repo();
         let token = CancellationToken::new();
         assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
-        let stamp = repo.preview_blob_verified.lock().unwrap()[&cache].file;
-        assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
-        assert_eq!(
-            repo.preview_blob_verified.lock().unwrap()[&cache].file,
-            stamp
-        );
-        std::fs::write(&cache, b"fake blob bytes").unwrap();
-        std::fs::File::options()
+        let modified = std::fs::metadata(&cache).unwrap().modified().unwrap();
+        let mut writer = std::fs::OpenOptions::new()
             .write(true)
             .open(&cache)
-            .unwrap()
-            .set_modified(stamp.modified.unwrap())
             .unwrap();
+        assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+        writer.write_all(b"fake blob bytes").unwrap();
+        writer.set_modified(modified).unwrap();
+        // Keep the writer open: Windows can defer metadata updates until close.
         assert!(!repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
     }
 
@@ -2057,35 +2093,19 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_worktree_memo_requires_an_aged_verified_cache_file() {
+    fn windows_worktree_verification_repairs_cache_and_observes_open_writer() {
         let tmp = tempfile::tempdir().unwrap();
         init_test_repo(tmp.path());
         let path = Path::new("memo.txt");
         stage_blob(tmp.path(), "memo.txt", b"correct content\n");
         let repo = open_repo(tmp.path());
-        std::thread::sleep(std::time::Duration::from_millis(2100));
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
         let source = repo
             .cached_git_normalized_worktree_file_source(&repo.repo(), path)
             .unwrap()
             .unwrap();
-        assert!(
-            repo.worktree_source_memo
-                .lock()
-                .unwrap()
-                .get(path)
-                .is_none(),
-            "fresh cache files cannot establish a trustworthy memo"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(2100));
         repo.cached_git_normalized_worktree_file_source(&repo.repo(), path)
             .unwrap();
-        assert!(
-            repo.worktree_source_memo
-                .lock()
-                .unwrap()
-                .get(path)
-                .is_some()
-        );
         let modified = std::fs::metadata(&source.path).unwrap().modified().unwrap();
         std::fs::write(&source.path, b"altered content\n").unwrap();
         std::fs::File::options()
@@ -2099,6 +2119,22 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(std::fs::read(reloaded.path).unwrap(), b"correct content\n");
+        let worktree_path = tmp.path().join(path);
+        let modified = std::fs::metadata(&worktree_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&worktree_path)
+            .unwrap();
+        writer.write_all(b"changed content\n").unwrap();
+        writer.set_modified(modified).unwrap();
+        let changed = repo
+            .cached_git_normalized_worktree_file_source(&repo.repo(), path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(std::fs::read(changed.path).unwrap(), b"changed content\n");
     }
 
     fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {

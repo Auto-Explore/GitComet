@@ -1623,16 +1623,6 @@ impl MainPaneView {
         self.diff_search_start_background(cx);
     }
 
-    pub(super) fn diff_search_flush_pending_query_recompute(&mut self) -> bool {
-        let Some(previous_query) = self.diff_search_pending_previous_query.take() else {
-            return false;
-        };
-
-        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
-        self.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
-        true
-    }
-
     pub(super) fn diff_search_recompute_matches_for_current_view(&mut self) {
         let previous_match_ix = self.diff_search_match_ix;
         let previous_visible_ix =
@@ -1667,29 +1657,6 @@ impl MainPaneView {
     }
 
     fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
-        self.diff_search_scan_current_view_synchronously(matcher);
-        // Exercise the immutable worker input against the established scanner
-        // in the existing view fixtures (wrapping, conflicts, Markdown, editor).
-        #[cfg(test)]
-        {
-            let actual = self.capture_search_document().search(
-                matcher.query(),
-                matcher.options,
-                gitcomet_core::services::CancellationToken::new(),
-            );
-            assert_eq!(
-                actual.matches,
-                self.diff_search_matches,
-                "background search rows for {:?}",
-                matcher.query()
-            );
-            if self.is_file_editor_active() {
-                assert_eq!(actual.editor_ranges, self.file_editor_search_matches);
-            }
-        }
-    }
-
-    fn diff_search_scan_current_view_synchronously(&mut self, matcher: &DiffSearchMatcher) {
         // Ahead of everything else: the arms below dispatch on
         // `is_file_preview_active()`, which stays true in edit mode, and that is
         // what had the search counting the stale pre-edit preview text.
@@ -2582,7 +2549,6 @@ impl MainPaneView {
             return;
         }
 
-        self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -2612,7 +2578,6 @@ impl MainPaneView {
             return;
         }
 
-        self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
         }

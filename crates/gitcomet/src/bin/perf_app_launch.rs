@@ -114,6 +114,16 @@ impl LaunchChild {
         }
     }
 
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        // process-wrap 10's JobObjectChild::try_wait consumes completion-port
+        // messages without remembering that the job finished. Poll only the
+        // leader, leaving those messages for the final whole-job wait.
+        #[cfg(windows)]
+        return self.child.inner_mut().try_wait();
+        #[cfg(not(windows))]
+        self.child.try_wait()
+    }
+
     /// Polls the leader and, once it has exited, stops the rest of the tree
     /// before reaping it. On Unix the group ID is the leader's PID: killing
     /// after the reap could signal an unrelated group that reused it.
@@ -124,12 +134,12 @@ impl LaunchChild {
                 return Ok(None);
             }
             self.stop_tree();
-            self.child.try_wait()
+            self.try_wait()
         }
         #[cfg(not(unix))]
         {
             // The job object handle is owned, so ordering is irrelevant here.
-            let status = self.child.try_wait()?;
+            let status = self.try_wait()?;
             if status.is_some() {
                 self.stop_tree();
             }
@@ -1392,6 +1402,39 @@ mod tests {
             Ok("descendant") => thread::sleep(Duration::from_secs(60)),
             _ => {} // Ordinary test runs do not launch a fixture.
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_child_cleanup_after_repeated_exit_polls_finishes() {
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut command = pipe_fixture_command("exit");
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut child = LaunchChild::spawn(command).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while child.try_wait_stopping_tree().unwrap().is_none() {
+                assert!(Instant::now() < deadline, "fixture leader did not exit");
+                thread::sleep(Duration::from_millis(5));
+            }
+            // Drain every queued notification in the old implementation,
+            // including ACTIVE_PROCESS_ZERO, before exercising the warm-up
+            // probe's unconditional cleanup.
+            for _ in 0..128 {
+                assert!(child.try_wait().unwrap().unwrap().success());
+            }
+            tx.send(terminate_child(&mut child)).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10))
+                .expect("cleanup must not wait for an already-consumed job notification")
+                .unwrap()
+                .success()
+        );
+        worker.join().unwrap();
     }
 
     #[cfg(unix)]

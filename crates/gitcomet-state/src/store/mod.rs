@@ -185,29 +185,35 @@ impl WorkerLoopContext<'_> {
     ) where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
-        let effects = {
+        let (effects, state) = {
             let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
-            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+            let mutable = make_mut_state_with_diagnostics(&mut app_state);
             let reduce_started = Instant::now();
-            let effects = reduce_with(app_state, repos, id_alloc);
-            // Cancel as soon as the reducer changes/clears a selection, even
-            // when the replacement does not need a backend diff load.
-            for (repo_id, token) in self.repo_task_tokens.iter() {
-                let selected = app_state
-                    .repos
-                    .iter()
-                    .find(|repo| repo.id == *repo_id)
-                    .and_then(|repo| {
-                        repo.diff_state
-                            .diff_target
-                            .as_ref()
-                            .map(|target| (target, repo.diff_state.diff_target_rev))
-                    });
-                token.cancel_stale_selected_diff(selected);
-            }
+            let effects = reduce_with(mutable, repos, id_alloc);
             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-            effects
+            (effects, Arc::clone(&app_state))
         };
+        // Cancel changed/cleared selections before dispatching their effects,
+        // outside the state write lock. Index selections once, including absent
+        // repos as cleared selections, instead of scanning all repos per token.
+        let selections: FxHashMap<_, _> = state
+            .repos
+            .iter()
+            .map(|repo| {
+                (
+                    repo.id,
+                    repo.diff_state
+                        .diff_target
+                        .as_ref()
+                        .map(|target| (target, repo.diff_state.diff_target_rev)),
+                )
+            })
+            .collect();
+        for (id, token) in self.repo_task_tokens.iter_mut() {
+            token.cancel_stale_selected_diff(selections.get(id).copied().flatten());
+        }
+        drop(selections);
+        drop(state);
         self.handle_effects(repos, effects);
     }
 

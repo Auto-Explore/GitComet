@@ -295,7 +295,7 @@ type RefMetadataCache =
 /// an object read per ref, so a page request whose fingerprint matches skips
 /// that entirely.
 /// Identity of a file as it sat on disk when we last read it. Inode and ctime
-/// (or Windows file ID and ChangeTime) detect replacements and edits that keep
+/// detect replacements and edits that keep
 /// length and mtime, but rapid writes can share even the same ctime.
 /// Verification memos must exclude
 /// racy stamps before recording them. `None` where those fields are unavailable,
@@ -307,14 +307,10 @@ struct DiskFileStamp {
     device: u64,
     inode: u128,
     ctime_nanos: i128,
-    #[cfg(windows)]
-    journal_version: (u64, i64),
 }
 
 struct DiskFileStampGuard {
     stamp: DiskFileStamp,
-    #[cfg(windows)]
-    _handle: gitcomet_win32_window_utils::FileIdentityGuard,
 }
 
 impl DiskFileStamp {
@@ -331,8 +327,11 @@ impl DiskFileStamp {
         })
     }
 
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn from_metadata(_metadata: &std::fs::Metadata) -> Option<Self> {
+        // Windows timestamps and USN records can be deferred/coalesced while
+        // writers remain open. Excluding writers would break editor saves.
+        // Verify content instead until a nonblocking identity is available.
         None
     }
 
@@ -342,27 +341,9 @@ impl DiskFileStamp {
         Self::acquire(path).map(|guard| guard.stamp)
     }
 
-    #[cfg(not(windows))]
     fn acquire(path: &Path) -> Option<DiskFileStampGuard> {
         let metadata = std::fs::symlink_metadata(path).ok()?;
         Self::from_metadata(&metadata).map(|stamp| DiskFileStampGuard { stamp })
-    }
-
-    #[cfg(windows)]
-    fn acquire(path: &Path) -> Option<DiskFileStampGuard> {
-        let handle = gitcomet_win32_window_utils::FileIdentityGuard::try_open(path).ok()??;
-        let identity = handle.identity();
-        Some(DiskFileStampGuard {
-            stamp: Self {
-                len: identity.len,
-                modified: identity.modified,
-                device: identity.volume,
-                inode: identity.file_id,
-                ctime_nanos: identity.change_unix_nanos,
-                journal_version: (identity.journal_id, identity.usn),
-            },
-            _handle: handle,
-        })
     }
 
     /// A stamp is unsafe to memoize while a subsequent write could still get
@@ -387,35 +368,6 @@ impl DiskFileStamp {
         // taken inside the racy window eligible for memoization.
         let now = racy_check_now();
         Self::acquire(path).filter(|guard| !guard.stamp.is_racy_at(now))
-    }
-
-    /// Stamp compared against a memoized cache file. On Unix a recorded stamp
-    /// either was aged when recorded or belongs to a file the recorder created
-    /// privately, so equality suffices. Windows also needs the guard's
-    /// open-writer exclusion.
-    fn cache_file_stamp_for_memo_hit(path: &Path) -> Option<Self> {
-        #[cfg(windows)]
-        return Self::acquire_for_verification_memo(path).map(|guard| guard.stamp);
-        #[cfg(not(windows))]
-        Self::read(path)
-    }
-
-    // Windows may coalesce journal updates while handles remain open. Seal a
-    // verified read before recording its identity, otherwise a later mapped write
-    // could reuse that identity. Failure disables the memo, never verification.
-    fn acquire_for_verification_recording(path: &Path) -> Option<DiskFileStampGuard> {
-        let guard = Self::acquire_for_verification_memo(path)?;
-        #[cfg(windows)]
-        let guard = {
-            let mut guard = guard;
-            if !guard._handle.seal_for_reuse() {
-                return None;
-            }
-            let identity = guard._handle.identity();
-            guard.stamp.journal_version = (identity.journal_id, identity.usn);
-            guard
-        };
-        Some(guard)
     }
 }
 
@@ -1712,8 +1664,6 @@ mod tests {
             device: 1,
             inode: 1,
             ctime_nanos: 98_000_000_000,
-            #[cfg(windows)]
-            journal_version: (1, 1),
         };
         assert!(!stamp.is_racy_at(now), "an aged stamp permits memoization");
         for (description, candidate) in [

@@ -39,6 +39,9 @@ pub(super) struct RepoTaskToken {
     // The revision distinguishes refreshes of the same path. All loads for one
     // selection share a child token, so superseding it leaves log/status work alive.
     selected_diff: Arc<Mutex<Option<(DiffTarget, u64, CancellationToken)>>>,
+    // Only the store worker changes selections. Avoid locking the shared task
+    // slot on unrelated messages or when this repo has no selected-diff work.
+    selected_diff_key: Option<(DiffTarget, u64)>,
     selected_diff_slots: SelectedDiffSlots,
 }
 
@@ -49,6 +52,7 @@ impl RepoTaskToken {
             cancellation: CancellationToken::new(),
             log_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
             selected_diff: Arc::new(Mutex::new(None)),
+            selected_diff_key: None,
             selected_diff_slots: SelectedDiffSlots::default(),
         }
     }
@@ -66,7 +70,12 @@ impl RepoTaskToken {
         next
     }
 
-    fn selected_diff_cancellation(&self, target: &DiffTarget, revision: u64) -> CancellationToken {
+    fn selected_diff_cancellation(
+        &mut self,
+        target: &DiffTarget,
+        revision: u64,
+    ) -> CancellationToken {
+        self.selected_diff_key = Some((target.clone(), revision));
         let mut slot = self.selected_diff.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((previous, previous_rev, token)) = slot.as_ref() {
             if previous == target && *previous_rev == revision && !token.is_cancelled() {
@@ -79,7 +88,15 @@ impl RepoTaskToken {
         token
     }
 
-    pub(super) fn cancel_stale_selected_diff(&self, selected: Option<(&DiffTarget, u64)>) {
+    pub(super) fn cancel_stale_selected_diff(&mut self, selected: Option<(&DiffTarget, u64)>) {
+        if self
+            .selected_diff_key
+            .as_ref()
+            .is_none_or(|(target, revision)| selected == Some((target, *revision)))
+        {
+            return;
+        }
+        self.selected_diff_key = None;
         let mut slot = self.selected_diff.lock().unwrap_or_else(|e| e.into_inner());
         if slot
             .as_ref()
@@ -2333,8 +2350,10 @@ pub(super) fn schedule_effect(
                 && let Some((msg_tx, _)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
-                let cancellation =
-                    repo_task_tokens[&repo_id].selected_diff_cancellation(&target, target_rev);
+                let cancellation = repo_task_tokens
+                    .get_mut(&repo_id)
+                    .expect("repo task token")
+                    .selected_diff_cancellation(&target, target_rev);
                 repo_load::schedule_load_selected_diff(
                     executor,
                     &repo_task_tokens[&repo_id].selected_diff_slots,
@@ -3010,7 +3029,7 @@ mod tests {
 
     #[test]
     fn selecting_a_new_diff_cancels_only_the_previous_diff() {
-        let token = RepoTaskToken::new(1);
+        let mut token = RepoTaskToken::new(1);
         let a = DiffTarget::WorkingTree {
             path: "a".into(),
             area: gitcomet_core::domain::DiffArea::Unstaged,
@@ -3021,7 +3040,26 @@ mod tests {
         };
         let first = token.selected_diff_cancellation(&a, 1);
         let same = token.selected_diff_cancellation(&a, 1);
+        // Unrelated store messages must not acquire a task's mutex. Holding
+        // the shared slot here would deadlock the old per-message check.
+        let slot = token.selected_diff.clone();
+        let held = slot.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let same_target = a.clone();
+        let worker = std::thread::spawn(move || {
+            token.cancel_stale_selected_diff(Some((&same_target, 1)));
+            let _ = tx.send(token);
+        });
+        let unlocked = rx.recv_timeout(std::time::Duration::from_secs(2));
+        drop(held);
+        worker.join().unwrap();
+        let mut token = unlocked.expect("unchanged selection must not lock the task slot");
         assert!(!first.is_cancelled());
+        token.cancel_stale_selected_diff(Some((&a, 2)));
+        assert!(
+            first.is_cancelled(),
+            "refreshing the same path cancels the old revision"
+        );
         let log = token.take_over_log();
         let next = token.selected_diff_cancellation(&b, 2);
         assert!(first.is_cancelled());

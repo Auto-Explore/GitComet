@@ -40,9 +40,6 @@ rustix = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
-[target.'cfg(windows)'.dependencies]
-gitcomet-win32-window-utils = { path = "../win32-window-utils" }
-
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 syn = { version = "3", features = ["full", "visit"] }

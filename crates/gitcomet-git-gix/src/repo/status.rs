@@ -1380,10 +1380,23 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
             paths.push(path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?);
         }
     }
-    // Include staged changes so deleted or replaced gitlinks (no longer in the
-    // index) are still supplemented. The primary gix tree/index pass already
-    // found these paths; avoid another traversal of HEAD here.
-    paths.extend(staged.iter().map(|entry| entry.path.clone()));
+    // Deleted/replaced gitlinks are absent from the index. Check only the
+    // staged paths in HEAD so ordinary staged files do not broaden the query
+    // or prevent the empty-selection fast path.
+    if !staged.is_empty()
+        && let Some(head) = super::history::gix_head_id_or_none(repo).ok()?
+    {
+        let tree = repo.find_object(head).ok()?.peel_to_tree().ok()?;
+        for entry in staged {
+            if tree
+                .lookup_entry_by_path(&entry.path)
+                .ok()?
+                .is_some_and(|entry| entry.mode().is_commit())
+            {
+                paths.push(entry.path.clone());
+            }
+        }
+    }
     paths.sort_unstable();
     paths.dedup();
     // Leave room for the executable, workdir, options and Windows quoting in
@@ -1539,6 +1552,50 @@ pub(crate) mod tests {
             kind,
             conflict: None,
         }
+    }
+
+    #[test]
+    fn gitlink_query_excludes_ordinary_staged_paths_but_keeps_removed_and_replaced_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        init_test_repo(root);
+        write_file(root, "ordinary.txt", "base\n");
+        git_success(root, &["add", "ordinary.txt"]);
+        git_success(root, &["commit", "-m", "base"]);
+        let oid = gix::open(root).unwrap().head_id().unwrap().to_string();
+        for path in ["removed", "replaced", "retained"] {
+            git_success(
+                root,
+                &["update-index", "--add", "--cacheinfo", "160000", &oid, path],
+            );
+        }
+        git_success(root, &["commit", "-m", "gitlinks"]);
+        git_success(root, &["update-index", "--force-remove", "removed"]);
+        git_success(root, &["update-index", "--force-remove", "replaced"]);
+        write_file(root, "replaced", "regular file\n");
+        write_file(root, "ordinary.txt", "changed\n");
+        git_success(root, &["add", "replaced", "ordinary.txt"]);
+        let staged = [
+            file_status("ordinary.txt", FileStatusKind::Modified),
+            file_status("removed", FileStatusKind::Deleted),
+            file_status("replaced", FileStatusKind::Modified),
+        ];
+        assert_eq!(
+            super::gitlink_status_paths(&gix::open(root).unwrap(), &staged),
+            Some(
+                ["removed", "replaced", "retained"]
+                    .map(PathBuf::from)
+                    .to_vec()
+            )
+        );
+        git_success(root, &["update-index", "--force-remove", "retained"]);
+        git_success(root, &["commit", "-m", "remove gitlinks"]);
+        write_file(root, "ordinary.txt", "changed again\n");
+        git_success(root, &["add", "ordinary.txt"]);
+        assert_eq!(
+            super::gitlink_status_paths(&gix::open(root).unwrap(), &staged[..1]),
+            Some(Vec::new())
+        );
     }
 
     fn conflicted_file_status(path: &str, conflict: FileConflictKind) -> FileStatus {

@@ -9,7 +9,7 @@ use gitcomet_core::services::CancellationToken;
 use std::sync::Mutex;
 
 /// Includes content generations and the visible row projection. A wrap, mode or
-/// viewport change can move matches even when the bytes are unchanged. Extend this
+/// wrap-plan change can move matches even when the bytes are unchanged. Extend this
 /// key when adding a search surface; omitting its generation can publish stale rows.
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::view) struct SearchDocumentKey {
@@ -23,13 +23,93 @@ pub(in crate::view) struct SearchDocumentKey {
     markdown_wrap: [Option<MarkdownPreviewWrapKey>; 4],
     conflict: (u64, Option<u64>, u64, ConflictResolverViewMode, bool),
     surface: (bool, bool, bool, bool),
-    viewport: (u32, u32),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[gpui::test]
+    fn search_snapshot_shares_rows_and_resize_only_invalidates_changed_wrap_plans(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::view::{GitCometView, test_support::TestBackend};
+        use gitcomet_core::domain::DiffLineKind;
+        use gitcomet_state::store::AppStore;
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, app| {
+            let pane = view.read(app).main_pane.clone();
+            pane.update(app, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.diff_word_wrap = false;
+                pane.diff_cache = ["+needle alpha", "+other"]
+                    .map(|text| AnnotatedDiffLine {
+                        kind: DiffLineKind::Add,
+                        text: text.into(),
+                        old_line: None,
+                        new_line: Some(1),
+                    })
+                    .into();
+                pane.ensure_diff_visible_indices();
+                let key = pane.diff_search_document_key();
+                pane.last_window_size.width += gpui::px(137.0);
+                pane.last_window_size.height += gpui::px(83.0);
+                assert!(
+                    key == pane.diff_search_document_key(),
+                    "unwrapped resizing does not change searchable rows"
+                );
+                let document = pane.capture_search_document();
+                assert_eq!(
+                    Arc::strong_count(&pane.diff_cache),
+                    2,
+                    "snapshot must share eager rows"
+                );
+                assert_eq!(
+                    Arc::strong_count(&pane.diff_visible_indices),
+                    2,
+                    "snapshot must share the projection"
+                );
+                assert_eq!(
+                    document
+                        .search(
+                            "needle",
+                            DiffSearchOptions::default(),
+                            CancellationToken::new()
+                        )
+                        .matches,
+                    [0]
+                );
+
+                pane.diff_word_wrap = true;
+                pane.ensure_diff_wrap_visible_rows(window, cx);
+                let wrapped_key = pane.diff_search_document_key();
+                let mut plan = pane.diff_wrap_visible_cache_key.unwrap();
+                plan.inline_columns += 1;
+                pane.diff_wrap_visible_cache_key = Some(plan);
+                assert!(
+                    wrapped_key != pane.diff_search_document_key(),
+                    "changed wrap plans invalidate visual row matches"
+                );
+
+                pane.diff_cache = Arc::from([]);
+                pane.diff_visible_indices = Arc::from([]);
+                assert_eq!(
+                    document
+                        .search(
+                            "needle",
+                            DiffSearchOptions::default(),
+                            CancellationToken::new()
+                        )
+                        .matches,
+                    [0],
+                    "a reload must leave the worker's snapshot intact"
+                );
+            });
+        });
+    }
 
     #[test]
     fn background_search_reuses_rows_and_preserves_query_semantics() {
@@ -43,7 +123,7 @@ mod tests {
                 counter.fetch_add(1, Ordering::Relaxed);
                 Some(texts[row].into())
             }),
-            wrapped: Vec::new(),
+            wrapped: Arc::from([]),
             streamed: false,
             previous: Mutex::new(VecDeque::new()),
         }));
@@ -137,7 +217,7 @@ mod tests {
                 }
                 Some("needle".into())
             }),
-            wrapped: Vec::new(),
+            wrapped: Arc::from([]),
             streamed: false,
             previous: Mutex::new(VecDeque::new()),
         };
@@ -156,7 +236,7 @@ struct RowDocument {
     len: usize,
     columns: usize,
     text: RowText,
-    wrapped: Vec<DiffWrapVisualRow>,
+    wrapped: Arc<[DiffWrapVisualRow]>,
     streamed: bool,
     previous: Mutex<VecDeque<SearchCandidates>>,
 }
@@ -389,10 +469,6 @@ impl MainPaneView {
                 self.rendered_markdown_preview_owns_view(),
                 self.is_collapsed_diff_projection_active(),
             ),
-            viewport: (
-                f32::from(self.last_window_size.width).to_bits(),
-                f32::from(self.last_window_size.height).to_bits(),
-            ),
         }
     }
 
@@ -583,7 +659,7 @@ impl MainPaneView {
         let wrapped = if self.diff_word_wrap && !self.is_file_preview_active() {
             self.diff_wrap_visible_rows.clone()
         } else {
-            Vec::new()
+            Arc::from([])
         };
         let streamed = self.is_file_preview_active()
             && self.worktree_preview_source_len > 0
@@ -622,7 +698,7 @@ impl MainPaneView {
             return;
         }
         if !self.is_file_preview_active() && self.active_conflict_target().is_none() {
-            self.ensure_diff_visible_indices();
+            self.ensure_diff_visible_indices_for_search();
         }
         let key = self.diff_search_document_key();
         if self

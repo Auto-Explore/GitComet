@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
+import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -317,7 +317,7 @@ def compile_tests(context, profile, test_targets=()):
     print(f"Inventoried {len(entries)} tests ({sum(t['ignored'] for t in entries)} ignored)")
 
 
-def suite_env(context, suite):
+def suite_env(context, suite, *, cleanup):
     env = dict(os.environ)
     if suite.get("package-name") == UI:
         # Keep copied/renamed UI harnesses away from the developer's session.
@@ -326,8 +326,9 @@ def suite_env(context, suite):
         env.pop("GITCOMET_SESSION_FILE", None)
         env["GITCOMET_DISABLE_SESSION_PERSIST"] = "1"
         if os.name == "nt":
-            appdata = REPORTS / "ui-appdata" / uuid.uuid4().hex
-            appdata.mkdir(parents=True)
+            parent = REPORTS / "ui-appdata"
+            parent.mkdir(parents=True, exist_ok=True)
+            appdata = cleanup.enter_context(tempfile.TemporaryDirectory(dir=parent))
             env["LOCALAPPDATA"] = str(appdata)
             env["APPDATA"] = str(appdata)
     binary_dir = str(Path(suite["binary-path"]).parent)
@@ -362,13 +363,14 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
         command += [test_filter]
     if exact:
         command += ["--exact"]
-    env = suite_env(context, suite)
-    env.update(env_overrides or {})
-    name = f"{context}-{binary_id}-{test_filter or 'all'}"
-    if env_overrides:
-        name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
-    code = run(name, command, cwd=suite["cwd"], env=env, check=False,
-               timeout=180 if test_filter else 600, live=live, cancel=cancel)
+    with ExitStack() as cleanup:
+        env = suite_env(context, suite, cleanup=cleanup)
+        env.update(env_overrides or {})
+        name = f"{context}-{binary_id}-{test_filter or 'all'}"
+        if env_overrides:
+            name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
+        code = run(name, command, cwd=suite["cwd"], env=env, check=False,
+                   timeout=180 if test_filter else 600, live=live, cancel=cancel)
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
     log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8", errors="replace")
     reject_prerequisite_skips(name, log)

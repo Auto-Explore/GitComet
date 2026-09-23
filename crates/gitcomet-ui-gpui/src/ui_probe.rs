@@ -58,6 +58,14 @@ struct ProbeLog {
     dropped: AtomicU64,
 }
 
+impl ProbeLog {
+    fn enqueue(&self, record: ProbeRecord) {
+        if self.writer.try_send(record).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 enum ProbeRecord {
     Text(String),
     Json(Value),
@@ -87,13 +95,7 @@ fn write_json(records: &[Value]) {
         return;
     };
     for record in records {
-        if log
-            .writer
-            .try_send(ProbeRecord::Json(record.clone()))
-            .is_err()
-        {
-            log.dropped.fetch_add(1, Ordering::Relaxed);
-        }
+        log.enqueue(ProbeRecord::Json(record.clone()));
     }
 }
 
@@ -220,9 +222,7 @@ fn log_line(text: &str) {
         return;
     };
     let stamped = format!("[+{:8.3}s] {text}", log.started.elapsed().as_secs_f64());
-    if log.writer.try_send(ProbeRecord::Text(stamped)).is_err() {
-        log.dropped.fetch_add(1, Ordering::Relaxed);
-    }
+    log.enqueue(ProbeRecord::Text(stamped));
 }
 
 /// Run `f`, logging how long it took when the probe is enabled. Free when the
@@ -609,6 +609,43 @@ impl MainThreadCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writer_flushes_while_the_application_is_still_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.jsonl");
+        let file = File::create(&path).unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || probe_writer(rx, None, Some(file)));
+        tx.send(ProbeRecord::Json(json!({"event": "live"})))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&path).unwrap() != "{\"event\":\"live\"}\n" {
+            assert!(
+                Instant::now() < deadline,
+                "records must flush without shutdown or a flush request"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!writer.is_finished());
+        drop(tx);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn full_probe_queue_counts_drops_without_blocking_the_ui() {
+        let (writer, rx) = mpsc::sync_channel(1);
+        let log = ProbeLog {
+            started: Instant::now(),
+            writer,
+            jsonl: true,
+            dropped: AtomicU64::new(0),
+        };
+        log.enqueue(ProbeRecord::Json(json!({"id": 1})));
+        log.enqueue(ProbeRecord::Json(json!({"id": 2})));
+        assert_eq!(log.dropped.load(Ordering::Relaxed), 1);
+        assert!(matches!(rx.try_recv(), Ok(ProbeRecord::Json(value)) if value["id"] == 1));
+    }
 
     #[test]
     fn flush_returns_after_every_queued_record_is_on_disk() {

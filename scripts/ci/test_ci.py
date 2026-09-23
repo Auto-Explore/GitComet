@@ -395,12 +395,12 @@ class RunnerTests(unittest.TestCase):
 
     def test_ui_harness_environment_isolates_personal_settings_after_binary_relocation(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
-                patch.dict(os.environ, {"GITCOMET_SESSION_FILE": "personal-session.json"}):
+                patch.dict(os.environ, {"GITCOMET_SESSION_FILE": "personal-session.json"}), runner.ExitStack() as cleanup:
             metadata = runner.paths("ui") / "binaries.json"
             metadata.write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
             suite = {"package-name": runner.UI, "binary-path": str(Path(directory) / "renamed.exe")}
-            first = runner.suite_env("ui", suite)
-            second = runner.suite_env("ui", suite)
+            first = runner.suite_env("ui", suite, cleanup=cleanup)
+            second = runner.suite_env("ui", suite, cleanup=cleanup)
             self.assertNotIn("GITCOMET_SESSION_FILE", first)
             self.assertEqual(first["GITCOMET_DISABLE_SESSION_PERSIST"], "1")
             self.assertEqual(os.environ["GITCOMET_SESSION_FILE"], "personal-session.json")
@@ -408,6 +408,38 @@ class RunnerTests(unittest.TestCase):
                 self.assertNotEqual(first["LOCALAPPDATA"], second["LOCALAPPDATA"])
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_relative_to(directory))
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_dir())
+
+    def test_ui_appdata_is_removed_after_success_failure_and_interruption(self):
+        # Exercise Windows appdata ownership on any host without changing
+        # pathlib's platform-dependent Path implementation.
+        from types import SimpleNamespace
+        windows_os = SimpleNamespace(name="nt", environ=os.environ, pathsep=os.pathsep)
+        for outcome in (0, 1, TimeoutError("suite timeout"), KeyboardInterrupt()):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runner, "REPORTS", Path(directory)), patch.object(runner, "os", windows_os):
+                metadata = runner.paths("ui") / "binaries.json"
+                metadata.write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
+                suite = {"package-name": runner.UI, "binary-path": str(Path(directory) / "ui.exe"),
+                         "cwd": directory, "testcases": {"test": {"ignored": False}}}
+                created = []
+                def execute(name, command, **kwargs):
+                    appdata = Path(kwargs["env"]["LOCALAPPDATA"])
+                    self.assertTrue(appdata.is_dir())
+                    self.assertEqual(kwargs["env"]["APPDATA"], str(appdata))
+                    (appdata / "settings.json").write_text("{}")
+                    created.append(appdata)
+                    if isinstance(outcome, BaseException):
+                        raise outcome
+                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    return outcome
+                with patch.object(runner, "run", side_effect=execute):
+                    if isinstance(outcome, BaseException):
+                        with self.assertRaises(type(outcome)):
+                            runner.run_suite("ui", "suite", suite)
+                    else:
+                        self.assertEqual(runner.run_suite("ui", "suite", suite), outcome)
+                self.assertEqual(len(created), 1)
+                self.assertFalse(created[0].exists())
 
     @staticmethod
     def git_integration_suites():

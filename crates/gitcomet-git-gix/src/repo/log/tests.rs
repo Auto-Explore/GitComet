@@ -1361,7 +1361,7 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
         .expect("source")
         .expect("file exists");
-    // The first read creates the cache file; only a read that finds it settled memoizes.
+    // The fresh private cache file can be reused on the second read.
     let second = repo
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
         .expect("source again")
@@ -1571,7 +1571,7 @@ fn assert_attribute_source_invalidates_memo(index_only: bool) {
         fs::read(source.path).unwrap()
     };
     assert_eq!(read_source(&repo), b"one\r\ntwo\r\n");
-    // The first read creates the cache file; the second finds it settled and memoizes.
+    // Re-reading also exercises the memo when the platform supports it.
     assert_eq!(read_source(&repo), b"one\r\ntwo\r\n");
     // DiskFileStamp has no inode/ctime off Unix, so nothing is memoized there.
     if cfg!(unix) {

@@ -510,8 +510,8 @@ impl MainPaneView {
                     this.reset_file_diff_word_highlight_caches();
                     #[cfg(test)]
                     {
-                        this.file_diff_cache_rows = rebuild.rows;
-                        this.file_diff_inline_cache = rebuild.inline_rows;
+                        this.file_diff_cache_rows = rebuild.rows.into();
+                        this.file_diff_inline_cache = rebuild.inline_rows.into();
                     }
                     let split_left_edit_hint = previous_old_text.as_ref().and_then(|previous| {
                         diff_syntax_edit_from_text_change(
@@ -759,7 +759,7 @@ impl MainPaneView {
         };
 
         self.reset_collapsed_diff_projection(clear_reveals);
-        self.diff_cache.clear();
+        self.diff_cache = Arc::from([]);
         self.diff_row_provider = None;
         self.diff_split_row_provider = None;
         self.diff_cache_repo_id = None;
@@ -774,9 +774,9 @@ impl MainPaneView {
         self.diff_visual_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
         self.diff_header_display_cache.clear();
-        self.diff_split_cache.clear();
+        self.diff_split_cache = Arc::from([]);
         self.diff_split_cache_len = 0;
-        self.diff_visible_indices.clear();
+        self.diff_visible_indices = Arc::from([]);
         self.diff_visible_inline_map = None;
         self.diff_visible_cache_len = 0;
         self.diff_visible_is_file_view = false;
