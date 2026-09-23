@@ -1465,19 +1465,9 @@ impl MainPaneView {
                 .justify_between()
                 .gap_x_3()
                 .gap_y_1()
-                // Neutral panel, status colour in the border — same reasoning
-                // as the crash banner and the toasts.
-                .bg(if theme.is_dark {
-                    with_alpha(theme.colors.status.warning.foreground, 0.13)
-                } else {
-                    theme.colors.surface.raised
-                })
+                .bg(theme.colors.notice.background)
                 .border_1()
-                .border_color(if theme.is_dark {
-                    with_alpha(theme.colors.status.warning.foreground, 0.30)
-                } else {
-                    theme.colors.status.warning.border
-                })
+                .border_color(theme.colors.notice.border)
                 .rounded(px(theme.radii.panel))
                 .text_size(theme.ui_text(13.0))
                 .child(
@@ -1492,17 +1482,18 @@ impl MainPaneView {
                         .child(
                             div()
                                 .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(theme.colors.notice.foreground)
                                 .child("File changed on disk"),
                         )
                         .child(
                             div()
-                                .text_color(theme.colors.foreground.secondary)
+                                .text_color(theme.colors.notice.secondary)
                                 .child(format!("{actor} {verb} {name}.")),
                         )
                         .when(discards_edits, |d| {
                             d.child(
                                 div()
-                                    .text_color(theme.colors.foreground.secondary)
+                                    .text_color(theme.colors.notice.secondary)
                                     .child("Reloading discards your unsaved edits."),
                             )
                         }),
