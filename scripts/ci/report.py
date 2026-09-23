@@ -129,7 +129,8 @@ def cache_context(key):
     if key.startswith("gitcomet-ci-v2-deps-"):
         return "deps/" + key.removeprefix("gitcomet-ci-v2-deps-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-v2-sources-"):
-        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 1)[0]
+        # Also parses pre-layout keys (os-deps), so new bundles retire those.
+        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-v1-"):
         return "deps/" + key.removeprefix("gitcomet-ci-v1-").rsplit("-", 1)[0]
     if key.startswith("gitcomet-ci-audit-"):
