@@ -46,6 +46,24 @@ fn content_events_exclude_focus_selection_and_identical_replacements(
     assert!(changes.windows(2).all(|events| events[0] != events[1]));
 }
 
+// The identical-replacement shortcut compared by copying the replaced range
+// first, so select-all and typing copied the whole buffer on every keystroke.
+#[gpui::test]
+fn replacing_a_large_selection_does_not_copy_it(cx: &mut gpui::TestAppContext) {
+    use crate::kit::text_model::OWNED_SLICES;
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(20_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            OWNED_SLICES.with(|count| count.set(0));
+            input.replace_utf8_range(0..text.len(), "x", cx);
+            assert_eq!(input.text(), "x");
+            assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
+        })
+    });
+}
+
 #[test]
 fn mask_text_preserves_length_and_newlines() {
     let input = "a\nb\r\nc";

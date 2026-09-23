@@ -3370,6 +3370,188 @@ fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// A synchronous recompute (data arrival, option toggle) cancels the worker
+/// but leaves the rows unchanged. It used to drop the captured document too,
+/// so the next keystroke recaptured it and lost its query cache.
+#[gpui::test]
+fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70548);
+    let commit_id = CommitId("1122334455667748".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_document_reuse",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    // Without file text the file-diff cache resets on every render, which
+    // bumps the projection and would recapture the document regardless.
+    repo.diff_state.diff_file =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+            path.clone(),
+            Some("old one\nunchanged\n".into()),
+            Some("new one\nunchanged\n".into()),
+        ))));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    let set_query = |cx: &mut gpui::VisualTestContext, query: &'static str| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_search_input
+                        .update(cx, |input, cx| input.set_text(query, cx));
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+    let document = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert!(!pane.diff_search_worker_running);
+            pane.diff_search_document
+                .as_ref()
+                .map(|(_, document)| Arc::clone(document))
+        })
+    };
+
+    set_query(cx, "new");
+    let first = document(cx).expect("the worker captured a document");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane
+                .update(cx, |pane, _| pane.diff_search_recompute_matches());
+        });
+    });
+    set_query(cx, "ne");
+    let second = document(cx).expect("the worker captured a document");
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "unchanged rows must keep the captured document"
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = match pane.diff_view {
+                    DiffViewMode::Split => DiffViewMode::Inline,
+                    DiffViewMode::Inline => DiffViewMode::Split,
+                };
+                pane.diff_search_recompute_matches();
+            });
+        });
+    });
+    assert!(
+        document(cx).is_none(),
+        "changed rows drop the stale document instead of pinning it"
+    );
+
+    focus_diff_search_input(cx, &view);
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(
+        document(cx).is_none(),
+        "closing search releases the document"
+    );
+}
+
+/// A split file diff searches only the file rows. The capture also cloned
+/// the patch header map and pinned the patch and inline row sources.
+#[gpui::test]
+fn split_file_diff_search_captures_only_file_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70549);
+    let commit_id = CommitId("1122334455667749".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_capture_scope",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    repo.diff_state.diff_file =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+            path.clone(),
+            Some("old one\nunchanged\n".into()),
+            Some("new one\nunchanged\n".into()),
+        ))));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.ensure_diff_visible_indices();
+                assert!(pane.is_file_diff_view_active());
+                let patch = pane.diff_row_provider.clone().expect("patch rows loaded");
+                let counts = |pane: &crate::view::panes::MainPaneView| {
+                    (
+                        Arc::strong_count(&patch),
+                        Arc::strong_count(&pane.diff_cache),
+                        Arc::strong_count(&pane.diff_split_cache),
+                        Arc::strong_count(&pane.file_diff_inline_cache),
+                        pane.diff_split_row_provider.as_ref().map(Arc::strong_count),
+                        pane.file_diff_inline_row_provider
+                            .as_ref()
+                            .map(Arc::strong_count),
+                    )
+                };
+                let before = counts(pane);
+                let file_rows = pane.file_diff_row_provider.as_ref().map(Arc::strong_count);
+                let _document = pane.capture_search_document();
+                assert_eq!(counts(pane), before, "the capture pinned unused rows");
+                assert_eq!(
+                    pane.file_diff_row_provider.as_ref().map(Arc::strong_count),
+                    file_rows.map(|count| count + 1),
+                    "the capture shares the file rows it searches"
+                );
+            });
+        });
+    });
+}
+
 #[gpui::test]
 fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
     cx: &mut gpui::TestAppContext,

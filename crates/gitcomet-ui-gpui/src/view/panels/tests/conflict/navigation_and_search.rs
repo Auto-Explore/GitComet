@@ -2147,6 +2147,83 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
     assert_matches(cx, &[]);
 }
 
+/// "Open content" on a conflicted file renders the file preview, not the
+/// resolver. The background search checked the conflict first, so typing
+/// searched resolver rows while the synchronous scan and scrolling used
+/// preview lines.
+#[gpui::test]
+fn conflict_content_preview_background_search_uses_preview_rows(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(199);
+    let workdir = tempfile::tempdir().expect("conflict fixture directory");
+    let path = Path::new("content.txt");
+    let current = "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nneedle\nb\nneedle\n";
+    std::fs::write(workdir.path().join(path), current).expect("write conflict fixture");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir.path());
+            set_test_conflict_status(
+                &mut repo,
+                path.to_path_buf(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let (base, ours, theirs) = (
+                "a\nneedle\nb\nneedle\n",
+                "a\nours\nneedle\nb\nneedle\n",
+                "a\ntheirs\nneedle\nb\nneedle\n",
+            );
+            set_test_conflict_file(&mut repo, path.to_path_buf(), base, ours, theirs, current);
+            repo.conflict_state.conflict_session =
+                Some(ConflictSession::from_stage_inputs_with_current(
+                    path.to_path_buf(),
+                    gitcomet_core::domain::FileConflictKind::BothModified,
+                    ConflictPayload::Text(base.into()),
+                    ConflictPayload::Text(ours.into()),
+                    ConflictPayload::Text(theirs.into()),
+                    Some(ConflictPayload::Text(current.into())),
+                ));
+            repo.diff_state.content_preview = true;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        let pane = main_pane.read(app);
+        assert!(pane.is_file_preview_active());
+        assert!(pane.active_conflict_target().is_some());
+        assert!(pane.worktree_preview_line_count().is_some());
+    });
+
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.diff_search_active = true;
+            let previous = std::mem::replace(&mut pane.diff_search_query, "needle".into());
+            pane.diff_search_schedule_query_recompute(previous, cx);
+        });
+    });
+    cx.run_until_parked();
+    let (background, synchronous) = cx.update(|_, app| {
+        main_pane.update(app, |pane, _| {
+            assert!(!pane.diff_search_worker_running);
+            let background = pane.diff_search_matches.clone();
+            pane.diff_search_recompute_matches();
+            (background, pane.diff_search_matches.clone())
+        })
+    });
+    assert_eq!(synchronous, [6, 8], "preview lines holding the query");
+    assert_eq!(
+        background, synchronous,
+        "the worker searched another surface"
+    );
+}
+
 /// Ctrl+F in the merge tool must bring the hit into view — in the input
 /// columns *and* in the resolved output.
 ///

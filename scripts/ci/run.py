@@ -75,6 +75,11 @@ def batched_test_names(batches):
             if name.startswith(prefix) and not test["ignored"]}
 
 
+def runner_label(package, binary_id, name, batched):
+    return ("libtest" if uses_libtest(package) else
+            "libtest-pure" if (binary_id, name) in batched else "nextest")
+
+
 def nextest_filter(batches):
     # `binary` matches the Cargo binary name; `binary_id` also distinguishes
     # library and integration harnesses. Inventory verification below remains
@@ -304,9 +309,7 @@ def compile_tests(context, profile, test_targets=()):
         package = packages[suite["package-id"]]
         for name, test in suite["testcases"].items():
             entries.append(dict(package=package, binary=binary_id, test=name,
-                                ignored=test["ignored"],
-                                runner="libtest" if uses_libtest(package) else
-                                       "libtest-pure" if (binary_id, name) in batched else "nextest"))
+                                ignored=test["ignored"], runner=runner_label(package, binary_id, name, batched)))
     if not entries:
         raise RuntimeError(f"No tests discovered for {context}")
     (directory / "coverage.json").write_text(json.dumps({
@@ -328,7 +331,8 @@ def suite_env(context, suite, *, cleanup):
         if os.name == "nt":
             parent = REPORTS / "ui-appdata"
             parent.mkdir(parents=True, exist_ok=True)
-            appdata = cleanup.enter_context(tempfile.TemporaryDirectory(dir=parent))
+            # A straggling child or antivirus may still hold a file; keep the suite's result.
+            appdata = cleanup.enter_context(tempfile.TemporaryDirectory(dir=parent, ignore_cleanup_errors=True))
             env["LOCALAPPDATA"] = str(appdata)
             env["APPDATA"] = str(appdata)
     binary_dir = str(Path(suite["binary-path"]).parent)
@@ -435,6 +439,13 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
     suites = inventory(context)["rust-suites"]
     batches = pure_batches(suites, batch_pure_tests)
     batched = batched_test_names(batches)
+    # Compile labels with the default mode; record the mode this run actually uses.
+    coverage = paths(context) / "coverage.json"
+    if coverage.exists():
+        document = json.loads(coverage.read_text(encoding="utf-8"))
+        for test in document["tests"]:
+            test["runner"] = runner_label(test["package"], test["binary"], test["test"], batched)
+        coverage.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     cpus = os.cpu_count() or 1
     balanced = schedule == "balanced" and cpus > 1
     start = time.monotonic()

@@ -305,12 +305,8 @@ struct DiskFileStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
     device: u64,
-    inode: u128,
+    inode: u64,
     ctime_nanos: i128,
-}
-
-struct DiskFileStampGuard {
-    stamp: DiskFileStamp,
 }
 
 impl DiskFileStamp {
@@ -321,7 +317,7 @@ impl DiskFileStamp {
             len: metadata.len(),
             modified: metadata.modified().ok(),
             device: metadata.dev(),
-            inode: u128::from(metadata.ino()),
+            inode: metadata.ino(),
             ctime_nanos: i128::from(metadata.ctime()) * 1_000_000_000
                 + i128::from(metadata.ctime_nsec()),
         })
@@ -338,12 +334,10 @@ impl DiskFileStamp {
     /// Stamp of the regular file at `path`; `None` for symlinks, non-files and
     /// platforms without the fields above.
     fn read(path: &Path) -> Option<Self> {
-        Self::acquire(path).map(|guard| guard.stamp)
-    }
-
-    fn acquire(path: &Path) -> Option<DiskFileStampGuard> {
+        #[cfg(test)]
+        DISK_FILE_STATS.with(|stats| stats.set(stats.get() + 1));
         let metadata = std::fs::symlink_metadata(path).ok()?;
-        Self::from_metadata(&metadata).map(|stamp| DiskFileStampGuard { stamp })
+        Self::from_metadata(&metadata)
     }
 
     /// A stamp is unsafe to memoize while a subsequent write could still get
@@ -363,11 +357,11 @@ impl DiskFileStamp {
         !mtime_is_old || !ctime_is_old
     }
 
-    fn acquire_for_verification_memo(path: &Path) -> Option<DiskFileStampGuard> {
+    fn read_for_verification_memo(path: &Path) -> Option<Self> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
         let now = racy_check_now();
-        Self::acquire(path).filter(|guard| !guard.stamp.is_racy_at(now))
+        Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
     }
 }
 
@@ -383,6 +377,17 @@ fn racy_check_now() -> std::time::SystemTime {
 thread_local! {
     static RACY_CLOCK_SKEW: std::cell::Cell<std::time::Duration> =
         const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static DISK_FILE_STATS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Stamp stats taken on this thread.
+#[cfg(test)]
+pub(crate) fn disk_file_stats_for_test() -> usize {
+    DISK_FILE_STATS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

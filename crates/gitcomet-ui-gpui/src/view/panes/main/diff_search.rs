@@ -1553,7 +1553,15 @@ impl MainPaneView {
         if let Some(token) = &self.diff_search_cancellation {
             token.cancel();
         }
-        self.diff_search_document = None;
+        // Unchanged rows keep the document and its query cache; a stale one
+        // is dropped so it does not pin replaced buffers.
+        if self
+            .diff_search_document
+            .as_ref()
+            .is_some_and(|(key, _)| *key != self.diff_search_document_key())
+        {
+            self.diff_search_document = None;
+        }
         self.diff_search_pending_navigation = 0;
         self.diff_search_probe_render = 0;
     }

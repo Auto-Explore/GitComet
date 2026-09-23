@@ -148,6 +148,17 @@ fn recv_next_worker_command(
     Ok(first)
 }
 
+#[cfg(test)]
+thread_local! {
+    static SELECTION_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Selected-diff indexes built by `reduce_and_handle` on this thread.
+#[cfg(test)]
+fn selection_index_builds_for_test() -> usize {
+    SELECTION_INDEX_BUILDS.with(std::cell::Cell::get)
+}
+
 /// Per-message scratch context for the store worker loop: the shared handles
 /// for the reduce-then-handle skeleton plus the effect dispatch machinery.
 struct WorkerLoopContext<'a> {
@@ -196,20 +207,30 @@ impl WorkerLoopContext<'_> {
         // Cancel changed/cleared selections before dispatching their effects,
         // outside the state write lock. Index selections once, including absent
         // repos as cleared selections, instead of scanning all repos per token.
-        let selections: FxHashMap<_, _> = state
-            .repos
-            .iter()
-            .map(|repo| {
-                (
-                    repo.id,
-                    repo.diff_state
-                        .diff_target
-                        .as_ref()
-                        .map(|target| (target, repo.diff_state.diff_target_rev)),
-                )
-            })
-            .collect();
+        // Most messages arrive with no selected-diff load in flight, so build
+        // the index only for the first token that has one.
+        let mut selections: Option<FxHashMap<_, _>> = None;
         for (id, token) in self.repo_task_tokens.iter_mut() {
+            if !token.has_selected_diff_work() {
+                continue;
+            }
+            let selections = selections.get_or_insert_with(|| {
+                #[cfg(test)]
+                SELECTION_INDEX_BUILDS.with(|builds| builds.set(builds.get() + 1));
+                state
+                    .repos
+                    .iter()
+                    .map(|repo| {
+                        (
+                            repo.id,
+                            repo.diff_state
+                                .diff_target
+                                .as_ref()
+                                .map(|target| (target, repo.diff_state.diff_target_rev)),
+                        )
+                    })
+                    .collect()
+            });
             token.cancel_stale_selected_diff(selections.get(id).copied().flatten());
         }
         drop(selections);

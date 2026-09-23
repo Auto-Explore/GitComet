@@ -42,8 +42,10 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
         "measurement_id": str(uuid.uuid4()),
         "batch_pure_tests": batch_pure_tests,
         "machine_id": platform.node(), "local_session": session,
+        "runner_environment": os.environ.get("RUNNER_ENVIRONMENT"),
+        # Raw bytes, like local-performance.py: text mode rejects non-UTF-8 and rewrites CRLF.
         "source_diff_sha256": hashlib.sha256(subprocess.check_output(
-            ["git", "diff", "--binary", "HEAD"], cwd=runner.ROOT, text=True, encoding="utf-8").encode()).hexdigest(),
+            ["git", "diff", "--binary", "HEAD"], cwd=runner.ROOT)).hexdigest(),
         "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=runner.ROOT, text=True).strip(),
         "dirty": bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=runner.ROOT)),
         "platform": sys.platform, "machine": platform.machine(), "cpus": os.cpu_count(),

@@ -166,7 +166,10 @@ def runtime_statistics(directory):
             seen[identity] = record
         environment = {field: record.get(field) for field in environment_fields}
         environment["dirty"] = record.get("dirty", False)
-        environment["machine_id"] = record.get("machine_id")
+        # Hosted runners get a new hostname per job; their image identifies the machine.
+        environment["runner_environment"] = record.get("runner_environment")
+        environment["machine_id"] = (None if environment["runner_environment"] == "github-hosted"
+                                     else record.get("machine_id"))
         environment["source_diff_sha256"] = record.get("source_diff_sha256")
         for sample in record["samples"]:
             descriptor = dict(environment, schedule=sample.get("schedule"),

@@ -205,6 +205,14 @@ impl PagedPatchDiffRows {
         Some(page)
     }
 
+    /// A line's text without building (and caching) its page.
+    pub(in crate::view) fn line_text(
+        &self,
+        ix: usize,
+    ) -> Option<gitcomet_core::domain::SharedLineText> {
+        self.diff.lines.get(ix).map(|line| line.text.clone())
+    }
+
     fn row_at(&self, ix: usize) -> Option<AnnotatedDiffLine> {
         if ix >= self.diff.lines.len() {
             return None;

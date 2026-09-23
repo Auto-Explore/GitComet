@@ -264,8 +264,7 @@ impl GixRepo {
         // last two seconds is never memoized (git's racy-file rule): a write
         // inside mtime granularity would otherwise be missed.
         // Recording requires the same identity again after the complete read.
-        let file_stamp =
-            DiskFileStamp::acquire_for_verification_memo(&full).map(|guard| guard.stamp);
+        let file_stamp = DiskFileStamp::read_for_verification_memo(&full);
         let attributes_fingerprint =
             file_stamp.and_then(|_| worktree_attributes_fingerprint(repo, path));
         if let (Some(file_stamp), Some(attributes_fingerprint)) =
@@ -289,9 +288,8 @@ impl GixRepo {
         }
 
         // Record the identity before verification and check it again afterwards.
-        let file_stamp = attributes_fingerprint.and_then(|_| {
-            DiskFileStamp::acquire_for_verification_memo(&full).map(|guard| guard.stamp)
-        });
+        let file_stamp =
+            attributes_fingerprint.and_then(|_| DiskFileStamp::read_for_verification_memo(&full));
         #[cfg(test)]
         WORKTREE_FILTER_RUNS.with(|runs| runs.set(runs.get() + 1));
         let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
@@ -330,9 +328,8 @@ impl GixRepo {
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
         let cache_path = worktree_git_cache_path(path, &identity);
         // Capture the identity before comparing an existing output's contents.
-        let cache_file_stamp = file_stamp.and_then(|_| {
-            DiskFileStamp::acquire_for_verification_memo(&cache_path).map(|guard| guard.stamp)
-        });
+        let cache_file_stamp =
+            file_stamp.and_then(|_| DiskFileStamp::read_for_verification_memo(&cache_path));
         let created = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
         // A file this call created is private to it (0600, content-addressed,
         // never rewritten), so fresh timestamps cannot hide a later write.
@@ -1500,21 +1497,17 @@ impl GixRepo {
         blob_id: gix::ObjectId,
         cancellation: &CancellationToken,
     ) -> bool {
+        let stamp = DiskFileStamp::read_for_verification_memo(cache_path);
+        if let Some(stamp) = stamp
+            && self
+                .preview_blob_verified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(cache_path)
+                .is_some_and(|verified| verified.file == stamp && verified.blob_id == blob_id)
         {
-            let guard = DiskFileStamp::acquire_for_verification_memo(cache_path);
-            if let Some(stamp) = guard.as_ref().map(|guard| guard.stamp)
-                && self
-                    .preview_blob_verified
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .get(cache_path)
-                    .is_some_and(|verified| verified.file == stamp && verified.blob_id == blob_id)
-            {
-                return true;
-            }
+            return true;
         }
-        let guard = DiskFileStamp::acquire_for_verification_memo(cache_path);
-        let stamp = guard.as_ref().map(|guard| guard.stamp);
         let matches = cached_preview_blob_matches(repo, cache_path, blob_id, cancellation);
         // Require a non-racy stamp from BEFORE hashing as well as an unchanged
         // stamp afterwards. A fresh snapshot must not become trusted merely
@@ -1904,7 +1897,8 @@ mod tests {
         let path = tmp.path().join("identity.txt");
         std::fs::write(&path, b"before").unwrap();
         let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
-        let guard = DiskFileStamp::acquire_for_verification_memo(&path);
+        // Kept alive across the edits: a lookup holding a handle would block them.
+        let _stamp = DiskFileStamp::read_for_verification_memo(&path);
         let mut writer = std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -1915,7 +1909,6 @@ mod tests {
         std::fs::write(&replacement, b"replacement").unwrap();
         std::fs::rename(&replacement, &path).expect("memo lookup must allow atomic saves");
         std::fs::remove_file(&path).expect("memo lookup must allow deletion");
-        drop(guard);
     }
 
     #[cfg(windows)]
@@ -2239,6 +2232,43 @@ mod tests {
             repo.preview_blob_verified.lock().expect("memo").is_empty(),
             "verification inside the race window must not become trusted as time passes"
         );
+    }
+
+    /// The stamp taken for the memo lookup is the one hashing must preserve, so
+    /// a verified miss stats the cache file once before hashing and once after.
+    #[test]
+    fn preview_blob_verification_stats_cache_file_once_before_hashing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+        let cache = repo
+            .cached_preview_blob_file_path(blob_id, Path::new("image.bin"))
+            .expect("materialize blob")
+            .expect("blob exists");
+        repo.preview_blob_verified.lock().expect("memo").clear();
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let handle = repo.repo();
+        let token = CancellationToken::new();
+
+        let stats = super::super::disk_file_stats_for_test();
+        assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+        assert_eq!(
+            super::super::disk_file_stats_for_test() - stats,
+            2,
+            "a verified miss stats before and after hashing"
+        );
+        // Unix records the verified stamp; the next check is a memo hit.
+        #[cfg(unix)]
+        {
+            let stats = super::super::disk_file_stats_for_test();
+            assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+            assert_eq!(
+                super::super::disk_file_stats_for_test() - stats,
+                1,
+                "a memo hit stats once"
+            );
+        }
     }
 
     #[cfg(unix)]

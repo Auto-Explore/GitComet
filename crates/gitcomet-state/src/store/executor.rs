@@ -113,7 +113,12 @@ impl TaskExecutor {
     /// `Some` means a queue entry already owns this slot. Taking it before running
     /// allows a concurrent replacement to enqueue its own entry; do not hold the
     /// slot lock across `task()`. Running work still needs cooperative cancellation.
-    pub(super) fn spawn_latest(&self, slot: &LatestTaskSlot, task: impl FnOnce() + Send + 'static) {
+    /// Returns `true` when this replaced a queued request that had not started.
+    pub(super) fn spawn_latest(
+        &self,
+        slot: &LatestTaskSlot,
+        task: impl FnOnce() + Send + 'static,
+    ) -> bool {
         let context = mergetool_trace::current_capture_context();
         let task: Task = Box::new(move || {
             let _trace = context.as_ref().map(mergetool_trace::attach_capture);
@@ -138,6 +143,7 @@ impl TaskExecutor {
                 slot.0.lock().unwrap_or_else(|e| e.into_inner()).take();
             }
         }
+        already_queued
     }
     #[cfg_attr(feature = "test-support", allow(dead_code))]
     pub(super) fn new(threads: usize) -> Self {

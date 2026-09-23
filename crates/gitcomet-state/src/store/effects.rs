@@ -88,6 +88,10 @@ impl RepoTaskToken {
         token
     }
 
+    pub(super) fn has_selected_diff_work(&self) -> bool {
+        self.selected_diff_key.is_some()
+    }
+
     pub(super) fn cancel_stale_selected_diff(&mut self, selected: Option<(&DiffTarget, u64)>) {
         if self
             .selected_diff_key
@@ -3073,6 +3077,107 @@ mod tests {
         token.cancel();
         assert!(last.is_cancelled());
         assert!(log.is_cancelled());
+    }
+
+    /// Status polls, progress events and log pages all pass through the store
+    /// worker. With no selected-diff load in flight there is nothing to cancel,
+    /// so they must not index every repo's selection.
+    #[test]
+    fn messages_without_selected_diff_work_skip_the_selection_index() {
+        use super::super::{
+            RepoMonitorManager, WorkerLoopContext, selection_index_builds_for_test,
+        };
+        use crate::model::RepoState;
+        use gitcomet_core::domain::{DiffArea, RepoSpec};
+
+        struct NoBackend;
+        impl GitBackend for NoBackend {
+            fn open(
+                &self,
+                _: &std::path::Path,
+            ) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+                Err(Error::new(ErrorKind::Unsupported("test backend")))
+            }
+        }
+
+        let target = DiffTarget::WorkingTree {
+            path: "a".into(),
+            area: DiffArea::Unstaged,
+        };
+        let ids = [RepoId(1), RepoId(2), RepoId(3)];
+        let repos_state = ids
+            .iter()
+            .map(|&id| {
+                let workdir = format!("/tmp/gitcomet-selection-index-{}", id.0).into();
+                let mut repo = RepoState::new_opening(id, RepoSpec { workdir });
+                repo.diff_state.diff_target = Some(target.clone());
+                repo.diff_state.diff_target_rev = 1;
+                repo
+            })
+            .collect();
+        let thread_state = Arc::new(RwLock::new(Arc::new(AppState {
+            repos: repos_state,
+            ..AppState::test_default()
+        })));
+        let active_repo_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (event_tx, _event_rx) = smol::channel::bounded(1);
+        let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+        let thread_msg_tx = StoreWorkerSender::for_test_msg_sender(msg_tx);
+        let executor = TaskExecutor::new(1);
+        let backend: Arc<dyn GitBackend> = Arc::new(NoBackend);
+        let mut repo_monitors = RepoMonitorManager::new();
+        let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> =
+            ids.iter().map(|&id| (id, RepoTaskToken::new(0))).collect();
+        let mut repos = FxHashMap::default();
+        let id_alloc = std::sync::atomic::AtomicU64::new(1);
+        let mut ctx = WorkerLoopContext {
+            thread_state: &thread_state,
+            active_repo_id: &active_repo_id,
+            event_tx: &event_tx,
+            repo_monitors: &mut repo_monitors,
+            repo_task_tokens: &mut repo_task_tokens,
+            thread_msg_tx: &thread_msg_tx,
+            executor: &executor,
+            repo_load_executor: &executor,
+            metadata_executor: &executor,
+            signature_executor: &executor,
+            session_persist_executor: &executor,
+            backend: &backend,
+        };
+
+        let builds = selection_index_builds_for_test();
+        ctx.reduce_and_handle(&mut repos, &id_alloc, |_, _, _| Vec::<Effect>::new());
+        assert_eq!(
+            selection_index_builds_for_test(),
+            builds,
+            "no task token holds selected-diff work"
+        );
+
+        // Tokens holding work are still checked against the new state.
+        let refreshed = ctx
+            .repo_task_tokens
+            .get_mut(&RepoId(2))
+            .unwrap()
+            .selected_diff_cancellation(&target, 1);
+        let closed = ctx
+            .repo_task_tokens
+            .get_mut(&RepoId(3))
+            .unwrap()
+            .selected_diff_cancellation(&target, 1);
+        ctx.reduce_and_handle(&mut repos, &id_alloc, |_, _, _| Vec::<Effect>::new());
+        assert!(!refreshed.is_cancelled() && !closed.is_cancelled());
+        ctx.reduce_and_handle(&mut repos, &id_alloc, |state, _, _| {
+            state.repos[1].diff_state.diff_target_rev = 2;
+            state.repos.remove(2);
+            Vec::<Effect>::new()
+        });
+        assert!(refreshed.is_cancelled(), "a new revision cancels the load");
+        assert!(closed.is_cancelled(), "a closed repo cancels the load");
+
+        // Cancelling released the work, so the index is skipped again.
+        let builds = selection_index_builds_for_test();
+        ctx.reduce_and_handle(&mut repos, &id_alloc, |_, _, _| Vec::<Effect>::new());
+        assert_eq!(selection_index_builds_for_test(), builds);
     }
 
     #[test]

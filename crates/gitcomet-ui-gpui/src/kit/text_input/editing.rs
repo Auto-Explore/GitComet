@@ -954,6 +954,8 @@ impl TextInput {
             && range.end <= self.content.len()
             && self.content.clamp_to_char_boundary(range.start) == range.start
             && self.content.clamp_to_char_boundary(range.end) == range.end
+            // Before `slice`, which copies a range spanning rope chunks.
+            && range.len() == new_text.len()
             && self.content.snapshot().slice(range.clone()).as_ref() == new_text
         {
             return range;

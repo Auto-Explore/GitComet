@@ -1,6 +1,7 @@
 """Regression coverage for failure propagation, inventory accounting, and cache isolation."""
 
 import copy
+import errno
 import hashlib
 import http.client
 from contextlib import redirect_stderr, redirect_stdout
@@ -441,6 +442,72 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(len(created), 1)
                 self.assertFalse(created[0].exists())
 
+    def test_locked_ui_appdata_cannot_replace_the_suite_result(self):
+        # A straggling child or antivirus can hold a file in the per-suite appdata.
+        from types import SimpleNamespace
+        windows_os = SimpleNamespace(name="nt", environ=os.environ, pathsep=os.pathsep)
+        real_unlink = os.unlink
+
+        def locked_unlink(path, *args, **kwargs):
+            if os.path.basename(path) == "locked.db":
+                raise PermissionError(errno.EACCES, "file is in use by another process", path)
+            return real_unlink(path, *args, **kwargs)
+
+        for outcome in (0, 1):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runner, "REPORTS", Path(directory)), patch.object(runner, "os", windows_os):
+                (runner.paths("ui") / "binaries.json").write_text(
+                    json.dumps({"rust-build-meta": {"target-directory": directory}}))
+                suite = {"package-name": runner.UI, "binary-path": str(Path(directory) / "ui.exe"),
+                         "cwd": directory, "testcases": {"test": {"ignored": False}}}
+
+                def execute(name, command, **kwargs):
+                    (Path(kwargs["env"]["LOCALAPPDATA"]) / "locked.db").write_text("held")
+                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    return outcome
+
+                with patch.object(runner, "run", side_effect=execute), patch.object(os, "unlink", locked_unlink):
+                    self.assertEqual(runner.run_suite("ui", "suite", suite), outcome)
+
+    def test_coverage_runner_labels_follow_the_executed_batching_mode(self):
+        suite = {"package-id": "core", "package-name": "gitcomet-core", "kind": "lib", "binary-name": "gitcomet_core",
+                 "testcases": {"conflict_session::pure": {"ignored": False}, "process::isolated": {"ignored": False}}}
+        suites = {"gitcomet-core": suite}
+        for platform_name, mode in product(("win32", "linux"), ("auto", "on", "off")):
+            with self.subTest(platform=platform_name, mode=mode), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runner, "REPORTS", Path(directory)), \
+                    patch.object(runner.sys, "platform", platform_name), \
+                    patch.object(runner, "package_names", return_value={"core": "gitcomet-core"}), \
+                    patch.object(runner, "inventory", return_value={"rust-suites": suites}), \
+                    patch.object(runner, "windows_linker_environment", return_value=None), \
+                    patch.object(runner, "prepare_runtime_binaries"), \
+                    patch.object(runner.subprocess, "check_output", return_value="rust"):
+                target = Path(directory)
+                # Compile and test are separate CLI invocations; only the latter knows the mode.
+                with patch.object(runner, "run"), redirect_stdout(io.StringIO()):
+                    runner.compile_tests("workspace", "ci-test")
+                (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
+                (target / "nextest/ci").mkdir(parents=True)
+                routed = {}
+
+                def run_nextest(name, command, **kwargs):
+                    ran = ["process::isolated"] if "conflict_session" in command[command.index("-E") + 1] else \
+                          ["conflict_session::pure", "process::isolated"]
+                    routed.update(dict.fromkeys(ran, "nextest"))
+                    (target / "nextest/ci/junit.xml").write_text('<testsuites><testsuite name="gitcomet-core">' +
+                        "".join(f'<testcase name="{name}"/>' for name in ran) + "</testsuite></testsuites>")
+                    return 0
+
+                def run_pure(context, binary_id, suite, **kwargs):
+                    routed["conflict_session::pure"] = "libtest-pure"
+                    return 0
+
+                with patch.object(runner, "run", side_effect=run_nextest), \
+                        patch.object(runner, "run_suite", side_effect=run_pure):
+                    runner.execute("workspace", batch_pure_tests=mode)
+                coverage = json.loads((target / "workspace/coverage.json").read_text())
+                self.assertEqual({test["test"]: test["runner"] for test in coverage["tests"]}, routed)
+
     @staticmethod
     def git_integration_suites():
         targets = {
@@ -749,6 +816,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(calls[2].kwargs["env"]["XDG_CURRENT_DESKTOP"], values[3])
 
 
+def fake_check_output(args, **kwargs):
+    return "test" if kwargs.get("text") else b"test"
+
+
 class RuntimeTests(unittest.TestCase):
     def test_unrecorded_thread_environment_cannot_change_acceptance_policy(self):
         for name in ("RUST_TEST_THREADS", "NEXTEST_TEST_THREADS"):
@@ -785,7 +856,7 @@ class RuntimeTests(unittest.TestCase):
 
             with patch.object(runtime.runner, "REPORTS", reports), \
                     patch.object(runtime.runner, "execute", side_effect=execute), \
-                    patch.object(runtime.subprocess, "check_output", return_value="test"):
+                    patch.object(runtime.subprocess, "check_output", side_effect=fake_check_output):
                 runtime.measure(root / "output", 2, "serial", None, "ci-git-limited", 8, batch_pure_tests="off")
                 self.assertEqual(runtime.runner.REPORTS, reports)
             for index in (1, 2):
@@ -810,12 +881,46 @@ class RuntimeTests(unittest.TestCase):
             (reports / "execution.json").write_text('{"success": true, "seconds": 1}')
             with patch.object(runtime.runner, "paths", return_value=reports), \
                     patch.object(runtime.runner, "execute", side_effect=RuntimeError("failed")), \
-                    patch.object(runtime.subprocess, "check_output", return_value="test"), \
+                    patch.object(runtime.subprocess, "check_output", side_effect=fake_check_output), \
                     self.assertRaisesRegex(RuntimeError, "failed"):
                 runtime.measure(root / "output", 5, "serial", None)
             record = json.loads((root / "output/runtime.json").read_text())
             self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None}])
             self.assertTrue((root / "output/sample-1").is_dir())
+
+    def test_source_diff_hash_matches_local_performance_for_non_utf8_and_crlf_changes(self):
+        real_check_output = subprocess.check_output
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("GIT_", "GITCOMET_", "RUST_TEST_", "NEXTEST_"))}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+        def check_output(args, **kwargs):
+            return "rustc test" if args[0] == "rustc" else real_check_output(args, **kwargs)
+
+        for name, content in (("latin-1", b"caf\xe9\n"), ("crlf", b"first\r\nsecond\r\n")):
+            with self.subTest(content=name), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, env, clear=True):
+                root = Path(directory)
+                repo = root / "repo"
+                git = ["git", "-C", str(repo), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid"]
+                subprocess.run(["git", "init", "-q", str(repo)], check=True)
+                subprocess.run([*git, "config", "core.autocrlf", "false"], check=True)
+                (repo / "notes.txt").write_bytes(b"base\n")
+                subprocess.run([*git, "add", "notes.txt"], check=True)
+                subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+                (repo / "notes.txt").write_bytes(content)
+                reports = root / "reports"
+                (reports / "workspace").mkdir(parents=True)
+
+                def execute(context, *args):
+                    (runtime.runner.paths(context) / "execution.json").write_text('{"success": true, "seconds": 1}')
+
+                with patch.object(runtime.runner, "ROOT", repo), patch.object(runtime.runner, "REPORTS", reports), \
+                        patch.object(runtime.runner, "execute", side_effect=execute), \
+                        patch.object(runtime.subprocess, "check_output", side_effect=check_output):
+                    runtime.measure(root / "output", 1, "serial", None)
+                record = json.loads((root / "output/runtime.json").read_text())
+                self.assertEqual(record["source_diff_sha256"], local_performance.revision(repo)["diff_sha256"])
 
 
 class ApplicationProbeTests(unittest.TestCase):
@@ -900,6 +1005,43 @@ class ReportTests(unittest.TestCase):
             self.assertTrue(row["local_enough_samples"])
             self.assertFalse(row["enough_samples"])
             self.assertEqual(row["local_sessions"], ["first", "second"])
+
+    def test_hosted_jobs_pool_across_ephemeral_hostnames_but_local_machines_stay_separate(self):
+        outputs = {"diff": "", "rev-parse": "abc\n", "status": "", "-Vv": "rustc 1", "--version": "git version 2"}
+        real_check_output = subprocess.check_output
+
+        def check_output(args, **kwargs):
+            key = args[1] if isinstance(args, list) and len(args) > 1 else None
+            if key not in outputs:
+                return real_check_output(args, **kwargs)
+            return outputs[key] if kwargs.get("text") else outputs[key].encode()
+
+        def execute(context, *args):
+            (runtime.runner.paths(context) / "execution.json").write_text(json.dumps(
+                dict(success=True, seconds=500, schedule="serial", nextest_threads=None)))
+
+        hosted = {"GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "native", "RUNNER_NAME": "GitHub Actions 1",
+                  "RUNNER_ENVIRONMENT": "github-hosted", "ImageVersion": "20260915.1"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reports = root / "reports"
+            (reports / "workspace").mkdir(parents=True)
+            (reports / "workspace/coverage.json").write_text('{"profile": "ci-test", "selection": ["--workspace"]}')
+            for kind, hostname, environment in (
+                    ("hosted", "fv-az123-4", dict(hosted, GITHUB_RUN_ID="101")),
+                    ("hosted", "fv-az567-8", dict(hosted, GITHUB_RUN_ID="102")),
+                    ("local", "desktop", {}), ("local", "laptop", {})):
+                with patch.dict(os.environ, environment, clear=True), \
+                        patch.object(runtime.platform, "node", return_value=hostname), \
+                        patch.object(runtime.runner, "REPORTS", reports), \
+                        patch.object(runtime.runner, "execute", side_effect=execute), \
+                        patch.object(runtime.subprocess, "check_output", side_effect=check_output):
+                    runtime.measure(root / kind / hostname, 3, "serial", None, session=hostname)
+            hosted_rows = report.runtime_statistics(root / "hosted")
+            self.assertEqual([(len(row["jobs"]), row["samples"], row["enough_samples"]) for row in hosted_rows],
+                             [(2, 6, True)])
+            local_rows = report.runtime_statistics(root / "local")
+            self.assertEqual(sorted(row["machine_id"] for row in local_rows), ["desktop", "laptop"])
 
     def test_local_latency_evidence_requires_complete_uninstrumented_sessions(self):
         with tempfile.TemporaryDirectory() as directory:

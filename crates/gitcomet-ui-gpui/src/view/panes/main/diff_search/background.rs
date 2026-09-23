@@ -112,6 +112,66 @@ mod tests {
         });
     }
 
+    // Reading rows through the paged provider cached every page it built, so
+    // one search kept the whole patch materialized. Each row was also copied
+    // twice by an unconditional tab expansion.
+    #[gpui::test]
+    fn inline_patch_search_reads_diff_lines_without_materializing_pages(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::view::panes::main::diff_cache::PagedPatchDiffRows;
+        use crate::view::{GitCometView, test_support::TestBackend};
+        use gitcomet_core::domain::{Diff, DiffArea, DiffTarget};
+        use gitcomet_state::store::AppStore;
+        let mut text = String::from("diff --git a/a.txt b/a.txt\n@@ -1,0 +1,3000 @@\n");
+        for ix in 0..3000 {
+            let suffix = if ix % 1000 == 7 { " needle" } else { "" };
+            text.push_str(&format!("+line {ix}{suffix}\n"));
+        }
+        text.push_str("+\tneedle\n");
+        let target = DiffTarget::WorkingTree {
+            path: "a.txt".into(),
+            area: DiffArea::Unstaged,
+        };
+        let diff = Arc::new(Diff::from_unified(target, &text));
+        let provider = Arc::new(PagedPatchDiffRows::new(diff.clone(), 256));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.clone();
+            pane.update(app, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.diff_word_wrap = false;
+                pane.diff_row_provider = Some(provider.clone());
+                pane.diff_visible_indices = (0..diff.lines.len()).collect();
+                let document = pane.capture_search_document();
+                let matches = document
+                    .search(
+                        "needle",
+                        DiffSearchOptions::default(),
+                        CancellationToken::new(),
+                    )
+                    .matches;
+                let tab_row = diff.lines.len() - 1;
+                assert_eq!(matches, [9, 1009, 2009, tab_row]);
+                assert_eq!(provider.materialized_row_count(), 0, "search built pages");
+
+                let DocumentSource::Rows(rows) = &document.0 else {
+                    panic!("patch search uses row text");
+                };
+                let row = (rows.text)(matches[0], 0).expect("row text");
+                assert_eq!(
+                    row.as_ref().as_ptr(),
+                    diff.lines[matches[0]].text.as_ref().as_ptr(),
+                    "a row without tabs is shared, not copied"
+                );
+                let row = (rows.text)(tab_row, 0).expect("row text");
+                assert_eq!(row.as_ref(), "+    needle", "tabs still expand");
+            });
+        });
+    }
+
     #[test]
     fn background_search_reuses_rows_and_preserves_query_semantics() {
         let texts = ["needle alpha", "Needle beta", "gamma", "猫 alpha", "tail"];
@@ -474,7 +534,7 @@ impl MainPaneView {
         }
     }
 
-    pub(super) fn capture_search_document(&self) -> SearchDocument {
+    pub(in crate::view) fn capture_search_document(&self) -> SearchDocument {
         if self.is_file_editor_active() {
             return SearchDocument(DocumentSource::Editor(
                 self.file_editor_search_source.clone().unwrap_or_default(),
@@ -514,7 +574,9 @@ impl MainPaneView {
                 out
             })));
         }
-        if self.active_conflict_target().is_some() {
+        // A content preview of a conflicted file renders the preview, so it
+        // wins over the resolver, as in the synchronous scanners.
+        if !self.is_file_preview_active() && self.active_conflict_target().is_some() {
             // Only search inputs are copied; syntax/image/layout caches remain
             // owned by the live view. Deferred line indexes stay shared.
             let source = &self.conflict_resolver;
@@ -564,24 +626,58 @@ impl MainPaneView {
             let collapsed = self
                 .is_collapsed_diff_projection_active()
                 .then(|| self.collapsed_diff_visible_rows.clone());
+            // Only the sources this mode reads: the rest would be cloned or
+            // pinned for nothing.
+            let split_view = view == DiffViewMode::Split;
             let headers = if collapsed.is_some() {
                 self.collapsed_diff_header_display_cache.clone()
+            } else if file_view {
+                FxHashMap::default()
             } else {
                 self.diff_header_display_cache.clone()
             };
-            let patch = self.diff_row_provider.clone();
-            let patch_rows = self.diff_cache.clone();
-            let split = self.diff_split_row_provider.clone();
-            let split_rows = self.diff_split_cache.clone();
-            let file = self.file_diff_row_provider.clone();
-            let file_rows = self.file_diff_cache_rows.clone();
-            let inline = self.file_diff_inline_row_provider.clone();
-            let inline_rows = self.file_diff_inline_cache.clone();
+            let (patch, patch_rows) = if file_view {
+                (None, Arc::from([]))
+            } else {
+                (self.diff_row_provider.clone(), self.diff_cache.clone())
+            };
+            let (split, split_rows) = if !file_view && split_view {
+                (
+                    self.diff_split_row_provider.clone(),
+                    self.diff_split_cache.clone(),
+                )
+            } else {
+                (None, Arc::from([]))
+            };
+            let (file, file_rows) = if file_view && split_view {
+                (
+                    self.file_diff_row_provider.clone(),
+                    self.file_diff_cache_rows.clone(),
+                )
+            } else {
+                (None, Arc::from([]))
+            };
+            let (inline, inline_rows) = if file_view && !split_view {
+                (
+                    self.file_diff_inline_row_provider.clone(),
+                    self.file_diff_inline_cache.clone(),
+                )
+            } else {
+                (None, Arc::from([]))
+            };
             let wrapped = self.diff_word_wrap;
             (
                 self.diff_source_visible_len(),
                 if view == DiffViewMode::Inline { 1 } else { 2 },
                 Box::new(move |visible, column| {
+                    // Provider pages are cached, so reading rows through them
+                    // would keep the whole patch materialized.
+                    let patch_line = |ix: usize| -> Option<FileDiffLineText> {
+                        match &patch {
+                            Some(provider) => provider.line_text(ix).map(Into::into),
+                            None => patch_rows.get(ix).map(|row| row.text.clone().into()),
+                        }
+                    };
                     let ix = if let Some(collapsed) = &collapsed {
                         let row = *collapsed.get(visible)?;
                         if let Some(header) = row.header_display_src_ix() {
@@ -619,11 +715,7 @@ impl MainPaneView {
                         if let Some(header) = headers.get(&ix) {
                             return Some(header.as_ref().into());
                         }
-                        patch
-                            .as_ref()
-                            .and_then(|provider| provider.row(ix))
-                            .or_else(|| patch_rows.get(ix).cloned())
-                            .map(|row| row.text.into())
+                        patch_line(ix)
                     } else {
                         match split
                             .as_ref()
@@ -634,11 +726,7 @@ impl MainPaneView {
                                 if let Some(header) = headers.get(&src_ix) {
                                     return Some(header.as_ref().into());
                                 }
-                                patch
-                                    .as_ref()
-                                    .and_then(|provider| provider.row(src_ix))
-                                    .or_else(|| patch_rows.get(src_ix).cloned())
-                                    .map(|row| row.text.into())
+                                patch_line(src_ix)
                             }
                             PatchSplitRow::Aligned { row, .. } => {
                                 if column == 0 {
@@ -649,7 +737,9 @@ impl MainPaneView {
                             }
                         }
                     }?;
-                    if wrapped || view == DiffViewMode::Split || !file_view {
+                    if (wrapped || view == DiffViewMode::Split || !file_view)
+                        && raw.as_ref().contains('\t')
+                    {
                         Some(expand_tabs_to_string(raw.as_ref()).into())
                     } else {
                         Some(raw)

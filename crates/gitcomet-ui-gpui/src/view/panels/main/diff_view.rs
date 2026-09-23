@@ -1108,6 +1108,7 @@ impl MainPaneView {
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_search_cancel_pending_query_recompute();
         self.diff_search_active = false;
+        self.diff_search_document = None;
         self.diff_search_query = SharedString::default();
         self.diff_search_regex_error = None;
         self.diff_search_matches.clear();
