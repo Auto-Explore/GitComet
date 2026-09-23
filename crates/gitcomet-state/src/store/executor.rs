@@ -219,12 +219,4 @@ mod tests {
     fn metadata_pool_supports_parallel_metadata_tasks() {
         assert!(metadata_worker_threads() >= 2);
     }
-
-    #[test]
-    fn review_regression_followup_production_stores_share_worker_pools() {
-        assert!(
-            super::super::should_share_store_executor_pools(false, false),
-            "production AppStore instances must reuse process-wide worker pools"
-        );
-    }
 }

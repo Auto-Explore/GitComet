@@ -179,7 +179,7 @@ impl GitCometView {
                 smol::Timer::after(Duration::from_millis(250)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.workspace_persist_seq == seq {
-                        crate::workspaces::persist_current(cx);
+                        crate::workspaces::persist_unsaved_placement(cx);
                     }
                 });
             },
@@ -187,8 +187,8 @@ impl GitCometView {
         .detach();
     }
 
-    /// Focused mergetool windows do not participate in durable workspaces,
-    /// so keep their historical process-wide width/height persistence path.
+    /// Focused mergetool windows do not participate in durable workspaces, so
+    /// they keep their own size keys, which workspace writes never touch.
     /// Persist only the dimensions: a resize must not write a stale snapshot
     /// of unrelated preferences owned by another window.
     pub(super) fn schedule_legacy_window_bounds_persist(&mut self, cx: &mut gpui::Context<Self>) {
@@ -207,25 +207,23 @@ impl GitCometView {
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 smol::Timer::after(Duration::from_millis(250)).await;
-                let settings = view
+                let size = view
                     .update(cx, |this, _cx| {
                         if this.ui_settings_persist_seq != seq {
                             return None;
                         }
                         let width: f32 = this.last_window_size.width.round().into();
                         let height: f32 = this.last_window_size.height.round().into();
-                        Some(session::UiSettings {
-                            window_width: (width.is_finite() && width >= 1.0)
-                                .then_some(width as u32),
-                            window_height: (height.is_finite() && height >= 1.0)
-                                .then_some(height as u32),
-                            ..session::UiSettings::default()
-                        })
+                        let valid = |value: f32| value.is_finite() && value >= 1.0;
+                        (valid(width) && valid(height)).then_some((width as u32, height as u32))
                     })
                     .ok()
                     .flatten();
-                if let Some(settings) = settings {
-                    let _ = smol::unblock(move || session::persist_ui_settings(settings)).await;
+                if let Some((width, height)) = size {
+                    let _ = smol::unblock(move || {
+                        session::persist_mergetool_window_size(width, height)
+                    })
+                    .await;
                 }
             },
         )

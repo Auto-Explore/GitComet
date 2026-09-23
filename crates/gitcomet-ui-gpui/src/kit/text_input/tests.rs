@@ -3718,3 +3718,40 @@ fn select_all_takes_ownership_only_when_it_highlights_something(cx: &mut gpui::T
         "select-all over real text is a highlight and must take the selection"
     );
 }
+
+/// Left at the start and Right at the end still reset the vertical goal
+/// column and scroll the caret into view; the edge flag only rides along.
+#[gpui::test]
+fn arrow_keys_at_the_text_edges_keep_caret_bookkeeping(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("first\nsecond", cx);
+            for (offset, press_left) in [(0, true), (input.text().len(), false)] {
+                input.move_to(offset, cx);
+                input.interaction.vertical_motion_x = Some(px(40.0));
+                input.interaction.pending_cursor_autoscroll = false;
+                if press_left {
+                    input.left(&Left, window, cx);
+                    assert!(input.take_arrow_left_at_start_pressed());
+                } else {
+                    input.right(&Right, window, cx);
+                    assert!(input.take_arrow_right_at_end_pressed());
+                }
+                assert_eq!(input.cursor_offset(), offset);
+                assert_eq!(input.interaction.vertical_motion_x, None);
+                assert!(input.interaction.pending_cursor_autoscroll);
+            }
+        });
+    });
+}

@@ -37,13 +37,6 @@ use repo_monitor::RepoMonitorManager;
 use send_diagnostics::try_send_state_changed_or_log;
 use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
-const fn should_share_store_executor_pools(_test_build: bool, _test_support: bool) -> bool {
-    // Stores keep independent reducers and state, while their bounded effect
-    // workers are process infrastructure. Sharing prevents each restored
-    // window from multiplying the primary/load/metadata/persistence pools.
-    true
-}
-
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
@@ -362,39 +355,24 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
 
         thread::spawn(move || {
-            let share_executor_pools =
-                should_share_store_executor_pools(cfg!(test), cfg!(feature = "test-support"));
-            let executor = if share_executor_pools {
-                TaskExecutor::shared_for_store(StoreExecutorPool::Primary, default_worker_threads())
-            } else {
-                TaskExecutor::new(default_worker_threads())
-            };
-            let repo_load_executor = if share_executor_pools {
-                TaskExecutor::shared_for_store(
-                    StoreExecutorPool::RepoLoad,
-                    repo_load_worker_threads(),
-                )
-            } else {
-                TaskExecutor::new(repo_load_worker_threads())
-            };
-            let metadata_executor = if share_executor_pools {
-                TaskExecutor::shared_for_store(
-                    StoreExecutorPool::Metadata,
-                    metadata_worker_threads(),
-                )
-            } else {
-                TaskExecutor::new(metadata_worker_threads())
-            };
-            let signature_executor = if share_executor_pools {
-                TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1)
-            } else {
-                TaskExecutor::new(1)
-            };
-            let session_persist_executor = if share_executor_pools {
-                TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1)
-            } else {
-                TaskExecutor::new(1)
-            };
+            // Each store (window) keeps its own reducer and state, but effect
+            // workers are process-wide so windows do not multiply the pools.
+            let executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::Primary,
+                default_worker_threads(),
+            );
+            let repo_load_executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::RepoLoad,
+                repo_load_worker_threads(),
+            );
+            let metadata_executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::Metadata,
+                metadata_worker_threads(),
+            );
+            let signature_executor =
+                TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1);
+            let session_persist_executor =
+                TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();

@@ -3381,3 +3381,367 @@ fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes(
     assert_eq!(loaded.editor_font_size_px, Some(17));
     assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
 }
+
+fn seed_v3_session(label: &str, open_repos: &[&str]) -> PathBuf {
+    let path = unique_session_test_dir(label).join("session.json");
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: SESSION_FILE_VERSION_V3,
+            open_repos: open_repos.iter().map(|repo| repo.to_string()).collect(),
+            active_repo: open_repos.first().map(|repo| repo.to_string()),
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed v3 session");
+    path
+}
+
+fn repos_snapshot(open_repos: &[&str]) -> SessionReposSnapshot {
+    SessionReposSnapshot {
+        open_repos: open_repos
+            .iter()
+            .map(|repo| Arc::<str>::from(*repo))
+            .collect(),
+        active_repo_index: (!open_repos.is_empty()).then_some(0),
+    }
+}
+
+// A store persisting its now-empty repo list after the UI saved a renamed,
+// emptied workspace must not drop that workspace from disk.
+#[test]
+fn store_repo_snapshot_keeps_an_empty_customized_legacy_workspace() {
+    let path = seed_v3_session("workspace-store-keeps-customized", &["/work/alpha"]);
+    let mut workspace = load_from_path(&path).workspaces.remove(0);
+    assert_eq!(workspace.id, LEGACY_WORKSPACE_ID);
+    workspace.custom_name = Some("Client work".to_string());
+    workspace.repositories.clear();
+    workspace.active_repository = None;
+    persist_workspaces_to_path(std::slice::from_ref(&workspace), &path).expect("UI persist");
+
+    persist_repos_snapshot_to_path(&repos_snapshot(&[]), &path).expect("store persist");
+
+    assert_eq!(load_from_path(&path).workspaces, vec![workspace]);
+}
+
+// Once the UI has saved workspaces, another store (a second window, or a
+// mergetool process) must not rewrite their repositories.
+#[test]
+fn store_repo_snapshot_does_not_rewrite_workspaces_the_ui_saved() {
+    let path = seed_v3_session("workspace-store-no-rewrite", &["/work/alpha", "/work/beta"]);
+    let workspaces = load_from_path(&path).workspaces;
+    persist_workspaces_to_path(&workspaces, &path).expect("UI persist");
+
+    persist_repos_snapshot_to_path(&repos_snapshot(&["/work/gamma"]), &path)
+        .expect("second store persist");
+
+    assert_eq!(load_from_path(&path).workspaces, workspaces);
+}
+
+// What the old legacy sync was for: until the UI saves workspaces, the
+// store's repo list is what loads, even after an unrelated writer.
+#[test]
+fn store_repo_snapshot_is_what_loads_until_the_ui_saves_workspaces() {
+    let path = seed_v3_session(
+        "workspace-store-owns-until-ui",
+        &["/work/alpha", "/work/beta"],
+    );
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("dark".to_string()),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("unrelated writer");
+
+    persist_repos_snapshot_to_path(&repos_snapshot(&["/work/gamma"]), &path)
+        .expect("store persist");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.open_repos, vec![PathBuf::from("/work/gamma")]);
+    assert_eq!(loaded.workspaces.len(), 1);
+    assert_eq!(loaded.workspaces[0].id, LEGACY_WORKSPACE_ID);
+    assert_eq!(
+        loaded.workspaces[0].repositories,
+        vec![PathBuf::from("/work/gamma")]
+    );
+    assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+}
+
+// One unknown or broken workspace entry must not reset the whole session:
+// unknown values degrade and an unparseable entry is dropped on its own.
+#[test]
+fn unknown_or_broken_workspace_entries_do_not_reset_the_session() {
+    let path = unique_session_test_dir("workspace-lenient").join("session.json");
+    let kept_id = WorkspaceId::from_u128(21);
+    let sparse_id = WorkspaceId::from_u128(22);
+    let session = serde_json::json!({
+        "version": CURRENT_SESSION_FILE_VERSION,
+        "ui_density": "comfortable",
+        "theme_mode": "dark",
+        "open_repos": ["/work/alpha"],
+        "active_repo": "/work/alpha",
+        "workspaces": [
+            {
+                "id": kept_id,
+                "custom_name": "Client work",
+                "color": "teal",
+                "repositories": ["/work/alpha"],
+                "active_repository": "/work/alpha",
+                "restore_on_launch": true,
+                "last_activation_order": 3,
+                "placement": {
+                    "normal_frame": {"x": 1, "y": 2, "width": 900, "height": 700},
+                    "captured_visible_frame": {"x": 0},
+                    "state": "minimized",
+                    "added_later": 1
+                },
+                "added_later": true
+            },
+            {"id": "not-a-uuid", "repositories": ["/work/broken"]},
+            {"id": sparse_id, "repositories": ["/work/beta"]}
+        ]
+    });
+    fs::write(&path, serde_json::to_vec(&session).expect("encode")).expect("seed session");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+    assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+    assert_eq!(
+        loaded
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id)
+            .collect::<Vec<_>>(),
+        vec![kept_id, sparse_id]
+    );
+    let kept = &loaded.workspaces[0];
+    assert_eq!(kept.custom_name.as_deref(), Some("Client work"));
+    assert_eq!(kept.color, None);
+    assert_eq!(kept.last_activation_order, 3);
+    assert_eq!(kept.layout, WorkspaceLayout::default());
+    assert_eq!(kept.placement.state, SavedWindowState::Windowed);
+    assert_eq!(kept.placement.captured_visible_frame, None);
+    assert_eq!(
+        kept.placement.normal_frame,
+        Some(SavedWindowFrame {
+            x: 1,
+            y: 2,
+            width: 900,
+            height: 700,
+        })
+    );
+    let sparse = &loaded.workspaces[1];
+    assert_eq!(sparse.repositories, vec![PathBuf::from("/work/beta")]);
+    assert!(
+        sparse.restore_on_launch,
+        "a sparse entry restores like a new one"
+    );
+}
+
+// The backup check trusts the version each write just loaded, so a file an
+// older build rewrote after this process went current still gets backed up.
+#[test]
+fn older_build_rewrite_after_a_current_write_is_still_backed_up() {
+    let path = unique_session_test_dir("workspace-backup-after-downgrade").join("session.json");
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("dark".to_string()),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("current write");
+    let older = br#"{"version":3,"open_repos":["/work/legacy"],"active_repo":null}"#;
+    fs::write(&path, older).expect("older build write");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("light".to_string()),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("current write");
+
+    let mut backup_name = path.as_os_str().to_os_string();
+    backup_name.push(".v3.bak");
+    assert_eq!(
+        fs::read(PathBuf::from(backup_name)).expect("v3 backup"),
+        older
+    );
+}
+
+/// Per-write session persist cost on a typical and a heavy session file.
+/// `cargo test -p gitcomet-state --lib timing_session_persist -- --ignored --nocapture`
+#[test]
+#[ignore = "timing probe"]
+fn timing_session_persist_cost_by_file_size() {
+    const ITERATIONS: u32 = 400;
+    for repo_count in [10_usize, 300] {
+        let path = unique_session_test_dir("timing-session-persist").join("session.json");
+        let repos: Vec<String> = (0..repo_count)
+            .map(|ix| format!("/home/user/src/team-{:02}/repository-{ix:04}", ix % 17))
+            .collect();
+        let per_repo_sets = || {
+            repos
+                .iter()
+                .map(|repo| {
+                    let items = (0..8).map(|ix| format!("refs/heads/feature/item-{ix}"));
+                    (repo.clone(), items.collect::<BTreeSet<_>>())
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let workspaces = repos
+            .chunks(5)
+            .take(20)
+            .enumerate()
+            .map(|(ix, chunk)| WorkspaceFile {
+                id: WorkspaceId::from_u128(ix as u128 + 1),
+                custom_name: Some(format!("Workspace {ix}")),
+                color: Some(WorkspaceColor::Blue),
+                repositories: chunk.to_vec(),
+                active_repository: chunk.first().cloned(),
+                restore_on_launch: ix % 3 == 0,
+                last_activation_order: ix as u64,
+                layout: WorkspaceLayout::default(),
+                placement: PortableWindowPlacement {
+                    normal_frame: Some(SavedWindowFrame {
+                        x: 10,
+                        y: 20,
+                        width: 1400,
+                        height: 900,
+                    }),
+                    ..PortableWindowPlacement::default()
+                },
+                theme_mode: None,
+                created_at: Some(1_800_000_000),
+                last_opened_at: Some(1_800_000_000),
+            })
+            .collect();
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                workspaces: Some(workspaces),
+                open_repos: repos.iter().take(5).cloned().collect(),
+                recent_repos: Some(repos.iter().take(MAX_RECENT_REPOS).cloned().collect()),
+                pinned_repos: Some(repos.iter().take(20).cloned().collect()),
+                repo_sidebar_collapsed_items: Some(per_repo_sets()),
+                repo_sidebar_pinned_branches: Some(per_repo_sets()),
+                repo_history_modes: Some(
+                    repos
+                        .iter()
+                        .map(|repo| (repo.clone(), HistoryModeSetting::FirstParent))
+                        .collect(),
+                ),
+                repo_history_scopes: Some(
+                    repos
+                        .iter()
+                        .map(|repo| (repo.clone(), HistoryScopeSetting::AllBranches))
+                        .collect(),
+                ),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session");
+        let bytes = fs::metadata(&path).expect("session metadata").len();
+        let contents = fs::read(&path).expect("read session");
+
+        let started = std::time::Instant::now();
+        for ix in 0..ITERATIONS {
+            persist_ui_settings_to_path(
+                UiSettings {
+                    sidebar_width: Some(200 + ix),
+                    ..UiSettings::default()
+                },
+                &path,
+            )
+            .expect("persist settings");
+        }
+        let settings_write = started.elapsed() / ITERATIONS;
+
+        let snapshot = repos_snapshot(&["/home/user/src/a", "/home/user/src/b"]);
+        let started = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            persist_repos_snapshot_to_path(&snapshot, &path).expect("persist snapshot");
+        }
+        let snapshot_write = started.elapsed() / ITERATIONS;
+
+        let started = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            preserve_previous_version_session_backup(&path, &contents).expect("backup check");
+        }
+        let backup_check = started.elapsed() / ITERATIONS;
+
+        println!(
+            "session persist: repos={repo_count} bytes={bytes} settings_write={settings_write:?} \
+             snapshot_write={snapshot_write:?} backup_check={backup_check:?}"
+        );
+    }
+}
+
+// The focused mergetool reads back its own size: neither a workspace frame
+// nor a running main app's workspace or settings writes may replace it.
+#[test]
+fn mergetool_window_size_survives_workspace_frames_and_main_app_writes() {
+    let path = unique_session_test_dir("mergetool-window-size").join("session.json");
+    let mut workspace = Workspace::new(vec![PathBuf::from("/work/alpha")]);
+    workspace.placement.normal_frame = Some(SavedWindowFrame {
+        x: 0,
+        y: 0,
+        width: 1200,
+        height: 800,
+    });
+    persist_workspaces_to_path(std::slice::from_ref(&workspace), &path).expect("UI persist");
+    persist_mergetool_window_size_to_path(700, 500, &path).expect("mergetool persist");
+    persist_workspaces_to_path(std::slice::from_ref(&workspace), &path).expect("UI persist");
+    persist_ui_settings_to_path(
+        UiSettings {
+            window_width: Some(1300),
+            window_height: Some(850),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("main window settings persist");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(
+        (
+            loaded.mergetool_window_width,
+            loaded.mergetool_window_height
+        ),
+        (Some(700), Some(500))
+    );
+    assert_eq!(
+        (loaded.window_width, loaded.window_height),
+        (Some(1200), Some(800)),
+        "normal windows keep the workspace frame"
+    );
+}
+
+// Before the mergetool saves its own size it opens at the shared legacy one.
+#[test]
+fn mergetool_window_size_falls_back_to_the_legacy_size() {
+    let path = unique_session_test_dir("mergetool-window-fallback").join("session.json");
+    persist_ui_settings_to_path(
+        UiSettings {
+            window_width: Some(900),
+            window_height: Some(600),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("legacy size persist");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(
+        (
+            loaded.mergetool_window_width,
+            loaded.mergetool_window_height
+        ),
+        (Some(900), Some(600))
+    );
+}

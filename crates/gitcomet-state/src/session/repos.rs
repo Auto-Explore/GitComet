@@ -238,7 +238,6 @@ pub fn persist_repos_snapshot_to_path(
             .active_repo_index
             .and_then(|ix| snapshot.open_repos.get(ix))
             .map(|path| path.to_string());
-        sync_legacy_workspace_from_projection(&mut file);
 
         persist_to_path(path, &file)
     })

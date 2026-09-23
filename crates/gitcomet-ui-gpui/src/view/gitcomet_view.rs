@@ -3165,7 +3165,7 @@ impl GitCometView {
             .cloned();
         self.clear_external_drag_state(repository_bar_already_cleared, cx);
         if let Some(path) = directory {
-            self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+            crate::app::open_dropped_repository_from_view(cx, self.window_handle.window_id(), path);
         }
     }
 

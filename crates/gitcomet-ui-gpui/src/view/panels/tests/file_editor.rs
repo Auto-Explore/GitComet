@@ -1931,6 +1931,169 @@ async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_r
     let _ = std::fs::remove_dir_all(&second_dir);
 }
 
+/// Open a window editing `file` in `repo_id` with auto-save on, type into the
+/// buffer, and ask the window to close. Returns the window id.
+fn request_close_with_dirty_auto_saved_buffer(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    state: Arc<AppState>,
+) -> gpui::WindowId {
+    let window_id = cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.auto_save_file_edits = true;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        });
+        let _ = window.draw(app);
+        window.window_handle().window_id()
+    });
+    cx.run_until_parked();
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// edited\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let took_over = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_window_or_warn(window_id, cx)
+        })
+    });
+    assert!(took_over, "the pending auto-save write must hold the close");
+    // Start the drain waiter before the clock moves.
+    cx.run_until_parked();
+    window_id
+}
+
+/// Let the drain's real-time grace pass, then step GPUI's clock by `total`.
+fn advance_file_edit_drain(cx: &mut gpui::VisualTestContext, total: std::time::Duration) {
+    std::thread::sleep(std::time::Duration::from_millis(175));
+    let step = std::time::Duration::from_millis(25);
+    let mut elapsed = std::time::Duration::ZERO;
+    while elapsed < total {
+        cx.executor().advance_clock(step);
+        cx.run_until_parked();
+        elapsed += step;
+    }
+}
+
+/// A long action in another repository must not hold a close whose own
+/// write has already landed.
+#[gpui::test]
+async fn review_regression_unrelated_repo_action_does_not_block_close(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store_for_view, events, None, window, cx)
+    });
+
+    let (edited, busy) = (
+        gitcomet_state::model::RepoId(971),
+        gitcomet_state::model::RepoId(972),
+    );
+    let edited_dir = unique_workdir("file_editor_close_edited");
+    let busy_dir = unique_workdir("file_editor_close_busy");
+    let file = std::path::PathBuf::from("main.rs");
+    std::fs::write(edited_dir.join(&file), "fn main() {}\n").expect("write fixture");
+    std::fs::write(busy_dir.join(&file), "fn main() {}\n").expect("write fixture");
+    let mut state = (*two_repo_editor_state(
+        (edited, &edited_dir, &file),
+        (busy, &busy_dir, &file),
+        edited,
+    ))
+    .clone();
+    state.repos[1].local_actions_in_flight = 1;
+
+    let window_id = request_close_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state));
+    store.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::RepoCommandFinished {
+            repo_id: edited,
+            command: gitcomet_state::msg::RepoCommandKind::SaveWorktreeFile {
+                path: file,
+                stage: false,
+            },
+            result: Ok(gitcomet_core::services::CommandOutput::empty_success(
+                "save file",
+            )),
+        },
+    ));
+    advance_file_edit_drain(cx, std::time::Duration::from_millis(200));
+
+    assert!(
+        cx.cx.update(|app| app
+            .windows()
+            .iter()
+            .all(|window| window.window_id() != window_id)),
+        "the close must go through once the edited repository's write landed"
+    );
+
+    let _ = std::fs::remove_dir_all(&edited_dir);
+    let _ = std::fs::remove_dir_all(&busy_dir);
+}
+
+/// A write that never reports back must not leave Close silently doing
+/// nothing: the unsaved-edits dialog comes back so the user can decide.
+#[gpui::test]
+async fn review_regression_timed_out_save_reopens_the_unsaved_dialog(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(973);
+    let workdir = unique_workdir("file_editor_close_timeout");
+    let file = std::path::PathBuf::from("main.rs");
+    std::fs::write(workdir.join(&file), "fn main() {}\n").expect("write fixture");
+
+    // A command already running in the repository (a slow pre-commit hook,
+    // say) keeps the save queued behind it, so the drain can only time out.
+    let mut state = (*editor_state(repo_id, &workdir, &file)).clone();
+    state.repos[0].local_actions_in_flight = 1;
+    let window_id = request_close_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state));
+    advance_file_edit_drain(cx, std::time::Duration::from_secs(6));
+
+    assert!(
+        cx.cx.update(|app| app
+            .windows()
+            .iter()
+            .any(|window| window.window_id() == window_id)),
+        "an unconfirmed write must not close the window"
+    );
+    cx.update(|_window, app| {
+        // Render moves a queued prompt into the popover host.
+        let view = view.read(app);
+        let queued = view.pending_unsaved_file_edits_prompt.clone();
+        let shown = match view.popover_host.read(app).popover_kind_for_tests() {
+            Some(PopoverKind::UnsavedFileEditsConfirm(prompt)) => Some(prompt),
+            _ => None,
+        };
+        let files = queued
+            .or(shown)
+            .map(|prompt| prompt.files)
+            .unwrap_or_default();
+        assert_eq!(
+            files,
+            vec![gpui::SharedString::from("main.rs")],
+            "the timeout must hand the decision back to the user"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 async fn review_regression_confirmed_failed_save_aborts_repository_move(
     cx: &mut gpui::TestAppContext,

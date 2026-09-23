@@ -185,3 +185,26 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         persist_to_path(path, &file)
     })
 }
+
+/// The focused mergetool's window size, kept apart from the legacy
+/// `window_width`/`window_height` that normal windows and workspaces rewrite.
+pub fn persist_mergetool_window_size(width: u32, height: u32) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_mergetool_window_size_to_path(width, height, &path)
+}
+
+pub fn persist_mergetool_window_size_to_path(
+    width: u32,
+    height: u32,
+    path: &Path,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        file.mergetool_window_width = Some(width);
+        file.mergetool_window_height = Some(height);
+        persist_to_path(path, &file)
+    })
+}

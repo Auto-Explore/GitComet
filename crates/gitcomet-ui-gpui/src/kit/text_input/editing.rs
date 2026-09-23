@@ -1452,8 +1452,6 @@ impl TextInput {
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         if self.selection.range.is_empty() && self.cursor_offset() == 0 {
             self.interaction.arrow_left_at_start_pressed = true;
-            cx.notify();
-            return;
         }
         if self.selection.range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
@@ -1466,8 +1464,6 @@ impl TextInput {
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
         if self.selection.range.is_empty() && self.cursor_offset() >= self.content.len() {
             self.interaction.arrow_right_at_end_pressed = true;
-            cx.notify();
-            return;
         }
         if self.selection.range.is_empty() {
             self.move_to(self.next_boundary(self.selection.range.end), cx);

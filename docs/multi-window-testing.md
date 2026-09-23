@@ -7,7 +7,7 @@ This document is the release test plan for GitComet's multi-window support. It c
 - A new window starts empty on the Home page (Open, Clone, Initialize, saved workspaces, recent repositories) and does not create a saved workspace until its first repository is added.
 - Every non-empty window is an independent workspace with its own active tab and layout.
 - Quitting GitComet restores every window that was open at quit time on the next launch.
-- Closing a window before quitting keeps its workspace recoverable in the repository picker but does not restore it automatically.
+- Closing a window before quitting keeps its workspace recoverable in the repository picker but does not restore it automatically. On Linux and Windows, closing the last window quits the app, so that window is restored like any other quit.
 - Closing the final repository in a window removes an anonymous empty workspace. Moving the final repository out closes the empty source window.
 - A customized workspace (a name, a title-bar color, or a theme override) outlives its last repository: its window stays open on Home, keeps its title-bar chip, and the empty workspace is saved and restored until it is deleted in Settings.
 - Saved windowed bounds, display, maximized state, fullscreen state, and relative stacking order are restored when possible. Bounds are rebased and clamped when the saved display is missing or smaller.
@@ -66,7 +66,8 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 6. Open the repository picker and recover the saved A/B/C workspace. Verify it opens once and focuses if selected again.
 7. Quit while both windows are open, relaunch, and verify both return.
 8. Focus a new empty window, add its first repository, click back to the previous window, and quit. Verify the previously clicked window is restored frontmost.
-9. With A open in the first window, use both the manual path field and a pinned/recent repository row for A from the second window. Verify both focus A in the first window and never create a second owner.
+9. With A open in the first window, use both the manual path field and a pinned/recent repository row for A from the second window. Verify both focus A in the first window and never create a second owner. Repeat with a worktree or submodule of A opened from the second window's pickers, and by dropping A's folder onto the second window.
+10. On Linux and Windows, close the only open window with its title-bar close button. Relaunch and verify that window's workspace is restored.
 
 ### 2. Window geometry and stacking
 

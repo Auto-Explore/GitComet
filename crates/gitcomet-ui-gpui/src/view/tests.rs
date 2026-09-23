@@ -3659,6 +3659,38 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
     });
 }
 
+/// Repositories deferred until Git recovers keep bootstrap pending (so the
+/// workspace membership survives), but must not hide the unavailable screen.
+#[gpui::test]
+fn review_regression_deferred_restore_shows_git_unavailable_screen(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let next = Arc::new(AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        ..AppState::test_default()
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+            this.adopt_workspace(
+                session::Workspace::new(vec![PathBuf::from("/repos/deferred")]),
+                cx,
+            );
+        });
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("repository_loading_screen").is_none(),
+        "a deferred restore must not spin while Git is unavailable"
+    );
+    cx.debug_bounds("git_unavailable_screen")
+        .expect("expected the git unavailable screen");
+}
+
 #[gpui::test]
 fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -6241,6 +6273,60 @@ fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppCont
             "Abort Merge should open the same confirmation as the action bar"
         );
     });
+}
+
+/// Store ticks that change nothing must not lease the workspace manager:
+/// every lease notifies its observers, such as an open Settings window.
+#[gpui::test]
+fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(51);
+    let state = AppState {
+        repos: vec![RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet-unchanged-snapshot"),
+            },
+        )],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    };
+    let apply = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                test_support::apply_state_snapshot_for_test(view, Arc::new(state.clone()), cx);
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    };
+    apply(cx);
+
+    let notifications = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&notifications);
+    let _subscription = cx.update(|_window, app| {
+        app.observe_global::<crate::workspaces::WorkspaceManager>(move |_cx| {
+            counter.set(counter.get() + 1);
+        })
+    });
+    for _ in 0..4 {
+        apply(cx);
+    }
+
+    assert_eq!(
+        notifications.get(),
+        0,
+        "an unchanged snapshot notified observers"
+    );
 }
 
 mod open_remote_in_browser;

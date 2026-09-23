@@ -1,13 +1,13 @@
 use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::{HistoryMode, LogScope};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{env, fs, io};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -28,6 +28,9 @@ pub struct UiSession {
     pub repo_sidebar_pinned_branches: BTreeMap<PathBuf, BTreeSet<String>>,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
+    /// The focused mergetool's own size; normal windows use workspace frames.
+    pub mergetool_window_width: Option<u32>,
+    pub mergetool_window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
     pub sidebar_collapsed: Option<bool>,
@@ -112,7 +115,11 @@ struct UiSessionFileV1 {
 struct UiSessionFile {
     version: u32,
     // V4 (branch-only) stored workspaces under their old "window groups" name.
-    #[serde(alias = "window_groups")]
+    #[serde(
+        alias = "window_groups",
+        default,
+        deserialize_with = "lenient_workspaces"
+    )]
     workspaces: Option<Vec<WorkspaceFile>>,
     open_repos: Vec<String>,
     active_repo: Option<String>,
@@ -124,6 +131,8 @@ struct UiSessionFile {
     repo_sidebar_pinned_branches: Option<BTreeMap<String, BTreeSet<String>>>,
     window_width: Option<u32>,
     window_height: Option<u32>,
+    mergetool_window_width: Option<u32>,
+    mergetool_window_height: Option<u32>,
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
     sidebar_collapsed: Option<bool>,
@@ -235,11 +244,15 @@ pub fn load() -> UiSession {
 }
 
 pub fn load_from_path(path: &Path) -> UiSession {
-    let Some(file) = load_file(path) else {
+    let Some(mut file) = load_file(path) else {
         return UiSession::default();
     };
 
-    let workspaces = parse_workspaces(file.workspaces.unwrap_or_default());
+    let stored_workspaces = file
+        .workspaces
+        .take()
+        .or_else(|| legacy_workspace_from_projection(&file).map(|workspace| vec![workspace]));
+    let workspaces = parse_workspaces(stored_workspaces.unwrap_or_default());
     let (legacy_open_repos, legacy_active_repo) = parse_repos(file.open_repos, file.active_repo);
     // Prefer a workspace with repositories so an empty customized one cannot
     // blank the legacy projection.
@@ -269,6 +282,11 @@ pub fn load_from_path(path: &Path) -> UiSession {
     );
     let restored_layout = restored_workspace.map(|workspace| workspace.layout.clone());
     let restored_frame = restored_workspace.and_then(|workspace| workspace.placement.normal_frame);
+    // Until the mergetool saves its own size it keeps the shared legacy one.
+    let mergetool_window_size = file
+        .mergetool_window_width
+        .zip(file.mergetool_window_height)
+        .or(file.window_width.zip(file.window_height));
     let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
     let pinned_repos = parse_path_list(file.pinned_repos.unwrap_or_default());
     let repo_sidebar_collapsed_items =
@@ -291,6 +309,8 @@ pub fn load_from_path(path: &Path) -> UiSession {
         window_height: restored_frame
             .map(|frame| frame.height)
             .or(file.window_height),
+        mergetool_window_width: mergetool_window_size.map(|(width, _)| width),
+        mergetool_window_height: mergetool_window_size.map(|(_, height)| height),
         sidebar_width: restored_layout
             .as_ref()
             .and_then(|layout| layout.sidebar_width)
@@ -423,38 +443,50 @@ fn with_session_file_persist_lock<T>(persist: impl FnOnce() -> io::Result<T>) ->
     persist()
 }
 
+/// On-disk version `load_file` last read per path, so the write that follows
+/// can skip the backup check's re-read.
+static LOADED_SESSION_VERSIONS: OnceLock<Mutex<FxHashMap<PathBuf, u32>>> = OnceLock::new();
+
+fn loaded_session_versions() -> MutexGuard<'static, FxHashMap<PathBuf, u32>> {
+    LOADED_SESSION_VERSIONS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
+fn loaded_session_version(path: &Path) -> Option<u32> {
+    loaded_session_versions().get(path).copied()
+}
+
 fn load_file(path: &Path) -> Option<UiSessionFile> {
-    let Ok(contents) = fs::read_to_string(path) else {
-        return None;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+    let value = fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok());
+    let Some(value) = value else {
+        loaded_session_versions().remove(path);
         return None;
     };
     let version = value
         .get("version")
         .and_then(|v| v.as_u64())
         .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
+    loaded_session_versions().insert(path.to_path_buf(), version);
     let mut file = match version {
         SESSION_FILE_VERSION_V1 => {
             let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
-            Some(migrate_v3_file(UiSessionFile {
+            Some(UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: file.open_repos,
                 active_repo: file.active_repo,
                 ..UiSessionFile::default()
-            }))
+            })
         }
         SESSION_FILE_VERSION_V2 => {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
-            Some(migrate_v3_file(migrate_v2_file(file)))
+            Some(migrate_v2_file(file))
         }
-        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value)
-            .ok()
-            .map(migrate_v3_file),
-        SESSION_FILE_VERSION_V4 | SESSION_FILE_VERSION_V5 => {
-            serde_json::from_value::<UiSessionFile>(value)
-                .ok()
-                .map(migrate_v3_file)
+        SESSION_FILE_VERSION_V3 | SESSION_FILE_VERSION_V4 | SESSION_FILE_VERSION_V5 => {
+            serde_json::from_value::<UiSessionFile>(value).ok()
         }
         _ => None,
     }?;

@@ -19,7 +19,7 @@ const PORT_SPAN: u16 = 20_000;
 const PORT_CANDIDATES: u16 = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const IO_TIMEOUT: Duration = Duration::from_secs(1);
-const DESCRIPTOR_RETRY_WINDOW: Duration = Duration::from_millis(250);
+const CLAIM_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_WIRE_BYTES: usize = 1024 * 1024;
 const INSTANCE_FILE_ENV: &str = "GITCOMET_BROWSER_INSTANCE_FILE";
 
@@ -251,12 +251,13 @@ pub(crate) fn start_or_forward(request: BrowserOpenRequest) -> io::Result<StartR
         .map(PathBuf::from)
         .or_else(gitcomet_state::session::browser_instance_file_path)
         .ok_or_else(|| io::Error::other("no per-user state directory is available"))?;
-    start_or_forward_at(&descriptor_path, request)
+    start_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
 }
 
 fn start_or_forward_at(
     descriptor_path: &Path,
     request: BrowserOpenRequest,
+    claim_wait: Duration,
 ) -> io::Result<StartResult> {
     if let Some(descriptor) = read_descriptor(descriptor_path)
         && forward_request(&descriptor, &request).is_ok()
@@ -268,34 +269,18 @@ fn start_or_forward_at(
     // operations. Serialize that interval across processes so a contender
     // cannot time out on the bound port, choose another one, and become a
     // second primary while the first process is merely preempted in between.
-    let claim = match acquire_browser_instance_claim(descriptor_path, &request)? {
+    let claim = match acquire_browser_instance_claim(descriptor_path, &request, claim_wait)? {
         BrowserInstanceClaim::Acquired(claim) => claim,
         BrowserInstanceClaim::Forwarded => return Ok(StartResult::Forwarded),
     };
 
-    let first_port = first_candidate_port(descriptor_path);
+    // With the claim held, no other primary can own a candidate port, so an
+    // occupied one belongs to an unrelated service: move on without waiting.
     let mut last_error = None;
-    for offset in 0..PORT_CANDIDATES {
-        let port = PORT_BASE + (first_port - PORT_BASE + offset) % PORT_SPAN;
+    for port in candidate_ports(descriptor_path) {
         let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         match TcpListener::bind(address) {
             Ok(listener) => return start_primary(descriptor_path, listener, port, claim),
-            Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-                last_error = Some(err);
-                let deadline = Instant::now() + DESCRIPTOR_RETRY_WINDOW;
-                loop {
-                    if let Some(descriptor) = read_descriptor(descriptor_path)
-                        && descriptor.port == port
-                        && forward_request(&descriptor, &request).is_ok()
-                    {
-                        return Ok(StartResult::Forwarded);
-                    }
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
             Err(err) => last_error = Some(err),
         }
     }
@@ -306,6 +291,7 @@ fn start_or_forward_at(
 fn acquire_browser_instance_claim(
     descriptor_path: &Path,
     request: &BrowserOpenRequest,
+    claim_wait: Duration,
 ) -> io::Result<BrowserInstanceClaim> {
     let Some(parent) = descriptor_path.parent() else {
         return Err(io::Error::new(
@@ -325,6 +311,7 @@ fn acquire_browser_instance_claim(
         options.mode(0o600);
     }
     let file = options.open(lock_path)?;
+    let deadline = Instant::now() + claim_wait;
     loop {
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(BrowserInstanceClaim::Acquired(file)),
@@ -337,6 +324,14 @@ fn acquire_browser_instance_claim(
                     && forward_request(&descriptor, request).is_ok()
                 {
                     return Ok(BrowserInstanceClaim::Forwarded);
+                }
+                // A live primary may never accept (protocol mismatch, deleted
+                // descriptor); give up so the caller launches independently.
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the running GitComet instance did not accept the request",
+                    ));
                 }
                 thread::sleep(Duration::from_millis(10));
             }
@@ -414,6 +409,9 @@ fn handle_connection(
     descriptor: &InstanceDescriptor,
     requests: &Sender<BrowserOpenRequest>,
 ) -> io::Result<()> {
+    // macOS and Windows inherit the listener's non-blocking mode on accept,
+    // which would make reads fail with WouldBlock and ignore the timeout.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let mut line = String::new();
@@ -555,6 +553,12 @@ fn first_candidate_port(path: &Path) -> u16 {
     PORT_BASE + (hash % u64::from(PORT_SPAN)) as u16
 }
 
+fn candidate_ports(path: &Path) -> impl Iterator<Item = u16> {
+    let first_port = first_candidate_port(path);
+    (0..PORT_CANDIDATES)
+        .map(move |offset| PORT_BASE + (first_port - PORT_BASE + offset) % PORT_SPAN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,6 +589,7 @@ mod tests {
         let primary = match start_or_forward_at(
             &descriptor,
             request(path.clone(), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -595,7 +600,8 @@ mod tests {
         assert!(matches!(
             start_or_forward_at(
                 &descriptor,
-                request(path.clone(), BrowserOpenTarget::NewWindow)
+                request(path.clone(), BrowserOpenTarget::NewWindow),
+                CLAIM_WAIT_TIMEOUT,
             )
             .expect("forward request"),
             StartResult::Forwarded
@@ -616,6 +622,7 @@ mod tests {
         let primary = match start_or_forward_at(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -626,7 +633,8 @@ mod tests {
         assert!(matches!(
             start_or_forward_at(
                 &descriptor,
-                request(path.clone(), BrowserOpenTarget::ExistingWindow)
+                request(path.clone(), BrowserOpenTarget::ExistingWindow),
+                CLAIM_WAIT_TIMEOUT,
             )
             .expect("forward non-UTF-8 path"),
             StartResult::Forwarded
@@ -655,6 +663,7 @@ mod tests {
         let primary = match start_or_forward_at(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -665,7 +674,8 @@ mod tests {
         assert!(matches!(
             start_or_forward_at(
                 &descriptor,
-                request(path.clone(), BrowserOpenTarget::ExistingWindow)
+                request(path.clone(), BrowserOpenTarget::ExistingWindow),
+                CLAIM_WAIT_TIMEOUT,
             )
             .expect("forward Windows path"),
             StartResult::Forwarded
@@ -703,6 +713,7 @@ mod tests {
                 path: None,
                 target: BrowserOpenTarget::ExistingWindow,
             },
+            CLAIM_WAIT_TIMEOUT,
         )
         .expect("replace stale descriptor")
         {
@@ -733,6 +744,7 @@ mod tests {
             let result = start_or_forward_at(
                 &first_descriptor,
                 request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
+                CLAIM_WAIT_TIMEOUT,
             )
             .expect("first broker start");
             let primary = match result {
@@ -752,6 +764,7 @@ mod tests {
             let result = start_or_forward_at(
                 &second_descriptor,
                 request(PathBuf::from("second"), BrowserOpenTarget::ExistingWindow),
+                CLAIM_WAIT_TIMEOUT,
             )
             .expect("second broker start");
             match result {
@@ -768,10 +781,9 @@ mod tests {
             }
         });
 
-        // Give the second process enough time to exhaust the descriptor retry
-        // window while the first owns the candidate but is paused before its
-        // atomic descriptor rename.
-        thread::sleep(DESCRIPTOR_RETRY_WINDOW + Duration::from_millis(100));
+        // Keep the first paused before its descriptor rename long enough for an
+        // unserialized contender to pick another port (well under the claim wait).
+        thread::sleep(Duration::from_millis(350));
         gate.release();
         first_ready_rx
             .recv_timeout(Duration::from_secs(2))
@@ -792,5 +804,144 @@ mod tests {
             !second_became_primary,
             "a delayed descriptor must not allow two browser primaries"
         );
+    }
+
+    // Guards against a launch spinning forever when a live primary holds the
+    // claim but cannot be forwarded to; it must fall back to launching alone.
+    #[test]
+    fn unreachable_claim_holder_falls_back_to_an_independent_launch() {
+        assert_launch_falls_back("primary speaks another protocol version", |path| {
+            let mut descriptor = read_descriptor(path).expect("descriptor");
+            descriptor.version = PROTOCOL_VERSION + 1;
+            write_descriptor(path, &descriptor).expect("rewrite descriptor");
+        });
+        assert_launch_falls_back("descriptor was cleaned up", |path| {
+            fs::remove_file(path).expect("remove descriptor");
+        });
+    }
+
+    fn assert_launch_falls_back(case: &str, break_forwarding: impl FnOnce(&Path)) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let descriptor_path = dir.path().join("instance.json");
+        let primary = match start_or_forward_at(
+            &descriptor_path,
+            request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
+        )
+        .expect("start primary")
+        {
+            StartResult::Primary(primary) => primary,
+            StartResult::Forwarded => panic!("first process unexpectedly forwarded"),
+        };
+        break_forwarding(&descriptor_path);
+        let published = read_descriptor(&descriptor_path).map(|current| current.token);
+
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let second_descriptor = descriptor_path.clone();
+        thread::spawn(move || {
+            let _ = result_tx.send(start_or_forward_at(
+                &second_descriptor,
+                request(PathBuf::from("second"), BrowserOpenTarget::ExistingWindow),
+                Duration::from_millis(100),
+            ));
+        });
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{case}: second launch is still waiting"));
+
+        match result {
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{case}"),
+            Ok(_) => panic!("{case}: second launch should fall back to running alone"),
+        }
+        assert_eq!(
+            read_descriptor(&descriptor_path).map(|current| current.token),
+            published,
+            "{case}: the fallback must not publish a second primary"
+        );
+        drop(primary);
+    }
+
+    // Guards against WouldBlock on macOS and Windows, where accepted sockets
+    // inherit the listener's non-blocking mode and read timeouts do not apply.
+    #[test]
+    fn connection_handler_waits_for_a_request_split_across_writes() {
+        let listener =
+            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let descriptor = InstanceDescriptor {
+            version: PROTOCOL_VERSION,
+            port: address.port(),
+            token: "token".to_string(),
+            pid: std::process::id(),
+        };
+        let mut wire = serde_json::to_vec(&WireRequest {
+            version: PROTOCOL_VERSION,
+            token: descriptor.token.clone(),
+            path: None,
+            target: WireTarget::NewWindow,
+        })
+        .expect("serialize request");
+        wire.push(b'\n');
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).expect("connect");
+            let (head, tail) = wire.split_at(wire.len() / 2);
+            stream.write_all(head).expect("write first half");
+            thread::sleep(Duration::from_millis(200));
+            let _ = stream.write_all(tail);
+            let mut response = String::new();
+            let _ = BufReader::new(stream).read_line(&mut response);
+            response
+        });
+
+        let (stream, _address) = listener.accept().expect("accept");
+        // What macOS and Windows hand out from start_primary's listener.
+        stream.set_nonblocking(true).expect("non-blocking stream");
+        let (requests_tx, requests_rx) = smol::channel::unbounded();
+        handle_connection(stream, &descriptor, &requests_tx).expect("serve split request");
+
+        assert_eq!(client.join().expect("join client"), "ok\n");
+        let received = requests_rx.try_recv().expect("forwarded request");
+        assert_eq!(received.target, BrowserOpenTarget::NewWindow);
+    }
+
+    // Guards startup latency: holding the claim rules out another primary on
+    // a candidate port, so occupied ports are skipped without polling.
+    #[test]
+    fn occupied_candidate_ports_are_skipped_without_waiting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let descriptor_path = dir.path().join("instance.json");
+        let occupied: Vec<u16> = candidate_ports(&descriptor_path).take(4).collect();
+        // A port something else already holds is occupied just the same.
+        let _listeners: Vec<TcpListener> = occupied
+            .iter()
+            .filter_map(|&port| {
+                TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).ok()
+            })
+            .collect();
+
+        let started = Instant::now();
+        let primary = match start_or_forward_at(
+            &descriptor_path,
+            BrowserOpenRequest {
+                path: None,
+                target: BrowserOpenTarget::ExistingWindow,
+            },
+            CLAIM_WAIT_TIMEOUT,
+        )
+        .expect("start primary")
+        {
+            StartResult::Primary(primary) => primary,
+            StartResult::Forwarded => panic!("no primary exists to forward to"),
+        };
+        let elapsed = started.elapsed();
+
+        let published = read_descriptor(&descriptor_path).expect("published descriptor");
+        assert!(!occupied.contains(&published.port));
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "skipping {} occupied ports took {elapsed:?}",
+            occupied.len()
+        );
+        drop(primary);
     }
 }

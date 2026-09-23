@@ -580,7 +580,7 @@ fn run_windowed_app(
         cx.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
         cx.on_app_quit(move |cx| {
             flush_open_workspace_environments(cx);
-            crate::workspaces::persist_current(cx);
+            crate::workspaces::flush_to_disk(cx);
             if let Some(on_shutdown) = on_shutdown.as_ref() {
                 on_shutdown();
             }
@@ -937,11 +937,20 @@ fn open_gitcomet_window(
         WorkspaceBootstrap::Saved(workspace) => Some(workspace.placement.clone()),
         WorkspaceBootstrap::LegacySession | WorkspaceBootstrap::Empty => None,
     };
+    // The focused mergetool keeps its own size; workspace frames never apply.
+    let (saved_w, saved_h) = if launch.view_config.view_mode == GitCometViewMode::FocusedMergetool {
+        (
+            ui_session.mergetool_window_width,
+            ui_session.mergetool_window_height,
+        )
+    } else {
+        (ui_session.window_width, ui_session.window_height)
+    };
     let restored_w = workspace_placement
         .as_ref()
         .and_then(|placement| placement.normal_frame)
         .map(|frame| frame.width)
-        .or(ui_session.window_width)
+        .or(saved_w)
         .map(|w| px(w as f32))
         .unwrap_or(default_size.width)
         .max(min_size.width);
@@ -949,7 +958,7 @@ fn open_gitcomet_window(
         .as_ref()
         .and_then(|placement| placement.normal_frame)
         .map(|frame| frame.height)
-        .or(ui_session.window_height)
+        .or(saved_h)
         .map(|h| px(h as f32))
         .unwrap_or(default_size.height)
         .max(min_size.height);
@@ -1623,7 +1632,7 @@ pub(crate) fn recent_repository_label(path: &Path) -> String {
     format!("{name} - {}", parent.display())
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct GitCometWindowEntry {
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
@@ -1701,7 +1710,7 @@ pub(crate) fn sync_gitcomet_window_state<C>(
     active_repo_path: Option<PathBuf>,
 ) -> Option<session::WorkspaceId>
 where
-    C: BorrowAppContext,
+    C: std::borrow::BorrowMut<App>,
 {
     let workspace_id = if view_mode == GitCometViewMode::Normal {
         crate::workspaces::sync_window(
@@ -1714,19 +1723,25 @@ where
     } else {
         None
     };
-    cx.update_default_global::<GitCometWindowRegistry, _>(|registry, _cx| {
-        registry.windows.insert(
-            handle.window_id(),
-            GitCometWindowEntry {
-                handle,
-                view,
-                main_pane,
-                view_mode,
-                workspace_id,
-                repo_paths,
-            },
-        );
-    });
+    let entry = GitCometWindowEntry {
+        handle,
+        view,
+        main_pane,
+        view_mode,
+        workspace_id,
+        repo_paths,
+    };
+    // Every store tick lands here; skip the lease when nothing moved.
+    let unchanged = cx
+        .borrow()
+        .try_global::<GitCometWindowRegistry>()
+        .and_then(|registry| registry.windows.get(&handle.window_id()))
+        .is_some_and(|current| *current == entry);
+    if !unchanged {
+        cx.update_default_global::<GitCometWindowRegistry, _>(|registry, _cx| {
+            registry.windows.insert(handle.window_id(), entry);
+        });
+    }
     workspace_id
 }
 
@@ -1809,14 +1824,7 @@ where
     let Some(target_workspace) = target_workspace else {
         return false;
     };
-    let live_windows = cx.update_default_global::<GitCometWindowRegistry, _>(|registry, _cx| {
-        registry
-            .windows
-            .values()
-            .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
-            .cloned()
-            .collect::<Vec<_>>()
-    });
+    let live_windows = live_normal_windows(cx.borrow_mut());
     let Some(source) = live_windows
         .iter()
         .find(|entry| entry.handle.window_id() == source_window_id)
@@ -1836,33 +1844,11 @@ where
     let Some(workspace) = crate::workspaces::workspace(cx.borrow(), target_workspace) else {
         return true;
     };
-    if workspace.repositories.is_empty() {
-        // Only customized workspaces persist while empty; the move fills it.
-        return false;
-    }
-    let duplicate_owner = workspace
-        .active_repository
-        .as_deref()
-        .and_then(|active| {
-            live_windows
-                .iter()
-                .find(|entry| entry_contains_repo_path(entry, active))
-        })
-        .or_else(|| {
-            workspace.repositories.iter().find_map(|path| {
-                live_windows
-                    .iter()
-                    .find(|entry| entry_contains_repo_path(entry, path))
-            })
-        });
-    let has_unowned_repository = workspace.repositories.iter().any(|path| {
-        !live_windows
-            .iter()
-            .any(|entry| entry_contains_repo_path(entry, path))
-    });
-
-    !has_unowned_repository
-        && duplicate_owner.is_none_or(|owner| owner.handle.window_id() == source_window_id)
+    // The move opens the workspace unless it settles on a live owner.
+    let (workspace, duplicate_owner) =
+        reconcile_workspace_against_live_windows(&live_windows, workspace);
+    workspace_is_fully_owned(&workspace, &duplicate_owner)
+        && duplicate_owner.is_none_or(|(owner, _)| owner.handle.window_id() == source_window_id)
 }
 
 fn active_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
@@ -1991,13 +1977,17 @@ where
     mark_clean_shutdown(cx);
 }
 
-pub(crate) fn mark_workspace_closed_from_view<T>(
-    cx: &mut gpui::Context<T>,
-    window_id: gpui::WindowId,
-) where
-    T: 'static,
-{
-    crate::workspaces::mark_window_closed(cx, window_id);
+/// Bookkeeping for a window about to close. Off macOS, closing the last window
+/// quits, so its workspace stays restorable like any other quit.
+pub(crate) fn mark_window_closing(cx: &mut App, window_id: gpui::WindowId) {
+    let last_window = cx.windows().len() == 1;
+    let quits_app = last_window && !cfg!(target_os = "macos");
+    if !quits_app {
+        crate::workspaces::mark_window_closed(cx, window_id);
+    }
+    if last_window {
+        mark_clean_shutdown(cx);
+    }
 }
 
 /// Record the window's latest pane layout before it closes; the debounced
@@ -2013,8 +2003,7 @@ fn flush_workspace_environment_for(cx: &mut App, window_id: gpui::WindowId) {
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
         flush_workspace_environment_for(cx, window.window_id());
-        crate::workspaces::mark_window_closed(cx, window.window_id());
-        mark_clean_shutdown_if_last_window(cx);
+        mark_window_closing(cx, window.window_id());
         let _ = window.update(cx, |_root, window, _cx| {
             window.remove_window();
         });
@@ -2035,8 +2024,7 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
         .unwrap_or(false);
     if !handled {
         flush_workspace_environment_for(cx, window_id);
-        crate::workspaces::mark_window_closed(cx, window_id);
-        mark_clean_shutdown_if_last_window(cx);
+        mark_window_closing(cx, window_id);
         window.remove_window();
     }
 }
@@ -2061,8 +2049,7 @@ pub(crate) fn close_window_by_id_or_warn(cx: &mut App, window_id: gpui::WindowId
     if handled {
         return;
     }
-    crate::workspaces::mark_window_closed(cx, window_id);
-    mark_clean_shutdown_if_last_window(cx);
+    mark_window_closing(cx, window_id);
     if let Some(entry) = normal_gitcomet_window_by_id(cx, window_id) {
         let _ = entry
             .handle
@@ -2230,16 +2217,19 @@ fn activate_gitcomet_window(cx: &mut App, window: gpui::AnyWindowHandle) {
     });
 }
 
+fn live_normal_windows(cx: &mut App) -> Vec<GitCometWindowEntry> {
+    gitcomet_window_entries(cx)
+        .into_iter()
+        .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
+        .collect()
+}
+
 /// Drop repositories a live window already owns from a saved workspace and
 /// report the live owner of its active (or first) repository.
 fn reconcile_workspace_against_live_windows(
-    cx: &mut App,
+    live_windows: &[GitCometWindowEntry],
     mut workspace: session::Workspace,
 ) -> (session::Workspace, Option<(GitCometWindowEntry, PathBuf)>) {
-    let live_windows: Vec<_> = gitcomet_window_entries(cx)
-        .into_iter()
-        .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
-        .collect();
     let duplicate_owner = workspace
         .active_repository
         .as_deref()
@@ -2271,6 +2261,15 @@ fn reconcile_workspace_against_live_windows(
     (workspace, duplicate_owner)
 }
 
+/// Whether a reconciled workspace has nothing left to open: its repositories
+/// all live elsewhere (an empty customized one still opens on Home).
+fn workspace_is_fully_owned(
+    workspace: &session::Workspace,
+    duplicate_owner: &Option<(GitCometWindowEntry, PathBuf)>,
+) -> bool {
+    workspace.repositories.is_empty() && (!workspace.is_customized() || duplicate_owner.is_some())
+}
+
 /// A workspace whose repositories all live elsewhere: focus their owner. A
 /// customized workspace keeps its identity; an anonymous one is discarded.
 /// Returns `None` when there is still something to open.
@@ -2279,9 +2278,7 @@ fn settle_fully_owned_workspace(
     workspace: &session::Workspace,
     duplicate_owner: &Option<(GitCometWindowEntry, PathBuf)>,
 ) -> Option<Option<GitCometWindowEntry>> {
-    if !workspace.repositories.is_empty()
-        || (workspace.is_customized() && duplicate_owner.is_none())
-    {
+    if !workspace_is_fully_owned(workspace, duplicate_owner) {
         return None;
     }
     if !workspace.is_customized() {
@@ -2318,7 +2315,8 @@ pub(crate) fn open_workspace_in_window(
     let Some(workspace) = crate::workspaces::workspace(cx, workspace_id) else {
         return;
     };
-    let (workspace, duplicate_owner) = reconcile_workspace_against_live_windows(cx, workspace);
+    let (workspace, duplicate_owner) =
+        reconcile_workspace_against_live_windows(&live_normal_windows(cx), workspace);
     if settle_fully_owned_workspace(cx, &workspace, &duplicate_owner).is_some() {
         return;
     }
@@ -2347,7 +2345,8 @@ fn activate_or_open_workspace(
     }
 
     let workspace = crate::workspaces::workspace(cx, workspace_id)?;
-    let (workspace, duplicate_owner) = reconcile_workspace_against_live_windows(cx, workspace);
+    let (workspace, duplicate_owner) =
+        reconcile_workspace_against_live_windows(&live_normal_windows(cx), workspace);
 
     if let Some(settled) = settle_fully_owned_workspace(cx, &workspace, &duplicate_owner) {
         return settled;
@@ -2509,6 +2508,29 @@ pub(crate) fn open_repository_from_view<T>(
             .or_else(|| find_normal_gitcomet_window(cx));
         if let Some(source) = source {
             open_repository_in_window(cx, &source, path);
+        }
+    });
+}
+
+/// A dropped folder that another window already owns focuses that window;
+/// otherwise the drop opens provisionally in the window it landed on.
+pub(crate) fn open_dropped_repository_from_view<T>(
+    cx: &mut gpui::Context<T>,
+    source_window_id: gpui::WindowId,
+    path: PathBuf,
+) where
+    T: 'static,
+{
+    cx.defer(move |cx| {
+        let normalized = normalize_repository_open_path(path.clone());
+        if let Some(owner) = find_normal_gitcomet_window_for_repo(cx, &normalized) {
+            focus_existing_repository_window(cx, &owner, &normalized);
+            return;
+        }
+        if let Some(source) = normal_gitcomet_window_by_id(cx, source_window_id) {
+            let _ = source
+                .view
+                .update(cx, |view, cx| view.open_dropped_repo_locally(path, cx));
         }
     });
 }
@@ -3232,6 +3254,15 @@ pub(crate) fn install_app_shortcuts_for_test(app: &mut App, backend: Arc<dyn Git
 }
 
 #[cfg(test)]
+pub(crate) fn windows_owning_repo_for_test(cx: &mut App, path: &Path) -> Vec<gpui::WindowId> {
+    gitcomet_window_entries(cx)
+        .into_iter()
+        .filter(|entry| entry_contains_repo_path(entry, path))
+        .map(|entry| entry.handle.window_id())
+        .collect()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use gpui::point;
@@ -3771,6 +3802,106 @@ mod tests {
             owners,
             vec![source_window_id],
             "the source must retain the repository when recovery resolves back to it"
+        );
+    }
+
+    /// Closing the last window quits on Linux/Windows, so it must keep the
+    /// workspace restorable; closing one of several windows still hides it.
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn review_regression_closing_the_last_window_keeps_its_workspace_restorable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let first = cx.add_window(|_, _| gpui::Empty);
+        let last = cx.add_window(|_, _| gpui::Empty);
+        cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+        let (first_id, last_id) = cx.update(|app| {
+            let sync = |app: &mut App, window: gpui::WindowId, repo: &str| {
+                crate::workspaces::sync_window(app, window, None, vec![PathBuf::from(repo)], None)
+                    .expect("durable workspace")
+            };
+            (
+                sync(app, first.window_id(), "/repos/a"),
+                sync(app, last.window_id(), "/repos/b"),
+            )
+        });
+        let restores = |cx: &mut gpui::TestAppContext, id| {
+            cx.update(|app| crate::workspaces::workspace(app, id))
+                .expect("workspace kept")
+                .restore_on_launch
+        };
+
+        first
+            .update(cx, |_, window, app| close_window_or_warn(window, app))
+            .unwrap();
+        assert!(
+            !restores(cx, first_id),
+            "a closed non-final window is hidden"
+        );
+
+        last.update(cx, |_, window, app| close_window_or_warn(window, app))
+            .unwrap();
+        assert!(
+            restores(cx, last_id),
+            "closing the final window quits, so its workspace must restore"
+        );
+    }
+
+    /// The pre-move guard must agree with the move. A closed window's registry
+    /// entry that still names the target is ignored by the move (it settles on
+    /// the source), so the guard must also call the move a no-op.
+    #[gpui::test]
+    fn review_regression_move_noop_check_ignores_closed_windows(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let path = std::env::temp_dir().join("gitcomet-app-test-repo");
+        let mut saved = session::Workspace::new(vec![path.clone()]);
+        saved.restore_on_launch = false;
+        let saved_id = saved.id;
+        cx.update(|app| crate::workspaces::initialize_for_test(app, vec![saved]));
+        let closed = cx.add_window(|_, _| gpui::Empty);
+        let closed_handle: gpui::AnyWindowHandle = closed.into();
+
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+        let source_window_id = cx.update(|window, app| {
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle().window_id()
+        });
+        seed_worktree_repo(cx, &store, view);
+
+        closed
+            .update(cx, |_, window, _| window.remove_window())
+            .expect("close the stale window");
+        cx.run_until_parked();
+        cx.cx.update(|app| {
+            app.update_default_global::<GitCometWindowRegistry, _>(|registry, _cx| {
+                registry.windows.insert(
+                    closed_handle.window_id(),
+                    GitCometWindowEntry {
+                        handle: closed_handle,
+                        view: gpui::WeakEntity::new_invalid(),
+                        main_pane: gpui::WeakEntity::new_invalid(),
+                        view_mode: GitCometViewMode::Normal,
+                        workspace_id: Some(saved_id),
+                        repo_paths: Arc::from(Vec::new()),
+                    },
+                );
+            });
+        });
+
+        assert!(
+            cx.cx.update(|app| repository_move_target_is_noop(
+                app,
+                source_window_id,
+                Some(saved_id)
+            )),
+            "the move resolves to the source, so its guards must not run"
         );
     }
 
@@ -5206,9 +5337,10 @@ mod tests {
             .update(|app| crate::workspaces::workspace(app, id))
             .expect("a customized workspace outlives its window");
         assert_eq!(saved.layout.sidebar_width, Some(333));
-        assert!(
-            !saved.restore_on_launch,
-            "an explicit close is not restored"
+        assert_eq!(
+            saved.restore_on_launch,
+            !cfg!(target_os = "macos"),
+            "closing the only window quits off macOS, so only there is it restored"
         );
     }
 

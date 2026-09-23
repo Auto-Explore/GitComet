@@ -1142,17 +1142,15 @@ impl MainPaneView {
         self.save_file_edits_scoped_to(Some(repo_id), cx);
     }
 
-    /// Turn optimistic clean recovery copies back into visible unsaved edits
-    /// after the store reports that their writes failed. `paths == None` is the
-    /// conservative timeout case: no close/move is retried, and every recovery
-    /// copy in scope is kept dirty until the user saves again.
+    /// Turn optimistic clean recovery copies of `paths` back into visible
+    /// unsaved edits after their writes failed or never reported back.
     pub(in crate::view) fn restore_failed_file_edit_recovery(
         &mut self,
         repo_id: RepoId,
-        paths: Option<&[PathBuf]>,
+        paths: &[PathBuf],
         cx: &mut gpui::Context<Self>,
     ) {
-        let includes = |path: &Path| paths.is_none_or(|paths| paths.iter().any(|p| p == path));
+        let includes = |path: &Path| paths.iter().any(|p| p == path);
         for ((stashed_repo_id, path), stashed) in &mut self.file_editor_stash {
             if *stashed_repo_id != repo_id || !includes(path) {
                 continue;

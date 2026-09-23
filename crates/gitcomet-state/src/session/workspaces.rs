@@ -63,6 +63,7 @@ pub struct SavedWindowFrame {
 
 /// Window edges a tiling window manager had snapped to when last captured.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(default)]
 pub struct SavedWindowTiling {
     pub top: bool,
     pub left: bool,
@@ -70,19 +71,26 @@ pub struct SavedWindowTiling {
     pub bottom: bool,
 }
 
+// Session parsing is lenient: a bad value here resets only that value.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(default)]
 pub struct PortableWindowPlacement {
+    #[serde(deserialize_with = "lenient")]
     pub normal_frame: Option<SavedWindowFrame>,
+    #[serde(deserialize_with = "lenient")]
     pub captured_visible_frame: Option<SavedWindowFrame>,
+    #[serde(deserialize_with = "lenient")]
     pub display_id: Option<String>,
+    #[serde(deserialize_with = "lenient")]
     pub state: SavedWindowState,
     /// Diagnostic only: tiling and snapping belong to the window manager and
     /// cannot be requested back, so restore uses the last frame instead.
-    #[serde(default)]
+    #[serde(deserialize_with = "lenient")]
     pub tiled: Option<SavedWindowTiling>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(default)]
 pub struct WorkspaceLayout {
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
@@ -185,16 +193,26 @@ impl Workspace {
     }
 }
 
+/// Only `id` is required; an entry that still fails to parse is dropped alone
+/// (see [`lenient_workspaces`]).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct WorkspaceFile {
     pub(super) id: WorkspaceId,
+    #[serde(default)]
     pub(super) custom_name: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     pub(super) color: Option<WorkspaceColor>,
+    #[serde(default)]
     pub(super) repositories: Vec<String>,
+    #[serde(default)]
     pub(super) active_repository: Option<String>,
+    #[serde(default = "restore_on_launch_default")]
     pub(super) restore_on_launch: bool,
+    #[serde(default)]
     pub(super) last_activation_order: u64,
+    #[serde(default, deserialize_with = "lenient")]
     pub(super) layout: WorkspaceLayout,
+    #[serde(default, deserialize_with = "lenient")]
     pub(super) placement: PortableWindowPlacement,
     #[serde(default)]
     pub(super) theme_mode: Option<String>,
@@ -202,6 +220,38 @@ pub(super) struct WorkspaceFile {
     pub(super) created_at: Option<u64>,
     #[serde(default)]
     pub(super) last_opened_at: Option<u64>,
+}
+
+const fn restore_on_launch_default() -> bool {
+    true
+}
+
+/// An unknown or malformed value falls back to its default.
+fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Drops workspace entries that fail to parse instead of failing the file.
+pub(super) fn lenient_workspaces<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<WorkspaceFile>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let serde_json::Value::Array(entries) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value(entry).ok())
+            .collect(),
+    ))
 }
 
 impl WorkspaceFile {
@@ -338,6 +388,9 @@ pub(super) fn workspaces_to_file(workspaces: &[Workspace]) -> Vec<WorkspaceFile>
     stored
 }
 
+/// The one workspace a file without a `workspaces` array implies. Derived on
+/// read only: that array appears once the UI saves workspaces, and from then
+/// on store snapshots (other windows, a mergetool process) cannot rewrite it.
 pub(super) fn legacy_workspace_from_projection(file: &UiSessionFile) -> Option<WorkspaceFile> {
     if file.open_repos.iter().all(|path| path.trim().is_empty()) {
         return None;
@@ -364,42 +417,16 @@ pub(super) fn legacy_workspace_from_projection(file: &UiSessionFile) -> Option<W
     })
 }
 
-pub(super) fn sync_legacy_workspace_from_projection(file: &mut UiSessionFile) {
-    let replacement = legacy_workspace_from_projection(file);
-    let Some(workspaces) = file.workspaces.as_mut() else {
-        file.workspaces = replacement.map(|workspace| vec![workspace]);
-        return;
-    };
-    if workspaces.len() != 1
-        || workspaces[0].id != LEGACY_WORKSPACE_ID
-        || !workspaces[0].restore_on_launch
-    {
-        return;
-    }
-    if let Some(replacement) = replacement {
-        workspaces[0].repositories = replacement.repositories;
-        workspaces[0].active_repository = replacement.active_repository;
-    } else {
-        workspaces.clear();
-    }
-}
-
-pub(super) fn migrate_v3_file(mut file: UiSessionFile) -> UiSessionFile {
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    if file.workspaces.is_some() {
-        return file;
-    }
-
-    file.workspaces = legacy_workspace_from_projection(&file).map(|workspace| vec![workspace]);
-    file
-}
-
 /// Keep one copy of a session file written by an older format version, so a
 /// downgrade can recover it (older builds drop files with a newer version).
 pub(super) fn preserve_previous_version_session_backup(
     path: &Path,
     replacement: &[u8],
 ) -> io::Result<()> {
+    // Writers load the file first; a file already current needs no re-read.
+    if loaded_session_version(path).is_some_and(|version| version >= CURRENT_SESSION_FILE_VERSION) {
+        return Ok(());
+    }
     let replacement_version = serde_json::from_slice::<serde_json::Value>(replacement)
         .ok()
         .and_then(|value| value.get("version").and_then(|version| version.as_u64()));

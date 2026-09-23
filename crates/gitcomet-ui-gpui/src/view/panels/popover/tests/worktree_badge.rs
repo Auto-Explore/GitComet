@@ -898,3 +898,74 @@ mod badges {
         );
     }
 }
+
+/// Records every repository its store tries to open.
+struct RecordingOpenBackend(std::sync::mpsc::Sender<PathBuf>);
+
+impl GitBackend for RecordingOpenBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        let _ = self.0.send(workdir.to_path_buf());
+        Err(Error::new(ErrorKind::Unsupported("recording backend")))
+    }
+}
+
+/// Picking a worktree another window already owns focuses that window; it
+/// must not open a second copy in this window's store.
+#[gpui::test]
+fn review_regression_picking_a_worktree_owned_elsewhere_does_not_duplicate_it(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let feature = PathBuf::from("/tmp/ws/feature");
+
+    let (owner_store, owner_events) = AppStore::new_test(Arc::new(TestBackend));
+    let owner =
+        cx.add_window(|window, cx| GitCometView::new(owner_store, owner_events, None, window, cx));
+    let owner_repo = RepoId(2);
+    owner
+        .update(cx, |view, _window, cx| {
+            crate::view::test_support::apply_state_snapshot_for_test(
+                view,
+                app_state_with_repo(opening_repo_state(owner_repo, &feature), owner_repo),
+                cx,
+            );
+        })
+        .expect("install the owner's repository");
+
+    let (opened_tx, opened_rx) = std::sync::mpsc::channel();
+    let (store, events) = AppStore::new_test(Arc::new(RecordingOpenBackend(opened_tx)));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(1);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(
+                this,
+                app_state_with_repo(repo_with_worktrees(repo_id), repo_id),
+                cx,
+            );
+            this.popover_host.update(cx, |host, cx| {
+                worktree_badge_picker::activate(
+                    host,
+                    repo_id,
+                    WorktreeBadgeRow::Worktree(feature.clone()),
+                    "",
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    let unexpected = opened_rx
+        .recv_timeout(std::time::Duration::from_millis(500))
+        .ok();
+    assert!(
+        unexpected.is_none(),
+        "the picker's store opened a repository another window owns: {unexpected:?}"
+    );
+    let owners = cx.update(|_window, app| crate::app::windows_owning_repo_for_test(app, &feature));
+    assert_eq!(owners, vec![owner.window_id()]);
+}

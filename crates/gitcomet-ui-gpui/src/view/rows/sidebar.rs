@@ -1208,12 +1208,16 @@ impl SidebarPaneView {
                         .on_activate(
                             false,
                             controls::ControlActivation::Composite,
-                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            cx.listener(move |this, e: &ClickEvent, window, cx| {
                                 if !e.standard_click() {
                                     return;
                                 }
                                 if e.click_count() >= 2 {
-                                    this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                                    crate::app::open_repository_from_view(
+                                        cx,
+                                        window.window_handle().window_id(),
+                                        path_for_open.clone(),
+                                    );
                                     cx.notify();
                                     return;
                                 }
@@ -1479,7 +1483,7 @@ impl SidebarPaneView {
                         .on_activate(
                             false,
                             controls::ControlActivation::Composite,
-                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            cx.listener(move |_this, e: &ClickEvent, window, cx| {
                                 if !e.standard_click() || e.click_count() < 2 {
                                     return;
                                 }
@@ -1489,8 +1493,11 @@ impl SidebarPaneView {
                                 let Some(base) = repo_workdir_for_open.clone() else {
                                     return;
                                 };
-                                this.store
-                                    .dispatch(Msg::OpenRepo(base.join(&path_for_open)));
+                                crate::app::open_repository_from_view(
+                                    cx,
+                                    window.window_handle().window_id(),
+                                    base.join(&path_for_open),
+                                );
                                 cx.notify();
                             }),
                         )
@@ -2009,9 +2016,11 @@ impl SidebarPaneView {
                                     }
                                     cx.stop_propagation();
                                     if e.click_count() >= 2 {
-                                        this.store.dispatch(Msg::OpenRepo(
+                                        crate::app::open_repository_from_view(
+                                            cx,
+                                            window.window_handle().window_id(),
                                             worktree_path_for_open.clone(),
-                                        ));
+                                        );
                                         cx.notify();
                                         return;
                                     }
@@ -2115,7 +2124,11 @@ impl SidebarPaneView {
                                                 cx.notify();
                                             }
                                             LocalBranchDoubleClickAction::OpenWorktree { path } => {
-                                                this.store.dispatch(Msg::OpenRepo(path));
+                                                crate::app::open_repository_from_view(
+                                                    cx,
+                                                    window.window_handle().window_id(),
+                                                    path,
+                                                );
                                                 cx.notify();
                                             }
                                         }

@@ -250,7 +250,7 @@ impl GitCometView {
         should_show_home_screen(
             self.view_mode,
             self.has_repo_tabs(),
-            self.startup_repo_bootstrap_pending,
+            self.startup_bootstrap_loading(),
         )
     }
 
@@ -258,8 +258,14 @@ impl GitCometView {
         should_show_startup_repository_loading_screen(
             self.view_mode,
             self.has_repo_tabs(),
-            self.startup_repo_bootstrap_pending,
+            self.startup_bootstrap_loading(),
         )
+    }
+
+    /// A bootstrap deferred until Git recovers stays pending (it keeps the
+    /// workspace membership) but shows Home's Git-unavailable screen.
+    fn startup_bootstrap_loading(&self) -> bool {
+        self.startup_repo_bootstrap_pending && !self.git_runtime_unavailable()
     }
 
     pub(super) fn sync_title_bar_repo_tab_actions(&mut self, cx: &mut gpui::Context<Self>) {

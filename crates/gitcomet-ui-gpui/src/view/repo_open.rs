@@ -336,6 +336,15 @@ impl GitCometView {
         cx.notify();
     }
 
+    pub(crate) fn open_dropped_repo_locally(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+        cx.notify();
+    }
+
     pub(crate) fn reserve_pending_repo_open(&mut self, path: &std::path::Path) {
         let failure_revision = self
             .store

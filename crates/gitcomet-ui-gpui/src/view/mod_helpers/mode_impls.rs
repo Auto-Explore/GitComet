@@ -964,6 +964,16 @@ pub(in crate::view) enum UnsavedFileEditsAction {
     },
 }
 
+impl UnsavedFileEditsAction {
+    /// A move only concerns its own repository's buffers.
+    pub(in crate::view) fn moving_repo(&self) -> Option<RepoId> {
+        match self {
+            Self::MoveRepo { repo_id, .. } => Some(*repo_id),
+            Self::CloseWindow(_) | Self::QuitApp => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct UnsavedFileEditsPrompt {
     pub(in crate::view) action: UnsavedFileEditsAction,
