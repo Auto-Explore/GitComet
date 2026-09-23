@@ -239,7 +239,8 @@ impl MainPaneView {
             );
             input
         });
-        let diff_search_subscription = cx.observe(&diff_search_input, |this, input, cx| {
+        let mut search_input_snapshot = diff_search_input.read(cx).text_snapshot();
+        let diff_search_subscription = cx.observe(&diff_search_input, move |this, input, cx| {
             if input.update(cx, |input, _| input.take_enter_pressed()) {
                 if this.diff_search_active {
                     this.diff_search_next_match();
@@ -247,6 +248,11 @@ impl MainPaneView {
                 }
                 return;
             }
+            let snapshot = input.read(cx).text_snapshot();
+            if snapshot == search_input_snapshot {
+                return;
+            }
+            search_input_snapshot = snapshot;
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.diff_search_query != next {
                 let previous_query = this.diff_search_query.clone();
@@ -351,7 +357,7 @@ impl MainPaneView {
             diff_cache_rev: 0,
             diff_cache_content_signature: None,
             diff_cache_target: None,
-            diff_cache: Vec::new(),
+            diff_cache: Arc::from([]),
             diff_row_provider: None,
             diff_split_row_provider: None,
             diff_file_for_src_ix: Vec::new(),
@@ -362,21 +368,21 @@ impl MainPaneView {
             diff_visual_line_kind_for_src_ix: Vec::new(),
             diff_hide_unified_header_for_src_ix: Vec::new(),
             diff_header_display_cache: FxHashMap::default(),
-            diff_split_cache: Vec::new(),
+            diff_split_cache: Arc::from([]),
             diff_split_cache_len: 0,
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
             diff_raw_input,
             submodule_hash_inputs,
             submodule_summary_cache: None,
-            diff_visible_indices: Vec::new(),
+            diff_visible_indices: Arc::from([]),
             diff_visible_inline_map: None,
-            diff_wrap_visible_rows: Vec::new(),
+            diff_wrap_visible_rows: Arc::from([]),
             diff_wrap_visible_cache_key: None,
             collapsed_diff_hunks: Vec::new(),
             collapsed_diff_hunk_ix_by_src_ix: FxHashMap::default(),
             collapsed_diff_reveals: FxHashMap::default(),
-            collapsed_diff_visible_rows: Vec::new(),
+            collapsed_diff_visible_rows: Arc::from([]),
             collapsed_diff_hunk_visible_indices: Vec::new(),
             collapsed_diff_header_display_cache: FxHashMap::default(),
             collapsed_diff_projection_identity: None,
@@ -427,6 +433,15 @@ impl MainPaneView {
             diff_search_match_ix: None,
             diff_search_debounce_seq: 0,
             diff_search_pending_previous_query: None,
+            diff_search_worker_running: false,
+            diff_search_worker_seq: 0,
+            diff_search_pending_finalize:
+                super::super::diff_search::DiffSearchFinalizeMode::ScrollToFirst,
+            diff_search_cancellation: None,
+            diff_search_document: None,
+            diff_search_pending_navigation: 0,
+            diff_search_probe_action: 0,
+            diff_search_probe_render: 0,
             diff_search_scroll,
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,
@@ -438,7 +453,7 @@ impl MainPaneView {
             file_diff_cache_error: None,
             file_diff_cache_path: None,
             file_diff_cache_language: None,
-            file_diff_cache_rows: Vec::new(),
+            file_diff_cache_rows: Arc::from([]),
             file_diff_row_provider: None,
             file_diff_old_text: SharedString::default(),
             file_diff_old_line_starts: Arc::default(),
@@ -460,7 +475,7 @@ impl MainPaneView {
             file_diff_new_line_starts: Arc::default(),
             file_diff_new_line_to_row: Arc::default(),
             file_diff_new_line_to_inline_row: Arc::default(),
-            file_diff_inline_cache: Vec::new(),
+            file_diff_inline_cache: Arc::from([]),
             file_diff_inline_row_provider: None,
             file_diff_inline_text: SharedString::default(),
             file_diff_inline_word_highlights: rows::new_lru_cache(

@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
-use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
+use super::super::{
+    RepoId, executor::TaskExecutor, repo_load_trace, worker_channel::StoreWorkerSender,
+};
 use super::util::{
     RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
     spawn_with_repo_or_else,
@@ -66,20 +68,45 @@ impl SelectedDiffLoadGuard {
     }
 }
 
+/// Traces the same queue/start/finish/skip events as `spawn_with_repo`, plus
+/// the queued request a newer one replaces.
 fn spawn_with_selected_diff_guard(
     executor: &TaskExecutor,
+    slot: &super::super::executor::LatestTaskSlot,
+    task_name: &'static str,
     repos: &RepoMap,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     guard: SelectedDiffLoadGuard,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender, SelectedDiffLoadGuard) + Send + 'static,
 ) -> bool {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        if !guard.is_current() {
+    let Some(repo) = repos.get(&repo_id).cloned() else {
+        repo_load_trace::trace!("repo_task_missing_handle repo_id={repo_id:?} task={task_name}");
+        return false;
+    };
+    // Trace before enqueueing: the worker may start the task immediately.
+    repo_load_trace::trace!("queue_repo_task repo_id={repo_id:?} task={task_name}");
+    let replaced = executor.spawn_latest(slot, move || {
+        if msg_tx.is_cancelled() {
+            repo_load_trace::trace!(
+                "skip_repo_task_cancelled_before_start repo_id={repo_id:?} task={task_name}"
+            );
             return;
         }
+        if !guard.is_current() {
+            repo_load_trace::trace!(
+                "skip_repo_task_stale_selection repo_id={repo_id:?} task={task_name}"
+            );
+            return;
+        }
+        repo_load_trace::trace!("start_repo_task repo_id={repo_id:?} task={task_name}");
         task(repo, msg_tx, guard);
-    })
+        repo_load_trace::trace!("finish_repo_task repo_id={repo_id:?} task={task_name}");
+    });
+    if replaced {
+        repo_load_trace::trace!("replace_queued_repo_task repo_id={repo_id:?} task={task_name}");
+    }
+    true
 }
 
 #[cfg(test)]
@@ -141,6 +168,123 @@ mod selected_diff_guard_tests {
         let stale_target =
             SelectedDiffLoadGuard::new(thread_state, repo_id, target("src/main.rs"), 7);
         assert!(!stale_target.is_current());
+    }
+
+    /// The repo-load trace explains slow or stuck loads, so selected-diff work
+    /// must record when it is queued, replaced, skipped, started and finished.
+    /// The trace target is read from the environment once per process, so the
+    /// scenario runs in a child test process with tracing enabled.
+    #[test]
+    fn selected_diff_loads_are_repo_load_traced() {
+        const CHILD: &str = "GITCOMET_TEST_SELECTED_DIFF_TRACE";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let trace_path = dir.path().join("repo-load.log");
+            let name = concat!(module_path!(), "::selected_diff_loads_are_repo_load_traced");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name.split_once("::").unwrap().1, "--nocapture"])
+                .env(CHILD, "1")
+                .env("GITCOMET_REPO_LOAD_TRACE", &trace_path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            let trace = std::fs::read_to_string(&trace_path).unwrap_or_default();
+            let events: Vec<&str> = trace
+                .lines()
+                .filter_map(|line| line.split_once("] ").map(|(_, event)| event))
+                .filter(|event| event.contains("task=selected_diff_"))
+                .collect();
+            assert_eq!(
+                events,
+                [
+                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_patch",
+                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_file_text",
+                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_patch",
+                    "replace_queued_repo_task repo_id=RepoId(1) task=selected_diff_patch",
+                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_submodule_summary",
+                    "repo_task_missing_handle repo_id=RepoId(2) task=selected_diff_file_image",
+                    "start_repo_task repo_id=RepoId(1) task=selected_diff_patch",
+                    "finish_repo_task repo_id=RepoId(1) task=selected_diff_patch",
+                    "skip_repo_task_stale_selection repo_id=RepoId(1) task=selected_diff_file_text",
+                    "skip_repo_task_cancelled_before_start repo_id=RepoId(1) task=selected_diff_submodule_summary",
+                ],
+                "full trace:\n{trace}"
+            );
+            return;
+        }
+
+        let repo_id = RepoId(1);
+        let selected = target("src/lib.rs");
+        let thread_state = thread_state_with_target(repo_id, selected.clone(), 1);
+        let executor = TaskExecutor::new(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        executor.spawn(move || {
+            let _ = release_rx.recv();
+        });
+        let slots = super::super::super::executor::SelectedDiffSlots::default();
+        let mut repos: RepoMap = FxHashMap::default();
+        repos.insert(
+            repo_id,
+            Arc::new(crate::store::tests::DummyRepo::new(
+                "/tmp/selected-diff-trace-test",
+            )),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let msg_tx = StoreWorkerSender::for_test_msg_sender(tx);
+        let load = |patch, text, summary, image| SelectedDiffLoadOptions {
+            load_patch_diff: patch,
+            load_file_text: text,
+            preview_text_side: None,
+            load_submodule_summary: summary,
+            load_file_image: image,
+        };
+        let schedule = |repo_id, msg_tx: &StoreWorkerSender, rev, options| {
+            schedule_load_selected_diff(
+                &executor,
+                &slots,
+                &repos,
+                Arc::clone(&thread_state),
+                msg_tx.clone(),
+                repo_id,
+                (selected.clone(), rev),
+                CancellationToken::new(),
+                options,
+            );
+        };
+
+        schedule(repo_id, &msg_tx, 1, load(true, true, false, false));
+        // A refresh while the worker is busy replaces the queued patch load and
+        // leaves the queued file-text load stale.
+        {
+            let mut state = thread_state.write().unwrap();
+            Arc::make_mut(&mut state).repos[0]
+                .diff_state
+                .diff_target_rev = 2;
+        }
+        schedule(repo_id, &msg_tx, 2, load(true, false, false, false));
+        let cancelled = CancellationToken::new();
+        let cancelled_tx = msg_tx.with_repo_load_guard(repo_id, 0, cancelled.clone());
+        schedule(repo_id, &cancelled_tx, 2, load(false, false, true, false));
+        cancelled.cancel();
+        schedule(RepoId(2), &msg_tx, 2, load(false, false, false, true));
+
+        release_tx.send(()).unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        executor.spawn(move || done_tx.send(()).unwrap());
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("queued loads finish");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Msg::Internal(crate::msg::InternalMsg::DiffLoaded { .. }))
+        ));
+        assert!(rx.try_recv().is_err(), "skipped loads send nothing");
     }
 }
 
@@ -2106,21 +2250,81 @@ pub(super) fn schedule_load_diff_file_image(
 
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
+    slots: &super::super::executor::SelectedDiffSlots,
     repos: &RepoMap,
     thread_state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    target: DiffTarget,
-    target_rev: u64,
+    selection: (DiffTarget, u64),
     cancellation: CancellationToken,
     options: SelectedDiffLoadOptions,
 ) {
+    let (target, target_rev) = selection;
     let guard = SelectedDiffLoadGuard::new(thread_state, repo_id, target.clone(), target_rev);
+    if options.load_patch_diff {
+        let target = target.clone();
+        let msg_tx = msg_tx.clone();
+        let guard = guard.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            &slots.patch,
+            "selected_diff_patch",
+            repos,
+            repo_id,
+            msg_tx,
+            guard,
+            move |repo, msg_tx, guard| {
+                // UI consumes this parsed diff through paged/lazy row adapters.
+                let result = repo.diff_parsed_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
+    if options.load_file_text {
+        let target = target.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            &slots.file_text,
+            "selected_diff_file_text",
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_file_text_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
     if options.load_submodule_summary {
         let target = target.clone();
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
+            &slots.submodule_summary,
+            "selected_diff_submodule_summary",
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2146,6 +2350,8 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
+            &slots.file_image,
+            "selected_diff_file_image",
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2171,6 +2377,8 @@ pub(super) fn schedule_load_selected_diff(
         let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
+            &slots.preview_text,
+            "selected_diff_preview_text",
             repos,
             repo_id,
             msg_tx.clone(),
@@ -2186,55 +2394,6 @@ pub(super) fn schedule_load_selected_diff(
                         repo_id,
                         target,
                         side,
-                        result,
-                    }),
-                );
-            },
-        );
-    }
-    if options.load_file_text {
-        let target = target.clone();
-        let cancellation = cancellation.clone();
-        spawn_with_selected_diff_guard(
-            executor,
-            repos,
-            repo_id,
-            msg_tx.clone(),
-            guard.clone(),
-            move |repo, msg_tx, guard| {
-                let result = repo.diff_file_text_cancellable(&target, &cancellation);
-                if !guard.is_current() {
-                    return;
-                }
-                send_or_log(
-                    &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
-                        repo_id,
-                        target,
-                        result,
-                    }),
-                );
-            },
-        );
-    }
-    if options.load_patch_diff {
-        spawn_with_selected_diff_guard(
-            executor,
-            repos,
-            repo_id,
-            msg_tx,
-            guard,
-            move |repo, msg_tx, guard| {
-                // UI consumes this parsed diff through paged/lazy row adapters.
-                let result = repo.diff_parsed_cancellable(&target, &cancellation);
-                if !guard.is_current() {
-                    return;
-                }
-                send_or_log(
-                    &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
-                        repo_id,
-                        target,
                         result,
                     }),
                 );

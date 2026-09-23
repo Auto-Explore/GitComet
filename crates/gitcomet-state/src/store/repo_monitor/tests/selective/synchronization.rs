@@ -213,7 +213,7 @@ fn drain_stop_cancels_pending_acknowledgements() {
 #[test]
 fn native_sync_positive_checks_use_operation_unique_paths() {
     let (_temp, root) = repository();
-    let monitor = RunningMonitor::start(&root);
+    let monitor = RunningMonitor::start_for_unique_path(&root);
     for cycle in 0..4 {
         let path = root.join(format!("operation-{cycle}.txt"));
         let change = monitor.expect_change(&path, || fs::write(&path, "unique edit").unwrap());

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run five paired production backend probes against unchanged repository snapshots."""
+"""Run paired production backend probes against unchanged repository snapshots."""
 import argparse
 import hashlib
 import json
@@ -31,7 +31,10 @@ def main():
     parser.add_argument('--repository', type=Path, action='append', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profile', choices=['test', 'release'], required=True)
+    parser.add_argument("--pairs", type=int, default=5)
     args = parser.parse_args()
+    if args.pairs < 1:
+        parser.error("--pairs must be positive")
     binaries = {phase: {'path': str(getattr(args, phase).resolve()),
                         'sha256': hashlib.sha256(getattr(args, phase).read_bytes()).hexdigest()}
                 for phase in ['before', 'after']}
@@ -45,7 +48,7 @@ def main():
     reports = []
     for repo_number, repo in enumerate(metadata['repositories']):
         samples = {'before': [], 'after': []}
-        for pair in range(5):
+        for pair in range(args.pairs):
             # Alternate execution order to avoid always assigning a warmer cache to after.
             for phase in (['before', 'after'] if pair % 2 == 0 else ['after', 'before']):
                 if repository_metadata(Path(repo['path'])) != repo:

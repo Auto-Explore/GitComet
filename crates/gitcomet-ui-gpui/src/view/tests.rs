@@ -122,6 +122,11 @@ fn pump_until(
             let _ = window.draw(app);
         });
         cx.run_until_parked();
+        // Pumping can complete the awaited task synchronously. Do not impose
+        // another real-time polling interval once the condition is satisfied.
+        if ready(cx) {
+            return;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
 }

@@ -113,10 +113,25 @@ impl Render for MainPaneView {
         } else {
             self.history_view.clone().into_any_element()
         };
+        let search_action = std::mem::take(&mut self.diff_search_probe_render);
+        crate::ui_probe::action_phase(search_action, "rendered", || {
+            serde_json::json!({
+                "window":format!("{:?}", window.window_handle().window_id()),
+                "revision":self.diff_search_debounce_seq, "matches":self.diff_search_matches.len()
+            })
+        });
         // The historical-browse treatment lives inside `diff_view` now — as a
         // tint on the file header and the content surface, see
         // `historical_browse_content_active`.
         div().size_full().relative().child(inner)
+    }
+}
+
+impl Drop for MainPaneView {
+    fn drop(&mut self) {
+        if let Some(token) = &self.diff_search_cancellation {
+            token.cancel();
+        }
     }
 }
 

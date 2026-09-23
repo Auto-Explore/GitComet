@@ -106,9 +106,12 @@ fn run(path: &Path, repeats: usize) {
         let token = CancellationToken::new();
         let start = Instant::now();
         let status = repo.status_cancellable(&token).unwrap();
+        let status_elapsed = start.elapsed();
+        let stats_start = Instant::now();
         let stats = repo
             .uncommitted_line_stats_for_status_cancellable(&status, &token)
             .unwrap();
+        let stats_elapsed = stats_start.elapsed();
         let elapsed = start.elapsed();
         assert!(status.staged.is_empty());
         assert_eq!(status.unstaged.len(), usize::from(kind == "dirty-lfs"));
@@ -130,8 +133,10 @@ fn run(path: &Path, repeats: usize) {
             original_mtime
         );
         println!(
-            "iteration={iteration} elapsed_ms={:.3} unstaged={} stats={stats:?}",
+            "iteration={iteration} elapsed_ms={:.3} status_ms={:.3} line_stats_ms={:.3} unstaged={} stats={stats:?}",
             elapsed.as_secs_f64() * 1000.0,
+            status_elapsed.as_secs_f64() * 1000.0,
+            stats_elapsed.as_secs_f64() * 1000.0,
             status.unstaged.len()
         );
     }

@@ -71,7 +71,7 @@ fn worktree_preview_materialized_source_arc(source_text: &SharedString) -> Arc<s
 }
 
 #[inline]
-fn worktree_preview_materialized_line_raw_text(
+pub(super) fn worktree_preview_materialized_line_raw_text(
     source_text: &SharedString,
     range: std::ops::Range<usize>,
 ) -> gitcomet_core::file_diff::FileDiffLineText {

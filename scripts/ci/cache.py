@@ -29,7 +29,9 @@ def cache_keys(context):
     dependencies = hashlib.sha256((ROOT / "Cargo.lock").read_bytes())
     compatibility = hashlib.sha256(context.encode())
     for directory, dirs, files in os.walk(ROOT):
-        dirs[:] = sorted(name for name in dirs if name not in ("target", ".git"))
+        # Local comparison checkouts are independent workspaces. Traversing
+        # them both slows hashing and makes their manifests invalidate ours.
+        dirs[:] = sorted(name for name in dirs if name not in ("target", ".git", ".worktrees"))
         if "Cargo.toml" not in files:
             continue
         path = Path(directory) / "Cargo.toml"
