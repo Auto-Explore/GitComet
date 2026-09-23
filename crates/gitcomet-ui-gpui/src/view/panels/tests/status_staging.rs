@@ -874,10 +874,25 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     let merge = std::process::Command::new("git")
         .arg("-C")
         .arg(dir.path())
-        .args(["merge", "--no-commit", "theirs"])
+        // Merge checks the committer identity even with --no-commit.
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "merge",
+            "--no-commit",
+            "theirs",
+        ])
         .output()
         .unwrap();
-    assert!(!merge.status.success());
+    // Exit code 1 is the expected conflict; anything else is a broken fixture.
+    assert_eq!(
+        merge.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
     let status = backend.status().unwrap();
