@@ -91,7 +91,7 @@ impl MainPaneView {
     /// current text width (which depends on whether the annotation column is
     /// shown).
     pub(in crate::view) fn invalidate_diff_wrap_visible_cache(&mut self) {
-        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows = Arc::from([]);
         self.diff_wrap_visible_cache_key = None;
     }
 }

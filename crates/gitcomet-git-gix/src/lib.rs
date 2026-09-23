@@ -1,4 +1,6 @@
 mod backend;
+#[doc(hidden)]
+pub mod command_trace;
 mod ignore;
 mod open;
 mod repo;

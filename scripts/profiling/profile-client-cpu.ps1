@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [Parameter(Mandatory)][string]$Repository,
-    [string]$Binary = (Join-Path $PSScriptRoot '../target/release-with-debug/gitcomet.exe'),
+    [string]$Binary = (Join-Path $PSScriptRoot '../../target/release-with-debug/gitcomet.exe'),
     [ValidateSet('idle','scroll','activate')][string]$Scenario = 'idle',
     [ValidateRange(1, 86400)][int]$Seconds = 45,
     [switch]$VerifySignatures,
@@ -135,7 +135,7 @@ try {
     }
     $samples | Export-Csv -LiteralPath (Join-Path $outputDir 'resources.csv') -NoTypeInformation
     $events | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputDir 'events.json')
-    @{label=$Label;scenario=$Scenario;repository=$Repository;requested_seconds=$Seconds;app_pid=if($app){$app.Id}else{$null};capture_pid=$capture.Id;actions=$actionCount;outcome=$outcome;probe=(-not $NoProbe);signatures=(-not $NoSignatures);binary=$Binary;binary_sha256=(Get-FileHash -LiteralPath $Binary).Hash;git_head=(git -C (Split-Path -Parent $PSScriptRoot) rev-parse HEAD);session=$session} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $outputDir 'metadata.json')
+    @{label=$Label;scenario=$Scenario;repository=$Repository;requested_seconds=$Seconds;app_pid=if($app){$app.Id}else{$null};capture_pid=$capture.Id;actions=$actionCount;outcome=$outcome;probe=(-not $NoProbe);signatures=(-not $NoSignatures);binary=$Binary;binary_sha256=(Get-FileHash -LiteralPath $Binary).Hash;git_head=(git -C (Join-Path $PSScriptRoot '../..') rev-parse HEAD);session=$session} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $outputDir 'metadata.json')
 }
 if ($outcome -ne 'completed' -or $nativeExit -ne 0 -or $testWindow -eq 0) {
     throw "Invalid capture: outcome=$outcome exit=$nativeExit window=$testWindow"

@@ -536,8 +536,9 @@ impl SidebarPaneView {
             )
         });
         let store_for_search = Arc::clone(&store);
-        let search_input_subscription =
-            cx.observe(&file_browser_search_input, move |this, input, cx| {
+        let search_input_subscription = cx.subscribe(
+            &file_browser_search_input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
                 // The TextInput entity owns its text (uncontrolled). We only read
                 // the typed value and mirror it into app state for filtering — we
                 // never write back into the input on a keystroke, which would reset
@@ -553,7 +554,8 @@ impl SidebarPaneView {
                     });
                 }
                 cx.notify();
-            });
+            },
+        );
 
         let branch_filter_input = cx.new(|cx| {
             TextInput::new_inert(
@@ -566,8 +568,9 @@ impl SidebarPaneView {
                 cx,
             )
         });
-        let branch_filter_subscription =
-            cx.observe(&branch_filter_input, move |this, input, cx| {
+        let branch_filter_subscription = cx.subscribe(
+            &branch_filter_input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
                 // The input owns its text (uncontrolled); mirror it into the
                 // local query used by the row builder, never writing back.
                 let text = input.read(cx).text().to_string();
@@ -578,7 +581,8 @@ impl SidebarPaneView {
                     this.sync_popover_branch_filter(cx);
                     cx.notify();
                 }
-            });
+            },
+        );
 
         let collapsed_popover_filter_input = cx.new(|cx| {
             TextInput::new_inert(
@@ -591,8 +595,9 @@ impl SidebarPaneView {
                 cx,
             )
         });
-        let collapsed_popover_filter_subscription =
-            cx.observe(&collapsed_popover_filter_input, move |this, input, cx| {
+        let collapsed_popover_filter_subscription = cx.subscribe(
+            &collapsed_popover_filter_input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
                 // Uncontrolled, like the sidebar filter: mirror the text into the
                 // query the popover presentation builder reads, never writing back.
                 let text = input.read(cx).text().to_string();
@@ -602,7 +607,8 @@ impl SidebarPaneView {
                         .set_offset(gpui::point(px(0.0), px(0.0)));
                     cx.notify();
                 }
-            });
+            },
+        );
 
         let mut this = Self {
             store,
