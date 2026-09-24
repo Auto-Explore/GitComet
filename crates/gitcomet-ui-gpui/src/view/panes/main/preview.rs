@@ -1183,14 +1183,10 @@ impl MainPaneView {
                 path.clone()?
             }
         };
-        let document = match path.strip_prefix(&workdir) {
-            Ok(relative) => relative.to_path_buf(),
-            Err(_) if path.is_relative() => path,
-            Err(_) => return None,
-        };
+        let document = crate::view::rows::markdown_preview_document_path(&workdir, &path)?;
         Some(crate::view::rows::MarkdownImageRoot {
             workdir: Arc::from(workdir.as_path()),
-            document: Arc::from(document.as_path()),
+            document: Arc::from(document),
         })
     }
 
@@ -1201,11 +1197,7 @@ impl MainPaneView {
     ) -> Option<crate::view::rows::MarkdownImageRoot> {
         let workdir = self.active_repo()?.spec.workdir.clone();
         let path = self.conflict_resolver.path.as_ref()?;
-        let document = match path.strip_prefix(&workdir) {
-            Ok(relative) => relative,
-            Err(_) if path.is_relative() => path.as_path(),
-            Err(_) => return None,
-        };
+        let document = crate::view::rows::markdown_preview_document_path(&workdir, path)?;
         Some(crate::view::rows::MarkdownImageRoot {
             workdir: Arc::from(workdir.as_path()),
             document: Arc::from(document),

@@ -18,21 +18,48 @@ fn repeated_directory_recreation_stops_stale_callbacks_and_keeps_crud_visible() 
     let directory = root.join("recreated/nested");
     fs::create_dir_all(&directory).unwrap();
     let monitor = RunningMonitor::start(&root);
+    let recreated = root.join("recreated");
     for cycle in 0..3 {
-        fs::remove_dir_all(root.join("recreated")).unwrap();
-        fs::create_dir_all(&directory).unwrap();
-        monitor.refresh();
+        // The edit and delete targets exist before the settle, so each awaited
+        // path below is touched once afterwards and needs no quiet window
+        // (3 s apiece on Windows/macOS). Between cycles only nested files
+        // change, so no late event names `recreated` itself.
+        let edited = directory.join(format!("edited-{cycle}.txt"));
+        let removed = directory.join(format!("removed-{cycle}.txt"));
+        assert!(
+            monitor
+                .expect_change(&recreated, || {
+                    fs::remove_dir_all(&recreated).unwrap();
+                    fs::create_dir_all(&directory).unwrap();
+                    fs::write(&edited, "created").unwrap();
+                    fs::write(&removed, "created").unwrap();
+                })
+                .worktree
+        );
+        monitor.settle();
         assert_native_quiet(&monitor);
-        let file = directory.join(format!("source-{cycle}.txt"));
-        fs::write(&file, "created").unwrap();
-        monitor.refresh();
-        fs::write(&file, "modified in place").unwrap();
-        monitor.refresh();
+        let created = directory.join(format!("created-{cycle}.txt"));
+        assert!(
+            monitor
+                .expect_change(&created, || fs::write(&created, "created").unwrap())
+                .worktree
+        );
+        assert!(
+            monitor
+                .expect_change(&edited, || fs::write(&edited, "modified in place").unwrap())
+                .worktree
+        );
         let renamed = directory.join(format!("renamed-{cycle}.txt"));
-        fs::rename(&file, &renamed).unwrap();
-        monitor.refresh();
-        fs::remove_file(&renamed).unwrap();
-        monitor.refresh();
+        assert!(
+            monitor
+                .expect_change(&renamed, || fs::rename(&created, &renamed).unwrap())
+                .worktree
+        );
+        assert!(
+            monitor
+                .expect_change(&removed, || fs::remove_file(&removed).unwrap())
+                .worktree
+        );
     }
 }
 

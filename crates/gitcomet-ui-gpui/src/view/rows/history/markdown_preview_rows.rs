@@ -366,13 +366,24 @@ pub(in crate::view) fn markdown_preview_local_link_target(
         } => (path.as_path(), FileSource::Commit(commit_id.clone())),
         DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => return None,
     };
-    let document_path = if document_path.is_absolute() {
-        document_path.strip_prefix(workdir).ok()?
-    } else {
-        document_path
-    };
+    let document_path = markdown_preview_document_path(workdir, document_path)?;
     let path = markdown_preview_local_link_path(document_path, destination)?;
     Some((source, path))
+}
+
+/// The previewed document's repo-relative path, or `None` when it lies
+/// outside `workdir`. Windows calls `\docs\a.md` (rooted, no drive) relative,
+/// but it is not repo-relative, so any root or prefix counts as outside.
+pub(in crate::view) fn markdown_preview_document_path<'a>(
+    workdir: &std::path::Path,
+    path: &'a std::path::Path,
+) -> Option<&'a std::path::Path> {
+    use std::path::Component;
+
+    match path.components().next() {
+        Some(Component::Prefix(_) | Component::RootDir) => path.strip_prefix(workdir).ok(),
+        _ => Some(path),
+    }
 }
 
 /// Whether the file a resolved local link names is missing, or `None` when

@@ -907,6 +907,8 @@ fn local_link_target_reads_from_the_tree_the_document_came_from() {
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileSource};
     use std::path::{Path, PathBuf};
 
+    // Rooted but not absolute on Windows (no drive); paths under it must still
+    // resolve the way absolute ones do.
     let workdir = Path::new("/repo");
     let resolve = |target: &DiffTarget, destination: &str| {
         markdown_preview_local_link_target(workdir, target, destination)
