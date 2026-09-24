@@ -130,6 +130,12 @@
             "alpha": 0.66
           }
         },
+        "notice": {
+          "background": "#f8fafcff",
+          "border": "#96701eff",
+          "foreground": "#111827ff",
+          "secondary": "#465166ff"
+        },
         "shadow": "#0b1220ff",
         "graph_lane_palette": null,
         "graph_lane_hues": [
@@ -452,6 +458,12 @@
             "hex": "#9ea5b4ff",
             "alpha": 0.55
           }
+        },
+        "notice": {
+          "background": { "hex": "#f2a53aff", "alpha": 0.13 },
+          "border": { "hex": "#f2a53aff", "alpha": 0.30 },
+          "foreground": "#eff1f5ff",
+          "secondary": "#9ea5b4ff"
         },
         "shadow": "#000000ff",
         "graph_lane_palette": null,

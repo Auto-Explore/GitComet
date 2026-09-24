@@ -3742,7 +3742,9 @@ fn rename_branch_prompt_existing_name_opens_collision_dialog(cx: &mut gpui::Test
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(!cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()));
-    assert!(store.snapshot().branch_exists_prompt.is_none());
+    wait_until("rename collision prompt cancellation", || {
+        store.snapshot().branch_exists_prompt.is_none()
+    });
 }
 
 #[gpui::test]
