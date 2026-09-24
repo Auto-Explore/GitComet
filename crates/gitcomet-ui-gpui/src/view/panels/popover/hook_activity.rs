@@ -662,7 +662,7 @@ fn operation_detail(
         .child(svg_icon(
             "icons/terminal.svg",
             theme.colors.foreground.secondary,
-            px(12.0),
+            ui_scale.px(12.0),
         ))
         .child(
             div()
