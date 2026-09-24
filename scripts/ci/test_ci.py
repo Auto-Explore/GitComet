@@ -196,8 +196,14 @@ class CacheTests(unittest.TestCase):
             lock = root / "Cargo.lock"
             lock.write_text("dependencies v1")
             before = cache.cache_keys("windows-arm64-workspace-ci-test")
-            self.assertEqual(before["source-restore-key"], f"{cache.PREFIX}sources-windows-")
+            self.assertTrue(before["source-restore-key"].startswith(f"{cache.PREFIX}sources-windows-"))
             self.assertTrue(before["source-key"].startswith(before["source-restore-key"]))
+            # A packing change must not prefix-restore bundles the old packer wrote.
+            packer = root / "cache.py"
+            packer.write_text("changed packer")
+            with patch.object(cache, "__file__", str(packer)):
+                self.assertFalse(cache.cache_keys("windows-arm64-workspace-ci-test")["source-key"]
+                                 .startswith(before["source-restore-key"]))
             lock.write_text("dependencies v2")
             after = cache.cache_keys("windows-arm64-workspace-ci-test")
             self.assertNotEqual(before["key"], after["key"])
@@ -258,6 +264,9 @@ class CacheTests(unittest.TestCase):
         sources = entry("gitcomet-ci-v2-sources-windows-new")
         obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources])
         self.assertCountEqual(obsolete, [native, bench])
+        layout = dict(entry("gitcomet-ci-v2-sources-windows-layout-new"), created_at="2026-09-20")
+        obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources, layout])
+        self.assertCountEqual(obsolete, [native, bench, sources])
 
     def test_roundtrip_preserves_dependency_and_source_but_no_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -277,6 +286,26 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(result.read_text(), "source")
             self.assertEqual(int(result.stat().st_mtime), 1700000000)
             self.assertFalse((restored / "credentials.toml").exists())
+
+    def test_crate_target_modules_survive_but_checkout_builds_do_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / "cargo-home"
+            # cc ships src/target/*.rs; dropping them broke every cc build restored from cache.
+            module = cargo / "registry/src/index.crates.io-0000/cc-1.4.7/src/target/apple.rs"
+            checkout = cargo / "git/checkouts/demo-0000/abcdef0"
+            nested = checkout / "crates/demo/src/target/mod.rs"
+            artifact = checkout / "target/debug/libdemo.rlib"
+            for path in (module, nested, artifact):
+                path.parent.mkdir(parents=True)
+                path.write_text("content")
+            bundle = root / "bundle.tar.gz"
+            cache.write_bundle(bundle, list(cache.source_entries(cargo)))
+            restored = root / "restored"
+            cache.restore(bundle, restored, root / "target")
+            for kept in (module, nested):
+                self.assertEqual((restored / kept.relative_to(cargo)).read_text(), "content")
+            self.assertFalse((restored / checkout.relative_to(cargo) / "target").exists())
 
     def test_archive_cannot_escape_destination(self):
         with tempfile.TemporaryDirectory() as directory:

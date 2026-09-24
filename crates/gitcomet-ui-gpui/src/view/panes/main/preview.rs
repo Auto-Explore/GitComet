@@ -1,3 +1,4 @@
+use super::file_disk::{DiskIdentity, DiskStamp, DiskSurface, disk_content_hash, disk_stamp};
 use super::*;
 use crate::view::markdown_preview::{
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
@@ -45,6 +46,10 @@ struct IndexedWorktreePreview {
     line_starts: Arc<[usize]>,
     line_flags: Arc<[u8]>,
     source_text: Option<SharedString>,
+    /// Taken before the read, so a write during it reads as a change.
+    stamp: DiskStamp,
+    /// Of the materialized text, computed here on the read's thread.
+    content_hash: Option<u64>,
 }
 
 #[inline]
@@ -117,7 +122,7 @@ fn validate_utf8_chunk_streaming(
 /// past the ceiling this re-reads the file plainly rather than refusing it.
 pub(super) fn read_worktree_file_for_editing(
     path: &std::path::Path,
-) -> Result<SharedString, String> {
+) -> Result<(SharedString, DiskStamp, u64), String> {
     let len = std::fs::metadata(path)
         .map_err(|e| match e.kind() {
             // Reachable from a commit's file list: the editor always opens the
@@ -137,13 +142,17 @@ pub(super) fn read_worktree_file_for_editing(
         ));
     }
     let indexed = index_utf8_worktree_preview_file(path)?;
-    if let Some(text) = indexed.source_text {
-        return Ok(text);
+    let stamp = indexed.stamp;
+    if let (Some(text), Some(hash)) = (indexed.source_text, indexed.content_hash) {
+        return Ok((text, stamp, hash));
     }
     // Between the parse ceiling and the editor's own limit the indexer stops
     // materializing, so read it plainly. Already validated as UTF-8 above.
     std::fs::read_to_string(path)
-        .map(SharedString::from)
+        .map(|text| {
+            let hash = disk_content_hash(text.as_bytes());
+            (SharedString::from(text), stamp, hash)
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -156,6 +165,7 @@ fn index_utf8_worktree_preview_file(
             "Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string(),
         );
     }
+    let stamp = disk_stamp(&metadata);
 
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut reader =
@@ -232,12 +242,17 @@ fn index_utf8_worktree_preview_file(
         .transpose()
         .map_err(|_| "File is not valid UTF-8; binary preview is not supported.".to_string())?
         .map(SharedString::from);
+    let content_hash = source_text
+        .as_ref()
+        .map(|text| disk_content_hash(text.as_bytes()));
 
     Ok(IndexedWorktreePreview {
         source_len,
         line_starts: Arc::from(line_starts),
         line_flags: Arc::from(line_flags),
         source_text,
+        stamp,
+        content_hash,
     })
 }
 
@@ -1709,9 +1724,15 @@ impl MainPaneView {
         self.worktree_preview = Loadable::Loading;
         self.reset_worktree_preview_source_state();
         self.worktree_preview_source_path = Some(source_path.clone());
-        self.reset_diff_horizontal_scroll_state();
-        self.worktree_preview_scroll
-            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        // A reload asked for by the disk notice keeps the reader's place;
+        // everything else starts at the top.
+        let restore_scroll_offset = self.worktree_preview_restore_scroll_offset.take();
+        if restore_scroll_offset.is_none() {
+            self.reset_diff_horizontal_scroll_state();
+            self.worktree_preview_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        }
+        let disk_revs = self.current_file_disk_revs();
 
         cx.spawn(async move |view, cx| {
             let index_preview = {
@@ -1729,10 +1750,14 @@ impl MainPaneView {
                 {
                     return;
                 }
-                this.worktree_preview_scroll
-                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                if restore_scroll_offset.is_none() {
+                    this.worktree_preview_scroll
+                        .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                }
                 match result {
                     Ok(preview) => {
+                        this.worktree_preview_disk =
+                            DiskIdentity::loaded(preview.stamp, preview.content_hash);
                         if let Some(source_text) = preview.source_text {
                             this.set_worktree_preview_ready_materialized_source(
                                 display_path.clone(),
@@ -1752,6 +1777,18 @@ impl MainPaneView {
                                 cx,
                             );
                         }
+                        // The list clamps it on the next paint if the file
+                        // got shorter; `cx.notify()` below is that paint.
+                        if let Some(offset) = restore_scroll_offset {
+                            this.worktree_preview_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .set_offset(offset);
+                        }
+                        // After the ready state: only a ready preview is a
+                        // surface the catch-up check can look at.
+                        this.file_disk_read_landed(DiskSurface::Preview, disk_revs, cx);
                     }
                     Err(e) => {
                         this.worktree_preview = Loadable::Error(e);

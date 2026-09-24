@@ -1516,9 +1516,9 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
 
 #[gpui::test]
 async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext) {
-    // Regression: a save bumps the repo's status revision, which the clean-buffer
-    // disk-follow treats as "the file may have moved". That path used to blank
-    // the input before re-reading, so every save re-seated the buffer — resetting
+    // Regression: a save is followed by a disk check (the write bumps the
+    // repo's revisions), and an earlier version of that follow-up blanked the
+    // input before re-reading, so every save re-seated the buffer — resetting
     // the caret to 0 and clearing undo, once per auto-save.
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

@@ -5261,6 +5261,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
                         text_fingerprint: 1,
                         saved_fingerprint: 2,
                         first_dirty_line: Some(0),
+                        disk: Default::default(),
                     },
                 );
                 pane.sync_unsaved_file_edits_rev(cx);
@@ -5438,6 +5439,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
                         text_fingerprint: 1,
                         saved_fingerprint: 2,
                         first_dirty_line: Some(0),
+                        disk: Default::default(),
                     },
                 );
                 pane.sync_unsaved_file_edits_rev(cx);
