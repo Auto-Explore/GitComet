@@ -860,6 +860,8 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     let _guard = lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "main"]);
+    // Git for Windows defaults to autocrlf=true, so the backend's checkout would write CRLF.
+    git(dir.path(), &["config", "core.autocrlf", "false"]);
     for path in ["a.txt", "b.txt"] {
         std::fs::write(dir.path().join(path), "base\n").unwrap();
     }
