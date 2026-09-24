@@ -19,7 +19,7 @@ pub(super) fn schedule(
         tx,
         move |repo, tx| {
             let cancellation = work.cancellation.with_parent(parent);
-            let result = repo.history_authors(work.mode, &cancellation);
+            let result = repo.history_authors(work.mode, &work.solo, &cancellation);
             util::send_or_log(
                 &tx,
                 Msg::HistoryAuthors(HistoryAuthorsMsg::Loaded {

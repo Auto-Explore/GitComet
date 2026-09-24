@@ -33,6 +33,7 @@ mod remote;
 mod remote_web_picker;
 mod repo_picker_row;
 mod repo_tab;
+mod solo;
 mod stash;
 mod status_file;
 mod submodule;
@@ -1092,6 +1093,13 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
+            }
+            ContextMenuAction::ToggleHistorySolo { repo_id, target } => {
+                self.store
+                    .dispatch(Msg::ToggleHistorySolo { repo_id, target });
+            }
+            ContextMenuAction::SetHistorySolo { repo_id, solo } => {
+                self.store.dispatch(Msg::SetHistorySolo { repo_id, solo });
             }
             ContextMenuAction::SetCommitFileSort { list, sort } => {
                 self.details_pane.update(cx, |pane, cx| {

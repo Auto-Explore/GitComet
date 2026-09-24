@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::LogPage;
+use gitcomet_core::domain::{HistorySoloSet, LogPage};
 use gitcomet_core::services::{
     CancellationToken, GitRepository, HistoryReadRequest, HistoryReadResult, HistorySnapshot,
 };
@@ -17,9 +17,20 @@ fn read(
     author: Option<&str>,
     request: HistoryReadRequest,
 ) -> HistoryReadResult {
+    read_soloed(repo, mode, author, &Default::default(), request)
+}
+
+fn read_soloed(
+    repo: &dyn GitRepository,
+    mode: HistoryMode,
+    author: Option<&str>,
+    solo: &HistorySoloSet,
+    request: HistoryReadRequest,
+) -> HistoryReadResult {
     repo.read_history(
         mode,
         author,
+        solo,
         &request,
         &CancellationToken::new(),
         &mut |_| {},
@@ -299,7 +310,13 @@ fn snapshot_refresh_real_repository() {
 fn assert_index_matches(repo: &dyn GitRepository, mode: HistoryMode, author: Option<&str>) {
     let cancellation = CancellationToken::new();
     let index = repo
-        .build_history_index(mode, author, &cancellation, &mut |_| {})
+        .build_history_index(
+            mode,
+            author,
+            &Default::default(),
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let (page, snapshot) = first(repo, mode, author, 10_000);
@@ -393,7 +410,13 @@ fn indexed_history_matches_queries_and_retains_immutable_ranges() {
     }
     let cancellation = CancellationToken::new();
     let index = repo
-        .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+        .build_history_index(
+            HistoryMode::AllBranches,
+            None,
+            &Default::default(),
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let before = repo
@@ -484,7 +507,13 @@ fn indexed_history_large_repository_benchmark() {
     let cancellation = CancellationToken::new();
     let started = Instant::now();
     let index = repo
-        .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+        .build_history_index(
+            HistoryMode::AllBranches,
+            None,
+            &Default::default(),
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     eprintln!(
@@ -580,7 +609,7 @@ fn indexed_history_reads_headers_only_when_needed_and_decodes_ranges_once() {
                 let _capture = capture();
                 let cancel = CancellationToken::new();
                 let index = repo
-                    .build_history_index(mode, author, &cancel, &mut |_| {})
+                    .build_history_index(mode, author, &Default::default(), &cancel, &mut |_| {})
                     .unwrap()
                     .unwrap();
                 if author.is_none() {
@@ -607,7 +636,13 @@ fn indexed_range_reads_reopen_their_object_store_every_sixty_four_blocks() {
     let repo = GixBackend.open(dir.path()).unwrap();
     let cancel = CancellationToken::new();
     let index = repo
-        .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+        .build_history_index(
+            HistoryMode::FullReachable,
+            None,
+            &Default::default(),
+            &cancel,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let _capture = capture();
@@ -667,6 +702,7 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
             .build_history_index(
                 HistoryMode::AllBranches,
                 None,
+                &Default::default(),
                 &CancellationToken::new(),
                 &mut |_| {},
             )

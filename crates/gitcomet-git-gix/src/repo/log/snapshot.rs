@@ -8,6 +8,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
+        solo: &HistorySoloSet,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
@@ -15,16 +16,13 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
+        let tips = self.history_tips(&repo, mode, solo, Some(cancellation))?;
         let author = AuthorFilter::new(author);
         // These are exact, unambiguous Debug encodings of typed inputs, not a
         // sampled hash or filesystem timestamp. The same captured values feed
         // every batch below, even if refs change while the walk is running.
-        let snapshot = HistorySnapshot(format!("{mode:?}|{author:?}|{tips:?}|{shallow:?}").into());
+        let snapshot =
+            HistorySnapshot(format!("{mode:?}|{author:?}|{solo:?}|{tips:?}|{shallow:?}").into());
         cancellation.check_cancelled()?;
         match request {
             HistoryReadRequest::Refresh {
@@ -45,7 +43,7 @@ impl GixRepo {
         let _scope = gitcomet_core::git_ops_trace::scope(
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
-        let seed = if mode == HistoryMode::AllBranches {
+        let seed = if !solo.is_empty() || mode == HistoryMode::AllBranches {
             super::super::LogPageSeed::Tips(Arc::clone(&tips))
         } else {
             super::super::LogPageSeed::Head(tips.first().copied())

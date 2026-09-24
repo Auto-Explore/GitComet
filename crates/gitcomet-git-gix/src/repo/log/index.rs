@@ -11,6 +11,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
+        solo: &HistorySoloSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
     ) -> Result<Option<HistoryIndexHandle>> {
@@ -20,13 +21,10 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
+        let tips = self.history_tips(&repo, mode, solo, Some(cancellation))?;
         let author = AuthorFilter::new(author);
-        let snapshot = HistorySnapshot(format!("{mode:?}|{author:?}|{tips:?}|{shallow:?}").into());
+        let snapshot =
+            HistorySnapshot(format!("{mode:?}|{author:?}|{solo:?}|{tips:?}|{shallow:?}").into());
         let mut builder =
             HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
         let mut walk = new_log_paged_walk(

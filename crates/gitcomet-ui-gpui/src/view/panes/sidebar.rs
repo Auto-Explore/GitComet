@@ -437,6 +437,11 @@ struct SidebarNotifyFingerprint {
     /// has to repaint when it changes — nothing else in this fingerprint moves
     /// when the user opens a different file.
     diff_target_rev: u64,
+    /// The soloed refs. The sidebar draws them in mustard and puts a banner
+    /// above the branch list, and neither is part of the cached row data — both
+    /// are computed at render time — so the pane has to be told to repaint when
+    /// the set changes. Hashed because this fingerprint is `Copy`.
+    history_solo_hash: u64,
 }
 
 impl SidebarNotifyFingerprint {
@@ -462,6 +467,14 @@ impl SidebarNotifyFingerprint {
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(|r| r.diff_state.diff_target_rev)
             .unwrap_or(0);
+        let history_solo_hash = active_repo_id
+            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
+            .map(|r| {
+                let mut hasher = FxHasher::default();
+                r.history_state.history_solo.hash(&mut hasher);
+                hasher.finish()
+            })
+            .unwrap_or(0);
         Self {
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
@@ -472,6 +485,7 @@ impl SidebarNotifyFingerprint {
             active_workspace_badges_hash,
             file_browser_rev,
             diff_target_rev,
+            history_solo_hash,
         }
     }
 }
@@ -2053,6 +2067,73 @@ impl SidebarPaneView {
     /// A slim always-visible filter field pinned above the branch tree. It
     /// narrows the Local/Remote (and pinned) sections live; a query force-expands
     /// those sections so matches are always visible.
+    /// The mustard banner above the branch list, shown only while the history is
+    /// soloed.
+    ///
+    /// The sidebar is where solo is switched on, one ref at a time, so it is
+    /// also where the way out belongs: the banner says how much of the
+    /// repository is currently in view and clears the whole set in one click.
+    fn render_solo_banner(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::Div> {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
+        let repo = self.active_repo()?;
+        let repo_id = repo.id;
+        let soloed = repo.history_state.history_solo.len();
+        if soloed == 0 {
+            return None;
+        }
+        // The denominator is the repository's local branches: the banner answers
+        // "how much of my work am I looking at", not "how many refs exist".
+        let local_branches = repo.branches.ready().map_or(0, |branches| branches.len());
+        let mustard = theme.colors.status.warning.foreground;
+        let store = self.store.clone();
+
+        Some(
+            div().px(scaled_px(8.0)).pb(scaled_px(6.0)).child(
+                div()
+                    .id("branch_sidebar_solo_banner")
+                    .debug_selector(|| "branch_sidebar_solo_banner".to_string())
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(scaled_px(6.0))
+                    .px(scaled_px(8.0))
+                    .py(scaled_px(4.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(mustard)
+                    .bg(with_alpha(mustard, if theme.is_dark { 0.18 } else { 0.22 }))
+                    .text_size(theme.ui_text(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(mustard)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .debug_selector(|| "branch_sidebar_solo_banner_count".to_string())
+                            .child(format!("Soloing {soloed}/{local_branches}")),
+                    )
+                    .child(
+                        components::Button::new("branch_sidebar_solo_banner_stop", "Stop Soloing")
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .on_click(theme, cx, move |_this, _e, _w, _cx| {
+                                store.dispatch(Msg::SetHistorySolo {
+                                    repo_id,
+                                    solo: gitcomet_core::domain::HistorySoloSet::default(),
+                                });
+                            }),
+                    ),
+            ),
+        )
+    }
+
     fn render_branch_filter_bar(
         &mut self,
         theme: AppTheme,
@@ -2132,6 +2213,7 @@ impl SidebarPaneView {
         let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         let filter_bar = self.render_branch_filter_bar(theme, cx);
+        let solo_banner = self.render_solo_banner(theme, cx);
         let Some(presentation) = self.branch_sidebar_presentation_cached() else {
             return div()
                 .flex()
@@ -2190,6 +2272,7 @@ impl SidebarPaneView {
             .h_full()
             .min_h(px(0.0))
             .child(filter_bar)
+            .children(solo_banner)
             .child(panel_body)
             .into_any()
     }
@@ -3578,6 +3661,41 @@ mod tests {
         state.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
 
         assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    /// The mustard row colours and the "Soloing x/y" banner are computed while
+    /// rendering, not stored in the cached rows, so without this the sidebar
+    /// keeps painting the pre-solo colours until something else happens to
+    /// repaint it.
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_the_history_solo() {
+        use gitcomet_core::domain::{HistorySolo, HistorySoloSet};
+
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+        let unsoloed = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[0].history_state.history_solo =
+            HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
+        let soloed = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(soloed, unsoloed, "soloing a ref must repaint the sidebar");
+
+        // Adding a second ref is also a repaint: the banner's count changes.
+        state.repos[0].history_state.history_solo = HistorySoloSet::from_iter([
+            HistorySolo::local_branch("feature"),
+            HistorySolo::local_branch("main"),
+        ]);
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), soloed);
+
+        state.repos[0].history_state.history_solo = HistorySoloSet::default();
+        assert_eq!(
+            SidebarNotifyFingerprint::from_state(&state),
+            unsoloed,
+            "clearing the solo returns the sidebar to its unsoloed painting"
+        );
     }
 
     #[test]

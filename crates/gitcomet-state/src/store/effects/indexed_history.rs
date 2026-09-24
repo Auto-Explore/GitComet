@@ -31,12 +31,14 @@ pub(super) fn schedule(
                     seq,
                     mode,
                     author,
+                    solo,
                     cancellation,
                 } => {
                     let cancellation = cancellation.with_parent(parent);
                     let result = repo.build_history_index(
                         mode,
                         author.as_deref(),
+                        &solo,
                         &cancellation,
                         &mut |progress| {
                             util::send_or_log(

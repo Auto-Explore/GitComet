@@ -10,17 +10,14 @@ impl GixRepo {
     pub(in super::super) fn history_authors_impl(
         &self,
         mode: HistoryMode,
+        solo: &HistorySoloSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
-        let snapshot = HistorySnapshot(format!("{mode:?}|{tips:?}|{shallow:?}").into());
+        let tips = self.history_tips(&repo, mode, solo, Some(cancellation))?;
+        let snapshot = HistorySnapshot(format!("{mode:?}|{solo:?}|{tips:?}|{shallow:?}").into());
         if let Some(cached) = self
             .history_authors_cache
             .lock()

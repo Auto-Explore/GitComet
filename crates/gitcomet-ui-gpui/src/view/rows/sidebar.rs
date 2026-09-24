@@ -537,6 +537,13 @@ impl SidebarPaneView {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.70 } else { 0.78 },
         );
+        // A soloed ref is drawn in mustard so the sidebar shows, at a glance,
+        // which refs the history it sits next to is actually built from.
+        let history_solo = this
+            .active_repo()
+            .map(|repo| repo.history_state.history_solo.clone())
+            .unwrap_or_default();
+        let solo_color = theme.colors.status.warning.foreground;
         let selected_branch = this.selected_branch().cloned();
         let (selected_commit, selected_branch_commit_id) =
             this.active_repo().map_or((None, None), |repo| {
@@ -1520,7 +1527,13 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
-                    let remote_color = branch_tree_color(BranchSection::Remote);
+                    let remote_color = if history_solo
+                        .contains(&gitcomet_core::domain::HistorySolo::remote(name.as_ref()))
+                    {
+                        solo_color
+                    } else {
+                        branch_tree_color(BranchSection::Remote)
+                    };
                     let remote_name: String = name.as_ref().to_owned();
                     let context_menu_invoker: SharedString =
                         format!("remote_menu_{}_{}", repo_id.0, remote_name).into();
@@ -1764,13 +1777,18 @@ impl SidebarPaneView {
                         });
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
                     let row_debug_selector = row_group.as_ref().to_owned();
-                    let branch_text_color = if muted {
+                    let branch_is_soloed = history_solo.contains(&solo_target_for_branch(&target));
+                    let branch_text_color = if branch_is_soloed {
+                        solo_color
+                    } else if muted {
                         theme.colors.foreground.secondary
                     } else {
                         branch_tree_color(section)
                     };
                     let branch_selected_bg = selected_branch_row_bg(theme);
-                    let branch_selected_label_color = if branch_selected {
+                    let branch_selected_label_color = if branch_is_soloed {
+                        solo_color
+                    } else if branch_selected {
                         selected_branch_label_color(theme)
                     } else {
                         branch_text_color
@@ -2938,6 +2956,18 @@ impl DetailsPaneView {
     }
 }
 
+/// The solo target a sidebar branch row stands for. The row already carries the
+/// exact menu target, which is what keeps `origin/feat` from being guessed at
+/// when a remote's own name contains a slash.
+fn solo_target_for_branch(target: &BranchMenuTarget) -> gitcomet_core::domain::HistorySolo {
+    match target {
+        BranchMenuTarget::Local { name } => gitcomet_core::domain::HistorySolo::local_branch(name),
+        BranchMenuTarget::Remote { remote, branch } => {
+            gitcomet_core::domain::HistorySolo::remote_branch(remote, branch)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -3106,6 +3136,7 @@ mod tests {
             .request_log(gitcomet_state::model::PendingLogLoad {
                 scope: repo.history_state.history_scope,
                 author: None,
+                solo: Default::default(),
                 limit: 200,
                 cursor: None,
             })

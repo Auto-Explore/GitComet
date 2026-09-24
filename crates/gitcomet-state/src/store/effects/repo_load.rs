@@ -659,6 +659,7 @@ pub(super) fn schedule_load_log(
     seq: crate::model::LogLoadSeq,
     scope: LogScope,
     author: Option<String>,
+    solo: gitcomet_core::domain::HistorySoloSet,
     cursor: Option<LogCursor>,
     request: gitcomet_core::services::HistoryReadRequest,
     cancellation: CancellationToken,
@@ -685,6 +686,7 @@ pub(super) fn schedule_load_log(
             let result = repo.read_history(
                 scope,
                 author.as_deref(),
+                &solo,
                 &request,
                 &cancellation,
                 &mut on_chunk,

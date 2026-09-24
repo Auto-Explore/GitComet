@@ -396,6 +396,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
         .read_history(
             LogScope::AllBranches,
             None,
+            &Default::default(),
             &HistoryReadRequest::Page {
                 limit: 6_000,
                 cursor: None,

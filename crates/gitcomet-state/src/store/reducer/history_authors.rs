@@ -19,6 +19,7 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryAuthorsMsg) -> Vec<Effe
                 return Vec::new();
             }
             let source = HistoryAuthorsState::source_for(repo);
+            let solo = repo.history_state.history_solo.clone();
             let authors = &mut repo.history_state.authors;
             authors.cancellation.cancel();
             authors.cancellation = CancellationToken::new();
@@ -30,6 +31,7 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryAuthorsMsg) -> Vec<Effe
                 repo_id,
                 seq: authors.seq,
                 mode: repo.history_state.history_scope,
+                solo,
                 cancellation: authors.cancellation.clone(),
             })]
         }
