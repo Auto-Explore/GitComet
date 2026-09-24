@@ -1,5 +1,17 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    // Web links a Ctrl/Cmd+click followed, in order.
+    static OPENED_WEB_LINKS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Web links followed since the last call, which clears them.
+#[cfg(test)]
+pub(in crate::view) fn take_opened_web_links_for_tests() -> Vec<String> {
+    OPENED_WEB_LINKS.with(|links| links.take())
+}
+
 #[derive(Clone, Copy)]
 enum DiffTextOffsetBias {
     Start,
@@ -949,7 +961,8 @@ impl MainPaneView {
     }
 
     /// Open the link menu when a plain click lands on a link in the rendered
-    /// markdown preview, and report whether it did.
+    /// markdown preview, and report whether it did. With `follow` (Ctrl/Cmd
+    /// held) the link opens straight away instead.
     ///
     /// A double or triple click is still a text selection — only a single
     /// click follows the link, so selecting the words of a link keeps working.
@@ -959,6 +972,7 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
         click_count: usize,
+        follow: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
@@ -987,6 +1001,9 @@ impl MainPaneView {
         else {
             return false;
         };
+        if follow && self.follow_markdown_preview_link(&kind, cx) {
+            return true;
+        }
         // Anchor on the link's own box, so the menu opens flush under the words
         // it describes rather than under the row that happens to hold them.
         let anchor = self
@@ -1002,6 +1019,8 @@ impl MainPaneView {
     ///
     /// The picture's own box is what the menu wants to hang off; the click
     /// point stands in for the frames where it has not been painted yet.
+    /// With `follow` (Ctrl/Cmd held) the link opens straight away instead.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::view) fn open_markdown_preview_link_menu(
         &mut self,
         region: DiffTextRegion,
@@ -1010,6 +1029,7 @@ impl MainPaneView {
         load_remote_image_url: Option<SharedString>,
         anchor_bounds: Option<Bounds<Pixels>>,
         position: Point<Pixels>,
+        follow: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -1019,6 +1039,7 @@ impl MainPaneView {
             &destination,
             load_remote_image_url.clone(),
         ) {
+            Some(kind) if follow && self.follow_markdown_preview_link(&kind, cx) => {}
             Some(kind) => {
                 self.open_markdown_preview_link_popover(kind, anchor_bounds, position, window, cx)
             }
@@ -1046,6 +1067,67 @@ impl MainPaneView {
             Some(bounds) => self.open_popover_for_bounds(kind, bounds, window, cx),
             None => self.open_popover_at(kind, position, window, cx),
         }
+    }
+
+    /// Run what a link menu's main entry would, and report whether it did.
+    /// A missing file has nothing to open, so its menu still explains why.
+    fn follow_markdown_preview_link(
+        &mut self,
+        kind: &PopoverKind,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        use crate::view::LocalFileLinkSource;
+
+        match kind {
+            PopoverKind::WebLinkMenu { url, .. } => {
+                self.open_markdown_preview_web_link(url.clone(), cx);
+            }
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing: false,
+                ..
+            } => self.store.dispatch(match source {
+                LocalFileLinkSource::Version(source) => Msg::OpenFileContent {
+                    repo_id: *repo_id,
+                    source: source.clone(),
+                    path: path.clone(),
+                },
+                LocalFileLinkSource::ParentOf(commit_id) => Msg::OpenFileAtCommitParent {
+                    repo_id: *repo_id,
+                    commit_id: commit_id.clone(),
+                    path: path.clone(),
+                },
+            }),
+            _ => return false,
+        }
+        true
+    }
+
+    fn open_markdown_preview_web_link(&mut self, url: SharedString, cx: &mut gpui::Context<Self>) {
+        // Tests record the link rather than start a browser.
+        #[cfg(test)]
+        {
+            let _ = cx;
+            OPENED_WEB_LINKS.with(|links| links.borrow_mut().push(url.to_string()));
+        }
+        #[cfg(not(test))]
+        crate::view::platform_open::spawn_launch(
+            cx,
+            move || crate::view::platform_open::open_url_blocking(&url),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.push_toast(
+                            crate::view::components::ToastKind::Error,
+                            format!("Failed to open link: {err}"),
+                            cx,
+                        );
+                    });
+                }
+            },
+        );
     }
 
     pub(in super::super::super) fn handle_diff_text_mouse_down(

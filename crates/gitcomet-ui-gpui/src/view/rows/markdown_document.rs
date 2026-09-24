@@ -723,6 +723,7 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
                         region,
                         event.position,
                         event.click_count,
+                        event.modifiers.secondary(),
                         window,
                         cx,
                     );
@@ -1666,6 +1667,7 @@ fn render_inline_image(
                     let load_remote_image_url = load_remote_image_url.clone();
                     let bounds = painted_bounds.get();
                     let position = event.position;
+                    let follow = event.modifiers.secondary();
                     view.update(cx, |this, cx| {
                         this.open_markdown_preview_link_menu(
                             region,
@@ -1674,6 +1676,7 @@ fn render_inline_image(
                             load_remote_image_url,
                             bounds,
                             position,
+                            follow,
                             window,
                             cx,
                         );

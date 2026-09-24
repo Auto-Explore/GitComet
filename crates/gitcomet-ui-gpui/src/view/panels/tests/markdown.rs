@@ -2597,6 +2597,65 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let source = "[![one](badge.svg)](https://example.com/badge)\n[![two](badge.svg)](https://example.com/other)\n";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8832),
+        "markdown_ctrl_click_badge",
+        source,
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/badge.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"20\"><rect width=\"80\" height=\"20\"/></svg>",
+    )
+    .expect("write the badge the link points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a picture");
+    let badge = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{source_byte}"
+        )))
+        .expect("the badge is drawn");
+    crate::view::panes::main::take_opened_web_links_for_tests();
+
+    simulate_modified_click(cx, badge.center(), 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+
+    assert_eq!(
+        crate::view::panes::main::take_opened_web_links_for_tests(),
+        vec!["https://example.com/badge".to_string()],
+        "Ctrl/Cmd+click follows the link the badge wraps"
+    );
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(popover.is_none(), "without a menu, got {popover:?}");
+        assert!(
+            !this.main_pane.read(app).diff_text_selecting,
+            "and without arming a selection"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -6012,6 +6071,61 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
     fixture.cleanup();
 }
 
+#[gpui::test]
+fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8827),
+        "markdown_ctrl_click_web_link",
+        "[the docs](https://example.com/docs)\n",
+    );
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+    crate::view::panes::main::take_opened_web_links_for_tests();
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+
+    assert_eq!(
+        crate::view::panes::main::take_opened_web_links_for_tests(),
+        vec!["https://example.com/docs".to_string()],
+        "Ctrl/Cmd+click opens the link in the browser"
+    );
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(popover.is_none(), "and skips the menu, got {popover:?}");
+        assert!(
+            !this.main_pane.read(app).diff_text_has_selection(),
+            "following the link is not a text selection"
+        );
+    });
+
+    // A plain click still asks first.
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    assert!(
+        crate::view::panes::main::take_opened_web_links_for_tests().is_empty(),
+        "a plain click opens nothing by itself"
+    );
+    let popover = popover_kind(cx, &view);
+    assert!(
+        matches!(popover, Some(PopoverKind::WebLinkMenu { .. })),
+        "a plain click opens the menu, got {popover:?}"
+    );
+
+    fixture.cleanup();
+}
+
 /// Click the single entry a local-file link menu offers, once the menu has
 /// been drawn.
 fn click_open_in_gitcomet(cx: &mut gpui::VisualTestContext) {
@@ -6201,6 +6315,104 @@ fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppC
             "nothing to open, so the pane stays on the document"
         );
     });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8828),
+        "markdown_ctrl_click_local_link",
+        "[other](./other.md)\n",
+    );
+    std::fs::write(fixture.workdir.join("docs/other.md"), "# Other\n").expect("write link target");
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    assert!(
+        popover.is_none(),
+        "Ctrl/Cmd+click skips the menu, got {popover:?}"
+    );
+
+    // As with the menu entry, the store's worker does the navigating.
+    let expected_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: std::path::PathBuf::from("docs/other.md"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let navigated = cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            let repo = snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == gitcomet_state::model::RepoId(8828));
+            repo.map(|repo| {
+                (
+                    repo.diff_state.diff_target.clone(),
+                    repo.diff_state.content_preview,
+                )
+            })
+        });
+        if navigated == Some((Some(expected_target.clone()), true)) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Ctrl/Cmd+click must open the linked file as a content preview, got {navigated:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn ctrl_clicking_a_link_to_a_missing_file_still_opens_the_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8829),
+        "markdown_ctrl_click_missing_local_link",
+        "[gone](../missing.txt)\n",
+    );
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+
+    // Nothing to open, so the greyed-out entry is left to say why.
+    let popover = popover_kind(cx, &view);
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::LocalFileLinkMenu { missing: true, .. })
+        ),
+        "a dangling link falls back to its menu, got {popover:?}"
+    );
 
     fixture.cleanup();
 }
@@ -6578,6 +6790,54 @@ fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::Test
         heading.top(),
         viewport.top()
     );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8831),
+        "markdown_ctrl_click_anchor_link",
+        &anchor_link_fixture_source("Trust a GPG key"),
+    );
+    let link_row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| row.text.contains("Trust a GPG key"))
+        .expect("the table row with the link");
+    let on_link = point_on_link_in_row(cx, &view, link_row);
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        window.simulate_next_frame(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "an anchor opens no menu, got {popover:?}"
+        );
+        let pane = this.main_pane.read(app);
+        let scroll = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        assert!(
+            scroll.offset().y < px(0.0),
+            "Ctrl/Cmd+click scrolls to the heading like a plain click"
+        );
+    });
 
     fixture.cleanup();
 }
@@ -8019,6 +8279,17 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
             }) if *id == commit_id
         ),
         "the new side's links open at the commit, got {popover:?}"
+    );
+    close_popover(cx, &view);
+
+    // Ctrl/Cmd+click opens the parent version the menu would have offered.
+    let on_link = point_on_link_in_region(cx, &view, row, DiffTextRegion::SplitLeft);
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    assert!(
+        popover.is_none(),
+        "Ctrl/Cmd+click on the old side skips the menu, got {popover:?}"
     );
 
     std::fs::remove_dir_all(&workdir).expect("cleanup");

@@ -27,6 +27,8 @@ pub(in crate::view) use diff_search::{
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl MainPaneView`.
 pub(in crate::view) use core_impl::MainPaneInit;
+#[cfg(test)]
+pub(in crate::view) use diff_text::take_opened_web_links_for_tests;
 pub(in crate::view) use file_disk::{
     DiskCheckCause, DiskIdentity, DiskSurface, FileDiskNotice, FileDiskSeen,
 };
