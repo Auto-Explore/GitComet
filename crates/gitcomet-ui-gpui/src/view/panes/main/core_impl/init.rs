@@ -229,7 +229,7 @@ impl MainPaneView {
             );
             input.set_submit_on_enter(true);
             input.set_vertical_scroll_handle(Some(diff_search_scroll.clone()));
-            input.set_vertical_padding(Some(px(4.0)), cx);
+            input.set_vertical_padding(Some(4.0), cx);
             input.set_line_height(
                 Some(ui_scale::design_px_from_percent(
                     18.0,

@@ -3746,6 +3746,90 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
     );
 }
 
+/// Icons are sized in design px, which only zoom through the UI scale; a bare
+/// `px()` holds them at 100% while the buttons around them grow.
+#[gpui::test]
+fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70547);
+    let commit_id = CommitId("1122334455667747".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_icons_follow_ui_scale",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    // Wide and tall enough that nothing collapses into an overflow at 200%.
+    cx.simulate_resize(gpui::size(px(2400.0), px(1400.0)));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    const ICONS: [&str; 8] = [
+        "diff_prev_hunk_icon",
+        "diff_next_hunk_icon",
+        "diff_action_menu_icon",
+        "diff_close_icon",
+        "commit_button_icon",
+        "commit_options_icon",
+        "previous_commit_messages_icon",
+        "change_tracking_unstaged_header_chevron",
+    ];
+    let sizes = |cx: &mut gpui::VisualTestContext| {
+        ICONS.map(|selector| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("expected {selector} to render"))
+                .size
+        })
+    };
+    let normal = sizes(cx);
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+    let zoomed = sizes(cx);
+
+    let unscaled: Vec<String> = ICONS
+        .into_iter()
+        .enumerate()
+        .filter(|(ix, _)| {
+            (zoomed[*ix].width, zoomed[*ix].height)
+                != (normal[*ix].width * 2.0, normal[*ix].height * 2.0)
+        })
+        .map(|(ix, selector)| format!("{selector}: {:?} -> {:?}", normal[ix], zoomed[ix]))
+        .collect();
+    assert!(
+        unscaled.is_empty(),
+        "icons must double at 200% UI scale: {unscaled:#?}"
+    );
+}
+
 #[gpui::test]
 fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -5699,7 +5783,7 @@ fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
-fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
+fn space_keeps_the_diff_when_the_selected_files_cannot_be_staged(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -5758,18 +5842,22 @@ fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
         "staging the selection must consume it"
     );
 
-    // The single-file path would advance the diff to the next unstaged file;
-    // acting on the whole selection clears it instead.
-    wait_until(cx, "the diff selection to be cleared", |cx| {
+    // This fixture has no repository handle, so staging fails. Consuming the
+    // selection must not close the diff or advance it to another file.
+    wait_until(cx, "the staging failure", |cx| {
         cx.update(|_window, app| {
             let snapshot = view.read(app).store.snapshot();
             snapshot
                 .repos
                 .iter()
                 .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| repo.diff_state.diff_target.is_none())
+                .is_some_and(|repo| {
+                    repo.local_actions_in_flight == 0 && repo.feedback.last_error.is_some()
+                })
         })
     });
+    sync_store_snapshot(cx, &view);
+    assert_eq!(active_worktree_diff_target_path(cx, &view), Some(first));
 }
 
 /// Ctrl+S must resolve the multi-file selection before confirming, the way

@@ -216,8 +216,11 @@ fn commit_details_signature_badge(
         .border_color(badge.palette.border)
         .bg(badge.palette.background)
         .child(
-            svg_icon(badge.icon, badge.palette.foreground, px(12.0))
+            gpui::svg()
+                .path(badge.icon)
                 .size(theme.ui_text(12.0))
+                .flex_shrink_0()
+                .text_color(badge.palette.foreground)
                 .debug_selector(|| "commit_details_signature_icon".to_string()),
         )
         .child(
@@ -614,11 +617,12 @@ impl DetailsPaneView {
             }
             DiffArea::Staged => {
                 self.clear_status_multi_selection(repo_id);
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                self.store.dispatch(Msg::UnstagePaths {
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
                     repo_id,
-                    paths: paths.into(),
-                });
+                    DiffArea::Staged,
+                    paths,
+                );
                 cx.notify();
             }
         }
@@ -1510,7 +1514,7 @@ impl DetailsPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1634,7 +1638,7 @@ impl DetailsPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
@@ -1858,7 +1862,7 @@ impl DetailsPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -2075,7 +2079,7 @@ impl DetailsPaneView {
             ("commit_details_message_scroll_surface", repo_id.0),
             ("commit_details_message_scrollbar", repo_id.0),
             self.commit_scroll.clone(),
-            px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX),
+            self.ui_scale().px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX),
         )
         .container_id(("commit_details_message_container", repo_id.0))
         .debug_selector("commit_details_message_scroll_surface")
@@ -2426,11 +2430,14 @@ impl DetailsPaneView {
                 )
                 .child(
                     components::Button::new("commit_details_close", "")
-                        .start_slot(svg_icon(
-                            "icons/generic_close.svg",
-                            theme.colors.foreground.secondary,
-                            px(12.0),
-                        ))
+                        .start_slot(
+                            svg_icon(
+                                "icons/generic_close.svg",
+                                theme.colors.foreground.secondary,
+                                ui_scale.px(12.0),
+                            )
+                            .debug_selector(|| "commit_details_close_icon".to_string()),
+                        )
                         .style(components::ButtonStyle::Transparent)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             // The commit details and diff views are independent
@@ -2795,7 +2802,8 @@ impl DetailsPaneView {
             })
             .unwrap_or(0);
 
-        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
+        let spinner =
+            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, ui_scale.px(14.0));
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
         let icon_muted = with_alpha(
@@ -2926,11 +2934,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .debug_selector(|| "stage_selected_button".to_string())
@@ -2995,13 +3004,15 @@ impl DetailsPaneView {
                 return;
             }
             this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: untracked_paths_for_stage_all.clone(),
-            });
+                DiffArea::Unstaged,
+                untracked_paths_for_stage_all.clone(),
+            );
             cx.notify();
         })
+        .debug_selector(|| "stage_all_untracked_button".to_string())
         .gitcomet_tooltip(theme, "Stage all untracked files".into());
 
         let stage_selected_untracked = components::Button::new(
@@ -3035,11 +3046,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .gitcomet_tooltip(
@@ -3110,6 +3122,7 @@ impl DetailsPaneView {
                 cx,
             );
         })
+        .debug_selector(|| "stage_all_split_unstaged_button".to_string())
         .gitcomet_tooltip(theme, "Stage all unstaged changes".into());
 
         let stage_selected_split_unstaged = components::Button::new(
@@ -3143,11 +3156,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .gitcomet_tooltip(
@@ -3205,13 +3219,15 @@ impl DetailsPaneView {
                 return;
             };
             this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: Default::default(),
-            });
+                DiffArea::Staged,
+                gitcomet_state::msg::RepoPathList::default(),
+            );
             cx.notify();
         })
+        .debug_selector(|| "unstage_all_button".to_string())
         .gitcomet_tooltip(theme, "Unstage all changes".into());
 
         let unstage_selected = components::Button::new(
@@ -3230,13 +3246,15 @@ impl DetailsPaneView {
             if paths.is_empty() {
                 return;
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Staged,
+                paths,
+            );
             cx.notify();
         })
+        .debug_selector(|| "unstage_selected_button".to_string())
         .gitcomet_tooltip(
             theme,
             format!(
@@ -3473,7 +3491,10 @@ impl DetailsPaneView {
                             .whitespace_nowrap()
                             .child(label),
                     )
-                    .child(svg_icon("icons/chevron_down.svg", icon_muted, px(12.0)))
+                    .child(
+                        svg_icon("icons/chevron_down.svg", icon_muted, ui_scale.px(12.0))
+                            .debug_selector(move || format!("{id}_chevron")),
+                    )
                     .on_activate(
                         false,
                         controls::ControlActivation::Action,
@@ -3996,6 +4017,7 @@ impl DetailsPaneView {
     pub(in super::super) fn commit_box(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let commit_in_flight = self
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
@@ -4007,8 +4029,8 @@ impl DetailsPaneView {
         );
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let icon_color = theme.colors.accent.foreground;
-        let icon = |path: &'static str| svg_icon(path, icon_color, px(14.0));
-        let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, px(14.0));
+        let icon = |path: &'static str| svg_icon(path, icon_color, scaled_px(14.0));
+        let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, scaled_px(14.0));
         let commit_label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
             (false, false) => "Commit",
             (false, true) => "Commit changes and Push",
@@ -4048,7 +4070,7 @@ impl DetailsPaneView {
             ("commit_message_scroll_surface", repo_key),
             ("commit_message_scrollbar", repo_key),
             self.commit_message_scroll.clone(),
-            px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
+            scaled_px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
         )
         .container_id(("commit_message_container", repo_key))
         .render(theme, self.commit_message_input.clone());
@@ -4056,16 +4078,17 @@ impl DetailsPaneView {
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key)).into_any_element()
             } else {
-                icon("icons/check.svg").into_any_element()
+                icon("icons/check.svg")
+                    .debug_selector(|| "commit_button_icon".to_string())
+                    .into_any_element()
             })
             .style(components::ButtonStyle::Subtle)
             .disabled(!can_submit_commit);
         let commit_menu = components::Button::new("commit_options", "")
-            .start_slot(svg_icon(
-                "icons/chevron_down.svg",
-                menu_icon_color,
-                px(14.0),
-            ))
+            .start_slot(
+                svg_icon("icons/chevron_down.svg", menu_icon_color, scaled_px(14.0))
+                    .debug_selector(|| "commit_options_icon".to_string()),
+            )
             .style(components::ButtonStyle::Subtle)
             .open(commit_options_active)
             .selected_bg(menu_selected_bg)
@@ -4103,11 +4126,14 @@ impl DetailsPaneView {
         .render(theme, ui_scale_percent)
         .debug_selector(|| "commit_split_button".to_string());
         let previous_messages_menu = components::Button::new("previous_commit_messages", "")
-            .start_slot(svg_icon(
-                "icons/history.svg",
-                previous_messages_icon_color,
-                px(14.0),
-            ))
+            .start_slot(
+                svg_icon(
+                    "icons/history.svg",
+                    previous_messages_icon_color,
+                    scaled_px(14.0),
+                )
+                .debug_selector(|| "previous_commit_messages_icon".to_string()),
+            )
             .style(components::ButtonStyle::Subtle)
             .open(previous_messages_active)
             .selected_bg(menu_selected_bg)

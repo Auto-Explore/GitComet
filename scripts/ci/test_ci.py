@@ -780,10 +780,108 @@ class RunnerTests(unittest.TestCase):
                 (Path(directory) / "workspace-ui-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
                 self.assertEqual(runner.run_suite("workspace", "ui", suite, threads=threads), 0)
                 command = run.call_args.args[1]
+                # Captured output lands under the failing test; skip notices stay in the log.
+                self.assertEqual(command[1:4], ["--format", "pretty", "--show-output"])
+                self.assertNotIn("--nocapture", command)
+                self.assertTrue(run.call_args.kwargs["dots"])
                 if threads is None:
                     self.assertNotIn("--test-threads", command)
                 else:
                     self.assertEqual(command[-2:], ["--test-threads", str(threads)])
+
+    def test_smoke_runs_keep_uncaptured_full_console_output(self):
+        suite = {"binary-path": "unused", "cwd": runner.ROOT, "testcases": {"gui_default": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0) as run:
+            (Path(directory) / "app-smoke-gui_default.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+            runner.run_suite("app", "smoke", suite, test_filter="gui_default")
+        self.assertIn("--nocapture", run.call_args.args[1])
+        self.assertFalse(run.call_args.kwargs["dots"])
+
+    def dot_console(self, text, chunk):
+        console = runner.DotConsole()
+        with redirect_stdout(io.StringIO()) as out:
+            for index in range(0, len(text), chunk):
+                console.write(text[index:index + chunk])
+            console.close()
+        return out.getvalue()
+
+    def test_dot_console_hides_libtest_passes_and_keeps_failure_detail(self):
+        log = ("\nrunning 153 tests\n" + "".join(f"test ui::pass_{index} ... ok\n" for index in range(150)) +
+               "test ui::skipped ... ignored, needs a display\n"
+               "test ui::hangs has been running for over 60 seconds\n"
+               "unattributed background output\n"
+               "test ui::broken ... FAILED\n"
+               "\nsuccesses:\n\n---- ui::pass_1 stdout ----\nskipping corpus: submodule missing\n\n"
+               "successes:\n    ui::pass_0\n    ui::pass_1\n"
+               "\nfailures:\n\n---- ui::broken stdout ----\n\nthread 'ui::broken' panicked at src/lib.rs:1:1:\n"
+               "  left: \"ours\\r\\n\"\n\nfailures:\n    ui::broken\n\n"
+               "test result: FAILED. 150 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out\n")
+        # Live mode tails arbitrary chunks, so lines split mid-way must still classify.
+        for chunk in (7, len(log)):
+            with self.subTest(chunk=chunk):
+                console = self.dot_console(log, chunk)
+                self.assertIn("running 153 tests\n" + "." * 100 + " 100/153\n" + "." * 50 + "i 151/153\n"
+                              "test ui::hangs has been running for over 60 seconds\n"
+                              "unattributed background output\ntest ui::broken ... FAILED\n", console)
+                self.assertIn("thread 'ui::broken' panicked at src/lib.rs:1:1:\n  left: \"ours\\r\\n\"\n", console)
+                self.assertIn("failures:\n    ui::broken\n\ntest result: FAILED.", console)
+                for hidden in ("... ok", "ui::pass_1 stdout", "skipping corpus", "    ui::pass_0"):
+                    self.assertNotIn(hidden, console)
+
+    def test_dot_console_keeps_slow_failed_and_output_bearing_nextest_results(self):
+        green, reset = "\x1b[32;1m", "\x1b[0m"
+        scoreboard = f"{green}        PASS{reset} [   0.200s] (  2/5) core scoreboard"
+        slow = f"{green}        PASS{reset} [  12.500s] (  3/5) state slow_one"
+        log = ("    Starting 5 tests across 2 binaries\n"
+               f"{green}        PASS{reset} [   0.100s] (  1/5) core fast_one\n"
+               f"{scoreboard}\n  stdout ───\n    running 1 test\n    budget gate: <= 105\n\n{slow}\n"
+               "        SLOW [> 60.000s] (─────────) state hanging\n"
+               "        FAIL [   0.300s] (  4/5) state broken\n"
+               "  stderr ───\n    thread 'broken' panicked at src/lib.rs:1:1:\n"
+               f"{green}        PASS{reset} [   0.100s] (  5/5) state fast_two\n"
+               "────────────\n     Summary [  61.000s] 5 tests run: 4 passed (1 slow), 1 failed\n")
+        console = self.dot_console(log, 5)
+        self.assertEqual(console, "    Starting 5 tests across 2 binaries\n.. 2/5\n"
+                         f"{scoreboard}\n  stdout ───\n    running 1 test\n    budget gate: <= 105\n\n{slow}\n"
+                         "        SLOW [> 60.000s] (─────────) state hanging\n"
+                         "        FAIL [   0.300s] (  4/5) state broken\n"
+                         "  stderr ───\n    thread 'broken' panicked at src/lib.rs:1:1:\n. 5/5\n"
+                         "────────────\n     Summary [  61.000s] 5 tests run: 4 passed (1 slow), 1 failed\n")
+
+    def test_dot_run_filters_the_console_but_keeps_the_complete_log(self):
+        output = "running 2 tests\ntest a ... ok\ntest b ... FAILED\n\nfailures:\n    b\n\ntest result: FAILED. 1 passed; 1 failed;\n"
+        child = [sys.executable, "-c", f"import sys; sys.stdout.write({output!r}); sys.exit(101)"]
+        for live in (True, False):
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runner, "REPORTS", Path(directory)), patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), \
+                    redirect_stdout(io.StringIO()) as console:
+                self.assertEqual(runner.run("dots", child, check=False, live=live, dots=True), 101)
+                self.assertEqual((Path(directory) / "dots.log").read_text(encoding="utf-8"), output)
+            # Skip the ::group:: and echoed command lines, which quote the child's source.
+            shown = console.getvalue().split("\n", 2)[2]
+            self.assertTrue(shown.startswith("running 2 tests\n. 1/2\ntest b ... FAILED\n"), shown)
+            self.assertNotIn("test a ... ok", shown)
+            self.assertIn("dots.log in the uploaded", shown)
+
+    def test_failed_tests_become_error_annotations(self):
+        suite = {"binary-path": "unused", "cwd": runner.ROOT, "testcases": {"broken": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=101), \
+                redirect_stdout(io.StringIO()) as console:
+            (Path(directory) / "workspace-ui-all.log").write_text(
+                "test ui::broken ... FAILED\n\nfailures:\n    ui::broken\n\ntest result: FAILED. 0 passed; 1 failed;\n")
+            self.assertEqual(runner.run_suite("workspace", "ui", suite), 101)
+            junit = Path(directory) / "junit.xml"
+            junit.write_text('<testsuites><testsuite name="core"><testcase name="passes"/>'
+                             '<testcase name="fails"><failure message="panicked"/></testcase>'
+                             '<testcase name="crashes"><error message="SIGSEGV"/></testcase></testsuite></testsuites>')
+            runner.annotate_failures("workspace-nextest", runner.failed_junit_cases(junit))
+        self.assertEqual(console.getvalue().splitlines(), [
+            "::error title=Test failed::workspace-ui-all: ui::broken",
+            "::error title=Test failed::workspace-nextest: core fails",
+            "::error title=Test failed::workspace-nextest: core crashes",
+        ])
 
     def test_ignored_or_unreported_test_is_not_counted_as_executed(self):
         suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core",

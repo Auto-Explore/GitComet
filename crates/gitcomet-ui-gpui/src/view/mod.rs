@@ -257,6 +257,7 @@ pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
+mod status_actions;
 mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;
