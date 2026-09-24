@@ -3192,10 +3192,7 @@ pub(crate) struct MainPaneView {
     /// stale range.
     pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
-    pub(in crate::view) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
-    pub(in crate::view) approved_remote_markdown_image_urls: Arc<FxHashSet<SharedString>>,
-    pub(super) remote_markdown_image_approval_revision: u64,
-    pub(super) remote_markdown_image_summary_cache: RefCell<RemoteMarkdownImageSummaryCache>,
+    pub(in crate::view) remote_markdown_images: RemoteMarkdownImages,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
@@ -3413,19 +3410,13 @@ pub(crate) struct MainPaneView {
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
 
-    pub(in crate::view) file_markdown_preview_cache_repo_id: Option<RepoId>,
-    pub(in crate::view) file_markdown_preview_cache_rev: u64,
-    pub(in crate::view) file_markdown_preview_cache_content_signature: Option<u64>,
-    pub(in crate::view) file_markdown_preview_cache_target: Option<DiffTarget>,
-    pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
-    pub(in crate::view) file_markdown_preview_seq: u64,
-    pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
-    /// Row the quick-search cursor wants revealed in the flowing markdown
-    /// preview, shared with the renderer that measures it. See
-    /// [`rows::MarkdownPreviewRevealRequest`].
-    pub(in crate::view) markdown_preview_reveal: rows::MarkdownPreviewRevealRequest,
-    /// The rendered-preview link under the pointer, underlined while hovered.
-    pub(in crate::view) markdown_preview_hovered_link: Option<rows::MarkdownPreviewHoveredLink>,
+    pub(in crate::view) diff_markdown: DiffMarkdownPreview,
+    pub(in crate::view) markdown_interaction: MarkdownPreviewInteraction,
+    /// Frames drawn, which is how often the preview surface re-reads the disk.
+    pub(in crate::view) main_pane_surface_frame: u64,
+    /// The preview surface this frame, once resolved; see
+    /// [`MainPaneView::main_pane_surface`].
+    pub(in crate::view) main_pane_surface_memo: RefCell<Option<MainPaneSurfaceMemo>>,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
@@ -3458,32 +3449,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_search_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) worktree_preview_content_rev: u64,
-    pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
-    pub(in crate::view) worktree_markdown_preview_source_rev: u64,
-    pub(in crate::view) worktree_markdown_preview: LoadableMarkdownDoc,
-    /// Sizes read from the headers of the pictures the rendered preview draws,
-    /// so a picture that has not decoded yet can still hold its box open.
-    pub(in crate::view) worktree_markdown_preview_picture_sizes: rows::MarkdownPreviewPictureSizes,
-    /// Where each sideways-scrolling block of the rendered preview is scrolled
-    /// to, so its scrollbar has something to read.
-    pub(in crate::view) worktree_markdown_preview_block_scrolls: rows::MarkdownDocumentBlockScrolls,
-    /// The same for the rendered markdown diff's old, new, and inline
-    /// documents, whose row indices overlap.
-    pub(in crate::view) markdown_diff_block_scrolls: [rows::MarkdownDocumentBlockScrolls; 3],
-    /// Where the rendered markdown diff drew its changes last frame, which
-    /// preview and layout that frame drew, and the one a follow-up frame was
-    /// already asked for to measure.
-    pub(in crate::view) markdown_diff_change_extents: rows::MarkdownChangeExtents,
-    pub(in crate::view) markdown_diff_change_extents_key: Option<(u64, DiffViewMode)>,
-    pub(in crate::view) markdown_diff_change_extents_requested: Option<(u64, DiffViewMode)>,
-    /// Block grouping of the document the rendered preview last drew, so it is
-    /// not re-derived on every frame.
-    pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,
-    /// Pictures in the rendered preview that are still decoding and already
-    /// have someone waiting to repaint the pane when they finish.
-    pub(in crate::view) worktree_markdown_preview_image_waits: FxHashSet<gpui::Resource>,
-    pub(in crate::view) worktree_markdown_preview_seq: u64,
-    pub(in crate::view) worktree_markdown_preview_inflight: Option<u64>,
+    pub(in crate::view) worktree_markdown: WorktreeMarkdownPreview,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,

@@ -469,7 +469,7 @@ impl PopoverHost {
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_image_policy
+                    self.main_pane.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(web_link::model(url, load_remote_image_url))
@@ -482,7 +482,7 @@ impl PopoverHost {
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_image_policy
+                    self.main_pane.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(local_file_link::model(

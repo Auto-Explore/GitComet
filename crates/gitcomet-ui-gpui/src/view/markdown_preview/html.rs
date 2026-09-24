@@ -7,24 +7,23 @@ pub(crate) enum HtmlHandling {
     DetailsSummary(String),
     StartInlineStyle(MarkdownInlineStyle),
     EndInlineStyle(MarkdownInlineStyle),
+    /// `<a href>`: link style plus the destination, when the preview can open it.
+    StartLink(Option<SharedString>),
+    EndLink,
     AppendText(String),
     /// The `<img>` tags a fragment holds, each with the byte offset of its tag
-    /// inside that fragment and the `alt` describing it if it cannot be drawn.
-    Images(Vec<(usize, MarkdownImage, String)>),
+    /// inside that fragment, the `alt` describing it if it cannot be drawn, and
+    /// the `<a href>` it sits in within the same fragment.
+    Images(Vec<HtmlImage>),
     AppendLiteral,
 }
 
-pub(crate) fn current_row_kind(
-    list_item_stack: &[MarkdownPreviewRowKind],
-    blockquote_level: u8,
-) -> MarkdownPreviewRowKind {
-    if let Some(kind) = list_item_stack.last().copied() {
-        kind
-    } else if blockquote_level > 0 {
-        MarkdownPreviewRowKind::BlockquoteLine
-    } else {
-        MarkdownPreviewRowKind::Paragraph
-    }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HtmlImage {
+    pub(crate) tag_offset: usize,
+    pub(crate) image: MarkdownImage,
+    pub(crate) alt: String,
+    pub(crate) link_url: Option<SharedString>,
 }
 
 pub(crate) fn markdown_alert_kind_from_blockquote_kind(
@@ -37,17 +36,6 @@ pub(crate) fn markdown_alert_kind_from_blockquote_kind(
         pulldown_cmark::BlockQuoteKind::Warning => MarkdownAlertKind::Warning,
         pulldown_cmark::BlockQuoteKind::Caution => MarkdownAlertKind::Caution,
     })
-}
-
-pub(crate) fn html_event_should_append(
-    in_paragraph: bool,
-    in_heading: bool,
-    in_list: bool,
-    blockquote_level: u8,
-    in_code_block: bool,
-    in_table_row: bool,
-) -> bool {
-    in_paragraph || in_heading || in_list || blockquote_level > 0 || in_code_block || in_table_row
 }
 
 pub(crate) fn markdown_parser_options() -> pulldown_cmark::Options {
@@ -90,14 +78,16 @@ pub(crate) fn classify_supported_html(html: &str) -> HtmlHandling {
     if matches!(lower.as_str(), "<sub>" | "</sub>" | "<sup>" | "</sup>") {
         return HtmlHandling::Ignore;
     }
-    if lower.starts_with("<a ") && (lower.contains(" name=") || lower.contains(" id=")) {
-        return HtmlHandling::Ignore;
+    if is_html_open_tag(lower.as_str(), "a") {
+        // A named anchor (`<a name>`/`<a id>`) is a jump target with nothing
+        // to show; one with an `href` is a link like any other.
+        return match extract_html_attribute(trimmed, "href") {
+            Some(href) => HtmlHandling::StartLink(offered_link_destination(&href)),
+            None => HtmlHandling::Ignore,
+        };
     }
-    if lower.starts_with("<a ") && lower.contains(" href=") {
-        return HtmlHandling::StartInlineStyle(MarkdownInlineStyle::Link);
-    }
-    if lower == "</a>" {
-        return HtmlHandling::EndInlineStyle(MarkdownInlineStyle::Link);
+    if is_html_close_tag(lower.as_str(), "a") {
+        return HtmlHandling::EndLink;
     }
     if lower.starts_with("<picture")
         || lower == "</picture>"
@@ -162,7 +152,7 @@ pub(crate) fn extract_html_image_alt(html: &str) -> Option<String> {
 /// One fragment often holds several — a row of badges is written as a single
 /// block of HTML — so every tag is collected, and each is bounded to its own
 /// `>` before its attributes are read so it cannot borrow the next tag's.
-pub(crate) fn extract_html_images(html: &str) -> Vec<(usize, MarkdownImage, String)> {
+pub(crate) fn extract_html_images(html: &str) -> Vec<HtmlImage> {
     let lower = html.to_ascii_lowercase();
     let mut images = Vec::new();
     let mut search_start = 0usize;
@@ -181,18 +171,32 @@ pub(crate) fn extract_html_images(html: &str) -> Vec<(usize, MarkdownImage, Stri
         if source.trim().is_empty() {
             continue;
         }
-        images.push((
-            tag_start,
-            MarkdownImage {
+        images.push(HtmlImage {
+            tag_offset: tag_start,
+            image: MarkdownImage {
                 source: source.into(),
                 width_px: extract_html_pixel_attribute(tag, "width"),
                 height_px: extract_html_pixel_attribute(tag, "height"),
             },
-            extract_html_attribute(tag, "alt").unwrap_or_default(),
-        ));
+            alt: extract_html_attribute(tag, "alt").unwrap_or_default(),
+            link_url: enclosing_html_link(html, &lower, tag_start),
+        });
     }
 
     images
+}
+
+/// The destination of the `<a href>` still open at `at` within `html`, as
+/// badges written `<a href="…"><img …></a>` in one fragment are.
+fn enclosing_html_link(html: &str, lower: &str, at: usize) -> Option<SharedString> {
+    let open = lower[..at].rfind("<a ")?;
+    if lower[open..at].contains("</a>") {
+        return None;
+    }
+    let tag_end = lower[open..]
+        .find('>')
+        .map_or(html.len(), |end| open + end + 1);
+    offered_link_destination(&extract_html_attribute(&html[open..tag_end], "href")?)
 }
 
 /// A `width`/`height` attribute in CSS pixels.

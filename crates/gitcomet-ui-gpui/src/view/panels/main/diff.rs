@@ -359,7 +359,7 @@ impl MainPaneView {
                             .into_any_element()
                     } else {
                         self.ensure_file_markdown_preview_cache(cx);
-                        match &self.file_markdown_preview {
+                        match &self.diff_markdown.preview {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Processing preview...")
                                     .into_any_element()
@@ -927,9 +927,9 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<components::ScrollbarMarker> {
         // Measurements are only good for the preview and layout they were taken in.
-        let key = (self.file_markdown_preview_seq, self.diff_view);
-        let measured = self.markdown_diff_change_extents.take();
-        let measured_key = self.markdown_diff_change_extents_key.replace(key);
+        let key = (self.diff_markdown.seq, self.diff_view);
+        let measured = self.diff_markdown.change_extents.take();
+        let measured_key = self.diff_markdown.change_extents_key.replace(key);
         let content_height =
             f32::from(scroll.bounds().size.height + scroll.max_offset().y.max(px(0.0)));
         if measured_key == Some(key) && !measured.is_empty() && content_height > 0.0 {
@@ -938,8 +938,8 @@ impl MainPaneView {
                 content_height,
             );
         }
-        if self.markdown_diff_change_extents_requested != Some(key) {
-            self.markdown_diff_change_extents_requested = Some(key);
+        if self.diff_markdown.change_extents_requested != Some(key) {
+            self.diff_markdown.change_extents_requested = Some(key);
             let view = cx.entity();
             window.on_next_frame(move |_, cx| view.update(cx, |_, cx| cx.notify()));
         }
@@ -965,7 +965,8 @@ impl MainPaneView {
             return empty_diff_text_document(
                 cx.entity(),
                 DiffTextRegion::Inline,
-                components::empty_state(theme, "Preview", "Empty file.").into_any_element(),
+                components::empty_state(theme, "Preview", preview.empty_notice())
+                    .into_any_element(),
             );
         }
 
@@ -976,27 +977,35 @@ impl MainPaneView {
             self.markdown_diff_scrollbar_markers(&preview, &scroll_handle, window, cx);
         let editor_font_family: SharedString =
             crate::font_preferences::current_editor_font_family(cx).into();
-        let image_base_dir = self
-            .markdown_preview_image_base_dir()
-            .map(|dir| std::sync::Arc::from(dir.as_path()));
+        let image_root = self.markdown_preview_image_root();
+        // Built once for both sides of a split: each matcher compiles a regex.
+        let query = self.markdown_preview_search_query();
+        // One document listener serves both sides of a split.
+        let row_boxes = rows::MarkdownRowBoxes::default();
         let context =
             |this: &Self, region: DiffTextRegion, side: usize| rows::MarkdownDocumentContext {
                 theme,
                 ui_scale_percent,
                 editor_font_family: editor_font_family.clone(),
-                image_base_dir: image_base_dir.clone(),
+                image_root: image_root.clone(),
                 remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
                 picture_sizes: Default::default(),
-                block_scrolls: this.markdown_diff_block_scrolls[side].clone(),
+                drawn_pictures: None,
+                row_boxes: row_boxes.clone(),
+                block_scrolls: this.diff_markdown.block_scrolls[side].clone(),
                 blocks: Default::default(),
                 view: Some(cx.entity()),
                 text_region: region,
                 change_bar_color: None,
-                query: this.markdown_preview_search_query(),
-                reveal: this.markdown_preview_reveal.clone(),
+                query: query.clone(),
+                reveal: this.markdown_interaction.reveal.clone(),
                 scroll: Some(scroll_handle.clone()),
-                hovered_link: this.markdown_preview_hovered_link.clone(),
-                change_extents: Some(this.markdown_diff_change_extents.clone()),
+                hovered_link: this.markdown_interaction.hovered_link.clone(),
+                change_extents: Some(this.diff_markdown.change_extents.clone()),
+                layout: this.diff_markdown.layouts[side].clone(),
+                // Only the split's new side is parsed from the working-tree file.
+                tasks_editable: region == DiffTextRegion::SplitRight
+                    && this.markdown_preview_tasks_editable(),
             };
         let body = match self.diff_view {
             DiffViewMode::Inline => rows::render_markdown_document_with_blocks(

@@ -270,38 +270,4 @@ impl MainPaneView {
             })
             .collect()
     }
-
-    pub(in crate::view) fn update_markdown_preview_horizontal_min_width(
-        &mut self,
-        document: &MarkdownPreviewDocument,
-        range: Range<usize>,
-        editor_font_family: &str,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.diff_word_wrap {
-            // Wrapped rows never exceed the viewport, so there is no content
-            // width to grow; `set_diff_word_wrap` already reset the
-            // horizontal scroll state.
-            return;
-        }
-        let mut min_width = self.diff_horizontal_content_width();
-        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let editor_font_family: SharedString = editor_font_family.to_owned().into();
-        for row in range.filter_map(|ix| document.rows.get(ix)) {
-            let row = markdown_preview_list_row(row);
-            let required = markdown_preview_row_required_width(
-                window,
-                self.theme,
-                &row,
-                &editor_font_family,
-                ui_scale_percent,
-            );
-            if required > min_width {
-                min_width = required;
-            }
-        }
-
-        self.record_diff_horizontal_content_width(min_width, cx);
-    }
 }

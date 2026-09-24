@@ -279,7 +279,11 @@ fn pictures_are_measured_from_their_headers_without_decoding_them() {
             "![a](shot.png)\n\n![b](broken.png)\n\n![c](missing.png)\n\n![d](https://example.com/x.png)\n",
         )
         .expect("the fixture parses");
-    let sizes = measure_markdown_preview_pictures(&document, Some(dir.as_path()));
+    let root = rows::MarkdownImageRoot {
+        workdir: Arc::from(dir.as_path()),
+        document: Arc::from(std::path::Path::new("README.md")),
+    };
+    let sizes = measure_markdown_preview_pictures(&document, Some(&root));
 
     assert_eq!(sizes.get("shot.png").copied(), Some((12, 5)));
     assert_eq!(sizes.get("broken.png"), None);
@@ -290,36 +294,28 @@ fn pictures_are_measured_from_their_headers_without_decoding_them() {
 }
 
 #[test]
-fn build_single_markdown_preview_document_reports_the_flowing_render_budget() {
-    // The single-document preview lays every row out on every frame, so it
-    // refuses a document the parser would happily produce.
-    let rows = crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS + 1;
-    let source: SharedString = "---\n".repeat(rows).into();
-    assert!(rows < crate::view::markdown_preview::MAX_PREVIEW_ROWS);
-    assert!(source.len() < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
-    assert!(
-        crate::view::markdown_preview::parse_markdown(source.as_ref()).is_some(),
-        "the parser itself accepts this document"
+fn build_single_markdown_preview_document_accepts_the_parsers_cap() {
+    // A frame builds only the blocks near the viewport, so the preview takes
+    // any document the parser produces.
+    let source: SharedString = "---\n"
+        .repeat(crate::view::markdown_preview::MAX_PREVIEW_ROWS)
+        .into();
+    let document = build_single_markdown_preview_document(source.as_ref())
+        .expect("a document at the parser's cap renders");
+    assert_eq!(
+        document.rows.len(),
+        crate::view::markdown_preview::MAX_PREVIEW_ROWS
     );
-
-    let error = build_single_markdown_preview_document(source.as_ref())
-        .expect_err("a document past the flowing budget should return an error");
-    // Distinct from the parser cap, and recoverable: the source still reads.
-    assert_eq!(error, MarkdownPreviewRefusal::TooManyRowsToRender);
-    assert!(error.prefers_source());
 }
 
 #[test]
-fn build_single_markdown_preview_document_accepts_the_flowing_render_budget() {
+fn build_single_markdown_preview_document_is_unavailable_past_the_parsers_cap() {
     let source: SharedString = "---\n"
-        .repeat(crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS)
+        .repeat(crate::view::markdown_preview::MAX_PREVIEW_ROWS + 1)
         .into();
-    let document = build_single_markdown_preview_document(source.as_ref())
-        .expect("a document exactly at the budget still renders");
-    assert_eq!(
-        document.rows.len(),
-        crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS
-    );
+    let error = build_single_markdown_preview_document(source.as_ref())
+        .expect_err("past the parser's cap there is no document");
+    assert!(matches!(error, MarkdownPreviewRefusal::Unavailable(_)));
 }
 
 #[test]

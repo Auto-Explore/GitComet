@@ -783,13 +783,13 @@ fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_containe
                     source.len(),
                     cx,
                 );
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                pane.worktree_markdown.path = Some(abs_path.clone());
+                pane.worktree_markdown.source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
                     crate::view::markdown_preview::parse_markdown(source)
                         .expect("untracked markdown preview should parse"),
                 ));
-                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_markdown.inflight = None;
                 cx.notify();
             });
         });

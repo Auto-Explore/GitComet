@@ -606,8 +606,9 @@ impl MainPaneView {
         // so the request must go with it rather than fire against whatever row
         // now holds that index.
         self.diff_search_horizontal_reveal = None;
-        self.markdown_preview_reveal.clear();
-        self.markdown_preview_hovered_link = None;
+        self.markdown_interaction.reveal.clear();
+        self.markdown_interaction.hovered_link = None;
+        self.markdown_interaction.plain_link = None;
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -626,18 +627,6 @@ impl MainPaneView {
         column: DiffHorizontalScrollColumn,
     ) -> Pixels {
         self.diff_horizontal_content_width_for_column(column)
-    }
-
-    pub(in crate::view) fn record_diff_horizontal_content_width(
-        &mut self,
-        width: Pixels,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.record_diff_horizontal_content_width_for_column(
-            DiffHorizontalScrollColumn::Primary,
-            width,
-            cx,
-        );
     }
 
     pub(in crate::view) fn record_diff_horizontal_content_width_for_column(
@@ -1298,13 +1287,15 @@ impl MainPaneView {
         next: RemoteMarkdownImagePolicy,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.remote_markdown_image_policy == next {
+        if self.remote_markdown_images.policy == next {
             return;
         }
-        self.remote_markdown_image_policy = next;
-        self.approved_remote_markdown_image_urls = Arc::default();
-        self.remote_markdown_image_approval_revision =
-            self.remote_markdown_image_approval_revision.wrapping_add(1);
+        self.remote_markdown_images.policy = next;
+        self.remote_markdown_images.approved_urls = Arc::default();
+        self.remote_markdown_images.approval_revision = self
+            .remote_markdown_images
+            .approval_revision
+            .wrapping_add(1);
         cx.notify();
     }
 
@@ -1313,8 +1304,8 @@ impl MainPaneView {
         approval_view: Option<Entity<MainPaneView>>,
     ) -> rows::MarkdownRemoteImageAccess {
         rows::MarkdownRemoteImageAccess {
-            policy: self.remote_markdown_image_policy,
-            approved_urls: Arc::clone(&self.approved_remote_markdown_image_urls),
+            policy: self.remote_markdown_images.policy,
+            approved_urls: Arc::clone(&self.remote_markdown_images.approved_urls),
             approval_view,
         }
     }
@@ -1324,12 +1315,14 @@ impl MainPaneView {
         url: SharedString,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+        if self.remote_markdown_images.policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
             return;
         }
-        if Arc::make_mut(&mut self.approved_remote_markdown_image_urls).insert(url) {
-            self.remote_markdown_image_approval_revision =
-                self.remote_markdown_image_approval_revision.wrapping_add(1);
+        if Arc::make_mut(&mut self.remote_markdown_images.approved_urls).insert(url) {
+            self.remote_markdown_images.approval_revision = self
+                .remote_markdown_images
+                .approval_revision
+                .wrapping_add(1);
             cx.notify();
         }
     }
@@ -2170,9 +2163,13 @@ impl MainPaneView {
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
         if prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target {
-            self.approved_remote_markdown_image_urls = Arc::default();
-            self.remote_markdown_image_approval_revision =
-                self.remote_markdown_image_approval_revision.wrapping_add(1);
+            self.remote_markdown_images.approved_urls = Arc::default();
+            self.remote_markdown_images.approval_revision = self
+                .remote_markdown_images
+                .approval_revision
+                .wrapping_add(1);
+            // Another repository's file at the same path is another file.
+            self.rendered_preview_modes.end_markdown_budget_fallback();
         }
         if prev_diff_target != next_diff_target {
             self.clear_diff_selection_state();
@@ -2180,10 +2177,7 @@ impl MainPaneView {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.worktree_preview_content_rev = 0;
-            self.worktree_markdown_preview_path = None;
-            self.worktree_markdown_preview_source_rev = 0;
-            self.worktree_markdown_preview = Loadable::NotLoaded;
-            self.worktree_markdown_preview_inflight = None;
+            self.worktree_markdown.invalidate();
             self.worktree_preview_syntax_language = None;
             self.reset_worktree_preview_source_state();
             self.reset_diff_horizontal_scroll_state();

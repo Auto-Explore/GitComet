@@ -1,10 +1,22 @@
 use super::*;
 use crate::view::markdown_preview::{
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTaskMarker,
 };
 #[cfg(test)]
 use std::borrow::Cow;
 use std::io::Read;
+
+#[cfg(test)]
+thread_local! {
+    // Link followability checks, each of which may stat the linked file.
+    static LINK_FOLLOWABILITY_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Link followability checks since the last call, which resets the count.
+#[cfg(test)]
+pub(in crate::view) fn take_link_followability_checks_for_tests() -> usize {
+    LINK_FOLLOWABILITY_CHECKS.with(|checks| checks.replace(0))
+}
 
 /// Largest file the editor will open.
 ///
@@ -400,11 +412,11 @@ impl MainPaneView {
                 },
             ]);
         } else if self.is_markdown_preview_active() && self.is_file_preview_active() {
-            if let Loadable::Ready(document) = &self.worktree_markdown_preview {
+            if let Loadable::Ready(document) = &self.worktree_markdown.document {
                 return RemoteMarkdownImageDocumentSet::Worktree(Arc::clone(document));
             }
         } else if self.is_markdown_preview_active()
-            && let Loadable::Ready(preview) = &self.file_markdown_preview
+            && let Loadable::Ready(preview) = &self.diff_markdown.preview
         {
             return RemoteMarkdownImageDocumentSet::Diff(Arc::clone(preview));
         }
@@ -454,7 +466,7 @@ impl MainPaneView {
 
     fn remote_markdown_image_summary(&self) -> (Arc<FxHashSet<SharedString>>, bool) {
         let documents = self.current_remote_markdown_image_documents();
-        let mut cache = self.remote_markdown_image_summary_cache.borrow_mut();
+        let mut cache = self.remote_markdown_images.summary_cache.borrow_mut();
         let documents_changed = !cache.documents.has_same_identity(&documents);
         if documents_changed {
             cache.urls = Arc::new(Self::collect_remote_markdown_image_urls(&documents));
@@ -462,13 +474,13 @@ impl MainPaneView {
         }
 
         if documents_changed
-            || cache.approval_revision != self.remote_markdown_image_approval_revision
+            || cache.approval_revision != self.remote_markdown_images.approval_revision
         {
             cache.has_blocked = cache
                 .urls
                 .iter()
-                .any(|url| !self.approved_remote_markdown_image_urls.contains(url));
-            cache.approval_revision = self.remote_markdown_image_approval_revision;
+                .any(|url| !self.remote_markdown_images.approved_urls.contains(url));
+            cache.approval_revision = self.remote_markdown_images.approval_revision;
         }
 
         (Arc::clone(&cache.urls), cache.has_blocked)
@@ -479,7 +491,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn has_blocked_remote_markdown_images(&self) -> bool {
-        self.remote_markdown_image_policy == RemoteMarkdownImagePolicy::AskBeforeLoading
+        self.remote_markdown_images.policy == RemoteMarkdownImagePolicy::AskBeforeLoading
             && self.remote_markdown_image_summary().1
     }
 
@@ -487,15 +499,17 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+        if self.remote_markdown_images.policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
             return;
         }
         let urls = self.current_remote_markdown_image_urls();
-        let previous_len = self.approved_remote_markdown_image_urls.len();
-        Arc::make_mut(&mut self.approved_remote_markdown_image_urls).extend(urls.iter().cloned());
-        if self.approved_remote_markdown_image_urls.len() != previous_len {
-            self.remote_markdown_image_approval_revision =
-                self.remote_markdown_image_approval_revision.wrapping_add(1);
+        let previous_len = self.remote_markdown_images.approved_urls.len();
+        Arc::make_mut(&mut self.remote_markdown_images.approved_urls).extend(urls.iter().cloned());
+        if self.remote_markdown_images.approved_urls.len() != previous_len {
+            self.remote_markdown_images.approval_revision = self
+                .remote_markdown_images
+                .approval_revision
+                .wrapping_add(1);
             cx.notify();
         }
     }
@@ -596,33 +610,10 @@ impl MainPaneView {
         )
     }
 
+    /// Whether a whole-file preview applies to the target, whatever covers
+    /// it; see [`MainPaneSurface`].
     pub(in crate::view) fn is_file_preview_active(&self) -> bool {
-        let preview_text_file_available = self.active_repo().is_some_and(|repo| {
-            matches!(
-                repo.diff_state.diff_preview_text_file,
-                Loadable::Loading | Loadable::Error(_) | Loadable::Ready(Some(_))
-            )
-        });
-        let has_untracked_preview = self.untracked_worktree_preview_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p) && p.is_file()
-        });
-        let has_added_preview = self.added_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !p.is_dir()
-                && (p.is_file() || preview_text_file_available)
-        });
-        let has_deleted_preview = self.deleted_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !p.is_dir()
-                && preview_text_file_available
-        });
-        // File-browser "open content" forces a full-content preview for any file.
-        let has_content_preview = self.content_preview_abs_path().is_some_and(|p| {
-            !self.content_preview_is_picture(&p)
-                && !p.is_dir()
-                && (p.is_file() || preview_text_file_available)
-        });
-        has_untracked_preview || has_added_preview || has_deleted_preview || has_content_preview
+        self.main_pane_surface().file_preview_target
     }
 
     /// Whether this content view should be drawn as a picture rather than as
@@ -643,58 +634,17 @@ impl MainPaneView {
         }
     }
 
-    /// Returns `true` when the markdown rendered preview is currently shown
-    /// (either single-pane file preview or two-sided diff preview).
+    /// Whether the rendered markdown preview — of the file, or of its diff —
+    /// is what the pane shows.
     pub(in crate::view) fn is_markdown_preview_active(&self) -> bool {
-        // The editor replaces the rendered preview entirely: it is the branch
-        // that wins in the body, so reporting the preview as active here would
-        // grey out Edit and Blame over a buffer that is plainly showing text.
-        if self.is_file_editor_active() {
-            return false;
-        }
-        let has_submodule_summary = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
-        if has_submodule_summary && !self.is_inline_submodule_diff_active() {
-            return false;
-        }
-
-        let is_file_preview =
-            self.is_file_preview_active() && self.untracked_directory_notice().is_none();
-        let wants_file_diff = self.wants_file_diff_view(is_file_preview);
-        let wants_collapsed_diff = self.wants_collapsed_diff_view(is_file_preview);
-        let rendered_preview_kind =
-            crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
-        let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
-            wants_file_diff,
-            wants_collapsed_diff,
-            is_file_preview,
-            rendered_preview_kind,
-        );
-        toggle_kind == Some(RenderedPreviewKind::Markdown)
-            && self
-                .rendered_preview_modes
-                .get(RenderedPreviewKind::Markdown)
-                == RenderedPreviewMode::Rendered
+        self.main_pane_surface().markdown_preview
     }
 
     /// Returns `true` when the current diff target is a conflicted file and
     /// there is an applicable conflict resolver strategy.
     pub(in crate::view) fn is_conflict_resolver_active(&self) -> bool {
-        self.active_repo().is_some_and(|repo| {
-            let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_state.diff_target.as_ref()
-            else {
-                return false;
-            };
-            if *area != DiffArea::Unstaged {
-                return false;
-            }
-            let conflict_kind = repo
-                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
-                .filter(|entry| entry.kind == FileStatusKind::Conflicted)
-                .and_then(|e| e.conflict);
-            Self::conflict_resolver_strategy(conflict_kind, false).is_some()
-        })
+        self.conflicted_worktree_target()
+            .is_some_and(|(_, kind)| Self::conflict_resolver_strategy(kind, false).is_some())
     }
 
     /// Whether the merge tool is showing a rendered *markdown* preview.
@@ -717,7 +667,13 @@ impl MainPaneView {
         })
     }
 
-    pub(in crate::view) fn ensure_conflict_markdown_preview_cache(&mut self) {
+    /// Parse the three sides of a conflicted markdown file for its rendered
+    /// preview — in the background, as the other previews do: a large file
+    /// takes tens of milliseconds per side.
+    pub(in crate::view) fn ensure_conflict_markdown_preview_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.is_conflict_rendered_preview_active()
             && self
                 .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full)
@@ -740,16 +696,39 @@ impl MainPaneView {
             return;
         }
 
-        let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
         self.conflict_resolver.markdown_preview = ConflictResolverMarkdownPreviewState {
             source_hash: Some(source_hash),
-            documents: build_conflict_markdown_preview_documents(
-                &self.conflict_resolver.three_way_text,
-            ),
+            documents: ThreeWaySides {
+                base: Loadable::Loading,
+                ours: Loadable::Loading,
+                theirs: Loadable::Loading,
+            },
+            columns: ThreeWaySides::default(),
         };
-        // These documents are what an open search scans; until now there were
-        // none, so it found nothing and has to look again.
-        self.diff_search_recompute_matches();
+        let sources = self.conflict_resolver.three_way_text.clone();
+        cx.spawn(async move |view, cx| {
+            let build = move || {
+                let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                build_conflict_markdown_preview_documents(&sources)
+            };
+            let documents = if crate::ui_runtime::current().uses_background_compute() {
+                smol::unblock(build).await
+            } else {
+                build()
+            };
+            let _ = view.update(cx, |this, cx| {
+                // The sources moved on while these parsed.
+                if this.conflict_resolver.markdown_preview.source_hash != Some(source_hash) {
+                    return;
+                }
+                this.conflict_resolver.markdown_preview.documents = documents;
+                // These documents are what an open search scans; until now
+                // there were none, so it found nothing and has to look again.
+                this.diff_search_recompute_matches();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(in crate::view) fn ensure_conflict_image_preview_cache(
@@ -1057,14 +1036,14 @@ impl MainPaneView {
     /// preview is active. Split sides share one aligned row space.
     pub(in crate::view) fn markdown_preview_row_count(&self) -> Option<usize> {
         if self.is_file_preview_active() {
-            if let Loadable::Ready(doc) = &self.worktree_markdown_preview {
+            if let Loadable::Ready(doc) = &self.worktree_markdown.document {
                 // The single document flows rather than wrapping into a fixed
                 // row grid, so a list position is always a source row index.
                 return Some(doc.rows.len());
             }
             return None;
         }
-        if let Loadable::Ready(diff) = &self.file_markdown_preview {
+        if let Loadable::Ready(diff) = &self.diff_markdown.preview {
             return Some(match self.diff_view {
                 DiffViewMode::Inline => diff.inline.rows.len(),
                 DiffViewMode::Split => diff.old.rows.len().max(diff.new.rows.len()),
@@ -1113,8 +1092,8 @@ impl MainPaneView {
             .map_or(0, |row| row.text.len())
     }
 
-    /// Arrange for the pane to repaint when a picture in the rendered preview
-    /// finishes decoding.
+    /// Arrange for the pane to repaint when a picture it drew finishes
+    /// decoding.
     ///
     /// `gpui` decodes an image once and hands the result to everyone, but it
     /// only wakes the *first* view that asked for it. A pane that starts
@@ -1123,68 +1102,31 @@ impl MainPaneView {
     /// unrelated happens to repaint it. Animated pictures are where this bites:
     /// `gpui` decodes every frame before it yields anything, so a long GIF
     /// takes seconds — time enough to open the same document in a second tab.
+    ///
+    /// `drawn` is what the frame drew, already resolved and permitted, so a
+    /// long document's off-screen pictures cost nothing here.
     pub(in crate::view) fn watch_pending_markdown_preview_images(
         &mut self,
+        drawn: Vec<gpui::Resource>,
         cx: &mut gpui::Context<Self>,
     ) {
         use futures::FutureExt as _;
 
-        let Loadable::Ready(document) = &self.worktree_markdown_preview else {
-            return;
-        };
-        // A document past the flowing renderer's budget is shown as source, so
-        // it draws no pictures and there is nothing to wait for.
-        if document.rows.len() > crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS {
-            return;
-        }
-        let document = Arc::clone(document);
-        let base_dir = self.markdown_preview_image_base_dir();
-        let remote_image_access = self.markdown_remote_image_access(None);
-
-        let mut resources = Vec::new();
-        let mut push = |source: &str| {
-            if let Some(resolved) =
-                crate::view::rows::markdown_preview_image_source(base_dir.as_deref(), source)
-            {
-                if let crate::view::rows::MarkdownPreviewImageSource::Remote(url) = &resolved
-                    && !remote_image_access.permits(url)
-                {
-                    return;
-                }
-                resources.push(resolved.to_resource());
-            }
-        };
-        for row in document.rows.iter() {
-            // Only the first band of a picture draws it; the rest are height.
-            if !row.continues_a_picture()
-                && let Some(image) = row.image.as_ref()
-            {
-                push(image.source.as_ref());
-            }
-            for inline in row.inline_images.iter() {
-                push(inline.image.source.as_ref());
-            }
-        }
-
-        for resource in resources {
-            if self
-                .worktree_markdown_preview_image_waits
-                .contains(&resource)
-            {
+        for resource in drawn {
+            if self.worktree_markdown.image_waits.contains(&resource) {
                 continue;
             }
             let (task, _) = cx.fetch_asset::<gpui::ImgResourceLoader>(&resource);
             if task.clone().now_or_never().is_some() {
                 continue;
             }
-            self.worktree_markdown_preview_image_waits
-                .insert(resource.clone());
+            self.worktree_markdown.image_waits.insert(resource.clone());
             cx.spawn(async move |view, cx| {
                 // Whether the picture decoded or failed, the pane has to hear
                 // about it: a failure is what draws the stand-in.
                 let _ = task.await;
                 let _ = view.update(cx, |this, cx| {
-                    this.worktree_markdown_preview_image_waits.remove(&resource);
+                    this.worktree_markdown.image_waits.remove(&resource);
                     cx.notify();
                 });
             })
@@ -1192,18 +1134,13 @@ impl MainPaneView {
         }
     }
 
-    /// Whether a markdown preview row only continues a picture an earlier row
-    /// already carries.
-    ///
-    /// An image block occupies as many rows as it is tall so the row grid can
-    /// give it height, and every one of them carries the picture's alt text.
-    /// Only the first is a line of the document, so copying a selection that
-    /// runs over a picture would otherwise repeat its alt text once per row.
+    /// Whether a rendered row adds no line of its own to copied text: the
+    /// spacers a diff pads one side with stand for no line of the document.
     ///
     /// Only the rendered preview is laid out that way. Text mode is showing the
     /// file, where a row index is a line number, and the parsed document that
     /// is still cached beside it describes nothing about those lines.
-    pub(in crate::view) fn markdown_preview_row_repeats_a_picture(
+    pub(in crate::view) fn markdown_preview_row_copies_nothing(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
@@ -1211,16 +1148,18 @@ impl MainPaneView {
         self.is_markdown_preview_active()
             && self
                 .markdown_preview_row_at(visible_ix, region)
-                .is_some_and(|row| row.continues_a_picture())
+                .is_some_and(MarkdownPreviewRow::is_alignment_padding)
     }
 
-    /// Directory that relative image paths in the rendered preview resolve
-    /// against — the directory of the file being previewed.
+    /// Where relative picture sources in the rendered preview resolve: the
+    /// working tree, and the previewed file's path in it.
     ///
     /// Images are read from the working tree even when the preview shows an
     /// older revision of the document: the historical blob is not on disk, and
     /// showing the current picture beats showing nothing.
-    pub(in crate::view) fn markdown_preview_image_base_dir(&self) -> Option<std::path::PathBuf> {
+    pub(in crate::view) fn markdown_preview_image_root(
+        &self,
+    ) -> Option<crate::view::rows::MarkdownImageRoot> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
         let path = match repo.diff_state.diff_target.as_ref()? {
@@ -1229,18 +1168,42 @@ impl MainPaneView {
                 path.clone()?
             }
         };
-        let absolute = if path.is_absolute() {
-            path
-        } else {
-            workdir.join(path)
+        let document = match path.strip_prefix(&workdir) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) if path.is_relative() => path,
+            Err(_) => return None,
         };
-        absolute.parent().map(ToOwned::to_owned)
+        Some(crate::view::rows::MarkdownImageRoot {
+            workdir: Arc::from(workdir.as_path()),
+            document: Arc::from(document.as_path()),
+        })
+    }
+
+    /// Where the merge tool's rendered columns resolve local pictures: beside
+    /// the conflicted file in the working tree.
+    pub(in crate::view) fn conflict_markdown_image_root(
+        &self,
+    ) -> Option<crate::view::rows::MarkdownImageRoot> {
+        let workdir = self.active_repo()?.spec.workdir.clone();
+        let path = self.conflict_resolver.path.as_ref()?;
+        let document = match path.strip_prefix(&workdir) {
+            Ok(relative) => relative,
+            Err(_) if path.is_relative() => path.as_path(),
+            Err(_) => return None,
+        };
+        Some(crate::view::rows::MarkdownImageRoot {
+            workdir: Arc::from(workdir.as_path()),
+            document: Arc::from(document),
+        })
     }
 
     /// The menu a click on a rendered-preview link opens, or `None` when the
-    /// link is inert here.
+    /// link is inert here. The row it was clicked in decides which version of
+    /// the tree a local link reads from.
     pub(in crate::view) fn markdown_preview_link_popover_kind(
         &self,
+        region: DiffTextRegion,
+        row_ix: usize,
         destination: &SharedString,
         load_remote_image_url: Option<SharedString>,
     ) -> Option<PopoverKind> {
@@ -1253,12 +1216,65 @@ impl MainPaneView {
                 url,
                 load_remote_image_url,
             }),
-            MarkdownLinkTarget::LocalFile(path) => {
-                self.markdown_preview_local_file_link_menu(&path, load_remote_image_url)
-            }
+            MarkdownLinkTarget::LocalFile(path) => self.markdown_preview_local_file_link_menu(
+                region,
+                row_ix,
+                &path,
+                load_remote_image_url,
+            ),
             // Followed on click, never offered in a menu.
             MarkdownLinkTarget::Anchor(_) => None,
         }
+    }
+
+    /// Whether a click on this link does anything: scrolls to its heading or
+    /// opens a menu.
+    pub(in crate::view) fn markdown_preview_link_is_followable(
+        &self,
+        region: DiffTextRegion,
+        row_ix: usize,
+        destination: &SharedString,
+    ) -> bool {
+        #[cfg(test)]
+        LINK_FOLLOWABILITY_CHECKS.with(|checks| checks.set(checks.get() + 1));
+        self.markdown_preview_anchor_target(region, destination)
+            .is_some()
+            || self
+                .markdown_preview_link_popover_kind(region, row_ix, destination, None)
+                .is_some()
+    }
+
+    /// The row the heading a `#fragment` link names sits in.
+    fn markdown_preview_anchor_target(
+        &self,
+        region: DiffTextRegion,
+        destination: &str,
+    ) -> Option<usize> {
+        use crate::view::markdown_preview::{
+            MarkdownLinkTarget, classify_markdown_link_destination, markdown_preview_anchor_row,
+        };
+
+        let MarkdownLinkTarget::Anchor(fragment) = classify_markdown_link_destination(destination)?
+        else {
+            return None;
+        };
+        // Flowing documents index rows, not wrapped lines; both split sides
+        // share one row space and one scroller.
+        if !matches!(
+            self.markdown_search_surface(),
+            Some(
+                MarkdownSearchSurface::Worktree
+                    | MarkdownSearchSurface::DiffInline
+                    | MarkdownSearchSurface::DiffSplit
+            )
+        ) {
+            return None;
+        }
+        let fragment = crate::view::rows::percent_decode_link_path(&fragment);
+        markdown_preview_anchor_row(
+            self.markdown_preview_document_for_region(region)?,
+            &fragment,
+        )
     }
 
     /// Scroll the preview to the heading a `#fragment` link names, and report
@@ -1269,32 +1285,10 @@ impl MainPaneView {
         destination: &str,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        use crate::view::markdown_preview::{
-            MarkdownLinkTarget, classify_markdown_link_destination, markdown_preview_anchor_row,
-        };
-
-        let Some(MarkdownLinkTarget::Anchor(fragment)) =
-            classify_markdown_link_destination(destination)
-        else {
+        let Some(row_ix) = self.markdown_preview_anchor_target(region, destination) else {
             return false;
         };
-        let fragment = crate::view::rows::percent_decode_link_path(&fragment);
-        let Some(row_ix) = self
-            .markdown_preview_document_for_region(region)
-            .and_then(|document| markdown_preview_anchor_row(document, &fragment))
-        else {
-            return false;
-        };
-        match self.markdown_search_surface() {
-            // Flowing documents index rows, not wrapped lines; both split sides
-            // share one row space and one scroller.
-            Some(
-                MarkdownSearchSurface::Worktree
-                | MarkdownSearchSurface::DiffInline
-                | MarkdownSearchSurface::DiffSplit,
-            ) => self.markdown_preview_reveal.request_top(row_ix),
-            Some(MarkdownSearchSurface::Conflict) | None => return false,
-        }
+        self.markdown_interaction.reveal.request_top(row_ix);
         cx.notify();
         true
     }
@@ -1305,9 +1299,13 @@ impl MainPaneView {
     /// link at a commit always tries that commit's tree.
     fn markdown_preview_local_file_link_menu(
         &self,
+        region: DiffTextRegion,
+        row_ix: usize,
         destination: &str,
         load_remote_image_url: Option<SharedString>,
     ) -> Option<PopoverKind> {
+        use crate::view::LocalFileLinkSource;
+
         // An inline submodule diff renders the submodule's file, but the menu
         // dispatches on the parent repository: the two trees do not line up.
         if self.active_inline_submodule_diff().is_some() {
@@ -1315,13 +1313,36 @@ impl MainPaneView {
         }
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.as_path();
-        let (source, path) = crate::view::rows::markdown_preview_local_link_target(
-            workdir,
-            repo.diff_state.diff_target.as_ref()?,
-            destination,
-        )?;
-        let missing =
-            crate::view::rows::markdown_preview_local_link_missing(workdir, &source, &path)?;
+        let target = repo.diff_state.diff_target.as_ref()?;
+        let (source, path) =
+            crate::view::rows::markdown_preview_local_link_target(workdir, target, destination)?;
+        let source = if self.markdown_preview_row_shows_old_version(region, row_ix) {
+            match target {
+                DiffTarget::Commit { commit_id, .. } => {
+                    LocalFileLinkSource::ParentOf(commit_id.clone())
+                }
+                // Staged changes sit on top of HEAD.
+                DiffTarget::WorkingTree {
+                    area: DiffArea::Staged,
+                    ..
+                } => LocalFileLinkSource::Version(
+                    repo.head_commit_id()
+                        .map(gitcomet_core::domain::FileSource::Commit)
+                        .unwrap_or(source),
+                ),
+                // The index has no version to open; the working tree is nearest.
+                _ => LocalFileLinkSource::Version(source),
+            }
+        } else {
+            LocalFileLinkSource::Version(source)
+        };
+        let missing = match &source {
+            LocalFileLinkSource::Version(source) => {
+                crate::view::rows::markdown_preview_local_link_missing(workdir, source, &path)?
+            }
+            // Read by the backend, which reports a file that is not there.
+            LocalFileLinkSource::ParentOf(_) => false,
+        };
         Some(PopoverKind::LocalFileLinkMenu {
             repo_id: repo.id,
             source,
@@ -1329,6 +1350,26 @@ impl MainPaneView {
             missing,
             load_remote_image_url,
         })
+    }
+
+    /// Whether row `row_ix` of `region` shows the file as it was before the
+    /// change: the old column of a split diff, or an old row of an inline one.
+    fn markdown_preview_row_shows_old_version(
+        &self,
+        region: DiffTextRegion,
+        row_ix: usize,
+    ) -> bool {
+        if self.is_file_preview_active() {
+            return false;
+        }
+        let Loadable::Ready(diff) = &self.diff_markdown.preview else {
+            return false;
+        };
+        match self.diff_view {
+            // As `markdown_preview_document_for_region` maps the regions.
+            DiffViewMode::Split => region != DiffTextRegion::SplitRight,
+            DiffViewMode::Inline => diff.inline_old.get(row_ix).copied().unwrap_or(false),
+        }
     }
 
     /// Link under `position` in a rendered markdown preview row, and where it
@@ -1375,26 +1416,25 @@ impl MainPaneView {
 
     /// Point the hovered-link underline and pointer cursor at the link under
     /// `position`, repainting only when that changes. A held button is a drag,
-    /// not a hover.
+    /// not a hover, and a link a click would not follow is plain words.
     pub(in crate::view) fn update_markdown_preview_link_hover(
         &mut self,
-        visible_ix: usize,
+        row_ix: usize,
         region: DiffTextRegion,
         position: Point<Pixels>,
         button_held: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let hovered = (!button_held)
-            .then(|| self.markdown_preview_link_span_ix_at(visible_ix, region, position))
+        let candidate = (!button_held)
+            .then(|| self.markdown_preview_link_span_ix_at(row_ix, region, position))
             .flatten()
             .map(|(row, span_ix)| {
                 // A link whose text changes style spans several runs; the whole
                 // link is what the pointer is on.
                 let spans = &row.inline_spans;
-                let url = &spans[span_ix].link_url;
+                let url = spans[span_ix].link_url.clone();
                 let same_link = |a: usize, b: usize| {
-                    spans[a].link_url == *url
-                        && spans[a].byte_range.end == spans[b].byte_range.start
+                    spans[a].link_url == url && spans[a].byte_range.end == spans[b].byte_range.start
                 };
                 let mut first = span_ix;
                 while first > 0 && same_link(first - 1, first) {
@@ -1404,33 +1444,50 @@ impl MainPaneView {
                 while last + 1 < spans.len() && same_link(last, last + 1) {
                     last += 1;
                 }
-                rows::MarkdownPreviewHoveredLink {
+                let hovered = rows::MarkdownPreviewHoveredLink {
                     region,
-                    visible_ix,
-                    row_ix: visible_ix,
+                    row_ix,
                     byte_range: spans[first].byte_range.start..spans[last].byte_range.end,
-                }
+                };
+                (hovered, url)
             });
-        if self.markdown_preview_hovered_link != hovered {
-            self.markdown_preview_hovered_link = hovered;
+        let hovered = match candidate {
+            // Still on the link already shown, or already found to go
+            // nowhere: nothing to re-check.
+            Some((hovered, _))
+                if self.markdown_interaction.hovered_link.as_ref() == Some(&hovered)
+                    || self.markdown_interaction.plain_link.as_ref() == Some(&hovered) =>
+            {
+                return;
+            }
+            Some((hovered, Some(url))) => {
+                if self.markdown_preview_link_is_followable(region, row_ix, &url) {
+                    self.markdown_interaction.plain_link = None;
+                    Some(hovered)
+                } else {
+                    self.markdown_interaction.plain_link = Some(hovered);
+                    None
+                }
+            }
+            _ => {
+                self.markdown_interaction.plain_link = None;
+                None
+            }
+        };
+        if self.markdown_interaction.hovered_link != hovered {
+            self.markdown_interaction.hovered_link = hovered;
             cx.notify();
         }
     }
 
-    /// Drop the hovered link when the pointer leaves the row showing it. A row
-    /// the pointer has already moved on to may have claimed it first.
+    /// Drop the hovered link: the pointer is off every row. Back on it later,
+    /// a link is checked afresh — its file or heading may have appeared.
     pub(in crate::view) fn clear_markdown_preview_link_hover(
         &mut self,
-        visible_ix: usize,
-        region: DiffTextRegion,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self
-            .markdown_preview_hovered_link
-            .as_ref()
-            .is_some_and(|hovered| hovered.region == region && hovered.visible_ix == visible_ix)
-        {
-            self.markdown_preview_hovered_link = None;
+        self.markdown_interaction.plain_link = None;
+        if self.markdown_interaction.hovered_link.take().is_some() {
             cx.notify();
         }
     }
@@ -1452,13 +1509,13 @@ impl MainPaneView {
         region: DiffTextRegion,
     ) -> Option<&MarkdownPreviewDocument> {
         if self.is_file_preview_active() {
-            let Loadable::Ready(doc) = &self.worktree_markdown_preview else {
+            let Loadable::Ready(doc) = &self.worktree_markdown.document else {
                 return None;
             };
             return Some(doc.as_ref());
         }
 
-        let Loadable::Ready(diff) = &self.file_markdown_preview else {
+        let Loadable::Ready(diff) = &self.diff_markdown.preview else {
             return None;
         };
 
@@ -1494,16 +1551,17 @@ impl MainPaneView {
         if self.is_conflict_rendered_markdown_preview_active() {
             return Some(MarkdownSearchSurface::Conflict);
         }
-        if !self.is_markdown_preview_active() {
+        let surface = self.main_pane_surface();
+        if !surface.markdown_preview {
             return None;
         }
-        if self.is_file_preview_active() {
-            if !matches!(self.worktree_markdown_preview, Loadable::Ready(_)) {
+        if surface.body == MainPaneBody::FilePreview {
+            if !matches!(self.worktree_markdown.document, Loadable::Ready(_)) {
                 return None;
             }
             return Some(MarkdownSearchSurface::Worktree);
         }
-        if !matches!(self.file_markdown_preview, Loadable::Ready(_)) {
+        if !matches!(self.diff_markdown.preview, Loadable::Ready(_)) {
             return None;
         }
         Some(match self.diff_view {
@@ -1517,22 +1575,21 @@ impl MainPaneView {
     /// One value for every list on screen: the split diff's two sides share a
     /// visual row space by construction, and the conflict columns are addressed
     /// by the same index, so the current-match row means the same thing in each.
+    /// The open search as the rendered preview highlights it. The matcher is
+    /// the one shared with the text diff, built once per query — a regex
+    /// query compiles, and a render asks for it on every frame.
     pub(in crate::view) fn markdown_preview_search_query(
-        &self,
+        &mut self,
     ) -> Option<crate::view::rows::MarkdownPreviewQuery> {
         if !self.diff_search_active || self.markdown_search_surface().is_none() {
             return None;
         }
-        let query = self.diff_search_query.clone();
-        let matcher = super::diff_search::DiffSearchMatcher::new(
-            query.as_ref(),
-            self.diff_search_options_or_default(),
-        );
+        let matcher = self.diff_search_query_matcher_shared()?;
         if matcher.is_empty() || matcher.regex_error().is_some() {
             return None;
         }
         Some(crate::view::rows::MarkdownPreviewQuery {
-            matcher: std::sync::Arc::new(matcher),
+            matcher,
             current_row: self.diff_search_current_match_row(),
         })
     }
@@ -1543,15 +1600,15 @@ impl MainPaneView {
         surface: MarkdownSearchSurface,
     ) -> Vec<&MarkdownPreviewDocument> {
         match surface {
-            MarkdownSearchSurface::Worktree => match &self.worktree_markdown_preview {
+            MarkdownSearchSurface::Worktree => match &self.worktree_markdown.document {
                 Loadable::Ready(document) => vec![document.as_ref()],
                 _ => Vec::new(),
             },
-            MarkdownSearchSurface::DiffInline => match &self.file_markdown_preview {
+            MarkdownSearchSurface::DiffInline => match &self.diff_markdown.preview {
                 Loadable::Ready(diff) => vec![&diff.inline],
                 _ => Vec::new(),
             },
-            MarkdownSearchSurface::DiffSplit => match &self.file_markdown_preview {
+            MarkdownSearchSurface::DiffSplit => match &self.diff_markdown.preview {
                 Loadable::Ready(diff) => vec![&diff.old, &diff.new],
                 _ => Vec::new(),
             },
@@ -2041,6 +2098,7 @@ mod tests {
     fn conflict_markdown_preview_state_document_returns_correct_side() {
         let state = ConflictResolverMarkdownPreviewState {
             source_hash: Some(42),
+            columns: ThreeWaySides::default(),
             documents: build_conflict_markdown_preview_documents(&ThreeWaySides {
                 base: "# Base".into(),
                 ours: "# Ours".into(),
@@ -2069,5 +2127,180 @@ mod tests {
         assert!(base_doc.rows[0].text.contains("Base"));
         assert!(ours_doc.rows[0].text.contains("Ours"));
         assert!(theirs_doc.rows[0].text.contains("Theirs"));
+    }
+}
+
+impl MainPaneView {
+    /// The working-tree file whose markdown the preview can write task toggles
+    /// into: an unstaged file that exists, whose preview — or diff's new side —
+    /// is that file's text.
+    fn markdown_preview_task_file(
+        &self,
+    ) -> Option<(RepoId, std::path::PathBuf, std::path::PathBuf)> {
+        let repo = self.active_repo()?;
+        let DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        } = repo.diff_state.diff_target.as_ref()?
+        else {
+            return None;
+        };
+        // A deleted file's preview is its last committed text, and a submodule
+        // diff describes a directory: neither has a file to write into.
+        let deleted = repo
+            .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+            .is_some_and(|entry| entry.kind == FileStatusKind::Deleted);
+        if deleted || self.is_inline_submodule_diff_active() {
+            return None;
+        }
+        let abs_path = self.absolute_worktree_path(path)?;
+        Some((repo.id, path.clone(), abs_path))
+    }
+
+    pub(in crate::view) fn markdown_preview_tasks_editable(&self) -> bool {
+        self.markdown_preview_task_file().is_some()
+    }
+
+    /// Flip one task-list checkbox in the file on disk.
+    ///
+    /// The file is re-read rather than trusting the preview's text, and the
+    /// marker must still sit where it was parsed, so an edit made elsewhere
+    /// since the preview loaded is never overwritten.
+    pub(in crate::view) fn toggle_markdown_preview_task(
+        &mut self,
+        region: DiffTextRegion,
+        task: MarkdownTaskMarker,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // The old side of a diff is not the file.
+        if matches!(region, DiffTextRegion::SplitLeft) {
+            return;
+        }
+        let Some((repo_id, path, abs_path)) = self.markdown_preview_task_file() else {
+            return;
+        };
+        let error = if self.file_edits_are_unsaved_for(repo_id, &path) {
+            Some("Save or discard your unsaved edits to this file first")
+        } else {
+            match std::fs::read(&abs_path) {
+                Ok(bytes) => match toggle_task_marker(bytes, task) {
+                    Some(contents) => {
+                        self.store.dispatch(Msg::SaveWorktreeFile {
+                            repo_id,
+                            path,
+                            contents: contents.clone(),
+                            stage: false,
+                        });
+                        // The file preview only reloads when its target
+                        // changes, and re-reading now could beat the write:
+                        // show the text being written, as a fresh read would.
+                        if self.worktree_preview_source_path.as_ref() == Some(&abs_path) {
+                            let line_starts: Arc<[usize]> = build_line_starts(&contents).into();
+                            self.set_worktree_preview_ready_source(
+                                abs_path,
+                                contents.into(),
+                                line_starts,
+                                cx,
+                            );
+                        }
+                        None
+                    }
+                    None => Some("The file changed on disk; the preview is catching up"),
+                },
+                Err(_) => Some("Couldn't read the file to update the checkbox"),
+            }
+        };
+        if let Some(message) = error {
+            let _ = self.root_view.update(cx, |root, cx| {
+                root.push_toast(
+                    crate::view::components::ToastKind::Error,
+                    message.to_string(),
+                    cx,
+                );
+            });
+        }
+        cx.notify();
+    }
+}
+
+/// `bytes` with the task marker flipped, or `None` when that marker is no
+/// longer where the preview found it, in the state the preview showed.
+pub(in crate::view) fn toggle_task_marker(
+    mut bytes: Vec<u8>,
+    task: MarkdownTaskMarker,
+) -> Option<String> {
+    let offset = task.byte_offset(&bytes)?;
+    let marker = bytes.get(offset..offset + 3)?;
+    let checked = match marker {
+        b"[ ]" => false,
+        b"[x]" | b"[X]" => true,
+        _ => return None,
+    };
+    if checked != task.checked {
+        return None;
+    }
+    bytes[offset + 1] = if checked { b' ' } else { b'x' };
+    String::from_utf8(bytes).ok()
+}
+
+#[cfg(test)]
+mod task_marker_tests {
+    use super::toggle_task_marker;
+    use crate::view::markdown_preview::parse_markdown;
+
+    /// Toggle the task on the row reading `text`, as a click on it would.
+    fn click(source: &str, text: &str) -> Option<String> {
+        let doc = parse_markdown(source).expect("parses");
+        let task = doc
+            .rows
+            .iter()
+            .find(|row| row.text.as_ref() == text)
+            .and_then(|row| row.task)
+            .expect("task row");
+        toggle_task_marker(source.as_bytes().to_vec(), task)
+    }
+
+    #[test]
+    fn toggling_flips_only_the_marker_byte() {
+        let source =
+            "# Todo\r\n\r\n- [ ] write\r\n  - [X] nested\r\n1. [x] ordered\r\n> * [ ] quoted ✓\n";
+        assert_eq!(
+            click(source, "write").as_deref(),
+            Some(source.replacen("[ ] write", "[x] write", 1).as_str())
+        );
+        assert_eq!(
+            click(source, "nested").as_deref(),
+            Some(source.replacen("[X]", "[ ]", 1).as_str())
+        );
+        assert_eq!(
+            click(source, "ordered").as_deref(),
+            Some(source.replacen("[x] ordered", "[ ] ordered", 1).as_str())
+        );
+        assert_eq!(
+            click(source, "quoted ✓").as_deref(),
+            Some(source.replacen("[ ] quoted", "[x] quoted", 1).as_str())
+        );
+    }
+
+    #[test]
+    fn toggling_twice_restores_the_file() {
+        let source = "- [ ] a\n- [x] b\n";
+        let once = click(source, "a").expect("toggles");
+        assert_eq!(click(&once, "a").as_deref(), Some(source));
+    }
+
+    #[test]
+    fn a_stale_offset_refuses_to_write() {
+        let source = "- [ ] a\n- [ ] b\n";
+        let doc = parse_markdown(source).expect("parses");
+        let task = doc.rows[1].task.expect("task row");
+        // The file gained a line above the item since the preview parsed it.
+        let edited = format!("intro\n{source}");
+        assert_eq!(toggle_task_marker(edited.into_bytes(), task), None);
+        // The file was checked elsewhere since the preview parsed it.
+        let checked = source.replacen("[ ] b", "[x] b", 1);
+        assert_eq!(toggle_task_marker(checked.into_bytes(), task), None);
+        // The file shrank past the marker.
+        assert_eq!(toggle_task_marker(b"- [".to_vec(), task), None);
     }
 }

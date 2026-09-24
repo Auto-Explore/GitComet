@@ -20,6 +20,7 @@ pub(super) use build::build_cached_diff_styled_text_with_palette;
 pub(in crate::view::rows) use build::hash_rgba_bits;
 pub(in crate::view) use build::query_highlight_colors;
 pub(in crate::view) use build::syntax_highlights_for_line;
+pub(in crate::view::rows) use build::syntax_theme_signature;
 pub(in crate::view::rows) use build::word_highlight_colors;
 pub(super) use build::{
     build_cached_diff_query_overlay_styled_text, build_cached_diff_styled_text,

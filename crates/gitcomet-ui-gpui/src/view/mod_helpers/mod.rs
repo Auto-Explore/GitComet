@@ -452,6 +452,9 @@ pub(super) enum RenderedPreviewMode {
 pub(super) struct RenderedPreviewModes {
     pub(super) svg: RenderedPreviewMode,
     pub(super) markdown: RenderedPreviewMode,
+    /// Markdown shows Source because a file's diff was too big to render, not
+    /// because the reader chose it; the next file gets Rendered back.
+    markdown_budget_fallback: bool,
 }
 
 impl Default for RenderedPreviewModes {
@@ -459,6 +462,7 @@ impl Default for RenderedPreviewModes {
         Self {
             svg: RenderedPreviewMode::Rendered,
             markdown: RenderedPreviewMode::Rendered,
+            markdown_budget_fallback: false,
         }
     }
 }
@@ -474,7 +478,26 @@ impl RenderedPreviewModes {
     pub(super) fn set(&mut self, kind: RenderedPreviewKind, mode: RenderedPreviewMode) {
         match kind {
             RenderedPreviewKind::Svg => self.svg = mode,
-            RenderedPreviewKind::Markdown => self.markdown = mode,
+            RenderedPreviewKind::Markdown => {
+                self.markdown = mode;
+                self.markdown_budget_fallback = false;
+            }
+        }
+    }
+
+    /// Show this markdown file as source because its diff is too big to
+    /// render, leaving the reader's own choice to come back with the next file.
+    pub(super) fn fall_back_to_markdown_source(&mut self) {
+        if self.markdown == RenderedPreviewMode::Rendered {
+            self.markdown = RenderedPreviewMode::Source;
+            self.markdown_budget_fallback = true;
+        }
+    }
+
+    /// The file that needed the fallback is gone.
+    pub(super) fn end_markdown_budget_fallback(&mut self) {
+        if std::mem::take(&mut self.markdown_budget_fallback) {
+            self.markdown = RenderedPreviewMode::Rendered;
         }
     }
 }

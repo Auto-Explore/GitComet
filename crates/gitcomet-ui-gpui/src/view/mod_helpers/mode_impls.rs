@@ -77,6 +77,14 @@ impl AutosquashMode {
     }
 }
 
+/// The version of the repository a local markdown link opens.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum LocalFileLinkSource {
+    Version(gitcomet_core::domain::FileSource),
+    /// The version before this commit: a link on the old side of its diff.
+    ParentOf(CommitId),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     HookActivity {
@@ -279,7 +287,7 @@ pub(crate) enum PopoverKind {
     /// destination is a file inside this repository.
     LocalFileLinkMenu {
         repo_id: RepoId,
-        source: gitcomet_core::domain::FileSource,
+        source: LocalFileLinkSource,
         /// Repo-relative, with `.`/`..` folded.
         path: std::path::PathBuf,
         /// The working tree has no such file; the entry is shown greyed out.

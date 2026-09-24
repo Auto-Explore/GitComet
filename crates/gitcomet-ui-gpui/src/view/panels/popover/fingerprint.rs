@@ -1167,7 +1167,9 @@ mod tests {
     fn local_file_link_menus_hash_their_path_and_presence() {
         let menu = |path: &str, missing: bool| PopoverKind::LocalFileLinkMenu {
             repo_id: RepoId(7),
-            source: gitcomet_core::domain::FileSource::WorkingDirectory,
+            source: LocalFileLinkSource::Version(
+                gitcomet_core::domain::FileSource::WorkingDirectory,
+            ),
             path: std::path::PathBuf::from(path),
             missing,
             load_remote_image_url: None,

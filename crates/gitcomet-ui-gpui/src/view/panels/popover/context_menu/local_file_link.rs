@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn model(
     repo_id: RepoId,
-    source: &gitcomet_core::domain::FileSource,
+    source: &LocalFileLinkSource,
     path: &std::path::Path,
     missing: bool,
     load_remote_image_url: Option<&str>,
@@ -12,7 +12,7 @@ pub(super) fn model(
 
 fn model_for_local_file_link(
     repo_id: RepoId,
-    source: &gitcomet_core::domain::FileSource,
+    source: &LocalFileLinkSource,
     path: &std::path::Path,
     missing: bool,
     load_remote_image_url: Option<&str>,
@@ -42,10 +42,17 @@ fn model_for_local_file_link(
         icon: Some("icons/file.svg".into()),
         shortcut: None,
         disabled: missing,
-        action: Box::new(ContextMenuAction::OpenFileContent {
-            repo_id,
-            source: source.clone(),
-            path: path.to_path_buf(),
+        action: Box::new(match source {
+            LocalFileLinkSource::Version(source) => ContextMenuAction::OpenFileContent {
+                repo_id,
+                source: source.clone(),
+                path: path.to_path_buf(),
+            },
+            LocalFileLinkSource::ParentOf(commit_id) => ContextMenuAction::OpenFileAtCommitParent {
+                repo_id,
+                commit_id: commit_id.clone(),
+                path: path.to_path_buf(),
+            },
         }),
     });
     ContextMenuModel::new(items)
@@ -55,6 +62,10 @@ fn model_for_local_file_link(
 mod tests {
     use super::*;
     use gitcomet_core::domain::FileSource;
+
+    fn working_directory() -> LocalFileLinkSource {
+        LocalFileLinkSource::Version(FileSource::WorkingDirectory)
+    }
 
     fn entry_labels(model: &ContextMenuModel) -> Vec<String> {
         model
@@ -86,8 +97,7 @@ mod tests {
     #[test]
     fn model_offers_opening_the_file_and_nothing_else() {
         let path = std::path::Path::new("docs/other.md");
-        let model =
-            model_for_local_file_link(RepoId(3), &FileSource::WorkingDirectory, path, false, None);
+        let model = model_for_local_file_link(RepoId(3), &working_directory(), path, false, None);
 
         assert_eq!(entry_labels(&model), vec!["Open in GitComet"]);
         // The resolved path is shown so a link's text cannot disguise where
@@ -103,8 +113,7 @@ mod tests {
         // Built with `push`, a Windows path shows its native separator; a
         // repository path reads the same everywhere.
         let path = std::path::PathBuf::from("docs\\nested\\other.md");
-        let model =
-            model_for_local_file_link(RepoId(3), &FileSource::WorkingDirectory, &path, false, None);
+        let model = model_for_local_file_link(RepoId(3), &working_directory(), &path, false, None);
 
         assert!(model.items.iter().any(|item| matches!(
             item,
@@ -120,7 +129,7 @@ mod tests {
     #[test]
     fn open_entry_carries_the_repo_source_and_path() {
         let path = std::path::Path::new("docs/other.md");
-        let source = FileSource::Commit(CommitId("deadbeef".into()));
+        let source = LocalFileLinkSource::Version(FileSource::Commit(CommitId("deadbeef".into())));
         let model = model_for_local_file_link(RepoId(3), &source, path, false, None);
 
         let (action, disabled) = open_entry(&model);
@@ -135,10 +144,26 @@ mod tests {
     }
 
     #[test]
+    fn a_link_on_the_old_side_of_a_commit_opens_the_parent_version() {
+        let path = std::path::Path::new("docs/old.md");
+        let source = LocalFileLinkSource::ParentOf(CommitId("deadbeef".into()));
+        let model = model_for_local_file_link(RepoId(3), &source, path, false, None);
+
+        let (action, disabled) = open_entry(&model);
+        assert!(!disabled);
+        assert!(matches!(
+            action,
+            ContextMenuAction::OpenFileAtCommitParent { repo_id, commit_id, path }
+                if *repo_id == RepoId(3)
+                    && *commit_id == CommitId("deadbeef".into())
+                    && path == std::path::Path::new("docs/old.md")
+        ));
+    }
+
+    #[test]
     fn a_missing_file_greys_the_entry_out() {
         let path = std::path::Path::new("missing.txt");
-        let model =
-            model_for_local_file_link(RepoId(3), &FileSource::WorkingDirectory, path, true, None);
+        let model = model_for_local_file_link(RepoId(3), &working_directory(), path, true, None);
 
         assert_eq!(entry_labels(&model), vec!["Open in GitComet"]);
         assert!(
@@ -154,7 +179,7 @@ mod tests {
         let path = std::path::Path::new("docs/other.md");
         let model = model_for_local_file_link(
             RepoId(3),
-            &FileSource::WorkingDirectory,
+            &working_directory(),
             path,
             false,
             Some("https://images.example.com/badge.svg"),

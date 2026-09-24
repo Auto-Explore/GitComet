@@ -261,7 +261,7 @@ impl MainPaneView {
     }
 
     fn markdown_preview_change_visible_indices(&self) -> Vec<usize> {
-        let Loadable::Ready(preview) = &self.file_markdown_preview else {
+        let Loadable::Ready(preview) = &self.diff_markdown.preview else {
             return Vec::new();
         };
 
@@ -337,8 +337,8 @@ impl MainPaneView {
         // The rendered markdown diff flows, so its rows are revealed once laid out.
         if self.is_rendered_markdown_diff_active() {
             match strategy {
-                gpui::ScrollStrategy::Top => self.markdown_preview_reveal.request_top(target),
-                _ => self.markdown_preview_reveal.request(target),
+                gpui::ScrollStrategy::Top => self.markdown_interaction.reveal.request_top(target),
+                _ => self.markdown_interaction.reveal.request(target),
             }
             return;
         }

@@ -1,11 +1,5 @@
 use super::*;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MarkdownTableCell {
-    pub(crate) text: String,
-    pub(crate) spans: Vec<MarkdownInlineSpan>,
-}
-
 /// Lay out every table's cells: trim the tab the last cell left, record each
 /// cell's range, give short rows empty cells, and measure the columns.
 pub(crate) fn finish_table_blocks(rows: &mut [MarkdownPreviewRow]) {
@@ -82,89 +76,6 @@ fn finish_table_block(rows: &mut [MarkdownPreviewRow]) {
             table: Arc::clone(&table),
         });
     }
-}
-
-/// A table row as the monospace row list draws it: cells padded to their
-/// column's width and joined by ` | `, with the spans moved to match.
-pub(crate) fn markdown_table_row_display(
-    row: &MarkdownPreviewRow,
-) -> Option<(String, Vec<MarkdownInlineSpan>)> {
-    let table = row.table.as_ref()?;
-    let cells = table
-        .cells
-        .iter()
-        .map(|range| MarkdownTableCell {
-            text: row.text[range.clone()].to_owned(),
-            spans: row
-                .inline_spans
-                .iter()
-                .filter_map(|span| {
-                    let start = span.byte_range.start.max(range.start);
-                    let end = span.byte_range.end.min(range.end);
-                    (start < end).then(|| span.restyled((start - range.start)..(end - range.start)))
-                })
-                .collect(),
-        })
-        .collect();
-    Some(build_aligned_table_row_text(
-        cells,
-        &table.table.column_widths,
-    ))
-}
-
-pub(crate) fn build_aligned_table_row_text(
-    cells: Vec<MarkdownTableCell>,
-    column_widths: &[usize],
-) -> (String, Vec<MarkdownInlineSpan>) {
-    const TABLE_COLUMN_SEPARATOR: &str = " | ";
-
-    let text_capacity = column_widths
-        .iter()
-        .copied()
-        .fold(0usize, usize::saturating_add)
-        .saturating_add(
-            cells
-                .iter()
-                .fold(0usize, |bytes, cell| bytes.saturating_add(cell.text.len())),
-        )
-        .saturating_add(
-            TABLE_COLUMN_SEPARATOR
-                .len()
-                .saturating_mul(column_widths.len().saturating_sub(1)),
-        );
-    let span_capacity = cells
-        .iter()
-        .fold(0usize, |len, cell| len.saturating_add(cell.spans.len()));
-    let mut text = String::with_capacity(text_capacity);
-    let mut spans = Vec::with_capacity(span_capacity);
-    let mut cells = cells.into_iter();
-
-    for (ix, width) in column_widths.iter().copied().enumerate() {
-        let cell = cells.next();
-        let cell_width = cell
-            .as_ref()
-            .map(|cell| cell.text.chars().count())
-            .unwrap_or(0);
-        let cell_start = text.len();
-        if let Some(cell) = cell {
-            text.push_str(&cell.text);
-            spans.extend(cell.spans.into_iter().map(|span| {
-                span.restyled(
-                    (cell_start + span.byte_range.start)..(cell_start + span.byte_range.end),
-                )
-            }));
-        }
-
-        if ix + 1 < column_widths.len() {
-            let pad = width.saturating_sub(cell_width);
-            for _ in 0..pad {
-                text.push(' ');
-            }
-            text.push_str(TABLE_COLUMN_SEPARATOR);
-        }
-    }
-
-    (text, spans)
 }
 
 pub(crate) fn normalize_whitespace(s: &str) -> String {

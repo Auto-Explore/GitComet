@@ -982,7 +982,9 @@ impl MainPaneView {
             return true;
         }
         // A link the preview cannot open is a click on plain words.
-        let Some(kind) = self.markdown_preview_link_popover_kind(&destination, None) else {
+        let Some(kind) =
+            self.markdown_preview_link_popover_kind(region, visible_ix, &destination, None)
+        else {
             return false;
         };
         // Anchor on the link's own box, so the menu opens flush under the words
@@ -1002,6 +1004,8 @@ impl MainPaneView {
     /// point stands in for the frames where it has not been painted yet.
     pub(in crate::view) fn open_markdown_preview_link_menu(
         &mut self,
+        region: DiffTextRegion,
+        row_ix: usize,
         destination: SharedString,
         load_remote_image_url: Option<SharedString>,
         anchor_bounds: Option<Bounds<Pixels>>,
@@ -1009,20 +1013,25 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        // The flowing document's pictures sit in the single worktree list.
-        if self.scroll_markdown_preview_to_anchor(DiffTextRegion::Inline, &destination, cx) {
-            return;
-        }
-        let Some(kind) =
-            self.markdown_preview_link_popover_kind(&destination, load_remote_image_url.clone())
-        else {
-            // A link that cannot open still leaves the picture approvable.
-            if let Some(image_url) = load_remote_image_url {
-                self.approve_remote_markdown_image(image_url, cx);
+        match self.markdown_preview_link_popover_kind(
+            region,
+            row_ix,
+            &destination,
+            load_remote_image_url.clone(),
+        ) {
+            Some(kind) => {
+                self.open_markdown_preview_link_popover(kind, anchor_bounds, position, window, cx)
             }
-            return;
-        };
-        self.open_markdown_preview_link_popover(kind, anchor_bounds, position, window, cx);
+            // An anchor, or a link that cannot open, has no menu to carry Load
+            // image: a click on a blocked picture approves it, and once shown
+            // the picture follows its anchor.
+            None => match load_remote_image_url {
+                Some(image_url) => self.approve_remote_markdown_image(image_url, cx),
+                None => {
+                    self.scroll_markdown_preview_to_anchor(region, &destination, cx);
+                }
+            },
+        }
     }
 
     fn open_markdown_preview_link_popover(
@@ -2486,16 +2495,17 @@ impl MainPaneView {
         // the text with a line of its own.
         let mut rows_written = 0usize;
         // A picture is one line of the document however many rows it was given,
-        // and every one of them carries its description. The row the selection
-        // starts on always contributes, so a selection that begins inside a
-        // picture still describes it once.
-        let repeats_a_picture = |this: &Self, source_visible_ix: usize, region| {
+        // and every one of them carries its description; a diff's alignment
+        // padding is no line at all. The row the selection starts on always
+        // contributes, so a selection that begins inside a picture still
+        // describes it once.
+        let copies_nothing = |this: &Self, source_visible_ix: usize, region| {
             source_visible_ix != start.source_visible_ix
-                && this.markdown_preview_row_repeats_a_picture(source_visible_ix, region)
+                && this.markdown_preview_row_copies_nothing(source_visible_ix, region)
         };
         for source_visible_ix in start.source_visible_ix..=end.source_visible_ix {
             if force_inline || self.diff_view == DiffViewMode::Inline {
-                if repeats_a_picture(self, source_visible_ix, DiffTextRegion::Inline) {
+                if copies_nothing(self, source_visible_ix, DiffTextRegion::Inline) {
                     continue;
                 }
                 let line_len = self
@@ -2529,7 +2539,7 @@ impl MainPaneView {
             .then_some(start.region);
 
             if let Some(region) = split_region {
-                if repeats_a_picture(self, source_visible_ix, region) {
+                if copies_nothing(self, source_visible_ix, region) {
                     continue;
                 }
                 let line_len = self.diff_text_full_line_len_for_region(source_visible_ix, region);
@@ -2550,6 +2560,11 @@ impl MainPaneView {
                     &mut expanded_tabs,
                 );
             } else {
+                if copies_nothing(self, source_visible_ix, DiffTextRegion::SplitLeft)
+                    && copies_nothing(self, source_visible_ix, DiffTextRegion::SplitRight)
+                {
+                    continue;
+                }
                 let left_full_len = self.diff_text_full_line_len_for_region(
                     source_visible_ix,
                     DiffTextRegion::SplitLeft,

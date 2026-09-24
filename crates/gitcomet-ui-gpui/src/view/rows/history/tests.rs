@@ -1,17 +1,14 @@
 use super::{
-    DiffSearchMatchEmphasis, MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource,
-    MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
-    MarkdownRemoteImageAccess, build_cached_diff_styled_text, history_message_text_left_px,
-    history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
-    markdown_preview_alert_title_label, markdown_preview_code_background,
+    DiffSearchMatchEmphasis, MarkdownChangeHint, MarkdownImageRoot, MarkdownInlineStyle,
+    MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewRow,
+    MarkdownPreviewRowKind, MarkdownRemoteImageAccess, build_cached_diff_styled_text,
+    history_message_text_left_px, history_scope_shows_graph_color_marker,
+    history_worktree_node_color_ix, markdown_preview_code_background,
     markdown_preview_expanded_slice_range, markdown_preview_image_source,
-    markdown_preview_inline_highlight, markdown_preview_no_picture_sizes,
-    markdown_preview_picture_skeleton, markdown_preview_row_background,
-    markdown_preview_row_height, markdown_preview_row_horizontal_padding,
-    markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
-    markdown_preview_row_typography, worktree_preview_apply_query_overlay,
+    markdown_preview_inline_highlight, markdown_preview_picture_skeleton,
+    markdown_preview_row_background, markdown_preview_row_marker, markdown_preview_row_styled_text,
+    worktree_preview_apply_query_overlay,
 };
-use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
 use crate::view::markdown_preview::MarkdownInlineSpan;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::rows::diff_text::DIFF_WRAP_TAB_EXPANDED_COLUMNS;
@@ -20,7 +17,7 @@ use crate::view::{
     HISTORY_COL_HANDLE_PX, HISTORY_MESSAGE_BORDER_GAP_PX, HISTORY_MESSAGE_BORDER_W_PX,
 };
 use gitcomet_core::domain::LogScope;
-use gpui::{FontWeight, SharedString, px};
+use gpui::{SharedString, px};
 use palette::IntoColor;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -31,7 +28,6 @@ fn markdown_row(kind: MarkdownPreviewRowKind) -> MarkdownPreviewRow {
         text: SharedString::from("text"),
         inline_spans: Arc::new(Vec::new()),
         code_language: None,
-        code_block_horizontal_scroll_hint: false,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 1,
@@ -42,8 +38,9 @@ fn markdown_row(kind: MarkdownPreviewRowKind) -> MarkdownPreviewRow {
         image: None,
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
         table: None,
+        task: None,
+        continues_item: false,
     }
 }
 
@@ -254,119 +251,9 @@ fn worktree_preview_renderer_avoids_full_document_prepare_calls() {
 }
 
 #[test]
-fn markdown_preview_heading_typography_scales_above_body_text() {
-    let theme = AppTheme::gitcomet_light();
-    let paragraph = MarkdownPreviewRow {
-        kind: MarkdownPreviewRowKind::Paragraph,
-        text: SharedString::from("body"),
-        inline_spans: Arc::new(Vec::new()),
-        code_language: None,
-        code_block_horizontal_scroll_hint: false,
-        source_line_range: 0..1,
-        change_hint: MarkdownChangeHint::None,
-        indent_level: 1,
-        blockquote_level: 0,
-        footnote_label: None,
-        alert_kind: None,
-        starts_alert: false,
-        image: None,
-        inline_images: Arc::from(Vec::new()),
-        styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
-        table: None,
-    };
-    let h1 = MarkdownPreviewRow {
-        kind: MarkdownPreviewRowKind::Heading { level: 1 },
-        ..paragraph.clone()
-    };
-    let h2 = MarkdownPreviewRow {
-        kind: MarkdownPreviewRowKind::Heading { level: 2 },
-        ..paragraph.clone()
-    };
-    let h6 = MarkdownPreviewRow {
-        kind: MarkdownPreviewRowKind::Heading { level: 6 },
-        ..paragraph.clone()
-    };
-
-    let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-    let body_typography = markdown_preview_row_typography(
-        theme,
-        &paragraph,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-    let h1_typography = markdown_preview_row_typography(
-        theme,
-        &h1,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-    let h2_typography = markdown_preview_row_typography(
-        theme,
-        &h2,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-    let h6_typography = markdown_preview_row_typography(
-        theme,
-        &h6,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-
-    assert!(h1_typography.font_size > h2_typography.font_size);
-    assert!(h2_typography.font_size > body_typography.font_size);
-    assert!(h6_typography.font_size > body_typography.font_size);
-    assert_eq!(h1_typography.font_weight, Some(FontWeight::BOLD));
-    assert_eq!(h2_typography.font_weight, Some(FontWeight::BOLD));
-    assert_eq!(h6_typography.font_weight, Some(FontWeight::BOLD));
-}
-
-#[test]
-fn markdown_preview_list_rows_match_body_line_height_and_keep_tighter_layout() {
-    let theme = AppTheme::gitcomet_light();
-    let paragraph = markdown_row(MarkdownPreviewRowKind::Paragraph);
-    let list_item = markdown_row(MarkdownPreviewRowKind::ListItem { number: None });
-
-    let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-    let paragraph_typography = markdown_preview_row_typography(
-        theme,
-        &paragraph,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-    let list_typography = markdown_preview_row_typography(
-        theme,
-        &list_item,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-    let paragraph_layout =
-        markdown_preview_row_layout(&paragraph, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-    let list_layout =
-        markdown_preview_row_layout(&list_item, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-
-    assert_eq!(
-        list_typography.line_height,
-        paragraph_typography.line_height
-    );
-    assert!(paragraph_layout.bottom_inset_px > list_layout.bottom_inset_px);
-}
-
-#[test]
-fn markdown_preview_details_summary_rows_are_bold_and_marked() {
-    let theme = AppTheme::gitcomet_light();
+fn markdown_preview_details_summary_rows_are_marked() {
     let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
 
-    let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-    let typography = markdown_preview_row_typography(
-        theme,
-        &row,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-
-    assert_eq!(typography.font_weight, Some(FontWeight::BOLD));
     assert_eq!(
         markdown_preview_row_marker(&row)
             .as_ref()
@@ -376,48 +263,12 @@ fn markdown_preview_details_summary_rows_are_bold_and_marked() {
 }
 
 #[test]
-fn markdown_preview_code_rows_do_not_reserve_bottom_space_for_local_scrollbar() {
-    let first_row = markdown_row(MarkdownPreviewRowKind::CodeLine {
-        is_first: true,
-        is_last: false,
-    });
-    let last_row = markdown_row(MarkdownPreviewRowKind::CodeLine {
-        is_first: false,
-        is_last: true,
-    });
-
-    let first_layout =
-        markdown_preview_row_layout(&first_row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-    let last_layout =
-        markdown_preview_row_layout(&last_row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-
-    assert_eq!(first_layout.top_inset_px, 5.0);
-    assert_eq!(last_layout.bottom_inset_px, 5.0);
-}
-
-#[test]
-fn markdown_preview_nested_code_rows_keep_small_outer_edge_gap() {
-    let mut row = markdown_row(MarkdownPreviewRowKind::CodeLine {
-        is_first: true,
-        is_last: false,
-    });
-    row.indent_level = 3;
-
-    let padding =
-        markdown_preview_row_horizontal_padding(&row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-
-    assert_eq!(padding.left_px, super::MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX);
-    assert_eq!(padding.right_px, super::MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX);
-}
-
-#[test]
 fn markdown_preview_row_marker_preserves_ordered_item_number() {
     let row = MarkdownPreviewRow {
         kind: MarkdownPreviewRowKind::ListItem { number: Some(7) },
         text: SharedString::from("item"),
         inline_spans: Arc::new(Vec::new()),
         code_language: None,
-        code_block_horizontal_scroll_hint: false,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 1,
@@ -428,8 +279,9 @@ fn markdown_preview_row_marker_preserves_ordered_item_number() {
         image: None,
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
         table: None,
+        task: None,
+        continues_item: false,
     };
 
     assert_eq!(
@@ -447,7 +299,6 @@ fn markdown_preview_row_marker_is_none_for_blockquotes_without_list_items() {
         text: SharedString::from("quote"),
         inline_spans: Arc::new(Vec::new()),
         code_language: None,
-        code_block_horizontal_scroll_hint: false,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 1,
@@ -458,8 +309,9 @@ fn markdown_preview_row_marker_is_none_for_blockquotes_without_list_items() {
         image: None,
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
         table: None,
+        task: None,
+        continues_item: false,
     };
 
     assert_eq!(markdown_preview_row_marker(&row), None);
@@ -472,7 +324,6 @@ fn markdown_preview_row_marker_uses_footnote_label_when_present() {
         text: SharedString::from("reference"),
         inline_spans: Arc::new(Vec::new()),
         code_language: None,
-        code_block_horizontal_scroll_hint: false,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 1,
@@ -483,8 +334,9 @@ fn markdown_preview_row_marker_uses_footnote_label_when_present() {
         image: None,
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
         table: None,
+        task: None,
+        continues_item: false,
     };
 
     assert_eq!(
@@ -502,7 +354,6 @@ fn markdown_preview_row_marker_returns_unordered_bullet_inside_blockquote() {
         text: SharedString::from("item"),
         inline_spans: Arc::new(Vec::new()),
         code_language: None,
-        code_block_horizontal_scroll_hint: false,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 1,
@@ -513,8 +364,9 @@ fn markdown_preview_row_marker_returns_unordered_bullet_inside_blockquote() {
         image: None,
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
         table: None,
+        task: None,
+        continues_item: false,
     };
 
     assert_eq!(
@@ -523,29 +375,6 @@ fn markdown_preview_row_marker_returns_unordered_bullet_inside_blockquote() {
             .map(SharedString::as_ref),
         Some("•")
     );
-}
-
-#[test]
-fn markdown_preview_alert_title_label_requires_alert_start_row() {
-    for (kind, label) in [
-        (super::MarkdownAlertKind::Note, "NOTE"),
-        (super::MarkdownAlertKind::Tip, "TIP"),
-        (super::MarkdownAlertKind::Important, "IMPORTANT"),
-        (super::MarkdownAlertKind::Warning, "WARNING"),
-        (super::MarkdownAlertKind::Caution, "CAUTION"),
-    ] {
-        let mut row = markdown_row(MarkdownPreviewRowKind::BlockquoteLine);
-        row.alert_kind = Some(kind);
-        row.starts_alert = true;
-        assert_eq!(markdown_preview_alert_title_label(&row), Some(label));
-
-        row.starts_alert = false;
-        assert_eq!(markdown_preview_alert_title_label(&row), None);
-    }
-
-    let mut row = markdown_row(MarkdownPreviewRowKind::BlockquoteLine);
-    row.starts_alert = true;
-    assert_eq!(markdown_preview_alert_title_label(&row), None);
 }
 
 #[test]
@@ -705,7 +534,12 @@ fn image_paths_resolve_only_inside_the_documents_own_directory() {
     let outside = dir.parent().expect("temp dir parent").join("outside.png");
     std::fs::write(&outside, b"not really a png").expect("write outside fixture");
 
-    let resolve = |source: &str| markdown_preview_image_source(Some(dir.as_path()), source);
+    // The document sits at the root of a working tree at `dir`.
+    let root = MarkdownImageRoot {
+        workdir: Arc::from(dir.as_path()),
+        document: Arc::from(std::path::Path::new("README.md")),
+    };
+    let resolve = |source: &str| markdown_preview_image_source(Some(&root), source);
     let file = |path: &std::path::Path| Some(MarkdownPreviewImageSource::File(path.to_owned()));
     let remote = |url: &str| {
         Some(MarkdownPreviewImageSource::Remote(SharedString::from(
@@ -737,8 +571,8 @@ fn image_paths_resolve_only_inside_the_documents_own_directory() {
         remote("https://example.com/a.png")
     );
 
-    // A file that exists but sits outside the document's tree is refused,
-    // so document content cannot aim the preview at arbitrary files.
+    // A file that exists but sits outside the repository is refused, so
+    // document content cannot aim the preview at arbitrary files.
     assert_eq!(resolve("../outside.png"), None);
     // Schemes a preview has no business dereferencing.
     assert_eq!(resolve("data:image/png;base64,AAAA"), None);
@@ -782,10 +616,7 @@ fn markdown_remote_image_access_requires_exact_url_approval_in_ask_mode() {
 
 /// A picture row carrying `source`, and whatever size the document declared.
 fn picture_row(source: &str, width_px: Option<u32>, height_px: Option<u32>) -> MarkdownPreviewRow {
-    let mut row = markdown_row(MarkdownPreviewRowKind::Image {
-        slice_ix: 0,
-        slice_count: 8,
-    });
+    let mut row = markdown_row(MarkdownPreviewRowKind::Image);
     row.image = Some(Arc::new(crate::view::markdown_preview::MarkdownImage {
         source: SharedString::from(source.to_owned()),
         width_px,
@@ -807,12 +638,11 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
     // The whole point of measuring a picture's header is that the space it
     // is going to take is reserved before it has been decoded, so the
     // document does not jump when it arrives.
-    let empty = markdown_preview_no_picture_sizes();
+    let empty = &MarkdownPreviewPictureSizes::default();
 
     // Read from the file: the picture's own pixels, which is what an
     // undeclared picture lays out at.
     let skeleton = markdown_preview_picture_skeleton(
-        AppTheme::gitcomet_dark(),
         &picture_row("demo.gif", None, None),
         100,
         &measured("demo.gif", 1280, 720),
@@ -822,7 +652,6 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
 
     // A declared size wins, and scales with the UI the way the picture will.
     let skeleton = markdown_preview_picture_skeleton(
-        AppTheme::gitcomet_dark(),
         &picture_row("demo.gif", Some(200), Some(100)),
         200,
         &measured("demo.gif", 1280, 720),
@@ -830,26 +659,17 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
     assert_eq!(skeleton.width, Some(px(400.0)));
     assert_eq!(skeleton.aspect_ratio, Some(2.0));
 
-    // Nothing to go on: fall back to the rows the parser set aside, which
-    // is all the row grid ever had.
-    let skeleton = markdown_preview_picture_skeleton(
-        AppTheme::gitcomet_dark(),
-        &picture_row("demo.gif", None, None),
-        100,
-        empty,
-    );
+    // Nothing to go on: fall back to the room the parser set aside.
+    let skeleton =
+        markdown_preview_picture_skeleton(&picture_row("demo.gif", None, None), 100, empty);
     assert_eq!(skeleton.width, None);
     assert_eq!(skeleton.aspect_ratio, None);
-    assert_eq!(
-        skeleton.reserved_height,
-        markdown_preview_row_height(AppTheme::gitcomet_dark(), 100) * 8.0
-    );
+    assert_eq!(skeleton.reserved_height, px(224.0));
 }
 
 #[test]
 fn a_height_only_skeleton_scales_the_measured_width_with_the_picture() {
     let skeleton = markdown_preview_picture_skeleton(
-        AppTheme::gitcomet_dark(),
         &picture_row("wide.gif", None, Some(60)),
         100,
         &measured("wide.gif", 1280, 720),
@@ -882,20 +702,6 @@ fn a_picture_is_named_the_same_way_wherever_it_is_asked_about() {
             "https://example.com/a.png".to_owned()
         ))
     );
-}
-
-#[test]
-fn heading_rows_are_inset_evenly_above_and_below() {
-    // Headings used to carry more space below than above, so the text rode
-    // high in its row instead of sitting centred in the break.
-    for level in 1..=6u8 {
-        let row = markdown_row(MarkdownPreviewRowKind::Heading { level });
-        let layout = markdown_preview_row_layout(&row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-        assert_eq!(
-            layout.top_inset_px, layout.bottom_inset_px,
-            "h{level} should be inset evenly: {layout:?}"
-        );
-    }
 }
 
 #[test]
@@ -933,46 +739,6 @@ fn markdown_preview_row_styled_text_repairs_spans_that_split_a_multibyte_char() 
 }
 
 #[test]
-fn markdown_preview_table_rows_use_monospace_typography_and_only_headers_are_bold() {
-    let theme = AppTheme::gitcomet_light();
-    let header = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: true });
-    let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
-
-    let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-    let header_typography = markdown_preview_row_typography(
-        theme,
-        &header,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-    let body_typography = markdown_preview_row_typography(
-        theme,
-        &body,
-        &editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    );
-
-    assert_eq!(
-        header_typography
-            .font_family
-            .as_ref()
-            .map(SharedString::as_ref),
-        Some(EDITOR_MONOSPACE_FONT_FAMILY)
-    );
-    assert_eq!(
-        body_typography
-            .font_family
-            .as_ref()
-            .map(SharedString::as_ref),
-        Some(EDITOR_MONOSPACE_FONT_FAMILY)
-    );
-    assert_eq!(header_typography.font_weight, Some(FontWeight::BOLD));
-    assert_eq!(body_typography.font_weight, None);
-    assert_eq!(header_typography.font_size, body_typography.font_size);
-    assert_eq!(header_typography.line_height, body_typography.line_height);
-}
-
-#[test]
 fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
     let theme = AppTheme::gitcomet_dark();
     let row = MarkdownPreviewRow {
@@ -983,7 +749,6 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
         text: SharedString::from("fn\tmain() { let x = 1; }"),
         inline_spans: Arc::new(Vec::new()),
         code_language: Some(crate::view::rows::DiffSyntaxLanguage::Rust),
-        code_block_horizontal_scroll_hint: false,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 1,
@@ -994,8 +759,9 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
         image: None,
         inline_images: Arc::from(Vec::new()),
         styled_text_cache: Default::default(),
-        measured_width_px: Default::default(),
         table: None,
+        task: None,
+        continues_item: false,
     };
 
     let dark_highlights = Arc::clone(&markdown_preview_row_styled_text(theme, &row).highlights);
@@ -1018,14 +784,10 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
 }
 
 #[test]
-fn markdown_preview_spacer_rows_have_no_extra_layout_or_background() {
+fn markdown_preview_spacer_rows_have_no_background_or_marker() {
     let theme = AppTheme::gitcomet_light();
     let row = markdown_row(MarkdownPreviewRowKind::Spacer);
 
-    let layout = markdown_preview_row_layout(&row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
-
-    assert_eq!(layout.top_inset_px, 0.0);
-    assert_eq!(layout.bottom_inset_px, 0.0);
     assert_eq!(markdown_preview_row_background(theme, &row), None);
     assert_eq!(markdown_preview_row_marker(&row), None);
 }
@@ -1303,28 +1065,4 @@ fn local_link_availability_refuses_symlinks_out_of_the_repository() {
     );
 
     std::fs::remove_dir_all(&root).expect("cleanup");
-}
-
-#[test]
-fn the_read_only_row_list_draws_tables_padded_into_columns() {
-    use super::markdown_preview_list_row;
-    let doc = crate::view::markdown_preview::parse_markdown(
-        "Intro.\n\n| Name | Age |\n|---|---|\n| Alexander | 3 |\n",
-    )
-    .expect("parses");
-    let intro = &doc.rows[0];
-    assert!(
-        matches!(
-            markdown_preview_list_row(intro),
-            std::borrow::Cow::Borrowed(_)
-        ),
-        "a row that is not a table is drawn as is"
-    );
-    let texts: Vec<String> = doc
-        .rows
-        .iter()
-        .filter(|row| matches!(row.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .map(|row| markdown_preview_list_row(row).text.to_string())
-        .collect();
-    assert_eq!(texts, vec!["Name      | Age", "Alexander | 3"]);
 }

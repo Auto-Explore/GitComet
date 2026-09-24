@@ -773,14 +773,10 @@ fn install_blame_annotation_mouse_handler(
         if !enabled {
             continue;
         }
-        let target = gpui::ElementId::from((
-            scope.clone(),
-            gpui::SharedString::from(format!(
-                "blame:{name}:{}:{}",
-                commit_id.as_ref(),
-                path.display()
-            )),
-        ));
+        let target = crate::kit::click::canvas_target(
+            "blame-click",
+            (&scope, name, commit_id.as_ref(), &path),
+        );
         let view = view.clone();
         let commit_id = commit_id.clone();
         let historical_path = source_path.as_deref().unwrap_or(&path).to_path_buf();
@@ -3575,24 +3571,32 @@ fn should_handle_row_mouse_event(
     phase == DispatchPhase::Bubble && row_hitbox.is_hovered(window)
 }
 
+/// A row's click target, scoped to the view and to the repo, file and
+/// revisions it shows: a redraw keeps a pending click, new content never
+/// inherits one.
 fn diff_canvas_click_target(
     view: &Entity<MainPaneView>,
     visible_ix: usize,
-    action: &str,
+    action: impl Hash,
     cx: &App,
 ) -> gpui::ElementId {
     let pane = view.read(cx);
-    (
-        gpui::ElementId::View(view.entity_id()),
-        gpui::SharedString::from(format!(
-            "diff:{:?}:{:?}:{}:{}:{visible_ix}:{action}",
+    let mut target = FxHasher::default();
+    if let Some(diff_target) = pane.rendered_diff_target() {
+        crate::view::fingerprint::hash_diff_target(diff_target, &mut target);
+    }
+    crate::kit::click::canvas_target(
+        "diff-click",
+        (
+            view.entity_id(),
             pane.active_repo_id(),
-            pane.rendered_diff_target(),
+            target.finish(),
             pane.rendered_patch_diff_rev(),
-            pane.diff_visible_projection_rev
-        )),
+            pane.diff_visible_projection_rev,
+            visible_ix,
+            action,
+        ),
     )
-        .into()
 }
 
 fn install_diff_row_mouse_handlers(
@@ -3698,7 +3702,7 @@ fn install_diff_row_mouse_handlers(
         let target = diff_canvas_click_target(
             view,
             visible_ix,
-            &format!("stage:{slot}:{:?}", button.kind),
+            ("stage", slot, std::mem::discriminant(&button.kind)),
             cx,
         );
         let view = view.clone();

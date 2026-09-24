@@ -42,8 +42,22 @@ pub(in crate::view) struct DiffSearchMatcher {
     regex_error: Option<String>,
 }
 
+#[cfg(test)]
+thread_local! {
+    // Matchers built since the last take; a regex query compiles on each.
+    static SEARCH_MATCHERS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Search matchers built since the last call, which resets the count.
+#[cfg(test)]
+pub(in crate::view) fn take_search_matchers_built_for_tests() -> usize {
+    SEARCH_MATCHERS_BUILT.with(|built| built.replace(0))
+}
+
 impl DiffSearchMatcher {
     pub(in crate::view) fn new(query: &str, options: DiffSearchOptions) -> Self {
+        #[cfg(test)]
+        SEARCH_MATCHERS_BUILT.with(|built| built.set(built.get() + 1));
         let query = normalize_diff_search_query(query).into_owned();
         let (regex, regex_error) = if options.regex && !query.is_empty() {
             match RegexBuilder::new(&query)
@@ -1686,15 +1700,11 @@ impl MainPaneView {
                     .is_some_and(|row| matcher.is_match(row.text.as_ref())),
                 _ => false,
             };
-            if !matches {
-                continue;
+            if matches {
+                self.conflict_resolver.markdown_preview.columns[column]
+                    .reveal
+                    .request(visible_ix);
             }
-            match column {
-                ThreeWayColumn::Base => &self.conflict_resolver_diff_scroll,
-                ThreeWayColumn::Ours => &self.conflict_preview_ours_scroll,
-                ThreeWayColumn::Theirs => &self.conflict_preview_theirs_scroll,
-            }
-            .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
         }
     }
 
@@ -2554,7 +2564,7 @@ impl MainPaneView {
                     MarkdownSearchSurface::Worktree
                     | MarkdownSearchSurface::DiffInline
                     | MarkdownSearchSurface::DiffSplit,
-                ) => self.markdown_preview_reveal.request(visible_ix),
+                ) => self.markdown_interaction.reveal.request(visible_ix),
                 Some(MarkdownSearchSurface::Conflict) => {
                     self.conflict_markdown_preview_reveal(visible_ix)
                 }
