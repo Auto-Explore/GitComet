@@ -659,16 +659,7 @@ fn status_folder_action(
                 return;
             }
 
-            match area {
-                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-            }
+            crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
             cx.notify();
         })
         .gitcomet_tooltip(theme, format!("{label} this folder").into());
@@ -825,19 +816,7 @@ fn status_row(
                 this.clear_status_multi_selection(repo_id);
             }
 
-            match area {
-                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-            }
-
-            this.clear_status_multi_selection(repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
 
             cx.notify();
         })

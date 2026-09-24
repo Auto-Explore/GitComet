@@ -405,7 +405,12 @@ impl MainPaneView {
                     return true;
                 }
                 self.clear_status_selection_for_shortcut(repo_id, cx);
-                self.stage_or_unstage_status_paths(repo_id, area, paths);
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    area,
+                    paths,
+                );
                 self.rebuild_diff_cache(cx);
                 return true;
             }
@@ -545,7 +550,12 @@ impl MainPaneView {
                             return true;
                         }
                         self.clear_status_selection_for_shortcut(repo_id, cx);
-                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
                         self.rebuild_diff_cache(cx);
                         return true;
                     }
@@ -619,7 +629,12 @@ impl MainPaneView {
                             return true;
                         }
                         self.clear_status_selection_for_shortcut(repo_id, cx);
-                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
                         self.rebuild_diff_cache(cx);
                         return true;
                     }
@@ -1474,7 +1489,7 @@ impl MainPaneView {
                     div()
                         .debug_selector(|| "file_disk_notice_text".to_string())
                         .flex_1()
-                        .min_w(px(200.0))
+                        .min_w(crate::ui_scale::design_px(200.0, cx))
                         .flex()
                         .flex_wrap()
                         .items_center()
@@ -1671,7 +1686,7 @@ impl MainPaneView {
                     .start_slot(svg_icon(
                         "icons/line_break.svg",
                         theme.colors.foreground.primary,
-                        px(14.0),
+                        ui_scale.px(14.0),
                     ))
                     .borderless()
                     .style(components::ButtonStyle::Subtle)
@@ -1752,7 +1767,7 @@ impl MainPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, window, cx| {
@@ -1803,6 +1818,7 @@ impl MainPaneView {
     ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
@@ -1996,7 +2012,7 @@ impl MainPaneView {
                         .child(svg_icon(
                             "icons/chevron_down.svg",
                             theme.colors.foreground.secondary,
-                            px(12.0),
+                            scaled_px(12.0),
                         ))
                         .on_activate(
                             false,
@@ -2022,11 +2038,14 @@ impl MainPaneView {
                 let can_nav_next = self.diff_nav_next_target_ix(&nav_entries).is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
-                    .start_slot(svg_icon(
-                        "icons/arrow_up.svg",
-                        theme.colors.foreground.primary,
-                        px(14.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/arrow_up.svg",
+                            theme.colors.foreground.primary,
+                            scaled_px(14.0),
+                        )
+                        .debug_selector(|| "diff_prev_hunk_icon".to_string()),
+                    )
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_prev)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -2039,11 +2058,14 @@ impl MainPaneView {
                     );
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
-                    .start_slot(svg_icon(
-                        "icons/arrow_down.svg",
-                        theme.colors.foreground.primary,
-                        px(14.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/arrow_down.svg",
+                            theme.colors.foreground.primary,
+                            scaled_px(14.0),
+                        )
+                        .debug_selector(|| "diff_next_hunk_icon".to_string()),
+                    )
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_next)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -2286,11 +2308,14 @@ impl MainPaneView {
                 .is_some_and(|id| id == &diff_action_invoker);
             controls = controls.child(
                 components::Button::new(cog_id, "")
-                    .start_slot(svg_icon(
-                        "icons/cog.svg",
-                        theme.colors.foreground.secondary,
-                        px(14.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/cog.svg",
+                            theme.colors.foreground.secondary,
+                            scaled_px(14.0),
+                        )
+                        .debug_selector(move || format!("{cog_id}_icon")),
+                    )
                     .style(components::ButtonStyle::Transparent)
                     .open(diff_action_active)
                     .selected_bg(theme.colors.interaction.pressed_background)
@@ -2307,11 +2332,14 @@ impl MainPaneView {
             );
             controls = controls.child(
                 components::Button::new("diff_close", "")
-                    .start_slot(svg_icon(
-                        "icons/generic_close.svg",
-                        theme.colors.foreground.secondary,
-                        px(12.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/generic_close.svg",
+                            theme.colors.foreground.secondary,
+                            scaled_px(12.0),
+                        )
+                        .debug_selector(|| "diff_close_icon".to_string()),
+                    )
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         this.clear_status_multi_selection(repo_id, cx);

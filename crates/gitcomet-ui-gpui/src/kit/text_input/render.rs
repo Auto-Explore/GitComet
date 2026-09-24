@@ -49,11 +49,12 @@ impl Render for TextInput {
         // viewport. Opt-in, non-wrapping multiline only.
         let content_width_layout =
             multiline && self.interaction.content_width_layout && !self.soft_wrap;
-        let pad_x = if chromeless { px(0.0) } else { px(8.0) };
+        let scaled_px = |value: f32| crate::ui_scale::design_px_from_window(value, window);
+        let pad_x = if chromeless { px(0.0) } else { scaled_px(8.0) };
         let pad_y = if chromeless || !multiline {
             px(0.0)
         } else {
-            self.vertical_padding_override.unwrap_or(px(8.0))
+            scaled_px(self.vertical_padding_override.unwrap_or(8.0))
         };
         // `min_h_full` alone makes GPUI treat the viewport height as the
         // multiline field's final height, so descendant text taller than the
@@ -132,7 +133,7 @@ impl Render for TextInput {
                 "blurred_text"
             })
             .pl(if leading_icon.is_some() {
-                px(6.0)
+                scaled_px(6.0)
             } else {
                 pad_x
             })
@@ -240,7 +241,7 @@ impl Render for TextInput {
                     div().pl(pad_x).flex_none().child(
                         gpui::svg()
                             .path(icon_path)
-                            .size(crate::ui_scale::design_px_from_window(14.0, window))
+                            .size(scaled_px(14.0))
                             .text_color(style.placeholder),
                     ),
                 )

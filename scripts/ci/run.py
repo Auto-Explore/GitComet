@@ -46,6 +46,16 @@ GIT_PREREQUISITE_SKIP = re.compile(
     r"\bskipping\b[^\n]*(?:Git-for-Windows|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
     re.IGNORECASE,
 )
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+LIBTEST_RESULT = re.compile(r"test \S+(?: - should panic)? \.\.\. (ok|FAILED|ignored(?:, .*)?)")
+LIBTEST_FAILED = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. FAILED\s*$", re.MULTILINE)
+NEXTEST_PASS = re.compile(r"\s*PASS \[\s*(\d+(?:\.\d+)?)s\]")
+NEXTEST_COUNTER = re.compile(r"\s*[A-Z][A-Z0-9 -]*\[[^\]]*\] \(\s*(\d+)/(\d+)\)")
+NEXTEST_OUTPUT = re.compile(r"\s*(?:stdout|stderr|output) ─")
+TEST_TOTAL = re.compile(r"running (\d+) tests?$|\s+Starting (\d+) tests? across")
+# Passes at least this slow print in full; nextest reports its own SLOW at 60s.
+SLOW_PASS_SECONDS = 10
+MARKS_PER_LINE = 100
 
 
 def uses_libtest(package):
@@ -128,6 +138,86 @@ def reject_prerequisite_skips(name, text):
         raise RuntimeError(f"{name}: required Git test did not run: {match.group()}")
 
 
+def annotate_failures(name, tests):
+    # Error annotations surface failures on the run page, outside collapsed groups.
+    with CONSOLE_LOCK:
+        for test in tests:
+            message = f"{name}: {test}".replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Test failed::{message}", flush=True)
+
+
+def failed_junit_cases(junit):
+    return [f"{suite.attrib['name']} {case.attrib['name']}"
+            for suite in ET.parse(junit).getroot().findall("testsuite") for case in suite.findall("testcase")
+            if case.find("failure") is not None or case.find("error") is not None]
+
+
+class DotConsole:
+    """Echo test output as one mark per fast pass; print every other line in full."""
+
+    def __init__(self):
+        self.pending = ""
+        self.column = 0
+        self.done = 0
+        self.total = None
+        self.successes = False
+        self.last_pass = None
+
+    def write(self, text):
+        *lines, self.pending = (self.pending + text).split("\n")
+        for line in lines:
+            self.line(line)
+
+    def close(self):
+        if self.pending:
+            self.line(self.pending)
+            self.pending = ""
+        self.end_marks()
+
+    def line(self, raw):
+        plain = ANSI_ESCAPE.sub("", raw).rstrip()
+        if self.successes:
+            # libtest --show-output: passing tests' output, then every passing name.
+            if plain != "failures:" and not plain.startswith("test result:"):
+                return
+            self.successes = False
+        elif plain == "successes:":
+            self.successes = True
+            return
+        if total := TEST_TOTAL.match(plain):
+            self.total = int(total[1] or total[2])
+        result = LIBTEST_RESULT.fullmatch(plain)
+        passed = NEXTEST_PASS.match(plain)
+        mark = ("." if (result and result[1] == "ok") or (passed and float(passed[1]) < SLOW_PASS_SECONDS)
+                else "i" if result and result[1].startswith("ignored") else None)
+        if mark is None:
+            self.end_marks()
+        if counter := NEXTEST_COUNTER.match(plain):
+            self.done, self.total = int(counter[1]), int(counter[2])
+        elif result:
+            self.done += 1
+        if mark:
+            self.mark(mark)
+            self.last_pass = raw if passed else None
+            return
+        # An immediate success-output block needs the PASS line it belongs to.
+        if self.last_pass is not None and NEXTEST_OUTPUT.match(plain):
+            print(self.last_pass, flush=True)
+        self.last_pass = None
+        print(raw, flush=True)
+
+    def mark(self, char):
+        self.column += 1
+        print(char, end="", flush=True)
+        if self.column == MARKS_PER_LINE:
+            self.end_marks()
+
+    def end_marks(self):
+        if self.column:
+            print(f" {self.done}" + (f"/{self.total}" if self.total else ""), flush=True)
+            self.column = 0
+
+
 def configure_output():
     # Redirected Windows streams can default to cp1252, while Cargo/nextest
     # produce UTF-8. Imported callers (runtime/probes) need the CLI policy too.
@@ -136,13 +226,26 @@ def configure_output():
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
-def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=None, live=True, cancel=None):
-    """Keep complete logs, surface runtime skips, and never mask subprocess failures."""
+def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=None, live=True, cancel=None, dots=False):
+    """Keep complete logs, surface runtime skips, and never mask subprocess failures.
+
+    `dots` only filters the console; the log file always keeps every line.
+    """
     configure_output()
     REPORTS.mkdir(parents=True, exist_ok=True)
     if cancel is not None and cancel.is_set():
         raise RuntimeError("test scheduling cancelled")
     command_text = "$ " + subprocess.list2cmdline([str(arg) for arg in command])
+    console = DotConsole() if dots else None
+
+    def echo(text, *, final=False):
+        if console is None:
+            print(text, end="", flush=True)
+            return
+        console.write(text)
+        if final:
+            console.close()
+
     if live:
         print(f"::group::{name}", flush=True)
         print(command_text, flush=True)
@@ -161,7 +264,7 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
         try:
             while process.poll() is None:
                 if live:
-                    print(reader.read(), end="", flush=True)
+                    echo(reader.read())
                 if cancel is not None and cancel.is_set():
                     raise RuntimeError("test scheduling cancelled")
                 if timeout is not None and time.monotonic() - start >= timeout:
@@ -171,7 +274,7 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
                 time.sleep(0.05)
             code = 124 if timed_out else process.wait()
             if live:
-                print(reader.read(), end="", flush=True)
+                echo(reader.read(), final=True)
         except BaseException:
             stop_process_tree(process)
             record(name, time.monotonic() - start, 130, cancelled=True, timed_out=False,
@@ -180,7 +283,8 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
                 if not live:
                     print(f"::group::{name}", flush=True)
                     print(command_text, flush=True)
-                    print(log_path.read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+                    echo(log_path.read_text(encoding="utf-8", errors="replace"))
+                echo("", final=True)
                 print("::endgroup::", flush=True)
             raise
     if timed_out:
@@ -196,8 +300,10 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
         if not live:
             print(f"::group::{name}", flush=True)
             print(command_text, flush=True)
-            print(log_path.read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+            echo(log_path.read_text(encoding="utf-8", errors="replace"), final=True)
         print("::endgroup::", flush=True)
+        if dots and code:
+            print(f"{name}: full output is {log_path.name} in the uploaded target/ci-reports artifact", flush=True)
     if check and code:
         raise subprocess.CalledProcessError(code, command)
     return code
@@ -358,9 +464,15 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
                     (name == test_filter if exact else test_filter in name))]
     if test_filter and not expected:
         raise RuntimeError(f"Smoke selector {test_filter!r} matches no tests in {binary_id}")
-    # Capture pure-test output so successful result lines cannot interleave
-    # with test stdout. Existing GPUI/smoke diagnostics retain --nocapture.
-    command = [suite["binary-path"], "--format", "pretty"] if verify_names else [suite["binary-path"], "--nocapture"]
+    # Capture output so libtest prints it under the failing test. --show-output
+    # keeps passing tests' skip notices in the log; smoke runs keep --nocapture.
+    dots = verify_names or test_filter is None
+    if not dots:
+        command = [suite["binary-path"], "--nocapture"]
+    elif verify_names:
+        command = [suite["binary-path"], "--format", "pretty"]
+    else:
+        command = [suite["binary-path"], "--format", "pretty", "--show-output"]
     if threads is not None:
         command += ["--test-threads", str(threads)]
     if test_filter:
@@ -374,9 +486,10 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
         if env_overrides:
             name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
         code = run(name, command, cwd=suite["cwd"], env=env, check=False,
-                   timeout=180 if test_filter else 600, live=live, cancel=cancel)
+                   timeout=180 if test_filter else 600, live=live, cancel=cancel, dots=dots)
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
     log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8", errors="replace")
+    annotate_failures(name, LIBTEST_FAILED.findall(log))
     reject_prerequisite_skips(name, log)
     summaries = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", log)
     if not code and (not summaries or sum(map(int, summaries[-1])) != len(expected)):
@@ -461,9 +574,10 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
                    "--ignore-default-filter", "-E", nextest_filter(batches), "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]
-        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel)
+        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True)
         if junit.exists():
             shutil.copyfile(junit, paths(context) / "junit.xml")
+            annotate_failures(f"{context}-nextest", failed_junit_cases(junit))
             check_nextest_results(context, suites, packages, junit, excluded=batched)
         elif not code:
             raise RuntimeError(f"{context}: nextest produced no results")

@@ -6,6 +6,18 @@ pub(crate) fn refresh_and_draw(cx: &mut gpui::VisualTestContext) {
     });
 }
 
+/// Every `.rs` file below `dir`, for guards that scan the crate's own source.
+pub(crate) fn rust_sources_under(dir: &std::path::Path, sources: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read source directory") {
+        let path = entry.expect("read source entry").path();
+        if path.is_dir() {
+            rust_sources_under(&path, sources);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            sources.push(path);
+        }
+    }
+}
+
 pub(crate) fn lock_clipboard_test() -> std::sync::MutexGuard<'static, ()> {
     static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

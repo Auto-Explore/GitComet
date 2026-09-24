@@ -1252,3 +1252,4 @@ mod file_status;
 mod large_file_diff;
 mod markdown;
 mod shortcuts;
+mod status_staging;

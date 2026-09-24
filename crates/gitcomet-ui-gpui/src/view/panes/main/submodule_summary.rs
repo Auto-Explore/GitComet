@@ -513,7 +513,7 @@ impl MainPaneView {
                                         theme.colors.accent.foreground
                                     }
                                 },
-                                px(14.0),
+                                scale.px(14.0),
                             ))
                             .child(
                                 div()

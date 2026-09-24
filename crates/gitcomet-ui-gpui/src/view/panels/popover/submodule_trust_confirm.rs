@@ -83,7 +83,7 @@ pub(super) fn panel(
                     .end_slot(svg_icon(
                         "icons/open_external.svg",
                         theme.colors.accent.foreground,
-                        px(14.0),
+                        scaled_px(14.0),
                     ))
                     .on_click(theme, cx, |_this, _e, _window, cx| {
                         cx.open_url(SUBMODULE_TRUST_CVE_URL);

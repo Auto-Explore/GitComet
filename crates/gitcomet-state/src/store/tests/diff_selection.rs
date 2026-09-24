@@ -1940,6 +1940,411 @@ fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
     assert!(!repo_state.diff_state.diff_reload_in_flight);
 }
 
+fn status_action_state(target: DiffTarget) -> AppState {
+    let mut state = AppState::test_default();
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.set_diff_target(Some(target.clone()));
+    repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+        target,
+        lines: vec![],
+    }));
+    state.repos.push(repo);
+    state.active_repo = Some(RepoId(1));
+    state
+}
+
+fn finish_status_action(
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    paths: Vec<PathBuf>,
+    succeeds: bool,
+) {
+    reduce(
+        &mut FxHashMap::default(),
+        &AtomicU64::new(3),
+        state,
+        Msg::Internal(crate::msg::InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action,
+            paths: paths.into(),
+            result: if succeeds {
+                Ok(())
+            } else {
+                Err(Error::new(ErrorKind::Unsupported("index locked")))
+            },
+        }),
+    );
+}
+
+#[test]
+fn status_actions_close_only_matching_diffs_after_success() {
+    use gitcomet_core::domain::DiffArea;
+    for action in [
+        RepoActionKind::StagePath,
+        RepoActionKind::StagePaths,
+        RepoActionKind::UnstagePath,
+        RepoActionKind::UnstagePaths,
+        RepoActionKind::DiscardWorktreeChangesPath,
+        RepoActionKind::DiscardWorktreeChangesPaths,
+    ] {
+        let action_area = match action {
+            RepoActionKind::UnstagePath | RepoActionKind::UnstagePaths => DiffArea::Staged,
+            _ => DiffArea::Unstaged,
+        };
+        for selected_area in [DiffArea::Unstaged, DiffArea::Staged] {
+            for paths in [
+                vec![],
+                vec![PathBuf::from("shown.rs")],
+                vec![PathBuf::from("other.rs")],
+            ] {
+                // Single-path messages cannot express the all-paths case.
+                if paths.is_empty()
+                    && matches!(
+                        action,
+                        RepoActionKind::StagePath
+                            | RepoActionKind::UnstagePath
+                            | RepoActionKind::DiscardWorktreeChangesPath
+                    )
+                {
+                    continue;
+                }
+                for (content_preview, edit_mode) in [(false, false), (true, false), (true, true)] {
+                    for succeeds in [false, true] {
+                        let target = DiffTarget::WorkingTree {
+                            path: "shown.rs".into(),
+                            area: selected_area,
+                        };
+                        let mut state = status_action_state(target.clone());
+                        state.repos[0].diff_state.content_preview = content_preview;
+                        state.repos[0].diff_state.edit_mode = edit_mode;
+                        let start = match action {
+                            RepoActionKind::StagePath => Msg::StagePath {
+                                repo_id: RepoId(1),
+                                path: paths[0].clone(),
+                            },
+                            RepoActionKind::StagePaths => Msg::StagePaths {
+                                repo_id: RepoId(1),
+                                paths: paths.clone().into(),
+                            },
+                            RepoActionKind::UnstagePath => Msg::UnstagePath {
+                                repo_id: RepoId(1),
+                                path: paths[0].clone(),
+                            },
+                            RepoActionKind::UnstagePaths => Msg::UnstagePaths {
+                                repo_id: RepoId(1),
+                                paths: paths.clone().into(),
+                            },
+                            RepoActionKind::DiscardWorktreeChangesPath => {
+                                Msg::DiscardWorktreeChangesPath {
+                                    repo_id: RepoId(1),
+                                    path: paths[0].clone(),
+                                }
+                            }
+                            RepoActionKind::DiscardWorktreeChangesPaths => {
+                                Msg::DiscardWorktreeChangesPaths {
+                                    repo_id: RepoId(1),
+                                    paths: paths.clone(),
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                        let effects = reduce(
+                            &mut FxHashMap::default(),
+                            &AtomicU64::new(3),
+                            &mut state,
+                            start,
+                        );
+                        assert_eq!(effects.len(), 1);
+                        assert_eq!(
+                            state.repos[0].diff_state.diff_target,
+                            Some(target.clone()),
+                            "starting an action must keep the diff"
+                        );
+                        finish_status_action(
+                            &mut state,
+                            RepoId(1),
+                            action,
+                            paths.clone(),
+                            succeeds,
+                        );
+                        let should_close = succeeds
+                            && !content_preview
+                            && action_area == selected_area
+                            && !(paths.is_empty()
+                                && action == RepoActionKind::DiscardWorktreeChangesPaths)
+                            && (paths.is_empty() || paths.contains(&PathBuf::from("shown.rs")));
+                        let diff = &state.repos[0].diff_state;
+                        assert_eq!(
+                            diff.diff_target,
+                            (!should_close).then_some(target),
+                            "action={action:?} selected={selected_area:?} paths={paths:?} preview={content_preview} edit={edit_mode} succeeds={succeeds}"
+                        );
+                        assert_eq!(diff.content_preview, content_preview);
+                        assert_eq!(diff.edit_mode, edit_mode);
+                        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn discarding_staged_files_closes_only_removed_additions() {
+    use gitcomet_core::domain::DiffArea;
+    for kind in [FileStatusKind::Added, FileStatusKind::Modified] {
+        for has_worktree_changes in [false, true] {
+            for paths in [vec![], vec![PathBuf::from("shown.rs")]] {
+                let target = DiffTarget::WorkingTree {
+                    path: "shown.rs".into(),
+                    area: DiffArea::Staged,
+                };
+                let mut state = status_action_state(target.clone());
+                state.repos[0].staged_status = Loadable::Ready(Arc::new(vec![FileStatus {
+                    path: "shown.rs".into(),
+                    kind,
+                    conflict: None,
+                }]));
+                state.repos[0].worktree_status =
+                    Loadable::Ready(Arc::new(if has_worktree_changes {
+                        vec![FileStatus {
+                            path: "shown.rs".into(),
+                            kind: FileStatusKind::Modified,
+                            conflict: None,
+                        }]
+                    } else {
+                        vec![]
+                    }));
+                let removed =
+                    !paths.is_empty() && kind == FileStatusKind::Added && !has_worktree_changes;
+                finish_status_action(
+                    &mut state,
+                    RepoId(1),
+                    RepoActionKind::DiscardWorktreeChangesPaths,
+                    paths,
+                    true,
+                );
+                assert_eq!(
+                    state.repos[0].diff_state.diff_target,
+                    (!removed).then_some(target)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn status_actions_preserve_historical_and_other_repository_views() {
+    use gitcomet_core::domain::DiffArea;
+    let working = DiffTarget::WorkingTree {
+        path: "shown.rs".into(),
+        area: DiffArea::Unstaged,
+    };
+    for target in [
+        working.clone(),
+        DiffTarget::Commit {
+            commit_id: CommitId("head".into()),
+            path: Some("shown.rs".into()),
+        },
+        DiffTarget::CommitRange {
+            from_commit_id: CommitId("base".into()),
+            to_commit_id: None,
+            path: Some("shown.rs".into()),
+        },
+    ] {
+        let mut state = status_action_state(target.clone());
+        let mut other = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: "/tmp/other".into(),
+            },
+        );
+        other.set_diff_target(Some(working.clone()));
+        state.repos.push(other);
+        finish_status_action(
+            &mut state,
+            RepoId(2),
+            RepoActionKind::StagePaths,
+            vec![],
+            true,
+        );
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));
+        assert_eq!(state.repos[1].diff_state.diff_target, None);
+        if target != working {
+            finish_status_action(
+                &mut state,
+                RepoId(1),
+                RepoActionKind::StagePaths,
+                vec![],
+                true,
+            );
+            assert_eq!(state.repos[0].diff_state.diff_target, Some(target));
+        }
+    }
+}
+
+#[test]
+fn status_actions_retire_only_the_affected_editor_return_diff() {
+    use gitcomet_core::domain::DiffArea;
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for preview in [false, true] {
+            for paths in [
+                vec![],
+                vec![PathBuf::from("shown.rs")],
+                vec![PathBuf::from("other.rs")],
+            ] {
+                for succeeds in [false, true] {
+                    let origin = DiffTarget::WorkingTree {
+                        path: "shown.rs".into(),
+                        area,
+                    };
+                    let mut state = status_action_state(origin.clone());
+                    state.repos[0].diff_state.content_preview = preview;
+                    reduce(
+                        &mut FxHashMap::default(),
+                        &AtomicU64::new(3),
+                        &mut state,
+                        Msg::OpenFileEditor {
+                            repo_id: RepoId(1),
+                            path: "shown.rs".into(),
+                        },
+                    );
+                    finish_status_action(
+                        &mut state,
+                        RepoId(1),
+                        RepoActionKind::StagePaths,
+                        paths.clone(),
+                        succeeds,
+                    );
+                    let retired = succeeds
+                        && !preview
+                        && area == DiffArea::Unstaged
+                        && (paths.is_empty() || paths.contains(&PathBuf::from("shown.rs")));
+                    assert!(state.repos[0].diff_state.edit_mode);
+                    assert_eq!(
+                        state.repos[0].diff_state.edit_return_view.is_none(),
+                        retired
+                    );
+                    reduce(
+                        &mut FxHashMap::default(),
+                        &AtomicU64::new(3),
+                        &mut state,
+                        Msg::ExitDiffEditMode { repo_id: RepoId(1) },
+                    );
+                    assert!(!state.repos[0].diff_state.edit_mode);
+                    assert_eq!(
+                        state.repos[0].diff_state.content_preview,
+                        retired || preview
+                    );
+                    assert_eq!(state.repos[0].diff_state.diff_target, Some(origin));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn status_actions_retire_inline_submodule_views_only_with_the_parent_entry() {
+    use gitcomet_core::domain::DiffArea;
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for paths in [
+            vec![],
+            vec![PathBuf::from("module")],
+            vec![PathBuf::from("inner.rs")],
+        ] {
+            for succeeds in [false, true] {
+                let target = DiffTarget::WorkingTree {
+                    path: "module".into(),
+                    area,
+                };
+                let mut state = status_action_state(target.clone());
+                reduce(
+                    &mut FxHashMap::default(),
+                    &AtomicU64::new(3),
+                    &mut state,
+                    Msg::OpenInlineSubmoduleDiff {
+                        repo_id: RepoId(1),
+                        origin: crate::model::ForeignDiffOrigin::Submodule,
+                        submodule_repo_path: "/tmp/repo/module".into(),
+                        parent_submodule_path: "module".into(),
+                        entries: vec![crate::model::InlineSubmoduleDiffEntry {
+                            path: "inner.rs".into(),
+                            kind: FileStatusKind::Modified,
+                            target: DiffTarget::WorkingTree {
+                                path: "inner.rs".into(),
+                                area: DiffArea::Unstaged,
+                            },
+                            section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+                        }]
+                        .into(),
+                        selected_ix: 0,
+                    },
+                );
+                finish_status_action(
+                    &mut state,
+                    RepoId(1),
+                    RepoActionKind::StagePaths,
+                    paths.clone(),
+                    succeeds,
+                );
+                let retired = succeeds
+                    && area == DiffArea::Unstaged
+                    && (paths.is_empty() || paths.contains(&PathBuf::from("module")));
+                assert_eq!(
+                    state.repos[0].diff_state.diff_target,
+                    (!retired).then_some(target)
+                );
+                assert_eq!(
+                    state.repos[0].diff_state.inline_submodule_diff.is_none(),
+                    retired
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unavailable_git_status_actions_preserve_the_diff() {
+    use gitcomet_core::domain::DiffArea;
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        let target = DiffTarget::WorkingTree {
+            path: "shown.rs".into(),
+            area,
+        };
+        let mut state = status_action_state(target.clone());
+        state.git_runtime.availability =
+            gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                detail: "unavailable in test".into(),
+            };
+        let message = match area {
+            DiffArea::Unstaged => Msg::StagePaths {
+                repo_id: RepoId(1),
+                paths: vec![].into(),
+            },
+            DiffArea::Staged => Msg::UnstagePaths {
+                repo_id: RepoId(1),
+                paths: vec![].into(),
+            },
+        };
+        let effects = reduce(
+            &mut FxHashMap::default(),
+            &AtomicU64::new(3),
+            &mut state,
+            message,
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target));
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    }
+}
+
 #[test]
 fn clear_diff_selection_resets_diff_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();

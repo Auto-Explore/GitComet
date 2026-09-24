@@ -21,7 +21,7 @@ pub(super) fn panel(
                     "commit_prompt_message_scroll_surface",
                     "commit_prompt_message_scrollbar",
                     this.commit_prompt_message_scroll.clone(),
-                    px(200.0),
+                    scaled_px(200.0),
                 )
                 .render(theme, this.commit_prompt_message_input.clone()),
             ),
