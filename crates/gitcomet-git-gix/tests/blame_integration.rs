@@ -1,4 +1,6 @@
 use gitcomet_core::services::GitBackend;
+use gitcomet_core::test_support::git_fixture::append_config;
+use gitcomet_core::test_support::git_fixture::{LinearCommit, import_linear_history};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -44,24 +46,40 @@ fn blame_file_reports_head_and_explicit_revision() {
     let repo = dir.path();
 
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-
-    std::fs::write(repo.join("story.txt"), "one\ntwo\n").unwrap();
-    run_git(repo, &["add", "story.txt"]);
-    run_git(
+    append_config(
         repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
     );
-    let base_id = git_stdout(repo, &["rev-parse", "HEAD"]);
 
-    std::fs::write(repo.join("story.txt"), "one\ntwo updated\n").unwrap();
-    run_git(repo, &["add", "story.txt"]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "update"],
+    let mut import = Command::new("git");
+    test_git_env::apply(&mut import);
+    import.arg("-C").arg(repo);
+    import_linear_history(
+        &mut import,
+        "main",
+        [
+            LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_000,
+                message: "base",
+                path: "story.txt",
+                contents: "one\ntwo\n",
+            },
+            LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_060,
+                message: "update",
+                path: "story.txt",
+                contents: "one\ntwo updated\n",
+            },
+        ],
     );
+    run_git(repo, &["reset", "--hard", "HEAD"]);
+    let base_id = git_stdout(repo, &["rev-parse", "HEAD^"]);
     let head_id = git_stdout(repo, &["rev-parse", "HEAD"]);
 
     let backend = GixBackend;
@@ -135,9 +153,14 @@ fn rename_repo() -> (tempfile::TempDir, String) {
     let repo = dir.path();
 
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join("src/old.txt"), "alpha\nbeta\ngamma\n").unwrap();
@@ -250,9 +273,14 @@ fn blame_worktree_synthesizes_local_blame_for_newly_added_file() {
     let repo = dir.path();
 
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 
     std::fs::write(repo.join("seed.txt"), "seed\n").unwrap();
     run_git(repo, &["add", "seed.txt"]);
@@ -407,9 +435,14 @@ fn blame_worktree_staged_succeeds_for_conflicted_file() {
     let repo = dir.path();
 
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 
     std::fs::write(repo.join("file.txt"), "line1\nline2\nline3\n").unwrap();
     run_git(repo, &["add", "file.txt"]);
@@ -464,9 +497,14 @@ fn blame_file_folds_multiline_subject_and_preserves_body() {
     let repo = dir.path();
 
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 
     // A commit whose subject paragraph spans two physical lines before the blank
     // separator, plus a body. Committed verbatim so the message is stored exactly.

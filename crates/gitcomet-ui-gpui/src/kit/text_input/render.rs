@@ -5,6 +5,12 @@ use crate::kit::click::PointerClickExt as _;
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let action = std::mem::take(&mut self.probe_action);
+        crate::ui_probe::action_phase(action, "rendered", || {
+            let snapshot = self.content.snapshot();
+            serde_json::json!({"window":format!("{:?}", window.window_handle().window_id()),
+                "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()})
+        });
         let style = self.style;
         let focus = self.focus_handle.clone();
         let entity_id = cx.entity().entity_id();

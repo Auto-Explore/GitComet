@@ -270,7 +270,7 @@ impl MainPaneView {
             if self.diff_wrap_visible_cache_key.take().is_some()
                 || !self.diff_wrap_visible_rows.is_empty()
             {
-                self.diff_wrap_visible_rows.clear();
+                self.diff_wrap_visible_rows = Arc::from([]);
                 self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
                 if self.diff_search_has_query() {
                     self.diff_search_recompute_matches_for_current_view_preserving_current();
@@ -308,8 +308,7 @@ impl MainPaneView {
             return;
         }
 
-        self.diff_wrap_visible_rows.clear();
-        self.diff_wrap_visible_rows.reserve(source_len);
+        let mut wrapped_rows = Vec::with_capacity(source_len);
         for source_visible_ix in 0..source_len {
             let (primary_ranges, secondary_ranges) = self.diff_wrap_ranges_for_source_visible_ix(
                 source_visible_ix,
@@ -319,7 +318,7 @@ impl MainPaneView {
             );
             let row_count = primary_ranges.len().max(secondary_ranges.len()).max(1);
             for wrap_ix in 0..row_count {
-                self.diff_wrap_visible_rows.push(DiffWrapVisualRow {
+                wrapped_rows.push(DiffWrapVisualRow {
                     source_visible_ix,
                     wrap_ix,
                     primary_range: diff_wrap_byte_range_at(&primary_ranges, wrap_ix),
@@ -327,6 +326,7 @@ impl MainPaneView {
                 });
             }
         }
+        self.diff_wrap_visible_rows = wrapped_rows.into();
         self.diff_wrap_visible_cache_key = Some(key);
         self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
         if self.diff_search_has_query() {

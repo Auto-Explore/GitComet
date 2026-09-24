@@ -153,6 +153,50 @@ type ActivityOutputAggregator = (
     Option<thread::JoinHandle<()>>,
 );
 
+/// The deadline belongs to the oldest buffered byte, not the latest arrival.
+/// Resetting a receive timeout on every chunk starves progress updates while
+/// a filter or transfer produces a steady stream smaller than the byte limit.
+#[derive(Default)]
+struct ActivityOutputBuffer {
+    chunks: Vec<GitOutputChunk>,
+    bytes: usize,
+    deadline: Option<Instant>,
+}
+
+impl ActivityOutputBuffer {
+    fn push(&mut self, stream: GitOutputStream, text: String, now: Instant) {
+        if text.is_empty() {
+            return;
+        }
+        self.deadline.get_or_insert(now + GIT_ACTIVITY_OUTPUT_FLUSH);
+        self.bytes = self.bytes.saturating_add(text.len());
+        if let Some(last) = self.chunks.last_mut()
+            && last.stream == stream
+        {
+            last.text.push_str(&text);
+        } else {
+            self.chunks.push(GitOutputChunk { stream, text });
+        }
+    }
+
+    fn wait(&self, now: Instant) -> Duration {
+        self.deadline
+            .map(|deadline| deadline.saturating_duration_since(now))
+            .unwrap_or(GIT_ACTIVITY_OUTPUT_FLUSH)
+    }
+
+    fn ready(&self, now: Instant) -> bool {
+        self.bytes >= GIT_ACTIVITY_OUTPUT_BATCH_BYTES
+            || self.deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    fn take(&mut self) -> Vec<GitOutputChunk> {
+        self.bytes = 0;
+        self.deadline = None;
+        std::mem::take(&mut self.chunks)
+    }
+}
+
 fn start_activity_output_aggregator(
     context: Option<&GitOperationContext>,
 ) -> ActivityOutputAggregator {
@@ -161,37 +205,28 @@ fn start_activity_output_aggregator(
     };
     let (sender, receiver) = mpsc::channel::<(GitOutputStream, String)>();
     let handle = thread::spawn(move || {
-        let mut chunks = Vec::<GitOutputChunk>::new();
-        let mut bytes = 0usize;
+        let mut buffer = ActivityOutputBuffer::default();
         loop {
-            match receiver.recv_timeout(GIT_ACTIVITY_OUTPUT_FLUSH) {
+            match receiver.recv_timeout(buffer.wait(Instant::now())) {
                 Ok((stream, text)) => {
-                    bytes = bytes.saturating_add(text.len());
-                    if let Some(last) = chunks.last_mut()
-                        && last.stream == stream
-                    {
-                        last.text.push_str(&text);
-                    } else {
-                        chunks.push(GitOutputChunk { stream, text });
-                    }
-                    if bytes < GIT_ACTIVITY_OUTPUT_BATCH_BYTES {
+                    buffer.push(stream, text, Instant::now());
+                    if !buffer.ready(Instant::now()) {
                         continue;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) if chunks.is_empty() => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) if buffer.chunks.is_empty() => continue,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) if chunks.is_empty() => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) if buffer.chunks.is_empty() => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     context.emit(GitOperationEvent::Output {
-                        chunks: std::mem::take(&mut chunks),
+                        chunks: buffer.take(),
                     });
                     break;
                 }
             }
             context.emit(GitOperationEvent::Output {
-                chunks: std::mem::take(&mut chunks),
+                chunks: buffer.take(),
             });
-            bytes = 0;
         }
     });
     (Some(sender), Some(handle))
@@ -212,6 +247,9 @@ struct Trace2Monitor {
 impl Trace2Monitor {
     fn start(cmd: &mut Command, context: Option<&GitOperationContext>) -> Option<Self> {
         let context = context?.clone();
+        if command_is_known_hook_free(cmd) {
+            return None;
+        }
         let file = tempfile::Builder::new()
             .prefix("gitcomet-trace2-")
             .suffix(".json")
@@ -246,6 +284,53 @@ impl Trace2Monitor {
             let _ = handle.join();
         }
     }
+}
+
+/// Trace2 is only used for hook events. On Windows even a tiny traced command
+/// walks the process ancestry, so avoid enabling it for these known builtins.
+/// Keep unknown programs, global options and subcommands traced: status, for
+/// example, can invoke a configured fsmonitor hook.
+fn command_is_known_hook_free(cmd: &Command) -> bool {
+    // Explicit custom executables may be wrappers that run their own hooks,
+    // even if their file name happens to be git.exe.
+    if cmd.get_program() != "git" {
+        return false;
+    }
+    let Some((subcommand, mut args)) = git_subcommand(cmd, true) else {
+        return false;
+    };
+    match subcommand {
+        "remote" => args.next().is_some_and(|arg| arg == "set-url"),
+        "config" => args.next().is_some_and(|arg| {
+            matches!(
+                arg.to_str(),
+                Some("--get" | "--get-all" | "--get-regexp" | "--list" | "get" | "list")
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// Skips Git's global options and returns the subcommand with the arguments
+/// after it. `None` for a non-UTF-8 argument or no subcommand. `strict` also
+/// rejects global options outside a known side-effect-free set.
+fn git_subcommand(cmd: &Command, strict: bool) -> Option<(&str, std::process::CommandArgs<'_>)> {
+    let mut args = cmd.get_args();
+    while let Some(arg) = args.next() {
+        match arg.to_str()? {
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+                args.next()?;
+            }
+            "--no-optional-locks" | "--no-pager" | "--literal-pathspecs" => {}
+            value if value.starts_with('-') => {
+                if strict {
+                    return None;
+                }
+            }
+            subcommand => return Some((subcommand, args)),
+        }
+    }
+    None
 }
 
 impl Drop for Trace2Monitor {
@@ -427,28 +512,28 @@ pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
 }
 
 fn command_may_require_auth(cmd: &Command) -> bool {
-    let mut args = cmd.get_args();
-    while let Some(arg) = args.next() {
-        let Some(arg) = arg.to_str() else {
-            return false;
-        };
-        match arg {
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
-                let _ = args.next();
-            }
-            value if value.starts_with('-') => {}
-            // Network commands need credentials. The remaining commands can
-            // create signatures and, with `gpg.format = ssh`, invoke
-            // `ssh-keygen -Y sign`, which also obtains its passphrase through
-            // askpass.
-            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit"
-            | "commit-tree" | "tag" | "merge" | "rebase" | "cherry-pick" | "revert" | "am" => {
-                return true;
-            }
-            _ => return false,
-        }
-    }
-    false
+    // Network commands need credentials. The remaining commands can create
+    // signatures and, with `gpg.format = ssh`, invoke `ssh-keygen -Y sign`,
+    // which also obtains its passphrase through askpass.
+    git_subcommand(cmd, false).is_some_and(|(subcommand, _)| {
+        matches!(
+            subcommand,
+            "clone"
+                | "fetch"
+                | "pull"
+                | "push"
+                | "submodule"
+                | "ls-remote"
+                | "commit"
+                | "commit-tree"
+                | "tag"
+                | "merge"
+                | "rebase"
+                | "cherry-pick"
+                | "revert"
+                | "am"
+        )
+    })
 }
 
 fn git_timeout_error(
@@ -794,6 +879,7 @@ fn run_command_with_timeout_auth(
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
 ) -> Result<Output> {
+    let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
@@ -817,7 +903,9 @@ fn run_command_with_timeout_auth(
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
+    timing.stage("spawn");
 
     let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
     let stdout_handle = spawn_read_pipe(
@@ -834,6 +922,7 @@ fn run_command_with_timeout_auth(
     );
     drop(activity_sender);
 
+    timing.stage("workers-start");
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -846,6 +935,7 @@ fn run_command_with_timeout_auth(
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
 
+    timing.stage("child-wait");
     let drain = wait_for_output_workers(
         &mut child,
         || stdout_handle.is_finished() && stderr_handle.is_finished(),
@@ -854,15 +944,19 @@ fn run_command_with_timeout_auth(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    timing.stage("output-drain");
     cancelled |= drain.cancelled;
     timed_out |= drain.timed_out;
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
+    timing.stage("activity-finish");
     if let Some(trace2) = trace2 {
         trace2.finish();
     }
+    timing.stage("trace-finish");
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
@@ -915,6 +1009,7 @@ pub(crate) fn run_git_with_stdin_capture(
 ) -> Result<Vec<u8>> {
     use std::io::Write as _;
 
+    let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     let operation = git_operation::current();
@@ -928,7 +1023,9 @@ pub(crate) fn run_git_with_stdin_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
+    timing.stage("spawn");
 
     let stdin = child.stdin.take();
     let writer = thread::spawn(move || {
@@ -952,6 +1049,7 @@ pub(crate) fn run_git_with_stdin_capture(
     );
     drop(activity_sender);
 
+    timing.stage("workers-start");
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -964,6 +1062,7 @@ pub(crate) fn run_git_with_stdin_capture(
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
 
+    timing.stage("child-wait");
     let drain = wait_for_output_workers(
         &mut child,
         || writer.is_finished() && stdout_handle.is_finished() && stderr_handle.is_finished(),
@@ -972,16 +1071,20 @@ pub(crate) fn run_git_with_stdin_capture(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    timing.stage("output-drain");
     cancelled |= drain.cancelled;
     timed_out |= drain.timed_out;
 
     let _ = writer.join();
     let stdout = stdout_handle.join().unwrap_or_default();
     let stderr = stderr_handle.join().unwrap_or_default();
+    timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
+    timing.stage("activity-finish");
     if let Some(trace2) = trace2 {
         trace2.finish();
     }
+    timing.stage("trace-finish");
 
     if cancelled {
         return Err(Error::new(ErrorKind::Cancelled));
@@ -1054,6 +1157,7 @@ where
     T: Send + 'static,
     F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 {
+    let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
@@ -1073,7 +1177,9 @@ where
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
+    timing.stage("spawn");
     let stdout = child.stdout.take().ok_or_else(|| {
         Error::new(ErrorKind::Backend(format!(
             "{label} did not provide piped stdout"
@@ -1090,6 +1196,7 @@ where
     let stdout_handle = thread::spawn(move || parse_stdout(stdout));
 
     let timeout = git_command_timeout();
+    timing.stage("workers-start");
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -1102,6 +1209,7 @@ where
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
 
+    timing.stage("child-wait");
     let drain = wait_for_output_workers(
         &mut child,
         || stdout_handle.is_finished() && stderr_handle.is_finished(),
@@ -1110,6 +1218,7 @@ where
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    timing.stage("output-drain");
     cancelled |= drain.cancelled;
     timed_out |= drain.timed_out;
 
@@ -1117,10 +1226,13 @@ where
         .join()
         .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
+    timing.stage("activity-finish");
     if let Some(trace2) = trace2 {
         trace2.finish();
     }
+    timing.stage("trace-finish");
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
@@ -1577,6 +1689,79 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_progress_deadline_survives_continuous_small_chunks() {
+        let start = Instant::now();
+        let mut buffer = ActivityOutputBuffer::default();
+        for ms in [0, 20, 40, 60, 80] {
+            buffer.push(
+                GitOutputStream::Stderr,
+                "progress\r".into(),
+                start + Duration::from_millis(ms),
+            );
+            assert!(!buffer.ready(start + Duration::from_millis(ms)));
+        }
+        assert_eq!(
+            buffer.wait(start + Duration::from_millis(90)),
+            Duration::from_millis(10)
+        );
+        buffer.push(
+            GitOutputStream::Stderr,
+            "still transferring\r".into(),
+            start + GIT_ACTIVITY_OUTPUT_FLUSH,
+        );
+        assert!(buffer.ready(start + GIT_ACTIVITY_OUTPUT_FLUSH));
+        let chunks = buffer.take();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].text.ends_with("still transferring\r"));
+        assert!(!buffer.ready(start + Duration::from_secs(1)));
+        assert_eq!(
+            buffer.wait(start + Duration::from_secs(1)),
+            GIT_ACTIVITY_OUTPUT_FLUSH
+        );
+    }
+
+    #[test]
+    fn activity_progress_flushes_large_output_and_preserves_stream_order() {
+        let start = Instant::now();
+        let mut buffer = ActivityOutputBuffer::default();
+        buffer.push(GitOutputStream::Stdout, "out".into(), start);
+        buffer.push(GitOutputStream::Stderr, "err".into(), start);
+        buffer.push(
+            GitOutputStream::Stdout,
+            "x".repeat(GIT_ACTIVITY_OUTPUT_BATCH_BYTES - 6),
+            start,
+        );
+        assert!(buffer.ready(start));
+        let chunks = buffer.take();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].stream, GitOutputStream::Stdout);
+        assert_eq!(chunks[1].stream, GitOutputStream::Stderr);
+        assert_eq!(chunks[2].stream, GitOutputStream::Stdout);
+    }
+
+    #[test]
+    fn activity_output_drains_final_partial_batch_on_disconnect() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let context = GitOperationContext::new("output", move |_, event| {
+            if let GitOperationEvent::Output { chunks } = event {
+                captured.lock().unwrap().extend(chunks);
+            }
+        });
+        let (sender, handle) = start_activity_output_aggregator(Some(&context));
+        sender
+            .as_ref()
+            .unwrap()
+            .send((GitOutputStream::Stderr, "final λ\r".into()))
+            .unwrap();
+        drop(sender);
+        join_activity_output_aggregator(handle);
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].text, "final λ\r");
+    }
     use gitcomet_core::auth::askpass::{
         GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV, GITCOMET_ASKPASS_PROMPT_LOG_ENV, PromptAuth,
     };
@@ -1587,7 +1772,6 @@ mod tests {
         GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
     };
     use std::process::Command;
-    #[cfg(unix)]
     use std::sync::Mutex;
 
     const GITPY_FOR_EACH_REF_WITH_PATH_COMPONENT: &[u8] =
@@ -1745,7 +1929,6 @@ mod tests {
         shell_command(&format!("Start-Sleep -Seconds {seconds}"))
     }
 
-    #[cfg(unix)]
     fn run_git_test_setup(workdir: &Path, args: &[&str]) {
         let mut cmd = git_workdir_cmd_for(workdir);
         cmd.args(args);
@@ -1758,19 +1941,66 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     fn write_test_hook(workdir: &Path, name: &str, script: &str) {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let hooks = workdir.join(".githooks");
         std::fs::create_dir_all(&hooks).expect("create test hooks directory");
         let path = hooks.join(name);
         std::fs::write(&path, script).expect("write test hook");
-        let mut permissions = std::fs::metadata(&path)
-            .expect("read test hook metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions).expect("make test hook executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(&path)
+                .expect("read test hook metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).expect("make test hook executable");
+        }
+    }
+
+    #[test]
+    fn hook_free_commands_do_not_enable_trace2() {
+        let operation = GitOperationContext::new("test", |_, _| {});
+        for args in [
+            vec![
+                "-c",
+                "protocol.ext.allow=never",
+                "-C",
+                "unicode space é",
+                "remote",
+                "set-url",
+                "--",
+                "origin",
+                "url",
+            ],
+            vec!["--no-optional-locks", "config", "--get", "core.editor"],
+            vec!["config", "get", "user.name"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.args(args);
+            assert!(Trace2Monitor::start(&mut cmd, Some(&operation)).is_none());
+            assert!(!cmd.get_envs().any(|(key, _)| key == "GIT_TRACE2_EVENT"));
+        }
+        for args in [
+            vec!["commit", "-m", "hook"],
+            vec!["status", "--porcelain=v2"],
+            vec!["remote", "update"],
+            vec!["config", "--edit"],
+            vec!["--paginate", "config", "--list"],
+            vec!["--unknown", "config", "--list"],
+            vec!["custom-alias"],
+            vec!["-C"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.args(args);
+            assert!(!command_is_known_hook_free(&cmd));
+            assert!(Trace2Monitor::start(&mut cmd, Some(&operation)).is_some());
+        }
+        let mut wrapper = Command::new("custom-git-wrapper");
+        wrapper.args(["remote", "set-url", "origin", "url"]);
+        assert!(!command_is_known_hook_free(&wrapper));
+        let mut custom_git = Command::new("custom/bin/git.exe");
+        custom_git.args(["remote", "set-url", "origin", "url"]);
+        assert!(!command_is_known_hook_free(&custom_git));
     }
 
     #[test]
@@ -1842,7 +2072,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn operation_context_reports_real_hooks_output_and_exit_codes() {
         let repo = tempfile::tempdir().expect("create test repository");

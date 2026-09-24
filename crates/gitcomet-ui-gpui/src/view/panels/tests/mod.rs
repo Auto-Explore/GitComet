@@ -1233,8 +1233,10 @@ pub(super) fn set_ui_scale_percent_for_test(
 mod comparison;
 mod conflict;
 mod control_interaction;
+mod diff_marker_refresh;
 mod diff_stage_gutter;
 mod file_diff;
+mod file_disk_notice;
 mod file_editor;
 mod file_preview;
 mod file_status;

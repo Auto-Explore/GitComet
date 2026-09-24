@@ -10,6 +10,22 @@ use std::thread;
 
 type Task = Box<dyn FnOnce() + Send + 'static>;
 
+/// One replaceable queue entry. Already-running work owns its cancellation
+/// token; obsolete requests that haven't started release their captures here.
+#[derive(Clone, Default)]
+pub(super) struct LatestTaskSlot(Arc<std::sync::Mutex<Option<Task>>>);
+
+/// One slot per selected-diff load kind. Sharing a slot would let complementary
+/// results replace each other before running, so each kind gets its own field.
+#[derive(Clone, Default)]
+pub(super) struct SelectedDiffSlots {
+    pub(super) patch: LatestTaskSlot,
+    pub(super) file_text: LatestTaskSlot,
+    pub(super) submodule_summary: LatestTaskSlot,
+    pub(super) file_image: LatestTaskSlot,
+    pub(super) preview_text: LatestTaskSlot,
+}
+
 static WORKER_TASK_PANICS: AtomicU64 = AtomicU64::new(0);
 
 /// Mirrors [`super::send_diagnostics::send_failure_count`] so a recovered task
@@ -93,6 +109,42 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
 }
 
 impl TaskExecutor {
+    /// Coalesce queued work without occupying a worker for every obsolete request.
+    /// `Some` means a queue entry already owns this slot. Taking it before running
+    /// allows a concurrent replacement to enqueue its own entry; do not hold the
+    /// slot lock across `task()`. Running work still needs cooperative cancellation.
+    /// Returns `true` when this replaced a queued request that had not started.
+    pub(super) fn spawn_latest(
+        &self,
+        slot: &LatestTaskSlot,
+        task: impl FnOnce() + Send + 'static,
+    ) -> bool {
+        let context = mergetool_trace::current_capture_context();
+        let task: Task = Box::new(move || {
+            let _trace = context.as_ref().map(mergetool_trace::attach_capture);
+            task();
+        });
+        let already_queued = slot
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(task)
+            .is_some();
+        if !already_queued {
+            let queued = slot.clone();
+            let sent = self.try_spawn(move || {
+                let task = queued.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(task) = task {
+                    task();
+                }
+            });
+            // No queue entry owns the slot, so later requests must not wait on one.
+            if !sent {
+                slot.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+            }
+        }
+        already_queued
+    }
     #[cfg_attr(feature = "test-support", allow(dead_code))]
     pub(super) fn new(threads: usize) -> Self {
         let (tx, rx) = mpsc::channel::<Task>();
@@ -164,6 +216,11 @@ impl TaskExecutor {
     }
 
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
+        self.try_spawn(task);
+    }
+
+    /// `false` when the worker queue is disconnected (the failure is recorded).
+    fn try_spawn(&self, task: impl FnOnce() + Send + 'static) -> bool {
         let mergetool_trace_context = mergetool_trace::current_capture_context();
         send_or_log(
             &self.tx,
@@ -175,7 +232,7 @@ impl TaskExecutor {
             }),
             SendFailureKind::ExecutorQueue,
             "TaskExecutor::spawn",
-        );
+        )
     }
 }
 
@@ -183,6 +240,43 @@ impl TaskExecutor {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn latest_slot_replaces_pending_work_without_blocking_other_slots() {
+        let executor = TaskExecutor::new(1);
+        let (release_tx, release_rx) = mpsc::channel();
+        executor.spawn(move || {
+            release_rx.recv().unwrap();
+        });
+        let slot = LatestTaskSlot::default();
+        let (done_tx, done_rx) = mpsc::channel();
+        for value in 0..100 {
+            let tx = done_tx.clone();
+            executor.spawn_latest(&slot, move || {
+                tx.send(value).unwrap();
+            });
+        }
+        let other = LatestTaskSlot::default();
+        executor.spawn_latest(&other, move || {
+            done_tx.send(100).unwrap();
+        });
+        release_tx.send(()).unwrap();
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 99);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 100);
+        assert!(done_rx.recv_timeout(Duration::from_secs(5)).is_err());
+    }
+
+    #[test]
+    fn latest_slot_is_released_when_the_queue_is_disconnected() {
+        // No workers: the shared receiver is dropped, so every send fails.
+        let executor = TaskExecutor::new(0);
+        let slot = LatestTaskSlot::default();
+        executor.spawn_latest(&slot, || {});
+        assert!(
+            slot.0.lock().unwrap().is_none(),
+            "a failed enqueue must not leave the slot claiming a queued entry"
+        );
+    }
 
     #[test]
     fn worker_keeps_serving_tasks_after_one_panics() {

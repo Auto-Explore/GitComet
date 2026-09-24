@@ -501,6 +501,14 @@ impl MainPaneView {
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
+                    // Rows swapped in place keep every key the visible-rows pass
+                    // checks when a line changed without adding one (a modify
+                    // row), so its scrollbar markers would keep marking the old
+                    // rows. Recompute them against the new ones.
+                    if this.diff_visible_is_file_view && !this.is_collapsed_diff_projection_active()
+                    {
+                        this.diff_scrollbar_markers_cache = this.compute_diff_scrollbar_markers();
+                    }
                     this.clear_diff_text_projected_highlights();
                     // The rows just changed under their own indices. On the
                     // clearing path `reset_file_diff_cache_data` already did
@@ -510,8 +518,8 @@ impl MainPaneView {
                     this.reset_file_diff_word_highlight_caches();
                     #[cfg(test)]
                     {
-                        this.file_diff_cache_rows = rebuild.rows;
-                        this.file_diff_inline_cache = rebuild.inline_rows;
+                        this.file_diff_cache_rows = rebuild.rows.into();
+                        this.file_diff_inline_cache = rebuild.inline_rows.into();
                     }
                     let split_left_edit_hint = previous_old_text.as_ref().and_then(|previous| {
                         diff_syntax_edit_from_text_change(
@@ -770,7 +778,7 @@ impl MainPaneView {
         };
 
         self.reset_collapsed_diff_projection(clear_reveals);
-        self.diff_cache.clear();
+        self.diff_cache = Arc::from([]);
         self.diff_row_provider = None;
         self.diff_split_row_provider = None;
         self.diff_cache_repo_id = None;
@@ -785,9 +793,9 @@ impl MainPaneView {
         self.diff_visual_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
         self.diff_header_display_cache.clear();
-        self.diff_split_cache.clear();
+        self.diff_split_cache = Arc::from([]);
         self.diff_split_cache_len = 0;
-        self.diff_visible_indices.clear();
+        self.diff_visible_indices = Arc::from([]);
         self.diff_visible_inline_map = None;
         self.diff_visible_cache_len = 0;
         self.diff_visible_is_file_view = false;

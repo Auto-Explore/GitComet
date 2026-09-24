@@ -166,6 +166,12 @@ fn complete(
     if !same_target || down.button != up.button || cx.has_active_drag() {
         return None;
     }
+    let action = crate::ui_probe::begin_action("click");
+    crate::ui_probe::action_phase(action, "accepted", || {
+        serde_json::json!({
+            "window":format!("{:?}", window.window_handle().window_id())
+        })
+    });
     Some(ClickEvent::Mouse(MouseClickEvent {
         down,
         up: up.clone(),

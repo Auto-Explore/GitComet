@@ -2,6 +2,7 @@ use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::main::DiskSurface;
 use crate::view::panes::main::diff_search::DiffSearchOptions;
 use gpui::Focusable;
 
@@ -1108,6 +1109,7 @@ impl MainPaneView {
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_search_cancel_pending_query_recompute();
         self.diff_search_active = false;
+        self.diff_search_document = None;
         self.diff_search_query = SharedString::default();
         self.diff_search_regex_error = None;
         self.diff_search_matches.clear();
@@ -1135,13 +1137,13 @@ impl MainPaneView {
         window.focus(&focus, cx);
     }
 
-    fn refresh_diff_search_after_option_change(&mut self) {
+    fn refresh_diff_search_after_option_change(&mut self, cx: &mut gpui::Context<Self>) {
         let query = self.diff_search_query.clone();
         self.invalidate_diff_text_query_overlay_cache(query.as_ref(), self.diff_search_options);
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
         self.diff_search_cancel_pending_query_recompute();
-        self.diff_search_recompute_matches_and_scroll_to_first();
+        self.diff_search_schedule_query_recompute(self.diff_search_query.clone(), cx);
     }
 
     fn set_diff_search_options(
@@ -1152,7 +1154,7 @@ impl MainPaneView {
     ) {
         if self.diff_search_options != next {
             self.diff_search_options = next;
-            self.refresh_diff_search_after_option_change();
+            self.refresh_diff_search_after_option_change(cx);
         }
         self.focus_diff_search_input(window, cx);
         cx.notify();
@@ -1394,6 +1396,119 @@ impl MainPaneView {
         self.store.dispatch(Msg::ExitDiffEditMode { repo_id });
         self.restore_diff_panel_focus_after_toolbar_action(window, cx);
         cx.notify();
+    }
+
+    /// The "File changed on disk" strip, when the notice names the surface on
+    /// screen. Sits between the toolbar and the body; the body itself is left
+    /// exactly as it was, which is the point.
+    fn render_file_disk_notice(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let notice = self.file_disk_notice_for_screen()?;
+        let name = notice
+            .abs_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "this file".to_string());
+        // Read live, not at notice time: the user may have typed since.
+        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty;
+        let actor = if notice.by_git_operation {
+            "A git operation"
+        } else {
+            "Another program"
+        };
+        let verb = if notice.deleted {
+            "deleted"
+        } else {
+            "modified"
+        };
+
+        let reload_button = components::Button::new("file_disk_notice_reload", "Reload")
+            .style(if discards_edits {
+                components::ButtonStyle::Danger
+            } else {
+                components::ButtonStyle::Filled
+            })
+            .on_click(theme, cx, |this, _e, _window, cx| {
+                this.reload_file_from_disk_notice(cx);
+            })
+            .debug_selector(|| "file_disk_notice_reload".to_string());
+        let dismiss_button = components::Button::new(
+            "file_disk_notice_dismiss",
+            if discards_edits {
+                "Keep my edits"
+            } else {
+                "Dismiss"
+            },
+        )
+        .style(components::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, _window, cx| {
+            this.dismiss_file_disk_notice(cx);
+        })
+        .debug_selector(|| "file_disk_notice_dismiss".to_string());
+
+        Some(
+            div()
+                .id("file_disk_notice")
+                .debug_selector(|| "file_disk_notice".to_string())
+                .mx_2()
+                .mt_1()
+                .px_2()
+                .py_1()
+                // One row: message left, buttons right. The buttons drop below
+                // only once the pane is too narrow for both.
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap_x_3()
+                .gap_y_1()
+                .bg(theme.colors.notice.background)
+                .border_1()
+                .border_color(theme.colors.notice.border)
+                .rounded(px(theme.radii.panel))
+                .text_size(theme.ui_text(13.0))
+                .child(
+                    div()
+                        .debug_selector(|| "file_disk_notice_text".to_string())
+                        .flex_1()
+                        .min_w(px(200.0))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_x_2()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(theme.colors.notice.foreground)
+                                .child("File changed on disk"),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.colors.notice.secondary)
+                                .child(format!("{actor} {verb} {name}.")),
+                        )
+                        .when(discards_edits, |d| {
+                            d.child(
+                                div()
+                                    .text_color(theme.colors.notice.secondary)
+                                    .child("Reloading discards your unsaved edits."),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(reload_button)
+                        .child(dismiss_button),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The explicit "Save" button, shown while editing with auto-save off.
@@ -2241,6 +2356,8 @@ impl MainPaneView {
                     .overflow_hidden()
                     .child(controls),
             );
+
+        let disk_notice = self.render_file_disk_notice(theme, cx);
 
         let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)
@@ -3270,6 +3387,7 @@ impl MainPaneView {
                     .border_b_1()
                     .border_color(theme.colors.stroke.default),
             )
+            .when_some(disk_notice, |d, strip| d.child(strip))
             .child(
                 div()
                     .id("diff_body_container")
