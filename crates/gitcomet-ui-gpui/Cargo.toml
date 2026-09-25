@@ -13,6 +13,15 @@ workspace = true
 
 [features]
 default = []
+# Ad-hoc workflow profiling: Tracy zones, allocation attribution, and the
+# workflow capture/export actions. Off by default so a normal release build
+# compiles none of it and keeps the plain mimalloc global allocator.
+workflow-profiler = ["dep:tracy-client", "profiling/profile-with-tracy"]
+# Adds per-frame GPU execution timing. Naming `gpui_wgpu/gpu-timing` only
+# resolves while gpui-ce is patched to an on-disk checkout carrying that
+# feature (see the `[patch]` block in the workspace Cargo.toml); the pinned
+# upstream rev has no such feature yet.
+workflow-profiler-gpu = ["workflow-profiler", "dep:gpui_wgpu", "gpui_wgpu/gpu-timing"]
 benchmarks = [
     "gitcomet-core/benchmarks",
     "gitcomet-state/benchmarks",
@@ -32,12 +41,14 @@ gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
+gpui_wgpu = { workspace = true, optional = true }
 image = { workspace = true }
 jiff = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
 mimalloc = { workspace = true }
 palette = { workspace = true }
+profiling = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
@@ -50,6 +61,7 @@ smol = { workspace = true }
 stats_alloc = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
+tracy-client = { workspace = true, optional = true }
 tree-sitter = { workspace = true }
 tree-sitter-asm = { workspace = true }
 tree-sitter-bash = { workspace = true }

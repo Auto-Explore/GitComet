@@ -12,6 +12,9 @@ mod linux_gui_env;
 mod menu_labels;
 #[doc(hidden)]
 pub mod perf_alloc;
+#[cfg(feature = "workflow-profiler")]
+#[doc(hidden)]
+pub mod perf_capture;
 #[doc(hidden)]
 pub mod perf_ram_guard;
 #[doc(hidden)]

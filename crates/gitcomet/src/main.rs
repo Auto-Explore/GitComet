@@ -27,6 +27,7 @@ use git_root::is_git_root_marker;
 use gitcomet_core::process::install_git_executable_path;
 #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
 use linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
+#[cfg(not(feature = "workflow-profiler"))]
 use mimalloc::MiMalloc;
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -40,8 +41,16 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 }
 use std::io::{self, Write};
 
+#[cfg(not(feature = "workflow-profiler"))]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+// A workflow-profiler build routes every allocation through Tracy's tracker on
+// its way to mimalloc, so captures can attribute allocations to a call stack.
+#[cfg(feature = "workflow-profiler")]
+#[global_allocator]
+static GLOBAL: gitcomet_ui_gpui::perf_capture::CaptureAllocator =
+    gitcomet_ui_gpui::perf_capture::capture_allocator();
 
 trait AppRunResult {
     fn stdout(&self) -> &str;

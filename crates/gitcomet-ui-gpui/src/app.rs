@@ -620,6 +620,9 @@ pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
 }
 
 fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    #[cfg(feature = "workflow-profiler")]
+    crate::perf_capture::init(cx);
+
     install_global_diff_shortcut_fallback(cx);
 
     let new_window_backend = Arc::clone(&backend);
@@ -834,6 +837,13 @@ fn install_macos_app_menu(cx: &mut App, backend: Arc<dyn GitBackend>) {
 }
 
 fn bind_app_keys(cx: &mut App) {
+    #[cfg(feature = "workflow-profiler")]
+    cx.bind_keys([KeyBinding::new(
+        "secondary-alt-p",
+        crate::perf_capture::ToggleWorkflowCapture,
+        None,
+    )]);
+
     cx.bind_keys([
         KeyBinding::new("secondary-n", NewWindow, None),
         KeyBinding::new("secondary-shift-n", NewWindow, None),

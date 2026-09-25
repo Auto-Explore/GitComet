@@ -20,6 +20,13 @@ ui-gpui-runtime = [
 ]
 ui-gpui = ["ui-gpui-runtime"]
 gix = ["dep:gitcomet-git-gix"]
+# Ad-hoc workflow profiling. Off by default; swaps in the Tracy-tracking
+# global allocator and enables the capture action. See docs/profiling.md.
+workflow-profiler = ["ui-gpui-runtime", "gitcomet-ui-gpui/workflow-profiler"]
+workflow-profiler-gpu = [
+    "workflow-profiler",
+    "gitcomet-ui-gpui/workflow-profiler-gpu",
+]
 
 [dependencies]
 clap = { workspace = true }
