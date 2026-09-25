@@ -2790,6 +2790,46 @@ fn anchors_resolve_to_their_heading_row() {
 }
 
 #[test]
+fn anchor_lookups_slug_each_heading_once_per_document() {
+    // Hovering a link checks where it goes and clicking it looks again; each
+    // lookup used to slug every heading up to the one it named.
+    let source: String = (0..100)
+        .map(|ix| format!("## Section {ix}\n\nText.\n\n"))
+        .collect();
+    let doc = parse(&source);
+    let untouched = doc.clone();
+    take_heading_slugs_for_tests();
+    for _ in 0..10 {
+        assert!(markdown_preview_anchor_row(&doc, "section-99").is_some());
+        assert!(markdown_preview_anchor_row(&doc, "Section-50").is_some());
+        assert_eq!(markdown_preview_anchor_row(&doc, "missing"), None);
+    }
+    assert_eq!(take_heading_slugs_for_tests(), 100);
+    assert_eq!(doc, untouched, "the ids are not part of what a document is");
+}
+
+#[test]
+fn parsing_indexes_headings_only_for_a_document_that_links_to_one() {
+    // Parsing runs off the UI thread; the first hover over a link does not.
+    take_heading_slugs_for_tests();
+    let linked = parse("[Go](#section-1)\n\n## Section 1\n\n## Section 2\n");
+    assert_eq!(take_heading_slugs_for_tests(), 2, "indexed while parsing");
+    let section_2 = linked
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "Section 2");
+    assert_eq!(markdown_preview_anchor_row(&linked, "section-2"), section_2);
+    assert_eq!(take_heading_slugs_for_tests(), 0, "the hover only looks up");
+
+    parse("[Web](https://example.com)\n\n## Section 1\n");
+    assert_eq!(
+        take_heading_slugs_for_tests(),
+        0,
+        "no link to a heading, nothing to index"
+    );
+}
+
+#[test]
 fn an_anchor_link_in_a_table_cell_keeps_its_destination() {
     let doc = parse(
         "| Badge | Meaning |\n| --- | --- |\n| **Untrusted key** | See [Trust a GPG key](#trust-a-gpg-key). |\n",

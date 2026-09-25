@@ -374,19 +374,19 @@ impl MainPaneView {
     /// text it acts on.
     ///
     /// `range` is in the offset space that method reports. A range that wraps
-    /// reports its first visual line only: that is where it begins, and an end
-    /// x taken from a later line says nothing about how far the first one runs.
+    /// reports its part on the visual line nearest `near` — the line clicked.
     fn diff_text_bounds_in_hitbox(
         &self,
         hitbox: &DiffTextHitbox,
         range: Range<usize>,
+        near: Point<Pixels>,
     ) -> Option<Bounds<Pixels>> {
         if !hitbox.cells.is_empty() {
             let cell = hitbox.cells.iter().find(|cell| {
                 (cell.text_start_offset..=cell.text_start_offset + cell.text_len)
                     .contains(&range.start)
             })?;
-            return self.diff_text_bounds_in_hitbox(cell, range);
+            return self.diff_text_bounds_in_hitbox(cell, range, near);
         }
         let local = |offset: usize| {
             offset
@@ -396,21 +396,20 @@ impl MainPaneView {
         let (start, end) = (local(range.start), local(range.end));
 
         if let Some(wrapped) = &hitbox.wrapped {
-            let top_left = wrapped
-                .layout
-                .position_for_index(wrapped.painted_offset(start))?;
-            let right = wrapped
-                .layout
-                .position_for_index(wrapped.painted_offset(end))
-                .filter(|tail| tail.y <= top_left.y)
-                .map_or(hitbox.bounds.right(), |tail| tail.x);
-            return Some(Bounds::from_corners(
-                top_left,
-                point(
-                    right.max(top_left.x),
-                    top_left.y + wrapped.layout.line_height(),
-                ),
-            ));
+            // One box per visual line, as the selection paints: gpui puts an
+            // offset at a wrap boundary at the end of the line above, so a
+            // range that starts a line would otherwise begin on the previous one.
+            let rects = rows::markdown_flow_range_rects(
+                &wrapped.layout,
+                wrapped.painted_offset(start),
+                wrapped.painted_offset(end),
+            );
+            let distance = |rect: &Bounds<Pixels>| {
+                f32::from((rect.top() - near.y).max(near.y - rect.bottom()))
+            };
+            return rects
+                .into_iter()
+                .min_by(|a, b| distance(a).total_cmp(&distance(b)));
         }
 
         let x_for = |offset: usize| -> Option<Pixels> {
@@ -1009,7 +1008,7 @@ impl MainPaneView {
         let anchor = self
             .diff_text_hitboxes
             .get(&(visible_ix, region))
-            .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span));
+            .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span, position));
         self.open_markdown_preview_link_popover(kind, anchor, position, window, cx);
         true
     }
@@ -1164,6 +1163,7 @@ impl MainPaneView {
                 if self.diff_text_selecting {
                     self.diff_suppress_clicks_remaining = 1;
                 }
+                self.begin_diff_text_scroll_tracking(position, cx);
             }
             _ => {
                 self.begin_diff_text_selection(visible_ix, region, position, cx);
@@ -1315,7 +1315,7 @@ impl MainPaneView {
                     }
 
                     keep_going = true;
-                    let changed = this.tick_diff_text_selection_autoscroll(cx);
+                    let changed = this.tick_diff_text_selection_autoscroll();
                     if changed {
                         cx.notify();
                     }
@@ -3123,11 +3123,10 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
-    fn tick_diff_text_selection_autoscroll(&mut self, cx: &mut gpui::Context<Self>) -> bool {
-        if let Ok(pos) = self.root_view.update(cx, |root, _cx| root.last_mouse_pos) {
-            self.diff_text_last_mouse_pos = pos;
-        }
-
+    /// The pointer is `diff_text_last_mouse_pos`, which the window-wide
+    /// `DiffTextSelectionTracker` keeps even past the window edge; the root
+    /// view's own position stops at it.
+    fn tick_diff_text_selection_autoscroll(&mut self) -> bool {
         let Some(target) = self.diff_text_autoscroll_target else {
             // Still update selection periodically so it can expand while the user scrolls.
             let before = self.diff_text_head;

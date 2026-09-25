@@ -10,13 +10,15 @@ pub(crate) fn parse_markdown(source: &str) -> Option<MarkdownPreviewDocument> {
     if source.len() > MAX_PREVIEW_SOURCE_BYTES {
         return None;
     }
-    build_markdown_document(source)
+    let document = build_markdown_document(source)?;
+    document.index_anchors_if_linked();
+    Some(document)
 }
 
 pub(crate) fn build_markdown_document(source: &str) -> Option<MarkdownPreviewDocument> {
     let line_starts = build_line_starts(source);
     let rows = flatten_to_rows(source, &line_starts)?;
-    Some(MarkdownPreviewDocument { rows })
+    Some(MarkdownPreviewDocument::new(rows))
 }
 
 /// Build a pair of preview documents for a two-sided diff.
@@ -78,6 +80,9 @@ pub(crate) fn build_markdown_diff_preview_of(
     let mut diff = MarkdownPreviewDiff::new(old, new, inline);
     diff.inline_old = inline_old;
     (diff.old_source, diff.new_source) = sources;
+    for document in [&diff.old, &diff.new, &diff.inline] {
+        document.index_anchors_if_linked();
+    }
     Some(diff)
 }
 
@@ -251,8 +256,8 @@ fn aligned_markdown_diff_documents(
         push_aligned_markdown_row_groups(&mut old_aligned, &mut new_aligned, group.old, group.new)?;
     }
     Some((
-        MarkdownPreviewDocument { rows: old_aligned },
-        MarkdownPreviewDocument { rows: new_aligned },
+        MarkdownPreviewDocument::new(old_aligned),
+        MarkdownPreviewDocument::new(new_aligned),
     ))
 }
 
@@ -327,7 +332,7 @@ pub(crate) fn inline_markdown_diff_document(
         from_old.resize(from_old.len() + new.len(), false);
         rows.extend(new);
     }
-    (MarkdownPreviewDocument { rows }, from_old)
+    (MarkdownPreviewDocument::new(rows), from_old)
 }
 
 /// Whether an old row and a new one show the same thing and can be drawn once.
