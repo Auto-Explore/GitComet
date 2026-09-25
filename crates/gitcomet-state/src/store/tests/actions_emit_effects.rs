@@ -5399,20 +5399,13 @@ fn large_file_command_replays_after_an_auth_prompt() {
     );
 }
 
-fn adjusted_annex_support() -> gitcomet_core::large_files::LargeFileSupport {
-    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
-    support.annex.uuid = Some("u".into());
-    support.annex.adjusted = Some(("main".into(), "unlocked".into()));
-    support
-}
-
 /// On an adjusted branch a plain merge would commit adjusted content to the
 /// wrong branch, so Pull and Push run git-annex's own pull and push.
 #[test]
 fn pull_and_push_on_adjusted_branch_use_git_annex() {
     use gitcomet_core::large_files::LargeFileCommand;
     let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
-    state.repos[0].large_file_support = Loadable::Ready(Arc::new(adjusted_annex_support()));
+    annex_repo_on(&mut state, "adjusted/main(unlocked)");
 
     let effects = reduce(
         &mut repos,
@@ -5456,6 +5449,291 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
             .any(|e| matches!(e, Effect::RunLargeFileCommand { .. })),
         "turning the setting off restores plain push"
     );
+}
+
+/// An annex repo whose support was loaded while HEAD was on `main`.
+fn annex_repo_on(state: &mut AppState, head: &str) {
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.uuid = Some("u".into());
+    support.annex.has_annex_branch = true;
+    state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+    state.repos[0].head_branch = Loadable::Ready(head.to_string());
+}
+
+fn runs_annex(effects: &[Effect], pull: bool) -> bool {
+    use gitcomet_core::large_files::LargeFileCommand;
+    effects.iter().any(|effect| {
+        matches!(
+            (effect, pull),
+            (
+                Effect::RunLargeFileCommand {
+                    command: LargeFileCommand::AnnexPull { .. },
+                    ..
+                },
+                true
+            ) | (
+                Effect::RunLargeFileCommand {
+                    command: LargeFileCommand::AnnexPush { .. },
+                    ..
+                },
+                false
+            )
+        )
+    })
+}
+
+/// Support is loaded once per repo open, but HEAD moves under it: a checkout
+/// from the sidebar (a repo action) or a terminal. The takeover follows the
+/// branch HEAD is on now, and a HEAD change reloads the support summary.
+#[test]
+fn adjusted_branch_takeover_follows_head_not_the_support_snapshot() {
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    annex_repo_on(&mut state, "main");
+    let head_loaded = |head: &str| {
+        Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
+            repo_id,
+            result: Ok(head.to_string()),
+        })
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        head_loaded("adjusted/main(unlocked)"),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadLargeFileSupport { .. })),
+        "a HEAD change reloads the support summary: {effects:?}"
+    );
+    let pull = || Msg::Pull {
+        repo_id,
+        mode: PullMode::Default,
+    };
+    let effects = reduce(&mut repos, &id_alloc, &mut state, pull());
+    assert!(runs_annex(&effects, true), "{effects:?}");
+
+    // Left the adjusted branch from a terminal: plain pull again.
+    reduce(&mut repos, &id_alloc, &mut state, head_loaded("main"));
+    let effects = reduce(&mut repos, &id_alloc, &mut state, pull());
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::Pull { .. })),
+        "{effects:?}"
+    );
+}
+
+/// Every way GitComet pulls into or pushes from the current branch must avoid
+/// plain git on an adjusted branch: the ones git-annex has an equivalent for
+/// go through it, the rest are refused with a reason.
+#[test]
+fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    annex_repo_on(&mut state, "adjusted/main(unlocked)");
+    let target = gitcomet_core::services::SafePushAfterCommitTarget {
+        remote: "origin".to_string(),
+        branch: "adjusted/main(unlocked)".to_string(),
+        local_branch: "adjusted/main(unlocked)".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: false,
+        local_branch: Some("adjusted/main(unlocked)".to_string()),
+        pre_head: None,
+        post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+    };
+
+    // An adjusted branch has no upstream, so the toolbar offers set-upstream.
+    for msg in [
+        Msg::PushSetUpstream {
+            repo_id,
+            remote: "origin".into(),
+            branch: "adjusted/main(unlocked)".into(),
+        },
+        Msg::PushAfterCommit {
+            repo_id,
+            target: target.clone(),
+            set_upstream: true,
+        },
+        Msg::SafePushAfterCommit {
+            repo_id,
+            context: context.clone(),
+        },
+    ] {
+        let label = format!("{msg:?}");
+        let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert!(runs_annex(&effects, false), "{label}: {effects:?}");
+    }
+
+    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+        message: "ship".to_string(),
+        amend: false,
+        push_after_commit: true,
+    });
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(gitcomet_core::services::CommitOperationOutcome {
+                local_branch: context.local_branch.clone(),
+                pre_head: None,
+                post_head: context.post_head.clone(),
+            }),
+        }),
+    );
+    assert!(runs_annex(&effects, false), "commit & push: {effects:?}");
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::SafePushAfterCommit { .. })),
+        "{effects:?}"
+    );
+
+    for msg in [
+        Msg::PullBranch {
+            repo_id,
+            remote: "origin".into(),
+            branch: "feature".into(),
+        },
+        Msg::ForcePush { repo_id },
+        Msg::ForcePushWithLease {
+            repo_id,
+            lease: test_force_push_lease(),
+        },
+        Msg::PushWithTags {
+            repo_id,
+            request: gitcomet_core::tag_push::TagPushRequest {
+                mode: gitcomet_core::tag_push::TagPushMode::All,
+                remote: "origin".into(),
+                branch: "adjusted/main(unlocked)".into(),
+                local_branch: "adjusted/main(unlocked)".into(),
+                head: CommitId("2222222222222222222222222222222222222222".into()),
+                set_upstream: true,
+            },
+        },
+    ] {
+        let label = format!("{msg:?}");
+        state.repos[0].feedback.last_error = None;
+        let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert!(effects.is_empty(), "{label} must not run git: {effects:?}");
+        assert!(
+            state.repos[0]
+                .feedback
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("adjusted branch")),
+            "{label}: {:?}",
+            state.repos[0].feedback.last_error
+        );
+        assert_eq!(state.repos[0].push_in_flight, 0, "{label}");
+        assert_eq!(state.repos[0].pull_in_flight, 0, "{label}");
+    }
+
+    // Opting out restores plain Git for all of them.
+    state.large_file_settings.annex_pull_push = false;
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PushSetUpstream {
+            repo_id,
+            remote: "origin".into(),
+            branch: "adjusted/main(unlocked)".into(),
+        },
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::PushSetUpstream { .. })),
+        "{effects:?}"
+    );
+}
+
+/// Without git-annex, the takeover cannot run, and a plain merge into the
+/// adjusted branch is exactly what it prevents: refuse with a reason.
+#[test]
+fn adjusted_branch_pull_without_git_annex_is_refused() {
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    annex_repo_on(&mut state, "adjusted/main(unlocked)");
+    state.large_file_tools.git_annex =
+        gitcomet_core::large_file_tools::ToolAvailability::NotFound {
+            detail: "Git cannot run `git annex`.".into(),
+        };
+    for msg in [
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Default,
+        },
+        Msg::Push { repo_id },
+    ] {
+        let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert!(effects.is_empty(), "{effects:?}");
+        assert!(
+            state.repos[0]
+                .feedback
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("git-annex")),
+            "{:?}",
+            state.repos[0].feedback.last_error
+        );
+    }
+}
+
+/// Support facts come from config, attributes, HEAD and git-annex; commands
+/// that change none of them must not re-run its two git-annex probes.
+#[test]
+fn only_commands_that_can_change_support_reload_it() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let mut reloads = |command: RepoCommandKind| {
+        // Settle any load a previous command started.
+        state.repos[0].loads_in_flight = Default::default();
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command,
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadLargeFileSupport { .. }))
+    };
+    for quiet in [
+        RepoCommandKind::StageHunk,
+        RepoCommandKind::UnstageHunk,
+        RepoCommandKind::Push,
+        RepoCommandKind::CreateTag {
+            name: "v1".into(),
+            target: "HEAD".into(),
+            message: None,
+            annotated: false,
+        },
+        RepoCommandKind::FetchAll,
+    ] {
+        assert!(!reloads(quiet.clone()), "{quiet:?}");
+    }
+    for loud in [
+        RepoCommandKind::LargeFile {
+            command: LargeFileCommand::AnnexInit,
+        },
+        RepoCommandKind::Pull {
+            mode: PullMode::Default,
+        },
+        RepoCommandKind::AddRemote {
+            name: "backup".into(),
+            url: "/tmp/b".into(),
+        },
+    ] {
+        assert!(reloads(loud.clone()), "{loud:?}");
+    }
 }
 
 #[test]

@@ -203,7 +203,7 @@ impl GitCometView {
             git_annex_missing: self.state.large_file_tools.git_annex.is_not_found(),
             repo_uses_annex: annex.is_some_and(|annex| annex.in_use()),
             annex_initialized: annex.is_some_and(|annex| annex.initialized()),
-            annex_adjusted: annex.is_some_and(|annex| annex.adjusted.is_some()),
+            annex_adjusted: repo.is_some_and(|repo| repo.annex_adjusted_branch().is_some()),
         }
     }
 
@@ -387,7 +387,7 @@ impl GitCometView {
                 let base = self
                     .active_repo()
                     .and_then(|repo| repo.annex_adjusted_branch())
-                    .map(|(base, _)| base.clone());
+                    .map(|(base, _)| base.to_string());
                 let command = match command_id {
                     "annex-sync" => Some(C::AnnexSync { content }),
                     "annex-pull" => Some(C::AnnexPull { content }),

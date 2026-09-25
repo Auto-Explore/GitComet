@@ -2,7 +2,7 @@
 //! user's transfer configuration all apply.
 
 use crate::util::{
-    run_git_capture_cancellable, run_git_with_input_output, run_git_with_output,
+    run_git_background_capture, run_git_with_input_output, run_git_with_output,
     validate_ref_like_arg,
 };
 use gitcomet_core::domain::DiffTarget;
@@ -116,8 +116,15 @@ impl super::GixRepo {
     }
 
     fn lfs_fetch_for_diff(&self, target: &DiffTarget) -> Result<CommandOutput> {
+        let mut index_trees = Vec::new();
         let (path, mut revisions) = match target {
-            DiffTarget::WorkingTree { path, .. } => (path, vec!["HEAD".to_string()]),
+            DiffTarget::WorkingTree { path, .. } => {
+                // The index side need not be in HEAD (after `reset --soft`, or
+                // theirs in a merge), and git-lfs fetches by commit or tree.
+                index_trees = self.index_side_trees(path)?;
+                let head = self.repo().head_id().is_ok();
+                (path, head.then(|| "HEAD".to_string()).into_iter().collect())
+            }
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
@@ -157,8 +164,12 @@ impl super::GixRepo {
                 .detach()
                 .to_string();
         }
+        revisions.extend(index_trees);
         revisions.sort();
         revisions.dedup();
+        if revisions.is_empty() {
+            return Err(paths_arg_error("git lfs fetch for diff"));
+        }
         let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
         let include = lfs_include_pattern(relative).ok_or_else(|| {
             Error::new(ErrorKind::Backend(
@@ -172,6 +183,54 @@ impl super::GixRepo {
             "git lfs fetch",
             format!("{}\n", revisions.join("\n")).as_bytes(),
         )
+    }
+
+    /// One tree per index stage of `path`, holding just that blob at that
+    /// path, so git-lfs can fetch the index side. Only loose objects are
+    /// written; the index itself is untouched.
+    fn index_side_trees(&self, path: &std::path::Path) -> Result<Vec<String>> {
+        use gix::objs::tree::{Entry, EntryKind};
+        let repo = self.repo();
+        let backend = |e: &dyn std::fmt::Display| {
+            Error::new(ErrorKind::Backend(format!("index side for LFS fetch: {e}")))
+        };
+        let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
+        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative));
+        let index = repo.index_or_empty().map_err(|e| backend(&e))?;
+        let Some(range) = index.entry_range(key.as_ref()) else {
+            return Ok(Vec::new());
+        };
+        let mut trees = Vec::new();
+        for entry in &index.entries()[range] {
+            let mut components = key.split(|byte| *byte == b'/').rev();
+            let Some(name) = components.next() else {
+                continue;
+            };
+            let mut id = repo
+                .write_object(gix::objs::Tree {
+                    entries: vec![Entry {
+                        mode: EntryKind::Blob.into(),
+                        filename: name.into(),
+                        oid: entry.id,
+                    }],
+                })
+                .map_err(|e| backend(&e))?
+                .detach();
+            for dir in components {
+                id = repo
+                    .write_object(gix::objs::Tree {
+                        entries: vec![Entry {
+                            mode: EntryKind::Tree.into(),
+                            filename: dir.into(),
+                            oid: id,
+                        }],
+                    })
+                    .map_err(|e| backend(&e))?
+                    .detach();
+            }
+            trees.push(id.to_string());
+        }
+        Ok(trees)
     }
 
     fn lfs_paths_command(
@@ -221,8 +280,10 @@ impl super::GixRepo {
         Ok(combine("git lfs track", outputs))
     }
 
+    /// Loads on its own when lockable patterns exist, so it runs as a
+    /// background read: a server that needs credentials simply fails.
     pub(super) fn lfs_locks_impl(&self, cancellation: &CancellationToken) -> Result<Vec<LfsLock>> {
-        let json = run_git_capture_cancellable(
+        let json = run_git_background_capture(
             self.git_lfs(&["locks", "--json"]),
             "git lfs locks --json",
             cancellation,

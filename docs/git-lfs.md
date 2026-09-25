@@ -28,7 +28,7 @@ LFS text diffs show changes in the actual content in both Full and Collapsed vie
 | Push all LFS objects, Refresh LFS locks, Enable Git LFS in this repository | **Push** menu |
 | All of the above, plus Prune and Check | Command palette, under **Git LFS** |
 
-GitComet never polls the LFS server for locks. It loads them when the repository has `lockable` patterns, after lock and unlock, and when you choose **Refresh LFS locks**. Many LFS servers have no lock API; the lock entries then stay unavailable without an error banner.
+GitComet never polls the LFS server for locks. It loads them when the repository has `lockable` patterns, after lock and unlock, and when you choose **Refresh LFS locks**. It never asks for credentials to do so; a credential helper still applies. Many LFS servers have no lock API; the lock entries then stay unavailable without an error banner.
 
 **Download content** in the diff card fetches both displayed revisions without changing your working files. The changed-file row action downloads and checks out that file. These explicit downloads override configured LFS fetch exclusions for the selected path without changing your configuration.
 

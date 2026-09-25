@@ -171,7 +171,9 @@ pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
     let Some(branch) = branches.iter().find(|branch| branch.name == *head) else {
         return PushRequest::NotReady;
     };
-    if branch.upstream.is_some() {
+    // An annex adjusted branch is local by design and never has an upstream:
+    // offering one would publish it. Push goes through `git annex push`.
+    if branch.upstream.is_some() || repo.annex_adjusted_branch().is_some() {
         return PushRequest::Push;
     }
 

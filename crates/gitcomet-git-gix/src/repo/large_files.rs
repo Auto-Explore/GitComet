@@ -1,5 +1,6 @@
 //! Git LFS and git-annex detection and per-row state, from git objects,
-//! config and the local object stores. Never runs either tool.
+//! config, git-annex's logs and the local object stores. Never runs either
+//! tool.
 
 use gitcomet_core::annex;
 use gitcomet_core::domain::FileDiffTextSource;
@@ -21,6 +22,9 @@ pub(super) const LARGE_FILE_STATUS_ROW_LIMIT: usize = 5_000;
 
 /// Largest pointer either tool writes; anything bigger is content.
 const MAX_POINTER_BYTES: u64 = annex::POINTER_MAX_BYTES as u64;
+
+/// Git LFS pointers are under 1 KiB; git-annex allows up to 32 KiB.
+const MAX_LFS_POINTER_BYTES: u64 = 1024;
 
 /// Real content above this stays behind its pointer in the text diff.
 pub(super) const LARGE_FILE_TEXT_DIFF_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -132,7 +136,16 @@ fn classify_blob(
     id: gix::ObjectId,
     is_symlink: bool,
 ) -> Option<Classified> {
-    if repo.find_header(id).ok()?.size() > MAX_POINTER_BYTES {
+    classify_blob_up_to(repo, id, is_symlink, MAX_POINTER_BYTES)
+}
+
+fn classify_blob_up_to(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+    is_symlink: bool,
+    max_bytes: u64,
+) -> Option<Classified> {
+    if repo.find_header(id).ok()?.size() > max_bytes {
         return None;
     }
     let object = repo.find_object(id).ok()?;
@@ -150,36 +163,119 @@ fn index_classified(
     classify_blob(repo, entry.id, is_symlink)
 }
 
-/// Large-file state of a committed blob, for commit file rows. `None` for
-/// ordinary files; costs one object-header lookup for those.
-pub(super) fn committed_large_file_state(
-    repo: &gix::Repository,
-    id: gix::ObjectId,
-    is_symlink: bool,
-    logical_path: &Path,
-) -> Option<LargeFileState> {
-    let classified = classify_blob(repo, id, is_symlink)?;
-    let in_local_store = repo.workdir().and_then(|workdir| {
-        in_local_store(&classified, &lfs_storage_dir(repo), workdir, logical_path)
-    });
-    Some(LargeFileState {
-        pointer: classified.pointer,
-        in_local_store,
-        worktree: None,
-        lockable: false,
-    })
+/// Where content lives locally: the LFS store, and git-annex's objects
+/// directory, whose layout is hashed from each key.
+struct LocalStores {
+    lfs: PathBuf,
+    annex_objects: PathBuf,
+    annex_levels: usize,
 }
 
-/// Whether the content is here. Unlocked annex files need the tool to know.
+impl LocalStores {
+    fn of(repo: &gix::Repository) -> Self {
+        let objecthash1 = repo
+            .config_snapshot()
+            .boolean("annex.tune.objecthash1")
+            .unwrap_or(false);
+        Self {
+            lfs: lfs_storage_dir(repo),
+            annex_objects: repo.common_dir().join("annex").join("objects"),
+            annex_levels: if objecthash1 { 1 } else { 2 },
+        }
+    }
+
+    /// The content of an annex key when it is here, found the way
+    /// `git annex contentlocation` finds it, without running git-annex.
+    fn annex_object(&self, key: &str) -> Option<PathBuf> {
+        annex::object_paths(key, self.annex_levels)
+            .into_iter()
+            .map(|relative| self.annex_objects.join(relative))
+            .find(|path| path.is_file())
+    }
+}
+
+/// Commit rows are classified only in repositories that use either tool, and
+/// only blobs small enough to be a pointer of the tools in use are read.
+pub(super) struct CommittedPointerScan {
+    stores: LocalStores,
+    workdir: Option<PathBuf>,
+    max_pointer_bytes: u64,
+}
+
+impl CommittedPointerScan {
+    /// `None` when neither tool is in use: then no blob is read at all.
+    pub(super) fn of(repo: &gix::Repository) -> Option<Self> {
+        let config = repo.config_snapshot();
+        let annex = repo.common_dir().join("annex").is_dir()
+            || config.string("annex.uuid").is_some()
+            || repo
+                .try_find_reference("refs/heads/git-annex")
+                .ok()
+                .flatten()
+                .is_some();
+        let stores = LocalStores::of(repo);
+        // Not the filter config: `git lfs install` sets it globally, so it
+        // says git-lfs is installed, not that this repository uses it.
+        let lfs = || {
+            stores.lfs.join("objects").is_dir()
+                || [
+                    repo.workdir().map(|dir| dir.join(".gitattributes")),
+                    Some(repo.common_dir().join("info").join("attributes")),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|path| {
+                    std::fs::read(path).is_ok_and(|text| text.find(b"filter=lfs").is_some())
+                })
+        };
+        let max_pointer_bytes = if annex {
+            MAX_POINTER_BYTES
+        } else if lfs() {
+            MAX_LFS_POINTER_BYTES
+        } else {
+            return None;
+        };
+        Some(Self {
+            workdir: repo.workdir().map(Path::to_path_buf),
+            stores,
+            max_pointer_bytes,
+        })
+    }
+
+    /// Large-file state of a committed blob, for commit file rows. `None` for
+    /// ordinary files; costs one object-header lookup for those.
+    pub(super) fn state(
+        &self,
+        repo: &gix::Repository,
+        id: gix::ObjectId,
+        is_symlink: bool,
+        logical_path: &Path,
+    ) -> Option<LargeFileState> {
+        let classified = classify_blob_up_to(repo, id, is_symlink, self.max_pointer_bytes)?;
+        let in_local_store = self
+            .workdir
+            .as_deref()
+            .and_then(|workdir| in_local_store(&classified, &self.stores, workdir, logical_path));
+        Some(LargeFileState {
+            pointer: classified.pointer,
+            in_local_store,
+            worktree: None,
+            lockable: false,
+        })
+    }
+}
+
+/// Whether the content is here.
 fn in_local_store(
     classified: &Classified,
-    storage_dir: &Path,
+    stores: &LocalStores,
     workdir: &Path,
     path: &Path,
 ) -> Option<bool> {
     match (&classified.pointer, &classified.link_target) {
         (LargeFilePointer::Lfs(pointer), _) => Some(
-            storage_dir
+            stores
+                .lfs
                 .join(lfs::object_relative_path(&pointer.oid))
                 .is_file(),
         ),
@@ -188,7 +284,7 @@ fn in_local_store(
             let link_dir = workdir.join(path);
             Some(link_dir.parent()?.join(target).is_file())
         }
-        (LargeFilePointer::Annex(_), None) => None,
+        (LargeFilePointer::Annex(key), None) => Some(stores.annex_object(&key.raw).is_some()),
     }
 }
 
@@ -215,16 +311,6 @@ impl LockableLookup<'_> {
 }
 
 impl super::GixRepo {
-    /// Local content of an unlocked annex key; its object directory is hashed,
-    /// so only git-annex can say where it is. Skipped for uninitialized clones.
-    fn annex_local_content(&self, repo: &gix::Repository, key: &str) -> Option<PathBuf> {
-        if !repo.common_dir().join("annex").is_dir() {
-            return None;
-        }
-        self.annex_content_location(key)
-            .filter(|path| path.is_file())
-    }
-
     /// Describe one side of a text diff whose git form is a pointer, and point
     /// it at the real content when that is here and small enough to diff.
     /// `worktree` sides may find content in the working tree itself.
@@ -268,7 +354,7 @@ impl super::GixRepo {
                     (path, Some(format!("annex:{}", key.raw)))
                 }
                 (LargeFilePointer::Annex(key), None) => (
-                    self.annex_local_content(repo, &key.raw),
+                    LocalStores::of(repo).annex_object(&key.raw),
                     Some(format!("annex:{}", key.raw)),
                 ),
             },
@@ -281,12 +367,6 @@ impl super::GixRepo {
                 } else {
                     LargeFileContent::Available
                 }
-            }
-            None if !worktree
-                && classified.link_target.is_none()
-                && !classified.pointer.is_lfs() =>
-            {
-                LargeFileContent::Unknown
             }
             None => LargeFileContent::MissingLocally,
         };
@@ -330,13 +410,13 @@ impl super::GixRepo {
                 .parent()?
                 .join(gix::path::try_from_byte_slice(target).ok()?),
             (LargeFilePointer::Annex(key), None) => {
-                match self.annex_local_content(repo, &key.raw) {
+                match LocalStores::of(repo).annex_object(&key.raw) {
                     Some(path) => path,
                     None => {
                         return Some((
                             LargeFileSide {
                                 pointer: classified.pointer,
-                                content: LargeFileContent::Unknown,
+                                content: LargeFileContent::MissingLocally,
                             },
                             None,
                         ));
@@ -397,11 +477,6 @@ impl super::GixRepo {
             locks_verify: config.boolean("lfs.locksverify"),
         };
 
-        let head_short = repo
-            .head_name()
-            .ok()
-            .flatten()
-            .map(|name| name.shorten().to_str_lossy().into_owned());
         let annex = AnnexRepoInfo {
             has_annex_dir: repo.common_dir().join("annex").is_dir(),
             has_annex_branch: repo
@@ -413,9 +488,6 @@ impl super::GixRepo {
                 .string("annex.uuid")
                 .map(|value| value.to_str_lossy().into_owned())
                 .filter(|value| !value.is_empty()),
-            adjusted: head_short.as_deref().and_then(|head| {
-                annex::adjusted_branch(head).map(|(base, mode)| (base.to_owned(), mode.to_owned()))
-            }),
             crippled_filesystem: config.boolean("annex.crippledfilesystem").unwrap_or(false),
             restage_pending: std::fs::metadata(repo.common_dir().join("annex").join("restage.log"))
                 .is_ok_and(|metadata| metadata.len() > 0),
@@ -426,7 +498,7 @@ impl super::GixRepo {
         let mut annex = annex;
         if annex.initialized() {
             cancellation.check_cancelled()?;
-            (annex.repositories, annex.numcopies) = self.annex_repositories(&repo, cancellation);
+            (annex.repositories, annex.numcopies) = self.annex_repositories(&repo);
         }
         Ok(LargeFileSupport { lfs, annex })
     }
@@ -515,7 +587,7 @@ impl super::GixRepo {
         let index = repo
             .index_or_empty()
             .map_err(|e| backend_error("read index for large files", e))?;
-        let storage_dir = lfs_storage_dir(&repo);
+        let stores = LocalStores::of(&repo);
         let workdir = self.spec.workdir.clone();
         let mut lockable = LockableLookup {
             stack: repo
@@ -530,7 +602,7 @@ impl super::GixRepo {
                       worktree: Option<LargeFileWorktree>,
                       path: &Path,
                       lockable: &mut LockableLookup<'_>| {
-            let in_store = in_local_store(&classified, &storage_dir, &workdir, path);
+            let in_store = in_local_store(&classified, &stores, &workdir, path);
             let is_lfs = classified.pointer.is_lfs();
             LargeFileState {
                 pointer: classified.pointer,
@@ -555,25 +627,6 @@ impl super::GixRepo {
             if let Some((classified, worktree)) = self.classify_unstaged_row(&repo, &index, entry) {
                 let state = finish(classified, Some(worktree), &entry.path, &mut lockable);
                 result.unstaged.insert(entry.path.clone(), state);
-            }
-        }
-        // Unlocked annex content lives under a hashed path only git-annex
-        // knows; one `find` over those rows tells which are present here.
-        let unknown: Vec<&Path> = result
-            .staged
-            .iter()
-            .chain(result.unstaged.iter())
-            .filter(|(_, state)| state.in_local_store.is_none())
-            .map(|(path, _)| path.as_path())
-            .collect();
-        if !unknown.is_empty()
-            && repo.common_dir().join("annex").is_dir()
-            && let Some(present) = self.annex_present_paths(&unknown)
-        {
-            for (path, state) in result.staged.iter_mut().chain(result.unstaged.iter_mut()) {
-                if state.in_local_store.is_none() {
-                    state.in_local_store = Some(present.contains(path));
-                }
             }
         }
         Ok(result)

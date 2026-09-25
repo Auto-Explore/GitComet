@@ -108,8 +108,6 @@ pub struct AnnexRepoInfo {
     pub has_annex_branch: bool,
     /// `annex.uuid`: this clone has run `git annex init`.
     pub uuid: Option<String>,
-    /// HEAD is an adjusted branch: `(base branch, mode)`.
-    pub adjusted: Option<(String, String)>,
     pub crippled_filesystem: bool,
     /// `.git/annex/restage.log` lists files whose content git-annex replaced
     /// without refreshing Git's index (an interrupted or failed command). They

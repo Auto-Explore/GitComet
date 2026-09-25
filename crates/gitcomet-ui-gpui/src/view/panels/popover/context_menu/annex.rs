@@ -302,13 +302,15 @@ pub(super) fn section_model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuM
         ),
         ContextMenuItem::Separator,
     ]);
-    match &support.annex.adjusted {
+    match repo.and_then(RepoState::annex_adjusted_branch) {
         Some((base, _)) => items.push(entry(
             &format!("Leave adjusted branch (back to {base})"),
             "icons/git_branch.svg",
             missing,
             repo_id,
-            LargeFileCommand::AnnexLeaveAdjusted { base: base.clone() },
+            LargeFileCommand::AnnexLeaveAdjusted {
+                base: base.to_string(),
+            },
         )),
         None => {
             for (text, mode) in [

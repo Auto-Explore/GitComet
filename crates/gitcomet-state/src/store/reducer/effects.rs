@@ -2714,12 +2714,21 @@ pub(super) fn head_branch_loaded(
                 Loadable::Error(e.to_string())
             }
         };
+        // Another branch can track other LFS patterns or be an annex adjusted
+        // branch, whether a GitComet checkout or a terminal moved HEAD.
+        let moved = matches!(
+            (&repo_state.head_branch, &head_branch),
+            (Loadable::Ready(before), Loadable::Ready(after)) if before != after
+        );
         repo_state.set_head_branch(head_branch);
         if repo_state
             .loads_in_flight
             .finish(RepoLoadsInFlight::HEAD_BRANCH)
         {
             effects.push(Effect::LoadHeadBranch { repo_id });
+        }
+        if moved && let Some(effect) = request_large_file_support_effect(repo_state) {
+            effects.push(effect);
         }
     }
     effects

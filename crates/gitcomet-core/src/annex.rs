@@ -84,6 +84,37 @@ pub fn key_from_pointer(bytes: &[u8]) -> Option<AnnexKey> {
     parse_key(key)
 }
 
+/// Where git-annex may keep a key's content, relative to `.git/annex/objects`:
+/// `hashdirmixed` (non-bare repos) first, then `hashdirlower` (bare and
+/// crippled-filesystem repos), as git-annex itself checks both. `levels` is 2,
+/// or 1 under `annex.tune.objecthash1`.
+pub fn object_paths(key: &str, levels: usize) -> [std::path::PathBuf; 2] {
+    use md5::{Digest as _, Md5};
+    let digest = Md5::digest(key.as_bytes());
+    // hashDirMixed: the digest's first four bytes as a little-endian word,
+    // six base-32 digits in swapped pairs, two characters per level.
+    const CHARS: &[u8; 32] = b"0123456789zqjxkmvwgpfZQJXKMVWGPF";
+    let word = u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]);
+    let digits: Vec<u8> = (0..6)
+        .map(|i| CHARS[((word >> (6 * i)) & 31) as usize])
+        .collect();
+    let mixed: Vec<u8> = digits
+        .chunks(2)
+        .flat_map(|pair| [pair[1], pair[0]])
+        .collect();
+    // hashDirLower: hex digest, three characters per level.
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let levels = levels.clamp(1, 2);
+    let mixed = std::str::from_utf8(&mixed).unwrap_or_default();
+    let path = |width: usize, digits: &str| {
+        (0..levels)
+            .map(|level| &digits[level * width..(level + 1) * width])
+            .chain([key, key])
+            .collect()
+    };
+    [path(2, mixed), path(3, &hex)]
+}
+
 /// Split `adjusted/<base>(<mode>)` into base branch and mode.
 pub fn adjusted_branch(head: &str) -> Option<(&str, &str)> {
     let rest = head.strip_prefix("adjusted/")?.strip_suffix(')')?;
@@ -122,6 +153,33 @@ mod tests {
         ] {
             assert!(parse_key(bad).is_none(), "{bad}");
         }
+    }
+
+    /// Directories real git-annex 10.20260901 chose for these keys.
+    #[test]
+    fn object_paths_match_git_annex() {
+        for (key, mixed, lower) in [
+            (
+                "SHA256E-s2000--44536ca869d7a09269b7205eeff9347d96cf7869234e830046e58e04559a9f85.bin",
+                "2w/Fk",
+                "91e/87e",
+            ),
+            (
+                "SHA256E-s1500--0e34e6739f87fa817b7ce94598c5831dd6d8827c28863417e15479365fec4b95.bin",
+                "p3/W1",
+                "e31/cf2",
+            ),
+        ] {
+            let [first, second] = object_paths(key, 2);
+            assert_eq!(first, std::path::Path::new(mixed).join(key).join(key));
+            assert_eq!(second, std::path::Path::new(lower).join(key).join(key));
+        }
+        let [one_level, _] = object_paths(
+            "SHA256E-s2000--44536ca869d7a09269b7205eeff9347d96cf7869234e830046e58e04559a9f85.bin",
+            1,
+        );
+        assert!(one_level.starts_with("2w"));
+        assert_eq!(one_level.components().count(), 3);
     }
 
     #[test]

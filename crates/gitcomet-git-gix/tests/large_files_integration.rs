@@ -214,12 +214,14 @@ fn annex_locked_and_unlocked_rows_are_recognised() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_repo(&repo);
-    let object_dir = repo.join(format!(".git/annex/objects/Xk/Wq/{ANNEX_KEY}"));
+    let object_dir = repo.join(format!(
+        ".git/annex/objects/{ANNEX_KEY_MIXED_DIR}/{ANNEX_KEY}"
+    ));
     fs::create_dir_all(&object_dir).unwrap();
     fs::write(object_dir.join(ANNEX_KEY), b"hello").unwrap();
-    let link_target = format!(".git/annex/objects/Xk/Wq/{ANNEX_KEY}/{ANNEX_KEY}");
+    let link_target = format!(".git/annex/objects/{ANNEX_KEY_MIXED_DIR}/{ANNEX_KEY}/{ANNEX_KEY}");
     symlink(&link_target, repo.join("present.bin")).unwrap();
-    let missing_target = link_target.replace("Xk/Wq", "Zz/Zz");
+    let missing_target = link_target.replace(ANNEX_KEY_MIXED_DIR, "Zz/Zz");
     symlink(&missing_target, repo.join("absent.bin")).unwrap();
     fs::write(
         repo.join("unlocked.bin"),
@@ -261,27 +263,8 @@ fn annex_locked_and_unlocked_rows_are_recognised() {
     assert_eq!(state("absent.bin").in_local_store, Some(false));
     assert_eq!(
         state("unlocked.bin").in_local_store,
-        None,
-        "needs git-annex to know"
-    );
-}
-
-#[test]
-fn adjusted_branch_head_is_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
-    init_repo(&repo);
-    fs::write(repo.join("a.txt"), "a\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "init"]);
-    git(&repo, &["checkout", "-qb", "adjusted/main(unlocked)"]);
-    let opened = GixBackend.open(&repo).unwrap();
-    let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
-        .unwrap();
-    assert_eq!(
-        support.annex.adjusted,
-        Some(("main".to_string(), "unlocked".to_string()))
+        Some(true),
+        "found where git-annex keeps it, without running git-annex"
     );
 }
 
@@ -985,5 +968,245 @@ fn lfs_named_checkout_treats_glob_characters_literally() {
             .unwrap()
             .starts_with("version https://git-lfs"),
         "only the named file may be checked out"
+    );
+}
+
+/// Where `git annex contentlocation` puts `ANNEX_KEY` in a non-bare repo
+/// (`hashdirmixed`, two levels) and in bare or crippled ones (`hashdirlower`).
+const ANNEX_KEY_MIXED_DIR: &str = "V7/pK";
+const ANNEX_KEY_LOWER_DIR: &str = "c79/e4f";
+const OTHER_ANNEX_KEY: &str =
+    "SHA256E-s3--ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.bin";
+
+/// Unlocked annex content lives at a path git-annex derives from the key, so
+/// presence is read from the store: status never runs git-annex for it, and
+/// the answer is the same where git-annex is not installed.
+#[test]
+fn unlocked_annex_presence_is_read_from_the_object_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let object = |hash_dir: &str, key: &str| {
+        let dir = repo.join(format!(".git/annex/objects/{hash_dir}/{key}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(key), b"hello").unwrap();
+    };
+    object(ANNEX_KEY_MIXED_DIR, ANNEX_KEY);
+    let pointer = |key: &str| format!("/annex/objects/{key}\n");
+    fs::write(repo.join("present.bin"), pointer(ANNEX_KEY)).unwrap();
+    fs::write(repo.join("absent.bin"), pointer(OTHER_ANNEX_KEY)).unwrap();
+    git(&repo, &["add", "."]);
+
+    let (status, opened) = status(&repo);
+    let files = opened
+        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .unwrap();
+    let presence = |name: &str| files.staged[Path::new(name)].in_local_store;
+    assert_eq!(presence("present.bin"), Some(true));
+    assert_eq!(presence("absent.bin"), Some(false));
+
+    // Bare and crippled-filesystem repos use the lower-case layout.
+    fs::remove_dir_all(repo.join(".git/annex/objects")).unwrap();
+    object(ANNEX_KEY_LOWER_DIR, ANNEX_KEY);
+    let files = opened
+        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(
+        files.staged[Path::new("present.bin")].in_local_store,
+        Some(true)
+    );
+}
+
+/// `git reset --soft` (or a merge) leaves an index pointer HEAD does not
+/// have. Downloading content for a staged diff must fetch that side too.
+#[test]
+fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = clone_lfs_history(dir.path());
+    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("a.bin"),
+        area: DiffArea::Staged,
+    };
+    let opened = GixBackend.open(&repo).unwrap();
+    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    assert_eq!(
+        diff.new_large.unwrap().content,
+        LargeFileContent::MissingLocally
+    );
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+            target: target.clone(),
+        },
+    );
+    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    assert_eq!(
+        source_text(diff.old_source.as_ref()).as_deref(),
+        Some("middle version\n"),
+        "HEAD side"
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("current version\n"),
+        "index side"
+    );
+}
+
+/// The worktree side of an unstaged image diff can be a locked annex file: a
+/// symlink whose target is the content. It resolves like the index side does
+/// instead of reading as a deleted file.
+#[cfg(unix)]
+#[test]
+fn annex_locked_worktree_image_resolves_through_its_symlink() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let before = b"\x89PNG\r\n\x1a\nbefore".to_vec();
+    let after = b"\x89PNG\r\n\x1a\nafter!".to_vec();
+    let key = |bytes: &[u8], tag: char| {
+        format!(
+            "SHA256E-s{}--{}.png",
+            bytes.len(),
+            tag.to_string().repeat(64)
+        )
+    };
+    let (old_key, new_key) = (key(&before, 'a'), key(&after, 'b'));
+    let link = |key: &str, bytes: &[u8]| {
+        let object_dir = repo.join(format!(".git/annex/objects/Xk/Wq/{key}"));
+        fs::create_dir_all(&object_dir).unwrap();
+        fs::write(object_dir.join(key), bytes).unwrap();
+        let path = repo.join("pic.png");
+        let _ = fs::remove_file(&path);
+        symlink(format!(".git/annex/objects/Xk/Wq/{key}/{key}"), &path).unwrap();
+    };
+    link(&old_key, &before);
+    git(&repo, &["add", "pic.png"]);
+    git(&repo, &["commit", "-qm", "image"]);
+    link(&new_key, &after);
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let image = opened
+        .diff_file_image(&unstaged("pic.png"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(image.old.as_deref(), Some(before.as_slice()), "index side");
+    assert_eq!(
+        image.new.as_deref(),
+        Some(after.as_slice()),
+        "worktree side"
+    );
+    assert!(image.new_large.is_some());
+}
+
+/// The lock list loads on its own when a repository has lockable patterns.
+/// Like other background probes it must not take the credentials staged for
+/// the command the user is retrying.
+#[test]
+fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
+    use gitcomet_core::auth::{
+        GitAuthKind, ScopedStagedGitAuth, StagedGitAuth, take_staged_git_auth,
+    };
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_lfs_repo(&repo);
+    let remote = dir.path().join("remote.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+    let opened = GixBackend.open(&repo).unwrap();
+    let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+        kind: GitAuthKind::UsernamePassword,
+        username: Some("alice".into()),
+        secret: "test-token".into(),
+    });
+    let _ = opened.lfs_locks_cancellable(&CancellationToken::new());
+    let pending = take_staged_git_auth()
+        .expect("the lock listing must leave the retried command's credentials staged");
+    assert_eq!(pending.username.as_deref(), Some("alice"));
+}
+
+/// Commit rows read every small blob to test for a pointer, which was most
+/// of the cost of opening a large commit. Repositories that use neither tool
+/// skip that; one that tracks LFS files in `.gitattributes` does not, even
+/// without git-lfs installed or anything downloaded.
+#[test]
+fn commit_rows_look_for_pointers_only_where_lfs_or_annex_is_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let pointer = "version https://git-lfs.github.com/spec/v1\n\
+                   oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n\
+                   size 12345\n";
+    fs::write(repo.join("a.bin"), pointer).unwrap();
+    git(&repo, &["add", "a.bin"]);
+    git(&repo, &["commit", "-qm", "pointer-shaped text"]);
+    let row = |repo: &Path| {
+        let head = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        let details = GixBackend
+            .open(repo)
+            .unwrap()
+            .commit_details(&gitcomet_core::domain::CommitId(head.into()))
+            .unwrap();
+        details.files[0].large_file.clone()
+    };
+    assert!(row(&repo).is_none(), "plain repository: no blob is read");
+
+    fs::write(
+        repo.join(".gitattributes"),
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    )
+    .unwrap();
+    assert!(
+        row(&repo).is_some_and(|state| state.pointer.is_lfs()),
+        "tracked in .gitattributes"
+    );
+}
+
+/// Timing probe: commit details for one large commit in a plain repository,
+/// where no row can be an LFS or annex pointer. Run with
+/// `cargo test --test large_files_integration -- --ignored --nocapture timing_`.
+#[test]
+#[ignore]
+fn timing_commit_details_of_a_large_plain_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let files = 20_000;
+    for i in 0..files {
+        let sub = repo.join(format!("src/m{}", i % 100));
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(
+            sub.join(format!("f{i}.rs")),
+            format!("// module {i}\npub fn f{i}() -> usize {{ {i} }}\n").repeat(1 + i % 40),
+        )
+        .unwrap();
+    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "large"]);
+    git(&repo, &["gc", "-q"]);
+    let head = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let opened = GixBackend.open(&repo).unwrap();
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let details = opened.commit_details(&head).unwrap();
+        samples.push(started.elapsed());
+        assert_eq!(details.files.len(), files);
+    }
+    samples.sort();
+    println!(
+        "timing commit_details files={files} min={:?} median={:?}",
+        samples[0], samples[2]
     );
 }

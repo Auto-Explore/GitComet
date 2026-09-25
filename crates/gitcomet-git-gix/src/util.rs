@@ -662,11 +662,20 @@ fn add_git_failure_hint(mut detail: String) -> String {
 /// otherwise ordinary command, so the UI can say what to do next.
 fn classify_git_failure(stderr: &str) -> GitFailureId {
     let lower = stderr.to_ascii_lowercase();
-    let mentions_lfs = lower.contains("git-lfs") || lower.contains("git lfs");
-    let binary_missing = lower.contains("command not found")
-        || lower.contains("is not recognized as")
-        || lower.contains("no such file or directory");
-    if (mentions_lfs && binary_missing) || lower.contains("'lfs' is not a git command") {
+    // One line must name git-lfs as the program that is missing: a present
+    // git-lfs also says "no such file or directory" about a missing object.
+    let lfs_binary_missing = lower.lines().any(|line| {
+        line.contains("'git-lfs' was not found on your path")
+            || line.contains("'lfs' is not a git command")
+            || (line.contains("git-lfs")
+                && (line.contains("command not found")
+                    || line.contains(": not found")
+                    || line.contains("is not recognized as")
+                    || ((line.contains("cannot run git-lfs")
+                        || line.contains("cannot spawn git-lfs"))
+                        && line.contains("no such file or directory"))))
+    });
+    if lfs_binary_missing {
         GitFailureId::LfsNotInstalled
     } else if lower.contains("unable to push locked files")
         || lower.contains("lock exists")
@@ -1037,6 +1046,26 @@ pub(crate) fn run_git_preview_output(
     )
 }
 
+/// Background reads leave credentials staged for a user-initiated command
+/// alone, like [`run_git_preview_output`], but keep the usual silence budget.
+pub(crate) fn run_git_background_capture(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<String> {
+    let output = run_command_with_timeout_auth(
+        cmd,
+        label,
+        git_command_timeout(),
+        Some(cancellation),
+        false,
+    )?;
+    if !output.status.success() {
+        return Err(git_command_failed_error(label, output));
+    }
+    Ok(bytes_to_text_preserving_utf8(&output.stdout))
+}
+
 fn run_command_with_timeout_auth(
     cmd: Command,
     label: &str,
@@ -1293,7 +1322,28 @@ where
     T: Send + 'static,
     F: FnOnce(ActivityReader<ChildStdout>) -> Result<T> + Send + 'static,
 {
-    run_git_parsed_stdout_maybe_cancellable(cmd, label, allow_exit_code_one, None, parse_stdout)
+    run_git_parsed_stdout_maybe_cancellable(
+        cmd,
+        label,
+        allow_exit_code_one,
+        None,
+        git_command_timeout(),
+        parse_stdout,
+    )
+}
+
+/// For commands the user started and can cancel, whose tools print nothing
+/// while one item runs (git-annex transfers): no silence deadline.
+pub(crate) fn run_git_parsed_stdout_until_done<T, F>(
+    cmd: Command,
+    label: &str,
+    parse_stdout: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(ActivityReader<ChildStdout>) -> Result<T> + Send + 'static,
+{
+    run_git_parsed_stdout_maybe_cancellable(cmd, label, false, None, Duration::MAX, parse_stdout)
 }
 
 pub(crate) fn run_git_parsed_stdout_cancellable<T, F>(
@@ -1312,6 +1362,7 @@ where
         label,
         allow_exit_code_one,
         Some(cancellation),
+        git_command_timeout(),
         parse_stdout,
     )
 }
@@ -1321,6 +1372,7 @@ fn run_git_parsed_stdout_maybe_cancellable<T, F>(
     label: &str,
     allow_exit_code_one: bool,
     cancellation: Option<&CancellationToken>,
+    timeout: Duration,
     parse_stdout: F,
 ) -> Result<T>
 where
@@ -1368,7 +1420,6 @@ where
     };
     let stdout_handle = thread::spawn(move || parse_stdout(stdout));
 
-    let timeout = git_command_timeout();
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -1648,6 +1699,16 @@ pub(crate) use gitcomet_core::process::bytes_to_text_preserving_utf8;
 
 pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
     let output = run_git_checked_output(cmd, label)?;
+    Ok(command_output(label, output))
+}
+
+/// Like [`run_git_parsed_stdout_until_done`]: ends when the command does or
+/// the user cancels it, never on silence.
+pub(crate) fn run_git_with_output_until_done(cmd: Command, label: &str) -> Result<CommandOutput> {
+    let output = run_command_with_timeout(cmd, label, Duration::MAX, None)?;
+    if !output.status.success() {
+        return Err(git_command_failed_error(label, output));
+    }
     Ok(command_output(label, output))
 }
 
@@ -2362,6 +2423,35 @@ mod tests {
         assert_eq!(
             add_lfs_failure_hint("boom".to_string(), GitFailureId::CommandFailed),
             "boom"
+        );
+    }
+
+    /// Real stderr: the LFS hooks' own message, dash's (Debian/Ubuntu `sh`)
+    /// missing-command form, and a present git-lfs reporting a missing object,
+    /// whose "no such file or directory" is about the object, not the binary.
+    #[test]
+    fn missing_git_lfs_is_told_apart_from_missing_lfs_objects() {
+        for stderr in [
+            "\nThis repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'pre-push' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks').\n\nerror: failed to push some refs to '../r2.git'",
+            "git-lfs filter-process: 1: git-lfs: not found\nerror: could not read greeting from subprocess 'git-lfs filter-process'\nfatal: a.bin: clean filter 'lfs' failed",
+            "'git-lfs' is not recognized as an internal or external command,\noperable program or batch file.",
+        ] {
+            assert_eq!(
+                classify_git_failure(stderr),
+                GitFailureId::LfsNotInstalled,
+                "{stderr}"
+            );
+        }
+        let missing_object = "Error downloading object: a.bin (6667b2d): Smudge error: Error reading from media file: open /r/.git/lfs/objects/66/67/6667b2d: no such file or directory\n\nerror: external filter 'git-lfs filter-process' failed\nfatal: a.bin: smudge filter lfs failed";
+        assert_eq!(
+            classify_git_failure(missing_object),
+            GitFailureId::LfsObjectMissing
+        );
+        assert_ne!(
+            classify_git_failure(
+                "git-lfs: open .git/lfs/objects/66/67/6667b2d: no such file or directory"
+            ),
+            GitFailureId::LfsNotInstalled
         );
     }
 

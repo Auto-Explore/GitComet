@@ -1856,14 +1856,10 @@ fn status_file_menu_offers_git_lfs_entries_by_row_state(cx: &mut gpui::TestAppCo
     );
 }
 
-fn annex_support(
-    adjusted: bool,
-    initialized: bool,
-) -> gitcomet_core::large_files::LargeFileSupport {
+fn annex_support(initialized: bool) -> gitcomet_core::large_files::LargeFileSupport {
     let mut support = gitcomet_core::large_files::LargeFileSupport::default();
     support.annex.has_annex_dir = true;
     support.annex.uuid = initialized.then(|| "u-here".to_string());
-    support.annex.adjusted = adjusted.then(|| ("main".to_string(), "unlocked".to_string()));
     support.annex.repositories = vec![
         gitcomet_core::large_files::AnnexRepository {
             uuid: "u-here".into(),
@@ -1922,7 +1918,7 @@ fn status_file_menu_offers_git_annex_entries_by_presence(cx: &mut gpui::TestAppC
     let has = |labels: &[(String, bool)], wanted: &str| labels.iter().any(|(l, _)| l == wanted);
 
     let absent = lfs_status_menu_labels(cx, &view, RepoId(91), psd, |repo, _| {
-        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(false, true)));
+        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
         repo.uncommitted_large_files = Arc::new(annex_row(Some(false)));
     });
     assert!(has(&absent, "Get content"), "{absent:?}");
@@ -1934,14 +1930,14 @@ fn status_file_menu_offers_git_annex_entries_by_presence(cx: &mut gpui::TestAppC
     );
 
     let present = lfs_status_menu_labels(cx, &view, RepoId(92), psd, |repo, _| {
-        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(false, true)));
+        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
         repo.uncommitted_large_files = Arc::new(annex_row(Some(true)));
     });
     assert!(has(&present, "Drop local content") && !has(&present, "Get content"));
     assert!(has(&present, "Drop even without other copies…"));
 
     let missing_tool = lfs_status_menu_labels(cx, &view, RepoId(93), psd, |repo, state| {
-        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(false, true)));
+        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
         repo.uncommitted_large_files = Arc::new(annex_row(None));
         state.large_file_tools.git_annex =
             gitcomet_core::large_file_tools::ToolAvailability::NotFound {
@@ -1963,6 +1959,17 @@ fn annex_menu_labels(
     support: gitcomet_core::large_files::LargeFileSupport,
     kind: AnnexPopoverKind,
 ) -> Vec<String> {
+    annex_menu_labels_on(cx, view, repo_id, support, kind, "main")
+}
+
+fn annex_menu_labels_on(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    repo_id: RepoId,
+    support: gitcomet_core::large_files::LargeFileSupport,
+    kind: AnnexPopoverKind,
+    head: &str,
+) -> Vec<String> {
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_annex_menu_{}",
         std::process::id(),
@@ -1972,6 +1979,7 @@ fn annex_menu_labels(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.large_file_support = Loadable::Ready(Arc::new(support));
+            repo.head_branch = Loadable::Ready(head.to_string());
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
@@ -2004,7 +2012,7 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         cx,
         &view,
         RepoId(101),
-        annex_support(false, false),
+        annex_support(false),
         AnnexPopoverKind::SectionMenu,
     );
     assert_eq!(fresh, ["Initialize git-annex in this clone"]);
@@ -2013,7 +2021,7 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         cx,
         &view,
         RepoId(102),
-        annex_support(false, true),
+        annex_support(true),
         AnnexPopoverKind::SectionMenu,
     );
     for wanted in [
@@ -2037,7 +2045,7 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         !section.iter().any(|l| l == "Stop git-annex assistant"),
         "no assistant runs: {section:?}"
     );
-    let mut running = annex_support(false, true);
+    let mut running = annex_support(true);
     running.annex.assistant_running = true;
     let running = annex_menu_labels(
         cx,
@@ -2047,12 +2055,13 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         AnnexPopoverKind::SectionMenu,
     );
     assert!(running.iter().any(|l| l == "Stop git-annex assistant"));
-    let adjusted = annex_menu_labels(
+    let adjusted = annex_menu_labels_on(
         cx,
         &view,
         RepoId(103),
-        annex_support(true, true),
+        annex_support(true),
         AnnexPopoverKind::SectionMenu,
+        "adjusted/main(unlocked)",
     );
     assert!(
         adjusted
@@ -2064,7 +2073,7 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         cx,
         &view,
         RepoId(104),
-        annex_support(false, true),
+        annex_support(true),
         AnnexPopoverKind::RepositoryMenu {
             uuid: "u-backup".into(),
         },
@@ -2083,7 +2092,7 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         cx,
         &view,
         RepoId(105),
-        annex_support(false, true),
+        annex_support(true),
         AnnexPopoverKind::RepositoryMenu {
             uuid: "u-nas".into(),
         },
@@ -2109,7 +2118,7 @@ fn annex_unused_prompt_drops_only_a_loaded_listing(cx: &mut gpui::TestAppContext
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, &workdir);
-                repo.large_file_support = Loadable::Ready(Arc::new(annex_support(false, true)));
+                repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
                 repo.annex_unused = unused;
                 push_test_state(this, app_state_with_repo(repo, repo_id), cx);
             });

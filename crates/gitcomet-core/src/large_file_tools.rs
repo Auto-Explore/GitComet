@@ -67,7 +67,8 @@ fn probe_subcommand(
         return ToolAvailability::NotChecked;
     }
     let mut command = git();
-    command.args(args);
+    // "is not a git command" is translated; match it in C.
+    command.args(args).env("LC_ALL", "C").env("LANGUAGE", "C");
     let output = match probe_output(command, PROBE_TIMEOUT, cancellation) {
         Ok(output) => output,
         Err(_) => return ToolAvailability::Unknown,
@@ -134,6 +135,18 @@ mod tests {
         let state = detect_large_file_tools_with(&git, &CancellationToken::new());
         assert!(state.git_lfs.is_not_found(), "{:?}", state.git_lfs);
         assert_eq!(state.git_annex, ToolAvailability::Unknown);
+    }
+
+    /// Git translates "is not a git command"; the probe must read it in C.
+    #[test]
+    fn missing_subcommand_is_recognised_under_a_translated_git() {
+        let git = fake_git(
+            r#"if [ "${LC_ALL:-}" = C ]; then msg="is not a git command"; else msg="ist kein Git-Befehl"; fi
+               echo "git: '$1' $msg. See 'git --help'." >&2; exit 1"#,
+        );
+        let state = detect_large_file_tools_with(&git, &CancellationToken::new());
+        assert!(state.git_lfs.is_not_found(), "{:?}", state.git_lfs);
+        assert!(state.git_annex.is_not_found(), "{:?}", state.git_annex);
     }
 
     #[test]

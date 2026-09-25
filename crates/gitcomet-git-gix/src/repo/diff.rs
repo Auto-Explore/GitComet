@@ -1100,9 +1100,19 @@ fn read_worktree_image_file_bytes_optional(workdir: &Path, path: &Path) -> Resul
     } else {
         workdir.join(path)
     };
-    // A symlink is link text, never an image; the text diff shows it.
     let metadata = match std::fs::symlink_metadata(&full) {
         Ok(metadata) if metadata.is_file() => metadata,
+        // A git-annex locked file: its link text is the git form, which the
+        // large-file side resolves to the content. Other links are not images.
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target = std::fs::read_link(&full).map_err(io_err_to_error)?;
+            let target = gix::path::into_bstr(target).into_owned();
+            return Ok(
+                gitcomet_core::annex::key_from_symlink_target(target.as_ref())
+                    .is_some()
+                    .then(|| target.into()),
+            );
+        }
         Ok(_) => return Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),

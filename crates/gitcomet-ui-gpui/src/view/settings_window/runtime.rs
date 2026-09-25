@@ -151,10 +151,24 @@ impl SettingsWindowView {
                 if current_git_runtime() != runtime {
                     return;
                 }
-                this.runtime_info.large_file_tools = Some(tools);
-                cx.notify();
+                this.apply_large_file_tools_probe(tools, cx);
             });
         }));
+    }
+
+    /// Main windows probe once per Git runtime; a recheck here is how they
+    /// learn a tool was installed or removed since.
+    pub(super) fn apply_large_file_tools_probe(
+        &mut self,
+        tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.runtime_info.large_file_tools = Some(tools.clone());
+        self.update_main_windows(cx, move |view, _window, _cx| {
+            view.store
+                .dispatch(Msg::SetLargeFileToolsState(tools.clone()));
+        });
+        cx.notify();
     }
 
     pub(super) fn cancel_signing_tools_probe(&mut self) {

@@ -1002,6 +1002,70 @@ pub(super) fn safe_push_after_commit_finished(
     }
 }
 
+/// Support facts come from config, remotes, `.gitattributes`, HEAD and
+/// git-annex's logs. A reload reads the index and every attributes file, so
+/// commands that change none of those skip it.
+fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
+    match command {
+        RepoCommandKind::LargeFile { .. }
+        // New commits or checked-out files can bring other `.gitattributes`.
+        | RepoCommandKind::Pull { .. }
+        | RepoCommandKind::PullBranch { .. }
+        | RepoCommandKind::MergeRef { .. }
+        | RepoCommandKind::SquashRef { .. }
+        | RepoCommandKind::Reset { .. }
+        | RepoCommandKind::SquashCommits { .. }
+        | RepoCommandKind::Rebase { .. }
+        | RepoCommandKind::RebaseContinue
+        | RepoCommandKind::RebaseAbort
+        | RepoCommandKind::InteractiveRebase { .. }
+        | RepoCommandKind::InteractiveCherryPick { .. }
+        | RepoCommandKind::CherryPick { .. }
+        | RepoCommandKind::Revert { .. }
+        | RepoCommandKind::MergeAbort
+        | RepoCommandKind::ApplyPatch { .. }
+        | RepoCommandKind::SaveWorktreeFile { .. }
+        // Annex repositories are listed under their remote names.
+        | RepoCommandKind::AddRemote { .. }
+        | RepoCommandKind::RemoveRemote { .. }
+        | RepoCommandKind::SetRemoteUrl { .. } => true,
+        RepoCommandKind::FetchAll
+        | RepoCommandKind::PruneMergedBranches
+        | RepoCommandKind::PruneLocalTags
+        | RepoCommandKind::Push
+        | RepoCommandKind::PushWithTags { .. }
+        | RepoCommandKind::PushAfterCommit { .. }
+        | RepoCommandKind::ForcePush
+        | RepoCommandKind::ForcePushWithLease { .. }
+        | RepoCommandKind::PushSetUpstream { .. }
+        | RepoCommandKind::SetUpstreamBranch { .. }
+        | RepoCommandKind::UnsetUpstreamBranch { .. }
+        | RepoCommandKind::DeleteRemoteBranch { .. }
+        | RepoCommandKind::DeleteRemoteBranches { .. }
+        | RepoCommandKind::CreateTag { .. }
+        | RepoCommandKind::DeleteTag { .. }
+        | RepoCommandKind::PushTag { .. }
+        | RepoCommandKind::DeleteRemoteTag { .. }
+        | RepoCommandKind::CheckoutConflict { .. }
+        | RepoCommandKind::AcceptConflictDeletion { .. }
+        | RepoCommandKind::CheckoutConflictBase { .. }
+        | RepoCommandKind::LaunchMergetool { .. }
+        | RepoCommandKind::AppendGitignorePatterns { .. }
+        | RepoCommandKind::ExportPatch { .. }
+        | RepoCommandKind::AddWorktree { .. }
+        | RepoCommandKind::RemoveWorktree { .. }
+        | RepoCommandKind::ForceRemoveWorktree { .. }
+        | RepoCommandKind::AddSubmodule { .. }
+        | RepoCommandKind::UpdateSubmodules { .. }
+        | RepoCommandKind::LoadSubmodule { .. }
+        | RepoCommandKind::ChangeSubmodulePointer { .. }
+        | RepoCommandKind::RemoveSubmodule { .. }
+        | RepoCommandKind::StageHunk
+        | RepoCommandKind::UnstageHunk
+        | RepoCommandKind::ApplyWorktreePatch { .. } => false,
+    }
+}
+
 fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     matches!(
         command,
@@ -1302,6 +1366,7 @@ pub(super) fn repo_command_finished(
         extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
     }
     if command_succeeded
+        && command_may_change_large_file_support(&command)
         && let Some(effect) = super::effects::request_large_file_support_effect(repo_state)
     {
         extra_effects.push(effect);

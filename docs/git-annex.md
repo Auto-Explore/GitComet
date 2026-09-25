@@ -2,7 +2,9 @@
 
 GitComet works with repositories that manage large files with [git-annex](https://git-annex.branchable.com). GitComet does not move annexed content itself. Content commands run `git annex`, so location tracking, the numcopies check and special remotes behave exactly as they do in a terminal. Ordinary Git commands still go through Git.
 
-**Settings → Executables** shows whether Git can run `git annex`. When it is **Not found**, GitComet still recognises annexed files, but every git-annex command is listed disabled with "(install git-annex)". Pull and push through git-annex need git-annex 10.20230626 or later.
+**Settings → Executables** shows whether Git can run `git annex`. When it is **Not found**, GitComet still recognises annexed files, but every git-annex command is listed disabled with "(install git-annex)". git-annex older than 10.20230626 has no `pull` and `push`; GitComet runs the same one-way `git annex sync` instead.
+
+Showing what is annexed never runs git-annex: file rows, presence and the sidebar section are read from Git, the local `git-annex` branch and `.git/annex`. git-annex runs only for commands you start and for **Where is it?** and **Find unused content…**.
 
 ## What GitComet shows
 
@@ -56,12 +58,11 @@ backup directory=/media/usb/annex
 **Settings → Large files** has three options:
 
 - **Hide git-annex bookkeeping branches** is on by default.
-- **Use git-annex pull and push on adjusted branches** is on by default. On an adjusted branch, the Pull and Push buttons run `git annex pull` and `git annex push`. A plain merge into an adjusted branch would commit the adjusted files to the wrong branch.
+- **Use git-annex pull and push on adjusted branches** is on by default. On an adjusted branch, Pull, Push and commit & push run `git annex pull` and `git annex push`. A plain merge into an adjusted branch would commit the adjusted files to the wrong branch, and a plain push would publish the adjusted branch. Pull from another branch, push with tags and force push have no git-annex equivalent, so GitComet refuses them there; check out the base branch to use them. Without git-annex installed, Pull and Push are refused on an adjusted branch for the same reason.
 - **git-annex pull, push and sync also move file content** is off by default, so these commands only exchange branches.
 
 ## Troubleshooting
 
-- **A file shows "presence unknown".** The clone is not initialized or git-annex is not installed. Unlocked files keep their content under a path only git-annex can compute.
 - **A drop was refused.** Copy the file to another repository first, raise trust in a repository that has it, or lower numcopies with **Set number of copies…**.
 - **Files read as modified after a cancelled download.** git-annex updates Git's index at the end of a command, which a cancel skips. GitComet refreshes it after every git-annex command it runs; for files left by other tools, use **Refresh** in the git-annex section.
-- **The git-annex section lists no repositories.** git-annex is not installed, or `git annex info` failed. Run `git annex info` in a terminal to see why.
+- **The git-annex section lists no repositories, or misses one.** The list comes from this clone's `git-annex` branch, so it is empty until the clone is initialized. Repositories another clone added appear once a git-annex pull or sync merges its `git-annex` branch; a plain fetch does not.

@@ -332,12 +332,10 @@ fn adjust_and_leave_adjusted_branch() {
         },
     )
     .unwrap();
-    let support = open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
-        .unwrap();
+    let head = git(&repo, &["branch", "--show-current"]);
     assert_eq!(
-        support.annex.adjusted,
-        Some((base.clone(), "unlocked".to_string()))
+        gitcomet_core::annex::adjusted_branch(head.trim()),
+        Some((base.as_str(), "unlocked"))
     );
 
     run(
@@ -778,4 +776,484 @@ fn assistant_counts_as_running_only_while_its_process_lives() {
         fs::write(&pid_file, format!("{dead}\n")).unwrap();
         assert!(!running());
     }
+}
+
+/// git-annex merges fetched `git-annex` branches whenever it reads the branch,
+/// rewriting refs, its index and `.git/config`. The support summary loads in
+/// the background, so it must read without merging; a command the user starts
+/// is where that merge belongs.
+#[test]
+fn support_load_never_merges_fetched_annex_branches() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let origin = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&repo, &["annex", "sync", "-q", "--no-content", "origin"]);
+
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    for (key, value) in [("user.name", "Other"), ("user.email", "other@example.com")] {
+        git(&other, &["config", key, value]);
+    }
+    git(&other, &["annex", "init", "-q", "other"]);
+    git(&other, &["annex", "sync", "-q", "--no-content", "origin"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+
+    let head_before = git(&repo, &["rev-parse", "refs/heads/git-annex"]);
+    assert_ne!(
+        head_before,
+        git(&repo, &["rev-parse", "refs/remotes/origin/git-annex"]),
+        "fixture: origin's git-annex branch has news"
+    );
+    let config_before = fs::read(repo.join(".git/config")).unwrap();
+    open(&repo)
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert_eq!(
+        git(&repo, &["rev-parse", "refs/heads/git-annex"]),
+        head_before,
+        "a background read merged the fetched git-annex branch"
+    );
+    assert_eq!(fs::read(repo.join(".git/config")).unwrap(), config_before);
+}
+
+/// The support summary is a background read, so it must not take credentials
+/// staged for a command the user is retrying (git-annex reaches remotes
+/// through Git's credentials).
+#[test]
+fn support_load_does_not_consume_credentials_staged_for_a_command() {
+    use gitcomet_core::auth::{
+        GitAuthKind, ScopedStagedGitAuth, StagedGitAuth, take_staged_git_auth,
+    };
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let opened = open(&repo);
+    let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+        kind: GitAuthKind::UsernamePassword,
+        username: Some("alice".into()),
+        secret: "test-token".into(),
+    });
+    opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    let pending = take_staged_git_auth()
+        .expect("the support probe must leave the retried command's credentials staged");
+    assert_eq!(pending.username.as_deref(), Some("alice"));
+}
+
+/// Every progress event becomes a store message and a repaint. git-annex
+/// prints one per file at least, hundreds a second for small files, so the
+/// reader forwards at most one per interval (and always the last).
+#[test]
+fn transfer_progress_is_coalesced_for_many_small_files() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let names: Vec<PathBuf> = (0..200)
+        .map(|i| {
+            let name = PathBuf::from(format!("small/f{i}.bin"));
+            fs::create_dir_all(repo.join("small")).unwrap();
+            fs::write(repo.join(&name), format!("small file {i}\n").repeat(100)).unwrap();
+            name
+        })
+        .collect();
+    git(&repo, &["annex", "add", "-q", "small"]);
+    git(&repo, &["commit", "-qm", "small files"]);
+    run(
+        &repo,
+        LargeFileCommand::AnnexCopy {
+            paths: vec![PathBuf::from("small")],
+            to: "backup".into(),
+        },
+    )
+    .unwrap();
+    git(&repo, &["annex", "drop", "-q", "small"]);
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let context =
+        gitcomet_core::git_operation::GitOperationContext::new("annex get", move |_, event| {
+            let _ = sender.send(event);
+        });
+    let started = std::time::Instant::now();
+    {
+        let _scope = gitcomet_core::git_operation::attach(&context);
+        run(
+            &repo,
+            LargeFileCommand::AnnexGet {
+                paths: vec![PathBuf::from("small")],
+                from: None,
+            },
+        )
+        .unwrap();
+    }
+    let elapsed = started.elapsed();
+    let progress: Vec<_> = receiver
+        .try_iter()
+        .filter_map(|event| match event {
+            gitcomet_core::git_operation::GitOperationEvent::TransferProgress(progress) => {
+                Some(progress)
+            }
+            _ => None,
+        })
+        .collect();
+    // One per 100 ms, plus the final one.
+    let budget = (elapsed.as_millis() / 100) as usize + 2;
+    assert!(
+        progress.len() <= budget,
+        "{} progress events for {} files in {elapsed:?} (budget {budget})",
+        progress.len(),
+        names.len()
+    );
+    let last = progress.last().expect("the final progress still arrives");
+    assert_eq!(last.bytes_done, last.bytes_total);
+}
+
+#[cfg(unix)]
+/// Runs `name` again in a child process with `env` set, returning true in the
+/// child. PATH and the silence deadline are process-wide, so tests that change
+/// them must not share a process with the others.
+fn in_child(name: &str, env: &[(&str, std::ffi::OsString)]) -> bool {
+    const CHILD_ENV: &str = "GITCOMET_ANNEX_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return true;
+    }
+    let mut command = Command::new(std::env::current_exe().expect("current test executable"));
+    command
+        .args(["--exact", name, "--nocapture"])
+        .env(CHILD_ENV, "1");
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let status = command.status().expect("run child test");
+    assert!(status.success(), "{name} failed in its child process");
+    false
+}
+
+#[cfg(unix)]
+/// PATH with `dir` in front, so its programs shadow installed ones.
+fn path_with(dir: &Path) -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(&path));
+    std::env::join_paths(dirs).unwrap()
+}
+
+#[cfg(unix)]
+fn write_script(path: &Path, text: &str) {
+    fs::write(path, text).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[cfg(unix)]
+/// A `git-annex` that logs each call as `cwd<TAB>args` and, like git-annex
+/// before 10.20230626, has no `pull` or `push`. Returns its directory.
+fn old_git_annex_shim(root: &Path) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let real = std::env::split_paths(&path)
+        .map(|dir| dir.join("git-annex"))
+        .find(|candidate| candidate.is_file())?;
+    let dir = root.join("shim");
+    fs::create_dir_all(&dir).unwrap();
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\t%s\\n' \"$PWD\" \"$*\" >> '{log}'\n\
+         for arg in \"$@\"; do case \"$arg\" in -*) ;; *) sub=\"$arg\"; break ;; esac; done\n\
+         case \"$sub\" in pull|push)\n\
+           printf \"Invalid argument \\`%s'\\n\\nUsage: git-annex COMMAND\\n\" \"$sub\" >&2; exit 1 ;;\n\
+         esac\n\
+         exec '{real}' \"$@\"\n",
+        log = dir.join("calls.log").display(),
+        real = real.display(),
+    );
+    write_script(&dir.join("git-annex"), &script);
+    Some(dir)
+}
+
+#[cfg(unix)]
+/// Shim calls made with `repo` as the working directory.
+fn shim_calls(shim: &Path, repo: &Path) -> Vec<String> {
+    let repo = fs::canonicalize(repo).unwrap();
+    fs::read_to_string(shim.join("calls.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(cwd, _)| fs::canonicalize(cwd).is_ok_and(|cwd| cwd == repo))
+        .map(|(_, args)| args.to_string())
+        .collect()
+}
+
+#[cfg(unix)]
+/// The test's fixed scratch root, shared by the parent and its child.
+fn child_root(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("gitcomet-{name}-{}", std::process::id()))
+}
+
+/// Ubuntu 22.04 and Debian 11 ship git-annex 8.x, which has `sync` but not
+/// the one-way `pull` and `push` split out in 10.20230626.
+#[cfg(unix)]
+#[test]
+fn annex_pull_and_push_fall_back_to_one_way_sync_on_older_git_annex() {
+    require_annex!();
+    const NAME: &str = "annex_pull_and_push_fall_back_to_one_way_sync_on_older_git_annex";
+    let root = match std::env::var_os("GITCOMET_ANNEX_TEST_ROOT") {
+        Some(root) => PathBuf::from(root),
+        None => {
+            let root = child_root("old-annex");
+            fs::create_dir_all(&root).unwrap();
+            let shim = old_git_annex_shim(&root).expect("git-annex on PATH");
+            let passed = in_child(
+                NAME,
+                &[
+                    ("PATH", path_with(&shim)),
+                    ("GITCOMET_ANNEX_TEST_ROOT", root.clone().into()),
+                ],
+            );
+            let _ = fs::remove_dir_all(&root);
+            if !passed {
+                return;
+            }
+            unreachable!("the parent never runs the body")
+        }
+    };
+    let repo = init_annex_repo(&root);
+    let opened = open(&repo);
+    for (command, direction) in [
+        (LargeFileCommand::AnnexPull { content: false }, "--no-push"),
+        (LargeFileCommand::AnnexPush { content: true }, "--no-pull"),
+    ] {
+        opened
+            .run_large_file_command(&command)
+            .unwrap_or_else(|e| panic!("{command:?}: {e}"));
+        let calls = shim_calls(&root.join("shim"), &repo);
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.contains("sync") && call.contains(direction)),
+            "{command:?} must fall back to a one-way sync: {calls:?}"
+        );
+    }
+}
+
+/// Status and its per-row large-file state are background reads that run on
+/// every refresh; they must never start git-annex, even for unlocked rows.
+#[cfg(unix)]
+#[test]
+fn status_rows_never_run_git_annex() {
+    require_annex!();
+    const NAME: &str = "status_rows_never_run_git_annex";
+    let root = match std::env::var_os("GITCOMET_ANNEX_TEST_ROOT") {
+        Some(root) => PathBuf::from(root),
+        None => {
+            let root = child_root("status-no-annex");
+            fs::create_dir_all(&root).unwrap();
+            let shim = old_git_annex_shim(&root).expect("git-annex on PATH");
+            let passed = in_child(
+                NAME,
+                &[
+                    ("PATH", path_with(&shim)),
+                    ("GITCOMET_ANNEX_TEST_ROOT", root.clone().into()),
+                ],
+            );
+            let _ = fs::remove_dir_all(&root);
+            if !passed {
+                return;
+            }
+            unreachable!("the parent never runs the body")
+        }
+    };
+    let repo = init_annex_repo(&root);
+    git(&repo, &["annex", "unlock", "big.bin"]);
+    fs::write(repo.join("other.bin"), vec![9u8; 2048]).unwrap();
+    git(&repo, &["annex", "add", "-q", "other.bin"]);
+    git(&repo, &["annex", "unlock", "other.bin"]);
+    let shim = root.join("shim");
+    let before = shim_calls(&shim, &repo).len();
+
+    let opened = open(&repo);
+    let status = opened.status().unwrap();
+    let files = opened
+        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(
+        files.staged[Path::new("other.bin")].in_local_store,
+        Some(true)
+    );
+    opened
+        .uncommitted_line_stats_for_status_cancellable(&status, &CancellationToken::new())
+        .unwrap();
+    let calls = shim_calls(&shim, &repo);
+    assert!(
+        calls.len() == before,
+        "status ran git-annex: {:?}",
+        &calls[before..]
+    );
+}
+
+#[cfg(unix)]
+/// A minimal external special remote that stores keys in `directory=` and
+/// takes `@SECS@` seconds per transfer, printing nothing meanwhile.
+const SLOW_REMOTE: &str = r#"#!/bin/sh
+dir=""
+echo VERSION 1
+while IFS= read -r line; do
+  set -- $line
+  case "$1" in
+    INITREMOTE) echo INITREMOTE-SUCCESS ;;
+    PREPARE)
+      echo "GETCONFIG directory"
+      IFS= read -r reply
+      dir="${reply#VALUE }"
+      echo PREPARE-SUCCESS ;;
+    TRANSFER)
+      op="$2"; key="$3"; file="${line#TRANSFER $op $key }"
+      sleep @SECS@
+      if [ "$op" = STORE ]; then cp "$file" "$dir/$key"; else cp "$dir/$key" "$file"; fi
+      echo "TRANSFER-SUCCESS $op $key" ;;
+    CHECKPRESENT)
+      if [ -e "$dir/$2" ]; then echo "CHECKPRESENT-SUCCESS $2"; else echo "CHECKPRESENT-FAILURE $2"; fi ;;
+    REMOVE) rm -f "$dir/$2"; echo "REMOVE-SUCCESS $2" ;;
+    *) echo UNSUPPORTED-REQUEST ;;
+  esac
+done
+"#;
+
+/// git-annex prints nothing while one file moves (no terminal, and `sync`,
+/// `pull` and `push` have no JSON progress), so a long transfer must not be
+/// ended by the silence deadline; cancelling it is the user's call.
+#[cfg(unix)]
+#[test]
+fn a_silent_content_transfer_outlives_the_silence_deadline() {
+    require_annex!();
+    const NAME: &str = "a_silent_content_transfer_outlives_the_silence_deadline";
+    let root = match std::env::var_os("GITCOMET_ANNEX_TEST_ROOT") {
+        Some(root) => PathBuf::from(root),
+        None => {
+            let root = child_root("silent-transfer");
+            let bin = root.join("bin");
+            fs::create_dir_all(&bin).unwrap();
+            write_script(
+                &bin.join("git-annex-remote-slowtest"),
+                &SLOW_REMOTE.replace("@SECS@", "4"),
+            );
+            let passed = in_child(
+                NAME,
+                &[
+                    ("PATH", path_with(&bin)),
+                    ("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "2".into()),
+                    ("GITCOMET_ANNEX_TEST_ROOT", root.clone().into()),
+                ],
+            );
+            let _ = fs::remove_dir_all(&root);
+            if !passed {
+                return;
+            }
+            unreachable!("the parent never runs the body")
+        }
+    };
+    let repo = init_annex_repo(&root);
+    git(
+        &repo,
+        &[
+            "annex",
+            "initremote",
+            "-q",
+            "slow",
+            "type=external",
+            "externaltype=slowtest",
+            "encryption=none",
+            &format!("directory={}", root.join("slow-store").display()),
+        ],
+    );
+    fs::create_dir_all(root.join("slow-store")).unwrap();
+    open(&repo)
+        .run_large_file_command(&LargeFileCommand::AnnexCopy {
+            paths: paths("big.bin"),
+            to: "slow".into(),
+        })
+        .map(|_| ())
+        .unwrap_or_else(|e| panic!("copy with JSON progress was cut off: {e}"));
+    git(&repo, &["annex", "drop", "-q", "--from", "slow", "big.bin"]);
+    open(&repo)
+        .run_large_file_command(&LargeFileCommand::AnnexPush { content: true })
+        .unwrap_or_else(|e| panic!("push --content was cut off: {e}"));
+    let whereis = git(&repo, &["annex", "whereis", "big.bin"]);
+    assert!(whereis.contains("slow"), "{whereis}");
+}
+
+/// The summary reads git-annex's logs instead of running `git annex info`, so
+/// it must list what `info` lists: same repositories, descriptions and trust.
+#[test]
+fn repositories_read_from_logs_match_git_annex_info() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let origin = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(&origin, &["annex", "init", "-q", "shared store"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&repo, &["annex", "sync", "-q", "--no-content", "origin"]);
+    git(&repo, &["annex", "untrust", "-q", "backup"]);
+    git(&repo, &["annex", "trust", "-q", "--force", "origin"]);
+    git(&repo, &["annex", "describe", "-q", "here", "my laptop"]);
+    git(&repo, &["annex", "dead", "-q", "web"]);
+    run(&repo, LargeFileCommand::AnnexNumcopies { copies: 3 }).unwrap();
+
+    let support = open(&repo)
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    let ours: Vec<_> = support
+        .annex
+        .repositories
+        .iter()
+        .map(|repo| {
+            (
+                repo.uuid.clone(),
+                repo.description.clone(),
+                repo.trust.label().to_string(),
+                repo.here,
+            )
+        })
+        .collect();
+    let info: serde_json::Value =
+        serde_json::from_str(&git(&repo, &["annex", "info", "--fast", "--json"])).unwrap();
+    let mut theirs = Vec::new();
+    for trust in ["trusted", "semitrusted", "untrusted"] {
+        for entry in info[format!("{trust} repositories")].as_array().unwrap() {
+            theirs.push((
+                entry["uuid"].as_str().unwrap().to_string(),
+                entry["description"].as_str().unwrap().to_string(),
+                trust.to_string(),
+                entry["here"].as_bool().unwrap(),
+            ));
+        }
+    }
+    assert_eq!(ours, theirs);
+    assert_eq!(support.annex.numcopies, Some(3));
 }

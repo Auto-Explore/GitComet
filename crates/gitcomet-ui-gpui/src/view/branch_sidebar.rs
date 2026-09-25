@@ -1604,7 +1604,7 @@ fn push_annex_section_rows(
         return;
     }
     let collapsed = is_collapsed(collapsed_items, annex_section_storage_key());
-    let summary = match (&annex.adjusted, annex.numcopies) {
+    let summary = match (repo.annex_adjusted_branch(), annex.numcopies) {
         (Some((_, mode)), _) => Some(format!("adjusted ({mode})").into()),
         (None, Some(copies)) => Some(format!("numcopies {copies}").into()),
         (None, None) => None,

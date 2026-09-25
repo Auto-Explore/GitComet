@@ -496,12 +496,22 @@ fn clear_stale_clone_banner_error(state: &mut AppState) {
 
 /// On an annex adjusted branch, Pull and Push go through git-annex: its pull
 /// propagates to the base branch and syncs the `git-annex` branch, where a
-/// plain merge would commit adjusted content to the wrong branch.
+/// plain merge would commit adjusted content to the wrong branch and a plain
+/// push would publish the adjusted branch. `None`: plain Git applies.
 fn annex_takeover(state: &mut AppState, repo_id: RepoId, pull: bool) -> Option<Vec<Effect>> {
     let settings = state.large_file_settings;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
-    if !settings.annex_pull_push || repo.annex_adjusted_branch().is_none() {
+    if !repo.annex_takes_over_pull_push(&settings) {
         return None;
+    }
+    if state.large_file_tools.git_annex.is_not_found() {
+        let action = if pull { "Pull" } else { "Push" };
+        return annex_refusal(
+            state,
+            repo_id,
+            action,
+            "needs git-annex, which Git cannot find. Install git-annex where Git can find it",
+        );
     }
     let content = settings.annex_sync_content;
     let command = if pull {
@@ -515,6 +525,44 @@ fn annex_takeover(state: &mut AppState, repo_id: RepoId, pull: bool) -> Option<V
         command,
         auth: None,
     }])
+}
+
+/// Branch operations git-annex has no equivalent for are refused on an
+/// adjusted branch rather than run as plain Git.
+fn annex_adjusted_refusal(
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: &str,
+) -> Option<Vec<Effect>> {
+    let settings = state.large_file_settings;
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    if !repo.annex_takes_over_pull_push(&settings) {
+        return None;
+    }
+    annex_refusal(
+        state,
+        repo_id,
+        action,
+        "is not available here: Pull and Push go through git-annex",
+    )
+}
+
+fn annex_refusal(
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: &str,
+    reason: &str,
+) -> Option<Vec<Effect>> {
+    let repo = state.repos.iter_mut().find(|repo| repo.id == repo_id)?;
+    let base = repo
+        .annex_adjusted_branch()
+        .map_or_else(String::new, |(base, _)| base.to_string());
+    let summary = format!(
+        "{action} on a git-annex adjusted branch {reason}. Check out {base} to use plain Git."
+    );
+    repo.feedback.last_error = Some(summary.clone());
+    util::push_action_log(repo, false, action.to_string(), summary, None);
+    Some(Vec::new())
 }
 
 #[cfg(test)]
@@ -2061,7 +2109,10 @@ fn reduce_inner(
             actions_emit_effects::commit_amend(repo_id, message)
         }
         Msg::SafePushAfterCommit { repo_id, context } => {
-            actions_emit_effects::safe_push_after_commit(repo_id, context)
+            match annex_takeover(state, repo_id, false) {
+                Some(effects) => effects,
+                None => actions_emit_effects::safe_push_after_commit(repo_id, context),
+            }
         }
         Msg::FetchAll { repo_id } => actions_emit_effects::fetch_all(repos, state, repo_id),
         Msg::PruneMergedBranches { repo_id } => {
@@ -2078,7 +2129,10 @@ fn reduce_inner(
             repo_id,
             remote,
             branch,
-        } => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
+        } => match annex_adjusted_refusal(state, repo_id, "Pull from another branch") {
+            Some(effects) => effects,
+            None => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
+        },
         Msg::MergeRef { repo_id, reference } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_ref(repo_id, reference)
@@ -2088,7 +2142,10 @@ fn reduce_inner(
             actions_emit_effects::squash_ref(repo_id, reference)
         }
         Msg::PushWithTags { repo_id, request } => {
-            actions_emit_effects::push_with_tags(repos, state, repo_id, request)
+            match annex_adjusted_refusal(state, repo_id, "Push with tags") {
+                Some(effects) => effects,
+                None => actions_emit_effects::push_with_tags(repos, state, repo_id, request),
+            }
         }
         Msg::PreviewTagPush {
             repo_id,
@@ -2145,16 +2202,31 @@ fn reduce_inner(
             repo_id,
             target,
             set_upstream,
-        } => actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream),
-        Msg::ForcePush { repo_id } => actions_emit_effects::force_push(repos, state, repo_id),
+        } => match annex_takeover(state, repo_id, false) {
+            Some(effects) => effects,
+            None => {
+                actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream)
+            }
+        },
+        Msg::ForcePush { repo_id } => match annex_adjusted_refusal(state, repo_id, "Force push") {
+            Some(effects) => effects,
+            None => actions_emit_effects::force_push(repos, state, repo_id),
+        },
         Msg::ForcePushWithLease { repo_id, lease } => {
-            actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease)
+            match annex_adjusted_refusal(state, repo_id, "Force push") {
+                Some(effects) => effects,
+                None => actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease),
+            }
         }
+        // An adjusted branch has no upstream; `git annex push` needs none.
         Msg::PushSetUpstream {
             repo_id,
             remote,
             branch,
-        } => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        } => match annex_takeover(state, repo_id, false) {
+            Some(effects) => effects,
+            None => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        },
         Msg::SetUpstreamBranch {
             repo_id,
             branch,
@@ -2940,7 +3012,9 @@ fn reduce_inner(
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
             }
-            if push_after_commit
+            if push_after_commit && let Some(push) = annex_takeover(state, repo_id, false) {
+                effects.extend(push);
+            } else if push_after_commit
                 && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
             {
                 effects.extend(actions_emit_effects::safe_push_after_commit(
@@ -2980,7 +3054,9 @@ fn reduce_inner(
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
             }
-            if push_after_commit
+            if push_after_commit && let Some(push) = annex_takeover(state, repo_id, false) {
+                effects.extend(push);
+            } else if push_after_commit
                 && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
             {
                 effects.extend(actions_emit_effects::safe_push_after_commit(

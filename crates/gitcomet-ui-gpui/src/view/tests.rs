@@ -452,6 +452,32 @@ fn push_request_uses_first_remote_when_origin_is_absent() {
     );
 }
 
+/// An annex adjusted branch never has an upstream. Offering to set one would
+/// publish the adjusted branch; Push goes through `git annex push` instead.
+#[test]
+fn push_request_on_an_annex_adjusted_branch_never_offers_set_upstream() {
+    let mut repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+    let head = "adjusted/main(unlocked)".to_string();
+    repo.head_branch = Loadable::Ready(head.clone());
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: head,
+        target: CommitId("deadbeef".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.uuid = Some("u".into());
+    repo.large_file_support = Loadable::Ready(Arc::new(support));
+
+    assert_eq!(push_request(&repo), PushRequest::Push);
+}
+
 #[test]
 fn push_request_distinguishes_no_remotes_from_loading_data() {
     let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));

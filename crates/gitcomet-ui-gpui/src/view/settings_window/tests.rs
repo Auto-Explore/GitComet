@@ -3490,6 +3490,53 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
     assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
 }
 
+/// "Recheck" re-probes `git lfs` / `git annex` from this window. The main
+/// windows only probe once per Git runtime, so without the result they keep
+/// offering "(install git-lfs)" after the user installed it.
+#[gpui::test]
+fn large_file_tools_recheck_reaches_the_main_windows(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::large_file_tools::{LargeFileToolsState, ToolAvailability};
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let main_store = store.clone();
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    main_store.dispatch(Msg::SetLargeFileToolsState(LargeFileToolsState {
+        git_lfs: ToolAvailability::NotFound {
+            detail: "Git cannot run `git lfs`.".into(),
+        },
+        git_annex: ToolAvailability::Unknown,
+    }));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+
+    let installed = LargeFileToolsState {
+        git_lfs: ToolAvailability::Available {
+            version: Some("git-lfs/3.8.0".into()),
+        },
+        git_annex: ToolAvailability::Unknown,
+    };
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.apply_large_file_tools_probe(installed.clone(), cx);
+    });
+    wait_for_store(
+        &mut settings_cx,
+        &main_store,
+        "the main window to learn git-lfs is installed",
+        |state| state.large_file_tools == installed,
+    );
+}
+
 #[test]
 fn large_file_tool_rows_report_found_missing_and_detecting() {
     use gitcomet_core::large_file_tools::{LargeFileToolsState, ToolAvailability};

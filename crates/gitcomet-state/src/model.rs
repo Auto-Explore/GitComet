@@ -2275,11 +2275,22 @@ impl RepoState {
     }
 
     /// The adjusted branch HEAD is on, as `(base, mode)`, in an annex repo.
-    pub fn annex_adjusted_branch(&self) -> Option<&(String, String)> {
+    /// Read from HEAD itself: support loads once, HEAD moves under it.
+    pub fn annex_adjusted_branch(&self) -> Option<(&str, &str)> {
+        let Loadable::Ready(head) = &self.head_branch else {
+            return None;
+        };
+        let adjusted = gitcomet_core::annex::adjusted_branch(head)?;
         match &self.large_file_support {
-            Loadable::Ready(support) => support.annex.adjusted.as_ref(),
-            _ => None,
+            // Outside an annex repo the name is an ordinary branch.
+            Loadable::Ready(support) if !support.annex.in_use() => None,
+            _ => Some(adjusted),
         }
+    }
+
+    /// Pull and Push of the current branch go through git-annex.
+    pub fn annex_takes_over_pull_push(&self, settings: &LargeFileSettings) -> bool {
+        settings.annex_pull_push && self.annex_adjusted_branch().is_some()
     }
 
     /// The lock held on `path`, when the lock list has loaded.

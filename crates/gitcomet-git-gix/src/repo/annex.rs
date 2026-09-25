@@ -2,7 +2,8 @@
 //! numcopies checks and special remotes all apply.
 
 use crate::util::{
-    run_git_capture_cancellable, run_git_parsed_stdout, run_git_with_output, validate_ref_like_arg,
+    run_git_background_capture, run_git_parsed_stdout_until_done, run_git_with_output,
+    run_git_with_output_until_done, validate_ref_like_arg,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::git_operation::{GitOperationEvent, TransferProgress};
@@ -11,10 +12,14 @@ use gitcomet_core::large_files::{
     AnnexWhereis, LargeFileCommand,
 };
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::ffi::OsString;
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
+
+/// Progress reaches the store as a message and a repaint; git-annex prints
+/// one line per file at least, hundreds a second for small files.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 fn backend(message: impl Into<String>) -> Error {
     Error::new(ErrorKind::Backend(message.into()))
@@ -116,9 +121,31 @@ fn failure_detail(failed: &[&AnnexItem]) -> String {
     detail
 }
 
-/// `remote.<name>.annex-uuid` → name, and the special remote type from the
+/// git-annex before 10.20230626 rejects `pull` and `push` as its argument
+/// parser's "Invalid argument `pull'".
+fn unknown_annex_command(error: &Error, verb: &str) -> bool {
+    let ErrorKind::Git(failure) = error.kind() else {
+        return false;
+    };
+    let stderr = String::from_utf8_lossy(failure.stderr());
+    stderr
+        .lines()
+        .any(|line| line.contains("Invalid argument") && line.contains(verb))
+}
+
+/// A remote this clone reaches, as `remote.<name>.*` config knows it.
+struct KnownRemote {
+    uuid: String,
+    name: String,
+    /// Guessed from the remote's own `annex-*` settings.
+    special_type: Option<String>,
+    /// `annex-trustlevel`, which overrides trust.log here.
+    trust_level: Option<String>,
+}
+
+/// Remotes with an `annex-uuid`, and the special remote type from the
 /// remote's own `annex-*` settings.
-fn remote_names(config: &gix::config::Snapshot<'_>) -> Vec<(String, String, Option<String>)> {
+fn remote_names(config: &gix::config::Snapshot<'_>) -> Vec<KnownRemote> {
     let mut remotes = Vec::new();
     for section in config
         .plumbing()
@@ -149,55 +176,145 @@ fn remote_names(config: &gix::config::Snapshot<'_>) -> Vec<(String, String, Opti
                     .unwrap_or_else(|| "special".into()),
             )
         };
-        remotes.push((uuid, name, special_type));
+        remotes.push(KnownRemote {
+            uuid,
+            name,
+            special_type,
+            trust_level: value("annex-trustlevel"),
+        });
     }
     remotes
 }
 
-/// `git annex info --fast --json`: repositories grouped by trust level.
-fn parse_info_repositories(
-    json: &str,
-    remotes: &[(String, String, Option<String>)],
-    special_remotes: &FxHashMap<String, SpecialRemote>,
-) -> Result<Vec<AnnexRepository>> {
-    let value: serde_json::Value = serde_json::from_str(json.trim())
-        .map_err(|e| backend(format!("git annex info --json: {e}")))?;
-    let mut repositories = Vec::new();
-    for (key, trust) in [
-        ("trusted repositories", AnnexTrust::Trusted),
-        ("semitrusted repositories", AnnexTrust::Semitrusted),
-        ("untrusted repositories", AnnexTrust::Untrusted),
-    ] {
-        for entry in value
-            .get(key)
-            .and_then(|v| v.as_array())
-            .into_iter()
-            .flatten()
+/// `1790075913.5s` in a log line.
+fn log_timestamp(text: &str) -> f64 {
+    text.trim_end_matches('s').parse().unwrap_or(0.0)
+}
+
+/// Newest value per uuid of a `<uuid> <value> timestamp=<t>s` log such as
+/// uuid.log or trust.log; later lines win ties, as the journal is newer.
+fn newest_per_uuid(text: &str) -> FxHashMap<String, String> {
+    let mut newest: FxHashMap<String, (f64, String)> = FxHashMap::default();
+    for line in text.lines() {
+        let Some((uuid, rest)) = line.trim_end().split_once(' ') else {
+            continue;
+        };
+        let (value, timestamp) = match rest.rsplit_once(" timestamp=") {
+            Some((value, timestamp)) => (value, log_timestamp(timestamp)),
+            None => (rest, 0.0),
+        };
+        if newest
+            .get(uuid)
+            .is_none_or(|(existing, _)| timestamp >= *existing)
         {
-            let text = |k: &str| entry.get(k).and_then(|v| v.as_str()).map(str::to_string);
-            let Some(uuid) = text("uuid") else { continue };
-            let remote = remotes
-                .iter()
-                .find(|(remote_uuid, ..)| *remote_uuid == uuid);
-            repositories.push(AnnexRepository {
-                description: text("description").unwrap_or_default(),
-                remote_name: remote.map(|(_, name, _)| name.clone()),
+            newest.insert(uuid.to_string(), (timestamp, value.to_string()));
+        }
+    }
+    newest
+        .into_iter()
+        .map(|(uuid, (_, value))| (uuid, value))
+        .collect()
+}
+
+/// numcopies.log: `<t>s <n>`, or `<n> timestamp=<t>s` from older git-annex.
+fn parse_numcopies_log(text: &str) -> Option<u32> {
+    let mut newest: Option<(f64, u32)> = None;
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(first), Some(second)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let (timestamp, value) = match second.strip_prefix("timestamp=") {
+            Some(timestamp) => (log_timestamp(timestamp), first),
+            None => (log_timestamp(first), second),
+        };
+        let Ok(value) = value.parse() else { continue };
+        if newest.is_none_or(|(existing, _)| timestamp >= existing) {
+            newest = Some((timestamp, value));
+        }
+    }
+    newest.map(|(_, value)| value)
+}
+
+/// git-annex's own pseudo-repositories, always listed unless dead.
+const BUILTIN_REPOSITORIES: [(&str, &str); 2] = [
+    ("00000000-0000-0000-0000-000000000001", "web"),
+    ("00000000-0000-0000-0000-000000000002", "bittorrent"),
+];
+
+/// Repositories as `git annex info` lists them: every uuid with a description
+/// or a remote, dead ones left out, grouped by trust and ordered by uuid.
+/// A remote's name joins its description the way git-annex shows it.
+fn repositories_from_logs(
+    uuid_log: &str,
+    trust_log: &str,
+    remotes: &[KnownRemote],
+    special_remotes: &FxHashMap<String, SpecialRemote>,
+    here: Option<&str>,
+) -> Vec<AnnexRepository> {
+    let mut descriptions = newest_per_uuid(uuid_log);
+    for (uuid, description) in BUILTIN_REPOSITORIES {
+        descriptions.insert(uuid.to_string(), description.to_string());
+    }
+    for remote in remotes {
+        descriptions.entry(remote.uuid.clone()).or_default();
+    }
+    let trust_log = newest_per_uuid(trust_log);
+    let mut repositories: Vec<AnnexRepository> = descriptions
+        .into_iter()
+        .filter_map(|(uuid, description)| {
+            let remote = remotes.iter().find(|remote| remote.uuid == uuid);
+            let level = remote
+                .and_then(|remote| remote.trust_level.as_deref())
+                .map(|level| match level {
+                    "trusted" => "1",
+                    "untrusted" => "0",
+                    "dead" => "X",
+                    _ => "?",
+                })
+                .or_else(|| trust_log.get(&uuid).map(String::as_str));
+            let trust = match level {
+                Some("X") => return None,
+                Some("1") => AnnexTrust::Trusted,
+                Some("0") => AnnexTrust::Untrusted,
+                _ => AnnexTrust::Semitrusted,
+            };
+            let description = match remote {
+                Some(remote) => {
+                    let name = format!("[{}]", remote.name);
+                    if description.is_empty() || description == remote.name {
+                        name
+                    } else {
+                        format!("{description} {name}")
+                    }
+                }
+                None => description,
+            };
+            Some(AnnexRepository {
+                description,
+                remote_name: remote.map(|remote| remote.name.clone()),
                 // remote.log is authoritative and also covers special remotes
                 // this clone has not enabled; the config guess is a fallback.
                 special_type: special_remotes
                     .get(&uuid)
                     .map(|special| special.special_type.clone())
-                    .or_else(|| remote.and_then(|(.., special)| special.clone())),
+                    .or_else(|| remote.and_then(|remote| remote.special_type.clone())),
                 special_name: special_remotes
                     .get(&uuid)
                     .and_then(|special| special.name.clone()),
                 trust,
-                here: entry.get("here").and_then(|v| v.as_bool()).unwrap_or(false),
+                here: here == Some(uuid.as_str()),
                 uuid,
-            });
-        }
-    }
-    Ok(repositories)
+            })
+        })
+        .collect();
+    let rank = |trust: AnnexTrust| match trust {
+        AnnexTrust::Trusted => 0,
+        AnnexTrust::Semitrusted => 1,
+        AnnexTrust::Untrusted => 2,
+    };
+    repositories.sort_by(|a, b| (rank(a.trust), &a.uuid).cmp(&(rank(b.trust), &b.uuid)));
+    repositories
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -253,27 +370,30 @@ fn parse_remote_log(text: &str) -> FxHashMap<String, SpecialRemote> {
         .collect()
 }
 
-/// `remote.log` from the `git-annex` branch, then the journal's uncommitted
-/// lines, which are newer.
-fn special_remotes(repo: &gix::Repository) -> FxHashMap<String, SpecialRemote> {
+/// A top-level git-annex log: the local `git-annex` branch's copy, then the
+/// journals' uncommitted lines, which are newer. Fetched `git-annex` branches
+/// are not merged in; git-annex does that when a command runs.
+fn annex_log(repo: &gix::Repository, name: &str) -> String {
     let mut text = repo
         .find_reference("refs/heads/git-annex")
         .ok()
         .and_then(|mut reference| reference.peel_to_tree().ok())
-        .and_then(|tree| tree.lookup_entry_by_path("remote.log").ok().flatten())
+        .and_then(|tree| tree.lookup_entry_by_path(name).ok().flatten())
         .and_then(|entry| entry.object().ok())
         .map(|object| String::from_utf8_lossy(&object.data).into_owned())
         .unwrap_or_default();
-    if let Ok(journal) = std::fs::read_to_string(
-        repo.common_dir()
-            .join("annex")
-            .join("journal")
-            .join("remote.log"),
-    ) {
-        text.push('\n');
-        text.push_str(&journal);
+    let annex_dir = repo.common_dir().join("annex");
+    for journal in ["journal", "journal-private"] {
+        if let Ok(lines) = std::fs::read_to_string(annex_dir.join(journal).join(name)) {
+            text.push('\n');
+            text.push_str(&lines);
+        }
     }
-    parse_remote_log(&text)
+    text
+}
+
+fn special_remotes(repo: &gix::Repository) -> FxHashMap<String, SpecialRemote> {
+    parse_remote_log(&annex_log(repo, "remote.log"))
 }
 
 /// `git annex unused --json`: one object with numbered key lists.
@@ -308,7 +428,7 @@ fn parse_unused(json: &str) -> Result<AnnexUnused> {
 }
 
 /// The assistant writes its pid to `.git/annex/daemon.pid` and leaves it
-/// behind when killed, so the process itself is checked where possible.
+/// behind when killed, so the process itself is checked.
 pub(super) fn assistant_running(annex_dir: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(annex_dir.join("daemon.pid")) else {
         return false;
@@ -321,10 +441,23 @@ pub(super) fn assistant_running(annex_dir: &Path) -> bool {
         rustix::process::Pid::from_raw(pid)
             .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // git-annex's own check on Windows: the running assistant holds
+        // `daemon.pid.<pid>.lck` exclusively; a killed one leaves it openable.
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ: u32 = 1;
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(annex_dir.join(format!("daemon.pid.{pid}.lck")))
+            .is_err_and(|error| error.raw_os_error() == Some(ERROR_SHARING_VIOLATION))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
-        true
+        false
     }
 }
 
@@ -374,7 +507,8 @@ impl super::GixRepo {
 
     /// Run a `--json` annex command over paths, streaming `--json-progress`
     /// lines into the activity panel. Fails when any item failed, with
-    /// git-annex's own reason per file.
+    /// git-annex's own reason per file. Runs until done or cancelled: a
+    /// remote that reports no progress keeps a transfer silent.
     fn run_annex_json(
         &self,
         args: &[OsString],
@@ -399,15 +533,26 @@ impl super::GixRepo {
         let operation = gitcomet_core::git_operation::current();
         let shared = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let reader_items = std::sync::Arc::clone(&shared);
-        let run = run_git_parsed_stdout(cmd, label, false, move |stdout| {
+        let run = run_git_parsed_stdout_until_done(cmd, label, move |stdout| {
+            let emit = |progress| {
+                if let Some(operation) = operation.as_ref() {
+                    operation.emit(GitOperationEvent::TransferProgress(progress));
+                }
+            };
+            let mut last_emit: Option<std::time::Instant> = None;
+            let mut pending = None;
             for line in std::io::BufReader::new(stdout).lines() {
                 let line = line.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
                 if let Some(progress) = parse_progress(&value) {
-                    if let Some(operation) = operation.as_ref() {
-                        operation.emit(GitOperationEvent::TransferProgress(progress));
+                    if last_emit.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL) {
+                        last_emit = Some(std::time::Instant::now());
+                        pending = None;
+                        emit(progress);
+                    } else {
+                        pending = Some(progress);
                     }
                 } else if let Some(item) = parse_item(&value) {
                     reader_items
@@ -415,6 +560,10 @@ impl super::GixRepo {
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .push(item);
                 }
+            }
+            // The newest state always arrives, however soon after the last.
+            if let Some(progress) = pending {
+                emit(progress);
             }
             Ok(())
         });
@@ -460,10 +609,30 @@ impl super::GixRepo {
         })
     }
 
+    /// A user-started command: runs until done or cancelled, since git-annex
+    /// prints nothing while one file transfers or one tree is checked out.
     fn run_annex_plain(&self, args: &[&str], extra: &[&str], label: &str) -> Result<CommandOutput> {
         let mut cmd = self.git_annex(args);
         cmd.args(extra);
-        run_git_with_output(cmd, label)
+        run_git_with_output_until_done(cmd, label)
+    }
+
+    /// `git annex pull` / `push` arrived in 10.20230626; older git-annex
+    /// (Ubuntu 22.04, Debian 11) does the same with a one-way `sync`.
+    fn run_annex_one_way(&self, pull: bool, content: bool) -> Result<CommandOutput> {
+        let (verb, other_way) = if pull {
+            ("pull", "--no-push")
+        } else {
+            ("push", "--no-pull")
+        };
+        let content = if content { "--content" } else { "--no-content" };
+        let label = format!("git annex {verb}");
+        match self.run_annex_plain(&[verb, content], &[], &label) {
+            Err(error) if unknown_annex_command(&error, verb) => {
+                self.run_annex_plain(&["sync", other_way, "--no-commit", content], &[], &label)
+            }
+            result => result,
+        }
     }
 
     pub(super) fn run_annex_command(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
@@ -477,7 +646,8 @@ impl super::GixRepo {
                 |_, _| {},
             );
             let _scope = gitcomet_core::git_operation::attach(&quiet);
-            let _ = self.run_annex_plain(&["restage"], &[], "git annex restage");
+            // Nobody can cancel this one, so it keeps the silence deadline.
+            let _ = run_git_with_output(self.git_annex(&["restage"]), "git annex restage");
         }
         result
     }
@@ -538,12 +708,8 @@ impl super::GixRepo {
             }
             C::AnnexLock { paths } => self.run_annex_json(&os(&["lock"]), paths, "git annex lock"),
             C::AnnexAdd { paths } => self.run_annex_json(&os(&["add"]), paths, "git annex add"),
-            C::AnnexPull { content: c } => {
-                self.run_annex_plain(&["pull", content(*c)], &[], "git annex pull")
-            }
-            C::AnnexPush { content: c } => {
-                self.run_annex_plain(&["push", content(*c)], &[], "git annex push")
-            }
+            C::AnnexPull { content } => self.run_annex_one_way(true, *content),
+            C::AnnexPush { content } => self.run_annex_one_way(false, *content),
             C::AnnexSync { content: c } => {
                 self.run_annex_plain(&["sync", "--no-commit", content(*c)], &[], "git annex sync")
             }
@@ -555,7 +721,7 @@ impl super::GixRepo {
                 validate_ref_like_arg(base, "branch")?;
                 let mut cmd = self.git_workdir_cmd();
                 cmd.args(["checkout", base.as_str()]);
-                run_git_with_output(cmd, "git checkout")
+                run_git_with_output_until_done(cmd, "git checkout")
             }
             C::AnnexEnableRemote { name, params } => {
                 validate_name(name, "remote")?;
@@ -629,37 +795,31 @@ impl super::GixRepo {
         }
     }
 
-    /// Repositories and numcopies for the repo summary. Errors (git-annex not
-    /// installed, clone not initialized) leave both empty.
+    /// Repositories and numcopies for the repo summary, read from git-annex's
+    /// logs. Running `git annex info` instead would merge fetched branches,
+    /// write remotes' uuids into config and probe URL remotes over the network.
     pub(super) fn annex_repositories(
         &self,
         repo: &gix::Repository,
-        cancellation: &CancellationToken,
     ) -> (
         Vec<gitcomet_core::large_files::AnnexRepository>,
         Option<u32>,
     ) {
-        let remotes = remote_names(&repo.config_snapshot());
-        let repositories = run_git_capture_cancellable(
-            self.git_annex(&["info", "--fast", "--json"]),
-            "git annex info",
-            cancellation,
+        let config = repo.config_snapshot();
+        let here = config
+            .string("annex.uuid")
+            .map(|uuid| String::from_utf8_lossy(&uuid).into_owned());
+        let repositories = repositories_from_logs(
+            &annex_log(repo, "uuid.log"),
+            &annex_log(repo, "trust.log"),
+            &remote_names(&config),
+            &special_remotes(repo),
+            here.as_deref(),
+        );
+        (
+            repositories,
+            parse_numcopies_log(&annex_log(repo, "numcopies.log")),
         )
-        .ok()
-        .and_then(|json| parse_info_repositories(&json, &remotes, &special_remotes(repo)).ok())
-        .unwrap_or_default();
-        let numcopies = run_git_capture_cancellable(
-            self.git_annex(&["numcopies"]),
-            "git annex numcopies",
-            cancellation,
-        )
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .next()
-                .and_then(|line| line.trim().parse().ok())
-        });
-        (repositories, numcopies)
     }
 
     /// Starts `git annex webapp` without waiting: it serves the webapp and
@@ -691,7 +851,7 @@ impl super::GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<AnnexUnused> {
-        parse_unused(&run_git_capture_cancellable(
+        parse_unused(&run_git_background_capture(
             self.git_annex(&["unused", "--json"]),
             "git annex unused",
             cancellation,
@@ -705,40 +865,11 @@ impl super::GixRepo {
     ) -> Result<AnnexWhereis> {
         let mut cmd = self.git_annex(&["whereis", "--json"]);
         cmd.arg("--").arg(path);
-        parse_whereis(&run_git_capture_cancellable(
+        parse_whereis(&run_git_background_capture(
             cmd,
             "git annex whereis",
             cancellation,
         )?)
-    }
-
-    /// Which of `paths` have their annexed content here (`git annex find`
-    /// lists only present files). `None` when git-annex cannot tell.
-    pub(super) fn annex_present_paths(&self, paths: &[&Path]) -> Option<FxHashSet<PathBuf>> {
-        if paths.is_empty() {
-            return Some(FxHashSet::default());
-        }
-        // `--format` has no NUL escape; `--print0` does.
-        let mut cmd = self.git_annex(&["find", "--print0"]);
-        cmd.arg("--").args(paths);
-        let output = run_git_with_output(cmd, "git annex find").ok()?;
-        Some(
-            output
-                .stdout
-                .split('\0')
-                .filter(|file| !file.is_empty())
-                .map(PathBuf::from)
-                .collect(),
-        )
-    }
-
-    /// Where the content of `key` lives in the local store, if present.
-    pub(super) fn annex_content_location(&self, key: &str) -> Option<PathBuf> {
-        let mut cmd = self.git_annex(&["contentlocation"]);
-        cmd.arg(key);
-        let output = run_git_with_output(cmd, "git annex contentlocation").ok()?;
-        let relative = output.stdout.trim();
-        (!relative.is_empty()).then(|| self.spec.workdir.join(relative))
     }
 }
 
@@ -770,24 +901,57 @@ mod tests {
     }
 
     #[test]
-    fn parses_info_repositories_with_remote_names() {
-        let json = r#"{"semitrusted repositories":[{"description":"web","here":false,"uuid":"00000000-0000-0000-0000-000000000001"},{"description":"lap","here":true,"uuid":"aaa"},{"description":"[backup]","here":false,"uuid":"bbb"}],"trusted repositories":[],"untrusted repositories":[{"description":"usb","here":false,"uuid":"ccc"}]}"#;
-        let remotes = vec![(
-            "bbb".to_string(),
-            "backup".to_string(),
-            Some("directory".to_string()),
-        )];
+    fn repositories_come_from_the_uuid_and_trust_logs() {
+        let uuid_log = "aaa laptop timestamp=5s\n\
+                        bbb backup timestamp=5s\n\
+                        ccc usb drive timestamp=5s\n\
+                        ddd gone timestamp=5s\n\
+                        aaa old name timestamp=1s\n";
+        let trust_log = "ccc 0 timestamp=5s\n\
+                         ddd X timestamp=5s\n\
+                         00000000-0000-0000-0000-000000000001 X timestamp=5s\n";
+        let remotes = [KnownRemote {
+            uuid: "bbb".into(),
+            name: "backup".into(),
+            special_type: Some("directory".into()),
+            trust_level: None,
+        }];
         let types = parse_remote_log("ccc name=usb type=rsync timestamp=1s\n");
-        let repos = parse_info_repositories(json, &remotes, &types).unwrap();
-        assert_eq!(repos.len(), 4);
-        assert!(repos[0].is_builtin());
+        let repos = repositories_from_logs(uuid_log, trust_log, &remotes, &types, Some("aaa"));
+        let summary: Vec<_> = repos
+            .iter()
+            .map(|repo| (repo.uuid.as_str(), repo.description.as_str(), repo.trust))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (
+                    "00000000-0000-0000-0000-000000000002",
+                    "bittorrent",
+                    AnnexTrust::Semitrusted
+                ),
+                ("aaa", "laptop", AnnexTrust::Semitrusted),
+                ("bbb", "[backup]", AnnexTrust::Semitrusted),
+                ("ccc", "usb drive", AnnexTrust::Untrusted),
+            ],
+            "dead ones are left out; the newest description wins"
+        );
         assert!(repos[1].here);
         assert_eq!(repos[2].display_name(), "backup");
         assert_eq!(repos[2].special_type.as_deref(), Some("directory"));
-        assert_eq!(repos[3].trust, AnnexTrust::Untrusted);
         // Not enabled here, so only remote.log knows its type and name.
         assert_eq!(repos[3].special_type.as_deref(), Some("rsync"));
         assert_eq!(repos[3].special_name.as_deref(), Some("usb"));
+    }
+
+    #[test]
+    fn numcopies_log_takes_the_newest_value_in_either_format() {
+        assert_eq!(parse_numcopies_log("1790106673s 2\n"), Some(2));
+        assert_eq!(
+            parse_numcopies_log("3 timestamp=10s\n1790106673s 2\n"),
+            Some(2)
+        );
+        assert_eq!(parse_numcopies_log(""), None);
     }
 
     #[test]
@@ -826,6 +990,31 @@ mod tests {
         );
         assert_eq!(unused.known_bytes(), 19);
         assert!(parse_unused("").is_err());
+    }
+
+    /// A killed assistant leaves `daemon.pid`; only its held lock file says
+    /// it still runs.
+    #[cfg(windows)]
+    #[test]
+    fn assistant_on_windows_counts_as_running_only_while_its_lock_is_held() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("daemon.pid"), "4242\n").unwrap();
+        assert!(!assistant_running(dir.path()), "a stale pid file alone");
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .open(dir.path().join("daemon.pid.4242.lck"))
+            .unwrap();
+        assert!(assistant_running(dir.path()));
+        drop(held);
+        assert!(
+            !assistant_running(dir.path()),
+            "left behind by a killed assistant"
+        );
     }
 
     #[test]

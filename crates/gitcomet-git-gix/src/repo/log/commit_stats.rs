@@ -1,3 +1,4 @@
+use super::super::large_files::CommittedPointerScan;
 use super::*;
 
 pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
@@ -94,6 +95,7 @@ pub(crate) fn commit_file_change_from_diff(
     repo: &gix::Repository,
     change: gix::object::tree::diff::ChangeDetached,
     compute_stats: bool,
+    pointers: Option<&CommittedPointerScan>,
     scratch: &mut CommitStatsScratch,
 ) -> Result<Option<CommitFileChange>> {
     use gitcomet_core::domain::FileStatusKind;
@@ -178,12 +180,10 @@ pub(crate) fn commit_file_change_from_diff(
     };
 
     let path = path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?;
-    let large_file = (!is_submodule)
-        .then(|| new_id.or(old_id))
-        .flatten()
-        .and_then(|id| {
-            super::super::large_files::committed_large_file_state(repo, id, link, &path)
-        });
+    let large_file = pointers
+        .filter(|_| !is_submodule)
+        .zip(new_id.or(old_id))
+        .and_then(|(pointers, id)| pointers.state(repo, id, link, &path));
     Ok(Some(CommitFileChange {
         path,
         kind,
@@ -207,11 +207,17 @@ pub(crate) fn tree_diff_file_changes(
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
 
     let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
+    let pointers = CommittedPointerScan::of(repo);
     let mut scratch = CommitStatsScratch::default();
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
-        if let Some(file) = commit_file_change_from_diff(repo, change, compute_stats, &mut scratch)?
-        {
+        if let Some(file) = commit_file_change_from_diff(
+            repo,
+            change,
+            compute_stats,
+            pointers.as_ref(),
+            &mut scratch,
+        )? {
             files.push(file);
         }
     }
