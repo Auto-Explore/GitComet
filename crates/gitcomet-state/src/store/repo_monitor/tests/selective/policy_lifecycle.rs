@@ -64,11 +64,13 @@ fn full_rebuild_discards_nested_ignore_inputs_in_newly_ignored_trees() {
     fs::write(&nested_ignore, "*.log\n").unwrap();
     let builds = Arc::new(AtomicU64::new(0));
     let count = builds.clone();
+    // Keep the default idle tick: every step below edits a stamped ignore
+    // input, and an idle stamp check that wins the race rebuilds the watcher
+    // before FSEvents delivers, so expect_change never sees the path.
     let monitor = RunningMonitor::start_custom(
         &root,
         Arc::new(gitcomet_git_gix::GixBackend),
         MonitorConfig {
-            idle_tick: Duration::from_millis(100),
             before_registration: Some(Box::new(move || {
                 count.fetch_add(1, Ordering::Relaxed);
             })),
@@ -82,8 +84,8 @@ fn full_rebuild_discards_nested_ignore_inputs_in_newly_ignored_trees() {
     monitor.settle();
     let before = builds.load(Ordering::Relaxed);
     fs::write(&nested_ignore, "*.log\n*.generated\n").unwrap();
-    monitor.revalidate();
-    monitor.quiet(); // Covers native events, activation and idle stamp checks.
+    monitor.revalidate(); // Runs the same stamp check as an idle tick.
+    monitor.quiet(); // Covers native events and that stamp check.
     assert_eq!(builds.load(Ordering::Relaxed), before);
     let unignore = || fs::write(&gitignore, "").unwrap();
     assert!(monitor.expect_change(&gitignore, unignore).worktree);

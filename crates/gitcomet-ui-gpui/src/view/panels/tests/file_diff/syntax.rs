@@ -2458,12 +2458,6 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     use gitcomet_core::domain::DiffLineKind;
     use std::collections::{BTreeMap, BTreeSet};
 
-    #[derive(Clone, Debug, PartialEq)]
-    struct LineSyntaxSnapshot {
-        text: String,
-        syntax: Vec<(std::ops::Range<usize>, Option<gpui::Hsla>)>,
-    }
-
     fn parse_hunk_start(text: &str) -> Option<(u32, u32)> {
         let text = text.strip_prefix("@@")?.trim_start();
         let text = text.split("@@").next()?.trim();
@@ -2521,86 +2515,6 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
         }
 
         (old_lines, new_lines)
-    }
-
-    fn one_based_line_byte_range(
-        text: &str,
-        line_starts: &[usize],
-        line_no: u32,
-    ) -> Option<std::ops::Range<usize>> {
-        let line_ix = usize::try_from(line_no).ok()?.checked_sub(1)?;
-        let start = (*line_starts.get(line_ix)?).min(text.len());
-        let mut end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(text.len())
-            .min(text.len());
-        if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-            end = end.saturating_sub(1);
-        }
-        Some(start..end)
-    }
-
-    fn shared_text_and_line_starts(text: &str) -> (gpui::SharedString, Arc<[usize]>) {
-        let mut line_starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-        line_starts.push(0usize);
-        for (ix, byte) in text.as_bytes().iter().enumerate() {
-            if *byte == b'\n' {
-                line_starts.push(ix.saturating_add(1));
-            }
-        }
-        (text.to_string().into(), Arc::from(line_starts))
-    }
-
-    fn prepared_document_snapshot_for_line(
-        theme: AppTheme,
-        text: &str,
-        line_starts: &[usize],
-        document: rows::PreparedDiffSyntaxDocument,
-        language: rows::DiffSyntaxLanguage,
-        line_no: u32,
-    ) -> Option<LineSyntaxSnapshot> {
-        let byte_range = one_based_line_byte_range(text, line_starts, line_no)?;
-        let line_text = text.get(byte_range.clone())?.to_string();
-        let started = std::time::Instant::now();
-
-        loop {
-            let highlights = rows::request_syntax_highlights_for_prepared_document_byte_range(
-                theme,
-                text,
-                line_starts,
-                document,
-                language,
-                byte_range.clone(),
-            )?;
-
-            if !highlights.pending {
-                return Some(LineSyntaxSnapshot {
-                    text: line_text.clone(),
-                    syntax: highlights
-                        .highlights
-                        .into_iter()
-                        .filter(|(_, style)| style.background_color.is_none())
-                        .map(|(range, style)| {
-                            (
-                                range.start.saturating_sub(byte_range.start)
-                                    ..range.end.saturating_sub(byte_range.start),
-                                style.color,
-                            )
-                        })
-                        .collect(),
-                });
-            }
-
-            let completed =
-                rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document);
-            if completed == 0 && started.elapsed() >= std::time::Duration::from_secs(2) {
-                return None;
-            }
-            if completed == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
     }
 
     fn yaml_patch_snapshot_for_src_ix(
