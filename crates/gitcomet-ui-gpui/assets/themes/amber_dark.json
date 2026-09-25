@@ -206,6 +206,12 @@
             "alpha": 0.54
           }
         },
+        "notice": {
+          "background": { "hex": "#e3a64bff", "alpha": 0.13 },
+          "border": { "hex": "#e3a64bff", "alpha": 0.30 },
+          "foreground": "#e7e8ecff",
+          "secondary": "#8b8fa3ff"
+        },
         "shadow": "#000000ff",
         "graph_lane_palette": null,
         "graph_lane_hues": [

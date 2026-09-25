@@ -81,6 +81,8 @@ pub(crate) type LoadableImagePreview = Loadable<Option<ConflictPreviewImage>>;
 pub(crate) struct ConflictResolverMarkdownPreviewState {
     pub(crate) source_hash: Option<u64>,
     pub(crate) documents: ThreeWaySides<LoadableMarkdownDoc>,
+    /// What each rendered column keeps between frames.
+    pub(in crate::view) columns: ThreeWaySides<ConflictMarkdownColumn>,
 }
 
 impl Default for ConflictResolverMarkdownPreviewState {
@@ -92,6 +94,7 @@ impl Default for ConflictResolverMarkdownPreviewState {
                 ours: Loadable::NotLoaded,
                 theirs: Loadable::NotLoaded,
             },
+            columns: ThreeWaySides::default(),
         }
     }
 }
@@ -99,6 +102,24 @@ impl Default for ConflictResolverMarkdownPreviewState {
 impl ConflictResolverMarkdownPreviewState {
     pub(crate) fn document(&self, side: ThreeWayColumn) -> &LoadableMarkdownDoc {
         &self.documents[side]
+    }
+}
+
+/// A rendered conflict column's state between frames, as the file preview
+/// keeps its own.
+#[derive(Clone, Default)]
+pub(in crate::view) struct ConflictMarkdownColumn {
+    pub(in crate::view) blocks: crate::view::rows::MarkdownDocumentBlockCache,
+    pub(in crate::view) layout: crate::view::rows::MarkdownDocumentLayoutCache,
+    pub(in crate::view) block_scrolls: crate::view::rows::MarkdownDocumentBlockScrolls,
+    /// A row the search wants brought into view in this column.
+    pub(in crate::view) reveal: crate::view::rows::MarkdownPreviewRevealRequest,
+}
+
+impl std::fmt::Debug for ConflictMarkdownColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConflictMarkdownColumn")
+            .finish_non_exhaustive()
     }
 }
 

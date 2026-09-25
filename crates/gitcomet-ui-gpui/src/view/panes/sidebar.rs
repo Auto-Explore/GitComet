@@ -3284,7 +3284,7 @@ fn unsaved_file_row(
     } = ctx;
     let ui_scale_percent = crate::ui_scale::current(cx).percent;
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-    let icon_px = crate::ui_scale::design_px_from_percent(12.0, 100);
+    let icon_px = scaled_px(12.0);
     // The full repo-relative path, not just the file name: two `mod.rs` under
     // different folders are indistinguishable here, and this row is the only
     // place they appear side by side.

@@ -678,7 +678,8 @@ impl TextInput {
         cx.notify();
     }
 
-    pub fn set_vertical_padding(&mut self, padding: Option<Pixels>, cx: &mut Context<Self>) {
+    /// `padding` is in design px, so it follows the UI zoom.
+    pub fn set_vertical_padding(&mut self, padding: Option<f32>, cx: &mut Context<Self>) {
         if self.vertical_padding_override == padding {
             return;
         }

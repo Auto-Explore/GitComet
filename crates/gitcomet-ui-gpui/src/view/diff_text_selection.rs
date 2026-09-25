@@ -468,6 +468,7 @@ impl Element for DiffTextSelectionOverlay {
             painted_text: self.text.clone(),
             streamed_ascii_monospace_cell_width: None,
             wrapped: None,
+            cells: Vec::new(),
         };
 
         let visible_ix = self.visible_ix;

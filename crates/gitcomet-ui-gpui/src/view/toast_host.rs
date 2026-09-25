@@ -720,7 +720,7 @@ impl ToastHost {
             abort_button = abort_button.start_slot(svg_spinner(
                 "clone_progress_abort_spinner",
                 spinner_color,
-                px(10.0),
+                ui_scale.px(10.0),
             ));
         }
         let abort_button = abort_button.on_click(theme, cx, move |_this, _e, _w, cx| {
@@ -744,7 +744,7 @@ impl ToastHost {
                     .child(svg_spinner(
                         "clone_progress_spinner",
                         spinner_color,
-                        px(16.0),
+                        ui_scale.px(16.0),
                     ))
                     .child(
                         div()
@@ -820,7 +820,7 @@ impl ToastHost {
                 .child(svg_spinner(
                     ("submodule_add_progress_spinner", ix),
                     spinner_color,
-                    px(16.0),
+                    ui_scale.px(16.0),
                 ))
                 .child(
                     div()
@@ -1007,7 +1007,7 @@ impl Render for ToastHost {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        scaled_px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e: &ClickEvent, _w, cx| {

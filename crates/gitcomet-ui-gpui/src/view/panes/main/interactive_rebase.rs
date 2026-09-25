@@ -374,7 +374,8 @@ struct IRebaseDragPreview {
 impl Render for IRebaseDragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let action_btn_w = px(ACTION_BTN_W * self.ui_scale_percent as f32 / 100.0);
+        let scaled_px = ui_scale::scaler(self.ui_scale_percent);
+        let action_btn_w = scaled_px(ACTION_BTN_W);
         let is_squash_like = matches!(
             self.action,
             InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
@@ -385,7 +386,7 @@ impl Render for IRebaseDragPreview {
         );
         div()
             .h(px(self.row_h))
-            .w(px(440.0 * self.ui_scale_percent as f32 / 100.0))
+            .w(scaled_px(440.0))
             .flex()
             .items_center()
             .gap_1()
@@ -406,7 +407,7 @@ impl Render for IRebaseDragPreview {
                     crate::view::icons::svg_icon(
                         "icons/squash_arrow.svg",
                         with_alpha(theme.colors.accent.foreground, 0.7),
-                        px(14.0),
+                        scaled_px(14.0),
                     ),
                 ))
             })
@@ -427,7 +428,7 @@ impl Render for IRebaseDragPreview {
                     .child(crate::view::icons::svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        scaled_px(12.0),
                     )),
             )
             .child(
@@ -782,7 +783,7 @@ impl MainPaneView {
             .end_slot(crate::view::icons::svg_icon(
                 "icons/chevron_down.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                 let invoker = invoker.clone();
@@ -820,7 +821,7 @@ impl MainPaneView {
             .start_slot(crate::view::icons::svg_icon(
                 "icons/arrow_up.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .style(components::ButtonStyle::Subtle)
             .no_focus()
@@ -850,7 +851,7 @@ impl MainPaneView {
             .start_slot(crate::view::icons::svg_icon(
                 "icons/arrow_down.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .style(components::ButtonStyle::Subtle)
             .no_focus()
@@ -1103,6 +1104,7 @@ impl MainPaneView {
     ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         self.sync_interactive_commit_editor_states();
 
         // Sync the variable-height virtualized list state before borrowing the
@@ -1384,7 +1386,7 @@ impl MainPaneView {
                                         .end_slot(crate::view::icons::svg_icon(
                                             "icons/chevron_down.svg",
                                             theme.colors.foreground.secondary,
-                                            px(12.0),
+                                            scaled_px(12.0),
                                         ))
                                         .on_click_with_bounds(
                                             theme,

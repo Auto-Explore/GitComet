@@ -272,7 +272,9 @@ fn blockquote_produces_blockquote_row() {
 
 #[test]
 fn multiline_blockquote_produces_one_row_per_logical_quote_line() {
-    let doc = parse("> first line\n> second line\n");
+    // A hard break ends a logical line; soft-wrapped lines reflow instead
+    // (see `soft_wrapped_quote_lines_join_into_one_paragraph`).
+    let doc = parse("> first line  \n> second line\n");
     assert_eq!(doc.rows.len(), 2);
     assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::BlockquoteLine);
     assert_eq!(doc.rows[0].text.as_ref(), "first line");
@@ -320,7 +322,8 @@ fn code_block_inside_blockquote_keeps_quote_depth() {
 
 #[test]
 fn gfm_alert_blockquotes_capture_alert_kind_and_hide_marker_line() {
-    let doc = parse("> [!NOTE]\n> Line 1.\n> Line 2.\n");
+    // Two paragraphs: soft-wrapped lines would reflow into one row.
+    let doc = parse("> [!NOTE]\n> Line 1.\n>\n> Line 2.\n");
     assert_eq!(doc.rows.len(), 2);
     assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::BlockquoteLine);
     assert_eq!(doc.rows[0].text.as_ref(), "Line 1.");
@@ -468,22 +471,6 @@ fn fenced_code_block_language_aliases_are_resolved() {
 }
 
 #[test]
-fn wide_fenced_code_blocks_set_horizontal_scroll_hints() {
-    let long_line = "scroll_hint_token_".repeat(6);
-    let doc = parse(&format!("```text\n{long_line}\nshort\n```\n"));
-    let code_rows = code_rows(&doc);
-
-    assert_eq!(code_rows.len(), 2);
-    assert!(
-        code_rows
-            .iter()
-            .all(|row| row.code_block_horizontal_scroll_hint)
-    );
-}
-
-// ── Thematic break ──────────────────────────────────────────────────
-
-#[test]
 fn thematic_break_produces_row() {
     let doc = parse("---\n");
     assert_eq!(doc.rows.len(), 1);
@@ -493,11 +480,51 @@ fn thematic_break_produces_row() {
 // ── Task list ───────────────────────────────────────────────────────
 
 #[test]
-fn task_list_markers_are_prepended() {
-    let doc = parse("- [x] done\n- [ ] todo\n");
-    assert_eq!(doc.rows.len(), 2);
-    assert_eq!(doc.rows[0].text.as_ref(), "[x] done");
-    assert_eq!(doc.rows[1].text.as_ref(), "[ ] todo");
+fn task_list_markers_become_checkboxes() {
+    let doc = parse("- [x] done\n- [ ] todo\n- plain\n");
+    assert_eq!(doc.rows.len(), 3);
+    assert_eq!(doc.rows[0].text.as_ref(), "done");
+    assert_eq!(doc.rows[1].text.as_ref(), "todo");
+    let source = "- [x] done\n- [ ] todo\n- plain\n";
+    let task = |ix: usize| doc.rows[ix].task.expect("task row");
+    assert!(task(0).checked);
+    assert!(!task(1).checked);
+    assert_eq!((task(0).line, task(0).column), (0, 2));
+    assert_eq!((task(1).line, task(1).column), (1, 2));
+    assert_eq!(task(1).byte_offset(source.as_bytes()), Some(13));
+
+    assert_eq!(doc.rows[2].task, None);
+}
+
+#[test]
+fn task_list_marker_offsets_point_at_the_bracket() {
+    let source = "Intro\r\n\r\n* [ ] star\r\n  + [X] nested **bold**\r\n1. [ ] numbered\r\n\n> - [x] quoted\n";
+    let doc = parse(source);
+    let tasks: Vec<_> = doc.rows.iter().filter_map(|row| row.task).collect();
+    assert_eq!(tasks.len(), 4);
+    for task in &tasks {
+        let offset = task.byte_offset(source.as_bytes()).expect("marker line");
+        let marker = &source[offset..offset + 3];
+        let expected = if task.checked {
+            ["[x]", "[X]"].contains(&marker)
+        } else {
+            marker == "[ ]"
+        };
+        assert!(expected, "{marker:?} at {offset}");
+    }
+    assert_eq!(tasks.iter().filter(|t| t.checked).count(), 2);
+}
+
+#[test]
+fn loose_task_item_marks_only_its_first_row() {
+    let doc = parse("- [ ] first\n\n  second paragraph\n- [x] next\n");
+    let with_task: Vec<_> = doc
+        .rows
+        .iter()
+        .filter(|row| row.task.is_some())
+        .map(|row| row.text.as_ref())
+        .collect();
+    assert_eq!(with_task, ["first", "next"]);
 }
 
 #[test]
@@ -546,111 +573,72 @@ fn footnote_definition_emits_label_only_for_first_rendered_row() {
 
 // ── Table ───────────────────────────────────────────────────────────
 
+fn table_rows(doc: &MarkdownPreviewDocument) -> Vec<&MarkdownPreviewRow> {
+    doc.rows
+        .iter()
+        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
+        .collect()
+}
+
+fn cell_texts(row: &MarkdownPreviewRow) -> Vec<&str> {
+    let table = row.table.as_ref().expect("a table row has cells");
+    table
+        .cells
+        .iter()
+        .map(|range| &row.text[range.clone()])
+        .collect()
+}
+
 #[test]
 fn table_rows_are_flattened() {
     let doc = parse("| A | B |\n|---|---|\n| 1 | 2 |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
-    assert!(table_rows.len() >= 2);
+    let table_rows = table_rows(&doc);
+    assert_eq!(table_rows.len(), 2);
     assert!(matches!(
         table_rows[0].kind,
         MarkdownPreviewRowKind::TableRow { is_header: true }
     ));
-    assert_eq!(table_rows[0].text.as_ref(), "A | B");
-    assert_eq!(table_rows[1].text.as_ref(), "1 | 2");
+    // Cells joined by tabs, so a copied selection pastes as columns.
+    assert_eq!(table_rows[0].text.as_ref(), "A\tB");
+    assert_eq!(table_rows[1].text.as_ref(), "1\t2");
+    assert_eq!(cell_texts(table_rows[0]), vec!["A", "B"]);
+    assert_eq!(cell_texts(table_rows[1]), vec!["1", "2"]);
 }
 
 #[test]
-fn table_rows_align_columns_across_block() {
-    let doc = parse("| Name | Age |\n|---|---|\n| Alexander | 3 |\n| Bo | 27 |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
-    assert_eq!(table_rows.len(), 3);
-
-    let header_sep = table_rows[0]
-        .text
-        .find('|')
-        .expect("header row should contain a column separator");
-    let first_row_sep = table_rows[1]
-        .text
-        .find('|')
-        .expect("body row should contain a column separator");
-    let second_row_sep = table_rows[2]
-        .text
-        .find('|')
-        .expect("body row should contain a column separator");
-
-    assert_eq!(header_sep, first_row_sep);
-    assert_eq!(first_row_sep, second_row_sep);
-}
-
-#[test]
-fn table_alignment_without_inline_spans_keeps_rows_plain() {
-    let doc = parse("| Name | Age |\n|---|---|\n| Alexander | 3 |\n| Bo | 27 |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
-
-    assert!(table_rows.iter().all(|row| row.inline_spans.is_empty()));
-    assert_eq!(table_rows[0].text.as_ref(), "Name      | Age");
-    assert_eq!(table_rows[1].text.as_ref(), "Alexander | 3");
-    assert_eq!(table_rows[2].text.as_ref(), "Bo        | 27");
-}
-
-#[test]
-fn table_alignment_preserves_inline_spans_after_padding_cells() {
-    let doc = parse(
-        "| A | **Header Bold** |\n| --- | --- |\n| A much longer first column | [link](https://example.com) |\n",
-    );
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
-    assert_eq!(table_rows.len(), 2);
-
-    let header_sep = table_rows[0]
-        .text
-        .find('|')
-        .expect("header row should contain a column separator");
-    let body_sep = table_rows[1]
-        .text
-        .find('|')
-        .expect("body row should contain a column separator");
-    assert_eq!(header_sep, body_sep);
-
-    let header_bold = spans_with_style(table_rows[0], MarkdownInlineStyle::Bold);
-    assert_eq!(header_bold.len(), 1);
+fn table_rows_share_column_alignments() {
+    let doc = parse("| L | C | R | N |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |\n");
+    let rows = table_rows(&doc);
+    let table = &rows[0].table.as_ref().expect("cells").table;
     assert_eq!(
-        &table_rows[0].text.as_ref()[header_bold[0].byte_range.clone()],
-        "Header Bold"
+        table.alignments,
+        vec![
+            MarkdownTableAlign::Left,
+            MarkdownTableAlign::Center,
+            MarkdownTableAlign::Right,
+            MarkdownTableAlign::None,
+        ]
     );
-
-    let body_links = spans_with_style(table_rows[1], MarkdownInlineStyle::Link);
-    assert_eq!(body_links.len(), 1);
-    assert_eq!(
-        &table_rows[1].text.as_ref()[body_links[0].byte_range.clone()],
-        "link"
+    assert!(
+        Arc::ptr_eq(table, &rows[1].table.as_ref().expect("cells").table),
+        "every row of a table shares one description"
     );
 }
 
 #[test]
-fn table_alignment_handles_inline_spans_in_earlier_cells() {
+fn short_and_empty_table_cells_keep_the_grid_rectangular() {
+    let doc = parse("| A | B | C |\n|---|---|---|\n| 1 |\n| | x | |\n");
+    let rows = table_rows(&doc);
+    assert_eq!(cell_texts(rows[1]), vec!["1", "", ""]);
+    assert_eq!(cell_texts(rows[2]), vec!["", "x", ""]);
+    assert_eq!(rows[2].text.as_ref(), "\tx\t");
+}
+
+#[test]
+fn table_cells_keep_their_inline_spans() {
     let doc =
         parse("| **Header Bold** | B |\n| --- | --- |\n| [link](https://example.com) | plain |\n");
-    let table_rows: Vec<_> = doc
-        .rows
-        .iter()
-        .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
-        .collect();
+    let table_rows = table_rows(&doc);
     assert_eq!(table_rows.len(), 2);
 
     let header_bold = spans_with_style(table_rows[0], MarkdownInlineStyle::Bold);
@@ -666,26 +654,6 @@ fn table_alignment_handles_inline_spans_in_earlier_cells() {
         &table_rows[1].text.as_ref()[body_links[0].byte_range.clone()],
         "link"
     );
-}
-
-#[test]
-fn row_width_cache_does_not_affect_preview_row_equality() {
-    let cached = parse("Paragraph\n").rows.remove(0);
-    let fresh = parse("Paragraph\n").rows.remove(0);
-
-    cached.measured_width_px.get_or_init(1, || 123);
-
-    assert_eq!(cached, fresh);
-}
-
-#[test]
-fn cloned_row_preserves_cached_width_measurement() {
-    let cached = parse("Paragraph\n").rows.remove(0);
-    cached.measured_width_px.get_or_init(1, || 123);
-
-    let cloned = cached.clone();
-
-    assert_eq!(cloned.measured_width_px.get_or_init(1, || 999), 123);
 }
 
 // ── Inline spans ────────────────────────────────────────────────────
@@ -1157,7 +1125,7 @@ fn diff_preview_marks_last_line_change_without_trailing_newline() {
 #[test]
 fn multiline_blockquote_change_hints_follow_changed_quote_lines() {
     let preview =
-        build_markdown_diff_preview("> keep\n> remove me\n", "> keep\n> add me\n").unwrap();
+        build_markdown_diff_preview("> keep  \n> remove me\n", "> keep  \n> add me\n").unwrap();
 
     assert_eq!(preview.old.rows.len(), 2);
     assert_eq!(preview.new.rows.len(), 2);
@@ -1459,13 +1427,14 @@ fn custom_anchor_id_tags_are_hidden_from_preview() {
 #[test]
 fn markdown_images_preserve_alt_text() {
     // A remote image is still laid out as a block; it just cannot be
-    // fetched, so every band keeps the alt text to describe itself.
+    // fetched, so its row keeps the alt text to describe itself.
     let doc = parse("![Octocat smiling](https://example.com/octocat.svg)\n");
-    assert_eq!(
-        doc.rows.len(),
-        usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+    assert_eq!(doc.rows.len(), 1);
+    assert!(
+        doc.rows
+            .iter()
+            .all(|row| matches!(row.kind, MarkdownPreviewRowKind::Image))
     );
-    assert!(doc.rows.iter().all(|row| row.kind.is_image()));
     assert!(
         doc.rows
             .iter()
@@ -1483,11 +1452,12 @@ fn markdown_images_preserve_alt_text() {
 #[test]
 fn html_img_tags_preserve_alt_text() {
     let doc = parse("<img alt=\"Octocat smiling\" src=\"https://example.com/octocat.svg\" />\n");
-    assert_eq!(
-        doc.rows.len(),
-        usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+    assert_eq!(doc.rows.len(), 1);
+    assert!(
+        doc.rows
+            .iter()
+            .all(|row| matches!(row.kind, MarkdownPreviewRowKind::Image))
     );
-    assert!(doc.rows.iter().all(|row| row.kind.is_image()));
     assert!(
         doc.rows
             .iter()
@@ -1513,7 +1483,7 @@ fn picture_elements_render_their_nested_img() {
     );
 
     let images = image_rows(&doc);
-    assert_eq!(images.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+    assert_eq!(images.len(), 1);
     assert_eq!(
         images[0].image.as_ref().map(|image| image.source.as_ref()),
         Some("light.svg")
@@ -1740,208 +1710,6 @@ fn diff_preview_unavailable_reason_reports_rows_for_normal_size() {
     );
 }
 
-// ── Word wrap ───────────────────────────────────────────────────────
-
-#[test]
-fn wrap_plan_keeps_one_visual_row_per_unwrapped_source_row() {
-    let doc = parse("# Title\n\nParagraph one.\n\nParagraph two.\n");
-    let plan = build_markdown_preview_wrap_plan(&doc, |_| Vec::new()).expect("plan fits");
-
-    assert_eq!(plan.len(), doc.rows.len());
-    for (visual_ix, row) in doc.rows.iter().enumerate() {
-        let visual = plan.get(visual_ix).expect("visual row");
-        assert_eq!(visual.row_ix, visual_ix);
-        assert_eq!(visual.wrap_ix, 0);
-        assert_eq!(visual.byte_range, 0..row.text.len());
-        assert!(!visual.is_continuation());
-    }
-}
-
-#[test]
-fn wrap_plan_expands_split_rows_and_maps_source_rows_to_their_first_visual_row() {
-    let doc = parse("First paragraph.\n\nSecond paragraph.\n");
-    // Split every row with text into two halves at a char boundary.
-    let plan = build_markdown_preview_wrap_plan(&doc, |row| {
-        let len = row.text.len();
-        if len < 4 {
-            return Vec::new();
-        }
-        let mut mid = len / 2;
-        while mid > 0 && !row.text.is_char_boundary(mid) {
-            mid -= 1;
-        }
-        vec![0..mid, mid..len]
-    })
-    .expect("plan fits");
-
-    let split_rows = doc.rows.iter().filter(|row| row.text.len() >= 4).count();
-    assert_eq!(plan.len(), doc.rows.len() + split_rows);
-
-    for row_ix in 0..doc.rows.len() {
-        let visual_ix = plan.visual_ix_for_row(row_ix);
-        let visual = plan.get(visual_ix).expect("first visual row");
-        assert_eq!(visual.row_ix, row_ix);
-        assert_eq!(visual.wrap_ix, 0);
-        assert!(!visual.is_continuation());
-    }
-
-    let continuations = (0..plan.len())
-        .filter_map(|ix| plan.get(ix))
-        .filter(|visual| visual.is_continuation())
-        .count();
-    assert_eq!(continuations, split_rows);
-}
-
-#[test]
-fn wrap_plan_slices_cover_the_whole_row_text() {
-    let doc = parse("A paragraph with several words in it.\n");
-    let plan = build_markdown_preview_wrap_plan(&doc, |row| {
-        let len = row.text.len();
-        if len >= 8 {
-            vec![0..4, 4..len]
-        } else {
-            Vec::new()
-        }
-    })
-    .expect("plan fits");
-
-    let mut covered: Vec<(usize, Range<usize>)> = Vec::new();
-    for ix in 0..plan.len() {
-        let visual = plan.get(ix).expect("visual row");
-        covered.push((visual.row_ix, visual.byte_range.clone()));
-    }
-    for (row_ix, row) in doc.rows.iter().enumerate() {
-        let mut cursor = 0usize;
-        for (_, range) in covered.iter().filter(|(ix, _)| *ix == row_ix) {
-            assert_eq!(range.start, cursor, "slices must be contiguous");
-            cursor = range.end;
-        }
-        assert_eq!(cursor, row.text.len(), "slices must cover the row text");
-    }
-}
-
-#[test]
-fn wrap_plan_reports_overflow_instead_of_truncating_the_document() {
-    // Wrapping every row into many visual rows blows past the cap. The
-    // builder must report that rather than hand back a plan whose tail
-    // rows are missing, which would make them unreachable in the list.
-    let paragraph = "w".repeat(900);
-    let source = format!("{paragraph}\n\n").repeat(200);
-    let doc = parse(&source);
-    // One visual row per byte overshoots MAX_PREVIEW_WRAPPED_ROWS, which
-    // a pane only a few pixels wide would do for real.
-    let plan = build_markdown_preview_wrap_plan(&doc, |row| {
-        let len = row.text.len();
-        (0..len).map(|ix| ix..ix + 1).collect()
-    });
-    assert!(
-        plan.is_none(),
-        "an oversized wrapped document must fall back to unwrapped rendering"
-    );
-}
-
-#[test]
-fn split_wrap_plans_keep_both_columns_row_aligned() {
-    let old = "# Title\n\nlong old paragraph that wraps\n\nshared tail\n";
-    let new = "# Title\n\nshort\n\nshared tail\n";
-    let preview = build_markdown_diff_preview(old, new).expect("diff preview should build");
-
-    // Wrap only rows longer than 10 bytes, into two halves.
-    let (old_plan, new_plan) =
-        build_markdown_preview_split_wrap_plans(&preview.old, &preview.new, |row| {
-            let len = row.text.len();
-            if len <= 10 {
-                return Vec::new();
-            }
-            let mut mid = len / 2;
-            while mid > 0 && !row.text.is_char_boundary(mid) {
-                mid -= 1;
-            }
-            vec![0..mid, mid..len]
-        })
-        .expect("split plans should fit");
-
-    assert_eq!(
-        old_plan.len(),
-        new_plan.len(),
-        "split columns must render the same number of visual rows"
-    );
-    for visual_ix in 0..old_plan.len() {
-        let old_visual = old_plan.get(visual_ix).expect("old visual row");
-        let new_visual = new_plan.get(visual_ix).expect("new visual row");
-        assert_eq!(
-            (old_visual.row_ix, old_visual.wrap_ix),
-            (new_visual.row_ix, new_visual.wrap_ix),
-            "visual row {visual_ix} must show the same source row on both sides"
-        );
-    }
-}
-
-#[test]
-fn split_wrap_plans_pad_the_short_side_with_empty_continuations() {
-    // The narrow column has to hold a blank row opposite each extra
-    // wrapped row on the wide side, or the two lists drift apart.
-    let old = "# Title\n\nlong paragraph on the old side\n";
-    let new = "# Title\n\nshort\n";
-    let preview = build_markdown_diff_preview(old, new).expect("diff preview should build");
-
-    let (old_plan, new_plan) =
-        build_markdown_preview_split_wrap_plans(&preview.old, &preview.new, |row| {
-            let len = row.text.len();
-            if len <= 10 {
-                return Vec::new();
-            }
-            vec![0..5, 5..len]
-        })
-        .expect("split plans should fit");
-
-    assert_eq!(old_plan.len(), new_plan.len());
-    let padded: Vec<_> = (0..new_plan.len())
-        .filter_map(|ix| new_plan.get(ix))
-        .filter(|visual| visual.is_continuation())
-        .collect();
-    assert!(
-        !padded.is_empty(),
-        "the short column should gain padding rows"
-    );
-    for visual in padded {
-        assert!(
-            visual.byte_range.is_empty(),
-            "a padding row paints nothing: {visual:?}"
-        );
-    }
-}
-
-#[test]
-fn visual_row_text_slice_returns_the_painted_portion() {
-    let doc = parse("first second third\n");
-    let row = doc
-        .rows
-        .iter()
-        .find(|row| row.kind == MarkdownPreviewRowKind::Paragraph)
-        .expect("paragraph row");
-
-    let visual = |wrap_ix, byte_range| MarkdownPreviewVisualRow {
-        row_ix: 0,
-        wrap_ix,
-        byte_range,
-    };
-
-    assert_eq!(
-        visual(0, 0..row.text.len()).text_slice(row).as_ref(),
-        "first second third"
-    );
-    assert_eq!(visual(1, 6..12).text_slice(row).as_ref(), "second");
-    // A padding row and an out-of-range slice both paint nothing.
-    assert_eq!(
-        visual(2, row.text.len()..row.text.len())
-            .text_slice(row)
-            .as_ref(),
-        ""
-    );
-    assert_eq!(visual(3, 1..2).text_slice(row).as_ref(), "i");
-}
-
 // ── Flowing document blocks ─────────────────────────────────────────
 
 #[test]
@@ -1970,7 +1738,7 @@ fn blocks_group_the_lines_of_one_construct_together() {
     assert_eq!(
         shapes,
         vec![
-            "h1", "p", "list(2)", "code(2)", "quote(2)", "table(2)", "hr"
+            "h1", "p", "list(2)", "code(2)", "quote(1)", "table(2)", "hr"
         ]
     );
 }
@@ -2007,12 +1775,20 @@ fn two_tables_that_touch_stay_separate() {
         .collect();
     assert_eq!(tables.len(), 2, "rows: {:?}", row_texts(&doc));
 
-    let width_of = |rows: &Range<usize>| doc.rows[rows.start].text.chars().count();
-    assert_ne!(
-        width_of(&tables[0]),
-        width_of(&tables[1]),
-        "each table is padded to its own columns, not the other's: {:?}",
-        row_texts(&doc)
+    let widths_of = |rows: &Range<usize>| {
+        doc.rows[rows.start]
+            .table
+            .as_ref()
+            .expect("cells")
+            .table
+            .column_widths
+            .clone()
+    };
+    assert_eq!(widths_of(&tables[0]), vec![1, 1]);
+    assert_eq!(
+        widths_of(&tables[1]),
+        vec![13, 1],
+        "each table measures its own columns, not the other's"
     );
 }
 
@@ -2053,13 +1829,9 @@ fn two_alerts_that_touch_stay_separate_blocks() {
 }
 
 #[test]
-fn an_image_block_collapses_its_bands_into_one() {
+fn an_image_is_one_row_and_one_block() {
     let doc = parse("![shot](a.png)\n");
-    assert_eq!(
-        doc.rows.len(),
-        usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS),
-        "the row model still carries one row per band"
-    );
+    assert_eq!(doc.rows.len(), 1);
 
     let blocks = markdown_document_blocks(&doc);
     assert_eq!(blocks.len(), 1);
@@ -2212,28 +1984,23 @@ fn source_lines_are_found_for_byte_offsets() {
     // "a\nbb\n\nc" — line starts at 0, 2, 5, 6.
     let line_starts = [0usize, 2, 5, 6];
 
-    assert_eq!(source_line_for_byte(0, &line_starts), 0);
-    assert_eq!(source_line_for_byte(1, &line_starts), 0);
-    assert_eq!(source_line_for_byte(2, &line_starts), 1);
-    assert_eq!(source_line_for_byte(4, &line_starts), 1);
-    assert_eq!(source_line_for_byte(5, &line_starts), 2);
-    assert_eq!(source_line_for_byte(6, &line_starts), 3);
+    assert_eq!(byte_offset_to_line(0, &line_starts), 0);
+    assert_eq!(byte_offset_to_line(1, &line_starts), 0);
+    assert_eq!(byte_offset_to_line(2, &line_starts), 1);
+    assert_eq!(byte_offset_to_line(4, &line_starts), 1);
+    assert_eq!(byte_offset_to_line(5, &line_starts), 2);
+    assert_eq!(byte_offset_to_line(6, &line_starts), 3);
     // Past the end still resolves to the last line rather than panicking.
-    assert_eq!(source_line_for_byte(9_999, &line_starts), 3);
+    assert_eq!(byte_offset_to_line(9_999, &line_starts), 3);
     // And an empty table cannot underflow.
-    assert_eq!(source_line_for_byte(3, &[]), 0);
+    assert_eq!(byte_offset_to_line(3, &[]), 0);
 }
 
 #[test]
 fn a_picture_alone_on_its_line_becomes_a_block() {
     let doc = parse("![only](a.png)\n");
 
-    assert_eq!(
-        image_rows(&doc).len(),
-        usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS),
-        "rows: {:?}",
-        row_texts(&doc)
-    );
+    assert_eq!(image_rows(&doc).len(), 1, "rows: {:?}", row_texts(&doc));
     assert!(
         doc.rows.iter().all(|row| row.inline_images.is_empty()),
         "a block picture is not also inline"
@@ -2268,31 +2035,25 @@ fn every_row_that_paints_reaches_a_block() {
 // ── Images ──────────────────────────────────────────────────────────
 
 fn image_rows(doc: &MarkdownPreviewDocument) -> Vec<&MarkdownPreviewRow> {
-    doc.rows.iter().filter(|row| row.kind.is_image()).collect()
+    doc.rows
+        .iter()
+        .filter(|row| matches!(row.kind, MarkdownPreviewRowKind::Image))
+        .collect()
 }
 
 #[test]
-fn an_image_becomes_a_block_of_rows_carrying_its_source_and_alt() {
+fn an_image_becomes_a_row_carrying_its_source_and_alt() {
     let doc = parse("![A screenshot](docs/shot.png)\n");
     let rows = image_rows(&doc);
 
-    assert_eq!(rows.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
-    for (expected_ix, row) in rows.iter().enumerate() {
-        assert_eq!(
-            row.kind,
-            MarkdownPreviewRowKind::Image {
-                slice_ix: expected_ix as u8,
-                slice_count: MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS,
-            }
-        );
-        assert_eq!(
-            row.image.as_ref().map(|image| image.source.as_ref()),
-            Some("docs/shot.png")
-        );
-        // The alt stays as row text so copy and the unavailable-image
-        // fallback have something to show.
-        assert_eq!(row.text.as_ref(), "A screenshot");
-    }
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].image.as_ref().map(|image| image.source.as_ref()),
+        Some("docs/shot.png")
+    );
+    // The alt stays as row text so copy and the unavailable-image fallback
+    // have something to show.
+    assert_eq!(rows[0].text.as_ref(), "A screenshot");
 }
 
 #[test]
@@ -2329,7 +2090,8 @@ fn image_alt_text_is_not_also_rendered_as_paragraph_text() {
     assert!(
         !doc.rows
             .iter()
-            .any(|row| !row.kind.is_image() && row.text.contains("only alt")),
+            .any(|row| !matches!(row.kind, MarkdownPreviewRowKind::Image)
+                && row.text.contains("only alt")),
         "alt text belongs to the image block only: {:?}",
         row_texts(&doc)
     );
@@ -2375,12 +2137,7 @@ fn a_block_html_image_stands_on_its_own_line() {
     let doc = parse("<img alt=\"demo\" src=\"assets/demo.gif\" />\n");
 
     let images = image_rows(&doc);
-    assert_eq!(
-        images.len(),
-        usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS),
-        "rows: {:?}",
-        row_texts(&doc)
-    );
+    assert_eq!(images.len(), 1, "rows: {:?}", row_texts(&doc));
     assert_eq!(
         images[0].image.as_ref().map(|image| image.source.as_ref()),
         Some("assets/demo.gif")
@@ -2389,38 +2146,42 @@ fn a_block_html_image_stands_on_its_own_line() {
 }
 
 #[test]
-fn image_block_rows_follow_the_declared_size() {
+fn an_images_reserved_height_follows_the_declared_size() {
     let sized = |width_px, height_px| {
         MarkdownImage {
             source: "a.png".into(),
             width_px,
             height_px,
         }
-        .block_rows()
+        .reserved_height_px()
     };
 
-    // Undeclared falls back to the default block.
-    assert_eq!(sized(None, None), MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS);
+    // Undeclared falls back to the default room.
+    assert_eq!(sized(None, None), MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX);
     // A declared height is authoritative, even against a wide width.
-    assert_eq!(sized(Some(400), Some(20)), 1);
-    assert_eq!(sized(Some(400), Some(60)), 3);
+    assert_eq!(sized(Some(400), Some(20)), 20);
+    assert_eq!(sized(Some(400), Some(60)), 60);
     // Width alone bounds the height, so a small logo stays small.
-    assert_eq!(sized(Some(26), None), 1);
-    assert_eq!(sized(Some(28), None), 1);
-    assert_eq!(sized(Some(29), None), 2);
-    // Anything large is capped at the default block.
-    assert_eq!(sized(Some(4000), None), MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS);
+    assert_eq!(sized(Some(26), None), 26);
+    // Anything large is capped at the default room.
+    assert_eq!(
+        sized(Some(4000), None),
+        MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX
+    );
     // A zero or unparseable size is treated as undeclared.
-    assert_eq!(sized(Some(0), None), MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS);
+    assert_eq!(
+        sized(Some(0), None),
+        MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX
+    );
 }
 
 #[test]
 fn non_pixel_size_attributes_are_ignored() {
-    // A percentage is relative to a container the fixed row grid does not
-    // have, so it falls back to the default block rather than guessing.
+    // A percentage is relative to a container the parser cannot see, so it
+    // falls back to the default room rather than guessing.
     let doc = parse("<img alt=\"wide\" src=\"a.png\" width=\"100%\" />\n");
     let images = image_rows(&doc);
-    assert_eq!(images.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+    assert_eq!(images.len(), 1);
     assert_eq!(images[0].image.as_ref().expect("image").width_px, None);
 
     // An explicit `px` suffix is accepted.
@@ -2440,7 +2201,7 @@ fn linked_badge_images_keep_both_the_picture_and_the_link() {
     );
 
     let images = image_rows(&doc);
-    assert_eq!(images.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+    assert_eq!(images.len(), 1);
     assert_eq!(
         images[0].image.as_ref().map(|image| image.source.as_ref()),
         Some("https://github.com/o/r/badge.svg?branch=main")
@@ -2540,15 +2301,217 @@ fn autolinks_and_styled_link_text_stay_clickable() {
 }
 
 #[test]
-fn only_web_destinations_are_offered() {
-    // Relative paths, anchors, and non-web schemes still render as links
-    // but have nothing to open in a browser.
+fn only_openable_destinations_are_offered() {
+    // A relative path names a file in the repository, an anchor a heading in
+    // this document, and a web URL opens in the browser. Non-web schemes still
+    // render as links but have nothing to open.
     let doc = parse(
         "[rel](./other.md) [anchor](#section) [mail](mailto:a@b.c) [js](javascript:alert(1)) [ok](https://example.com)\n",
     );
     let row = &doc.rows[0];
 
-    assert_eq!(link_spans(row), vec![("ok", "https://example.com")]);
+    assert_eq!(
+        link_spans(row),
+        vec![
+            ("rel", "./other.md"),
+            ("anchor", "#section"),
+            ("ok", "https://example.com")
+        ]
+    );
+}
+
+#[test]
+fn link_destinations_classify_as_web_local_or_nothing() {
+    use super::MarkdownLinkTarget::{Anchor, LocalFile, Web};
+    let web = |url: &str| Some(Web(SharedString::from(url.to_owned())));
+    let local = |path: &str| Some(LocalFile(SharedString::from(path.to_owned())));
+
+    // An in-document anchor carries its fragment without the `#`.
+    assert_eq!(
+        classify_markdown_link_destination(" #trust-a-gpg-key "),
+        Some(Anchor("trust-a-gpg-key".into()))
+    );
+
+    assert_eq!(
+        classify_markdown_link_destination("https://a/b"),
+        web("https://a/b")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("HTTP://a"),
+        web("HTTP://a")
+    );
+    // The fragment is part of what the browser opens.
+    assert_eq!(
+        classify_markdown_link_destination("https://a/b#frag"),
+        web("https://a/b#frag")
+    );
+
+    assert_eq!(
+        classify_markdown_link_destination("./other.md"),
+        local("./other.md")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("../README.md"),
+        local("../README.md")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("docs/guide.md"),
+        local("docs/guide.md")
+    );
+    // Root-relative, as GitHub reads it.
+    assert_eq!(
+        classify_markdown_link_destination("/docs/x.md"),
+        local("/docs/x.md")
+    );
+    // Fragment and query stay attached; the resolver strips them.
+    assert_eq!(
+        classify_markdown_link_destination("other.md#sec"),
+        local("other.md#sec")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("other.md?raw=1"),
+        local("other.md?raw=1")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("  other.md  "),
+        local("other.md")
+    );
+
+    for inert in [
+        "",
+        "   ",
+        "#",
+        "mailto:a@b.c",
+        "javascript:alert(1)",
+        "data:image/png;base64,x",
+        "tel:+123",
+        "ftp://x",
+        "file:///etc/passwd",
+        "//cdn.example.com/x",
+        "C:\\notes.md",
+    ] {
+        assert_eq!(
+            classify_markdown_link_destination(inert),
+            None,
+            "{inert:?} must not be offered"
+        );
+    }
+}
+
+#[test]
+fn scheme_detection_follows_rfc_3986_not_any_colon() {
+    use super::MarkdownLinkTarget::LocalFile;
+    let local = |path: &str| Some(LocalFile(SharedString::from(path.to_owned())));
+
+    // A colon after a path separator is part of a file name, not a scheme.
+    assert_eq!(
+        classify_markdown_link_destination("docs/a:b.md"),
+        local("docs/a:b.md")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("./mailto:x"),
+        local("./mailto:x")
+    );
+    // A scheme has to start with a letter.
+    assert_eq!(
+        classify_markdown_link_destination("1http:x"),
+        local("1http:x")
+    );
+    assert_eq!(
+        classify_markdown_link_destination("_x:y.md"),
+        local("_x:y.md")
+    );
+    // Letters, digits, `+`, `-`, and `.` after the first letter still spell a
+    // scheme, however unusual.
+    assert_eq!(classify_markdown_link_destination("a+b-c.d:x"), None);
+    assert_eq!(
+        classify_markdown_link_destination("svn+ssh:host/repo"),
+        None
+    );
+    // Web schemes need their `//`: without it this is a flat scheme.
+    assert_eq!(
+        classify_markdown_link_destination("https:example.com"),
+        None
+    );
+    // `://` after a non-web scheme is never a file.
+    assert_eq!(classify_markdown_link_destination("vscode://file/x"), None);
+    assert_eq!(classify_markdown_link_destination("ssh://git@host/r"), None);
+}
+
+#[test]
+fn offered_destinations_are_trimmed_and_carry_no_classification() {
+    assert_eq!(
+        offered_link_destination("  ./a.md  ").as_deref(),
+        Some("./a.md")
+    );
+    assert_eq!(
+        offered_link_destination(" https://example.com ").as_deref(),
+        Some("https://example.com")
+    );
+    assert_eq!(offered_link_destination(" #top ").as_deref(), Some("#top"));
+    assert_eq!(offered_link_destination("#"), None);
+    assert_eq!(offered_link_destination("mailto:a@b.c"), None);
+}
+
+#[test]
+fn reference_style_local_links_keep_their_destination() {
+    // pulldown resolves the reference, so the span sees the definition's
+    // destination exactly as an inline link's.
+    let doc = parse("See [the guide][g] and [root][].\n\n[g]: ./guide.md\n[root]: /README.md\n");
+    let row = &doc.rows[0];
+
+    assert_eq!(
+        link_spans(row),
+        vec![("the guide", "./guide.md"), ("root", "/README.md")]
+    );
+}
+
+#[test]
+fn local_links_survive_table_alignment_and_styled_text() {
+    let table = parse("| a | b |\n| --- | --- |\n| [x](../x.md) | wide cell |\n");
+    let body = table
+        .rows
+        .iter()
+        .find(|row| row.text.contains('x'))
+        .expect("table body row");
+    assert_eq!(link_spans(body), vec![("x", "../x.md")]);
+
+    // A styled span inside a local link stays clickable, as for web links.
+    let doc = parse("[**bold** and `code`](docs/a.md#part)\n");
+    let spans = link_spans(&doc.rows[0]);
+    assert!(
+        spans
+            .iter()
+            .any(|(text, url)| *text == "bold" && *url == "docs/a.md#part"),
+        "bold text inside a local link keeps the destination: {spans:?}"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|(text, url)| *text == "code" && *url == "docs/a.md#part"),
+        "code inside a local link keeps the destination: {spans:?}"
+    );
+}
+
+#[test]
+fn a_badge_wrapped_in_a_local_link_keeps_the_link() {
+    let doc = parse(
+        "[![One](https://img.shields.io/badge/one.svg)](./one.md)\n[![Two](https://img.shields.io/badge/two.svg)](#anchor)\n",
+    );
+    let badges: Vec<&MarkdownInlineImage> = doc
+        .rows
+        .iter()
+        .flat_map(|row| row.inline_images.iter())
+        .collect();
+
+    // The anchor-wrapped badge links to its heading.
+    assert_eq!(
+        badges
+            .iter()
+            .map(|badge| badge.link_url.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("./one.md"), Some("#anchor")]
+    );
 }
 
 #[test]
@@ -2763,4 +2726,764 @@ fn inline_spans_stay_on_char_boundaries_for_random_markdown_soup() {
         };
         assert_rows_span_aligned(&source, &doc);
     }
+}
+
+#[test]
+fn heading_slugs_follow_github() {
+    for (heading, slug) in [
+        ("Trust a GPG key", "trust-a-gpg-key"),
+        ("What's new?", "whats-new"),
+        ("C++ & Rust: a_b-c", "c--rust-a_b-c"),
+        ("Äiti ja Übung", "äiti-ja-übung"),
+        ("  Padded  ", "padded"),
+        ("v0.2.5 (beta)", "v025-beta"),
+    ] {
+        assert_eq!(markdown_heading_slug(heading), slug, "{heading:?}");
+    }
+}
+
+#[test]
+fn anchors_resolve_to_their_heading_row() {
+    let doc = parse(
+        "# Signatures\n\n| Badge | Meaning |\n| --- | --- |\n| `U` | See [Trust a GPG key](#trust-a-gpg-key). |\n\n## Trust a `GPG` key\n\nText.\n\n## Notes\n\n## Notes\n",
+    );
+    let heading = |text: &str| {
+        doc.rows
+            .iter()
+            .position(|row| {
+                matches!(row.kind, MarkdownPreviewRowKind::Heading { .. })
+                    && row.text.as_ref() == text
+            })
+            .unwrap_or_else(|| panic!("no heading {text:?}"))
+    };
+    let trust = heading("Trust a GPG key");
+    let first_notes = heading("Notes");
+    let second_notes = doc
+        .rows
+        .iter()
+        .rposition(|row| row.text.as_ref() == "Notes")
+        .expect("second Notes heading");
+    assert_ne!(first_notes, second_notes);
+
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "trust-a-gpg-key"),
+        Some(trust)
+    );
+    assert_eq!(markdown_preview_anchor_row(&doc, "signatures"), Some(0));
+    // A repeated heading is numbered in document order.
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "notes"),
+        Some(first_notes)
+    );
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "notes-1"),
+        Some(second_notes)
+    );
+    // Case is forgiven when nothing matches exactly.
+    assert_eq!(
+        markdown_preview_anchor_row(&doc, "Trust-A-GPG-Key"),
+        Some(trust)
+    );
+    assert_eq!(markdown_preview_anchor_row(&doc, "missing"), None);
+    // Table text is not a heading, however it reads.
+    assert_eq!(markdown_preview_anchor_row(&doc, "badge"), None);
+}
+
+#[test]
+fn an_anchor_link_in_a_table_cell_keeps_its_destination() {
+    let doc = parse(
+        "| Badge | Meaning |\n| --- | --- |\n| **Untrusted key** | See [Trust a GPG key](#trust-a-gpg-key). |\n",
+    );
+    let spans: Vec<_> = doc.rows.iter().flat_map(link_spans).collect();
+    assert_eq!(spans, vec![("Trust a GPG key", "#trust-a-gpg-key")]);
+}
+
+fn band_texts(diff: &MarkdownPreviewDiff) -> Vec<(Vec<String>, Vec<String>)> {
+    let texts = |doc: &MarkdownPreviewDocument, blocks: &[MarkdownBlock], range: &Range<usize>| {
+        blocks[range.clone()]
+            .iter()
+            .flat_map(|block| block.row_range())
+            .filter(|&ix| !matches!(doc.rows[ix].kind, MarkdownPreviewRowKind::Spacer))
+            .map(|ix| doc.rows[ix].text.to_string())
+            .collect::<Vec<_>>()
+    };
+    diff.bands
+        .iter()
+        .map(|band| {
+            (
+                texts(&diff.old, &diff.old_blocks, &band.old_blocks),
+                texts(&diff.new, &diff.new_blocks, &band.new_blocks),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_item_inserted_mid_list_keeps_the_list_one_block_per_side() {
+    let diff = build_markdown_diff_preview("- a\n- b\n- c\n", "- a\n- x\n- b\n- c\n")
+        .expect("diff builds");
+    assert_eq!(diff.old_blocks.len(), 1, "{:?}", diff.old_blocks);
+    assert!(matches!(diff.old_blocks[0], MarkdownBlock::List(_)));
+    assert_eq!(
+        band_texts(&diff),
+        vec![(
+            vec!["a".to_string(), "b".into(), "c".into()],
+            vec!["a".to_string(), "x".into(), "b".into(), "c".into()],
+        )],
+        "the whole list is one band, so blank space goes after it, not inside it"
+    );
+}
+
+#[test]
+fn an_added_paragraph_gets_a_band_with_nothing_on_the_old_side() {
+    let diff = build_markdown_diff_preview("First.\n\nLast.\n", "First.\n\nAdded here.\n\nLast.\n")
+        .expect("diff builds");
+    let bands = band_texts(&diff);
+    assert!(
+        bands.contains(&(Vec::new(), vec!["Added here.".to_string()])),
+        "{bands:?}"
+    );
+    assert_eq!(
+        bands.first(),
+        Some(&(vec!["First.".to_string()], vec!["First.".to_string()]))
+    );
+    assert_eq!(
+        bands.last(),
+        Some(&(vec!["Last.".to_string()], vec!["Last.".to_string()]))
+    );
+}
+
+#[test]
+fn a_band_never_splits_a_block_on_either_side() {
+    let diff = build_markdown_diff_preview(
+        "Intro.\n\nOne line.\n\nTwo line.\n\nEnd.\n",
+        "Intro.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nEnd.\n",
+    )
+    .expect("diff builds");
+    for band in &diff.bands {
+        for (blocks, range) in [
+            (&diff.old_blocks, &band.old_blocks),
+            (&diff.new_blocks, &band.new_blocks),
+        ] {
+            for block in &blocks[range.clone()] {
+                let rows = block.row_range();
+                assert!(
+                    band.rows.start <= rows.start && rows.end <= band.rows.end,
+                    "{block:?} crosses {band:?}"
+                );
+            }
+        }
+    }
+    // Every block of both sides is in exactly one band.
+    let covered = |pick: fn(&MarkdownDiffBand) -> Range<usize>| {
+        diff.bands
+            .iter()
+            .map(|band| pick(band).len())
+            .sum::<usize>()
+    };
+    assert_eq!(
+        covered(|band| band.old_blocks.clone()),
+        diff.old_blocks.len()
+    );
+    assert_eq!(
+        covered(|band| band.new_blocks.clone()),
+        diff.new_blocks.len()
+    );
+}
+
+#[test]
+fn measured_change_extents_become_markers_where_they_were_drawn() {
+    // 1000px of content, an addition drawn at 800..850.
+    let markers = scrollbar_markers_for_extents(&[(800.0, 850.0, 1)], 1000.0);
+    assert_eq!(markers.len(), 1, "{markers:?}");
+    assert!((markers[0].start - 0.8).abs() < 0.01, "{markers:?}");
+    assert!((markers[0].end - 0.85).abs() < 0.01, "{markers:?}");
+}
+
+// ── Known rendering bugs: regression tests written before the fixes ──────
+
+/// Text and kind of each row, for readable failure messages.
+fn row_summary(doc: &MarkdownPreviewDocument) -> Vec<(MarkdownPreviewRowKind, &str)> {
+    doc.rows
+        .iter()
+        .map(|row| (row.kind, row.text.as_ref()))
+        .collect()
+}
+
+#[test]
+fn tight_list_item_keeps_its_text_before_a_fenced_code_block() {
+    // The common README install step: in a tight list the item's text arrives
+    // as bare Text inside the Item, and the code block's start used to clear it.
+    let doc = parse("1. Install:\n   ```sh\n   cargo install foo\n   ```\n2. Run it\n");
+    let summary = row_summary(&doc);
+    assert!(
+        summary.contains(&(
+            MarkdownPreviewRowKind::ListItem { number: Some(1) },
+            "Install:"
+        )),
+        "the first item's text and number must survive the code block: {summary:?}"
+    );
+}
+
+#[test]
+fn tight_list_item_keeps_its_text_before_a_nested_heading() {
+    let doc = parse("- intro\n  # heading\n");
+    assert!(
+        row_texts(&doc).contains(&"intro"),
+        "item text dropped: {:?}",
+        row_summary(&doc)
+    );
+}
+
+#[test]
+fn tight_list_item_keeps_its_text_before_a_nested_quote() {
+    let doc = parse("- intro\n  > quoted\n");
+    let summary = row_summary(&doc);
+    assert!(
+        row_texts(&doc).contains(&"intro"),
+        "item text dropped: {summary:?}"
+    );
+    let quoted = doc
+        .rows
+        .iter()
+        .find(|row| row.text.as_ref() == "quoted")
+        .expect("quote row");
+    assert_eq!(
+        quoted.kind,
+        MarkdownPreviewRowKind::BlockquoteLine,
+        "a quote inside an item is still a quote, not another bulleted item"
+    );
+}
+
+#[test]
+fn tight_list_item_keeps_its_text_before_a_nested_table() {
+    let doc = parse("- a\n- b\n  | x | y |\n  |---|---|\n  | 1 | 2 |\n");
+    assert!(
+        row_texts(&doc).contains(&"b"),
+        "item text dropped: {:?}",
+        row_summary(&doc)
+    );
+}
+
+#[test]
+fn yaml_front_matter_does_not_render_as_a_rule_and_a_heading() {
+    let doc = parse("---\ntitle: Foo\nlayout: page\n---\n\n# Real\n");
+    let summary = row_summary(&doc);
+    assert!(
+        !doc.rows.iter().any(|row| {
+            matches!(row.kind, MarkdownPreviewRowKind::Heading { .. })
+                && row.text.contains("title:")
+        }),
+        "front matter became a setext heading: {summary:?}"
+    );
+    assert_ne!(
+        doc.rows.first().map(|row| row.kind),
+        Some(MarkdownPreviewRowKind::ThematicBreak),
+        "the opening `---` of front matter is not a rule: {summary:?}"
+    );
+}
+
+#[test]
+fn list_item_continuation_rows_do_not_repeat_the_marker() {
+    let marker = |doc: &MarkdownPreviewDocument, text: &str| {
+        let row = doc
+            .rows
+            .iter()
+            .find(|row| row.text.as_ref() == text)
+            .unwrap_or_else(|| panic!("no row {text:?}: {:?}", row_summary(doc)));
+        crate::view::rows::markdown_preview_marker_label(row).map(|label| label.to_string())
+    };
+
+    // A second paragraph in a loose item.
+    let doc = parse("1. Step one\n\n   More detail.\n\n2. Step two\n");
+    assert_eq!(marker(&doc, "Step one").as_deref(), Some("1."));
+    assert_eq!(
+        marker(&doc, "More detail."),
+        None,
+        "continuation paragraph repeats `1.`"
+    );
+    assert_eq!(marker(&doc, "Step two").as_deref(), Some("2."));
+
+    // A hard break inside a tight item.
+    let doc = parse("- line one  \n  line two\n");
+    assert_eq!(
+        marker(&doc, "line two"),
+        None,
+        "hard-broken line repeats the bullet"
+    );
+
+    // Text that follows a nested list inside the same item.
+    let doc = parse("- a\n  - b\n\n  after\n");
+    assert_eq!(
+        marker(&doc, "after"),
+        None,
+        "text after a nested list repeats the bullet"
+    );
+}
+
+#[test]
+fn alert_containing_a_list_stays_one_block() {
+    let doc = parse("> [!NOTE]\n> Read this:\n> - a\n> - b\n");
+    let blocks = markdown_document_blocks(&doc);
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| matches!(block, MarkdownBlock::List(_))),
+        "the alert's list is rendered outside the alert box: {blocks:?} {:?}",
+        row_summary(&doc)
+    );
+}
+
+#[test]
+fn quote_containing_a_list_or_code_stays_a_quote_block() {
+    for source in ["> - a\n> - b\n", "> ```\n> x\n> ```\n"] {
+        let doc = parse(source);
+        let blocks = markdown_document_blocks(&doc);
+        assert!(
+            blocks
+                .iter()
+                .all(|block| matches!(block, MarkdownBlock::Blockquote(_))),
+            "{source:?}: the quote bar is lost for its content: {blocks:?}"
+        );
+    }
+}
+
+#[test]
+fn html_anchor_link_carries_its_destination() {
+    let doc = parse("See <a href=\"https://example.com/docs\">the docs</a> now.\n");
+    let links = spans_with_style(&doc.rows[0], MarkdownInlineStyle::Link);
+    assert_eq!(links.len(), 1, "{:?}", doc.rows[0].inline_spans);
+    assert_eq!(
+        links[0].link_url.as_deref(),
+        Some("https://example.com/docs"),
+        "an HTML link is styled as a link but cannot be followed"
+    );
+}
+
+#[test]
+fn soft_wrapped_quote_lines_join_into_one_paragraph() {
+    // GitHub reflows a quote's paragraph like any other; the preview used to
+    // keep every source line as its own row.
+    let doc = parse("> one line\n> continues here\n");
+    assert_eq!(
+        row_summary(&doc),
+        vec![(
+            MarkdownPreviewRowKind::BlockquoteLine,
+            "one line continues here"
+        )]
+    );
+}
+
+#[test]
+fn inline_diff_shows_an_unchanged_code_line_once() {
+    // Only the second line changed; it now runs past 80 columns, which flips a
+    // per-block flag no renderer reads and used to block merging `keep`.
+    let old = "```\nkeep\nshort\n```\n";
+    let new = format!("```\nkeep\n{}\n```\n", "x".repeat(90));
+    let preview = build_markdown_diff_preview(old, &new).expect("diff preview");
+    let keeps = preview
+        .inline
+        .rows
+        .iter()
+        .filter(|row| row.text.as_ref() == "keep")
+        .count();
+    assert_eq!(
+        keeps,
+        1,
+        "the unchanged line is drawn twice: {:?}",
+        row_summary(&preview.inline)
+    );
+}
+
+// Found by the correctness audit (2026-09-23), confirmed in the crate.
+
+#[test]
+fn an_image_description_broken_over_quote_lines_does_not_panic_or_leak() {
+    // The soft break inside the quoted image flushes the row while the image
+    // is still open, so `alt_start` indexes into the next line's text.
+    let doc = parse("> See ![Architecture overview —\n> 日本語 system](arch.png) here.\n");
+    for row in &doc.rows {
+        assert!(
+            !row.text.contains("日本語") && !row.text.contains("overview"),
+            "the description is not painted as quote text: {:?}",
+            row_texts(&doc)
+        );
+    }
+}
+
+#[test]
+fn a_line_break_inside_an_image_description_stays_out_of_the_text() {
+    let doc = parse("abc ![x<br>yyyyyy](i.png) tail\n");
+    assert!(
+        doc.rows.iter().all(|row| !row.text.contains('y')),
+        "alt text leaked into the row: {:?}",
+        row_texts(&doc)
+    );
+    let alts: Vec<&str> = doc
+        .rows
+        .iter()
+        .flat_map(|row| row.inline_images.iter())
+        .map(|image| image.alt.as_ref())
+        .collect();
+    assert!(alts.iter().any(|alt| alt.contains("yyyyyy")), "{alts:?}");
+}
+
+#[test]
+fn inline_diff_of_a_replaced_picture_draws_each_version_once() {
+    let diff = build_markdown_diff_preview(
+        "Intro.\n\n![shot](old.png)\n\nOutro.\n",
+        "Intro.\n\n![shot](new.png)\n\nOutro.\n",
+    )
+    .expect("diff");
+    let pictures = diff
+        .inline_blocks
+        .iter()
+        .filter(|block| matches!(block, MarkdownBlock::Image(_)))
+        .count();
+    assert_eq!(
+        pictures, 2,
+        "one old picture, one new: {:?}",
+        diff.inline_blocks
+    );
+}
+
+#[test]
+fn editing_a_nested_item_leaves_its_neighbour_unmarked() {
+    for (old, new, unchanged) in [
+        // Space-indented child edited: the parent must stay unchanged.
+        ("- a\n  - b\n- c\n", "- a\n  - x\n- c\n", "a"),
+        // Tab-indented parent edited: the child must stay unchanged.
+        (
+            "- parent one\n\t- child\n- other\n",
+            "- parent two\n\t- child\n- other\n",
+            "child",
+        ),
+    ] {
+        let diff = build_markdown_diff_preview(old, new).expect("diff");
+        for doc in [&diff.old, &diff.new] {
+            let row = doc
+                .rows
+                .iter()
+                .find(|row| row.text.as_ref() == unchanged)
+                .expect("row");
+            assert_eq!(
+                row.change_hint,
+                MarkdownChangeHint::None,
+                "{old:?} -> {new:?}"
+            );
+        }
+        assert_eq!(
+            diff.inline
+                .rows
+                .iter()
+                .filter(|row| row.text.as_ref() == unchanged)
+                .count(),
+            1,
+            "{old:?} -> {new:?}: {:?}",
+            row_texts(&diff.inline)
+        );
+    }
+}
+
+#[test]
+fn a_paragraph_whose_first_line_was_added_stays_one_changed_pair() {
+    let diff = build_markdown_diff_preview(
+        "Alpha line one\nalpha line two\n\nTail.\n",
+        "New first line\nAlpha line one\nalpha line two\n\nTail.\n",
+    )
+    .expect("diff");
+    // Every inline copy of the changed paragraph is marked, old before new.
+    let copies: Vec<&MarkdownPreviewRow> = diff
+        .inline
+        .rows
+        .iter()
+        .filter(|row| row.text.contains("alpha line two"))
+        .collect();
+    assert!(
+        copies
+            .iter()
+            .all(|row| row.change_hint != MarkdownChangeHint::None),
+        "an unmarked copy reads as unchanged context: {:?}",
+        copies
+            .iter()
+            .map(|r| (r.text.as_ref(), r.change_hint))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !copies[0].text.starts_with("New"),
+        "the old version comes first"
+    );
+    // And the split view puts the two versions side by side.
+    let old_ix = diff
+        .old
+        .rows
+        .iter()
+        .position(|r| r.text.contains("alpha line two"))
+        .unwrap();
+    let new_ix = diff
+        .new
+        .rows
+        .iter()
+        .position(|r| r.text.contains("alpha line two"))
+        .unwrap();
+    assert!(
+        diff.bands
+            .iter()
+            .any(|band| band.rows.contains(&old_ix) && band.rows.contains(&new_ix)),
+        "{:?}",
+        diff.bands
+    );
+}
+
+#[test]
+fn a_br_inside_a_table_cell_stays_in_the_cell() {
+    let doc = parse("| a | b |\n|---|---|\n| x<br>y | z |\n");
+    assert!(
+        doc.rows
+            .iter()
+            .all(|row| matches!(row.kind, MarkdownPreviewRowKind::TableRow { .. })),
+        "{:?}",
+        row_texts(&doc)
+    );
+    let rows = table_rows(&doc);
+    assert_eq!(rows.len(), 2);
+    assert!(cell_texts(rows[1])[0].contains('x') && cell_texts(rows[1])[0].contains('y'));
+    assert_eq!(cell_texts(rows[1])[1], "z");
+}
+
+#[test]
+fn br_line_endings_add_no_blank_row_and_keep_their_own_source_line() {
+    let doc = parse("Author: Foo<br>\nLicense: MIT<br>\n\nNext.\n");
+    assert_eq!(
+        row_texts(&doc),
+        vec!["Author: Foo", "License: MIT", "Next."]
+    );
+    assert_eq!(doc.rows[1].source_line_range, 1..2);
+    let diff = build_markdown_diff_preview(
+        "Author: Foo<br>\nLicense: MIT<br>\n",
+        "Author: Bar<br>\nLicense: MIT<br>\n",
+    )
+    .expect("diff");
+    let license = diff
+        .new
+        .rows
+        .iter()
+        .find(|r| r.text.as_ref() == "License: MIT")
+        .unwrap();
+    assert_eq!(license.change_hint, MarkdownChangeHint::None);
+}
+
+#[test]
+fn a_linked_picture_on_its_own_line_keeps_its_link() {
+    let doc = parse(
+        "[![Build Status](https://github.com/o/r/badge.svg)](https://github.com/o/r/actions)\n",
+    );
+    let target = "https://github.com/o/r/actions";
+    assert!(
+        doc.rows.iter().any(|row| {
+            row.inline_images
+                .iter()
+                .any(|image| image.link_url.as_deref() == Some(target))
+                || link_spans(row).iter().any(|(_, url)| *url == target)
+        }),
+        "the badge's link is recorded nowhere"
+    );
+}
+
+#[test]
+fn inline_diff_shows_the_new_picture_when_its_reference_changes() {
+    let diff = build_markdown_diff_preview(
+        "Intro [![Build][b]][l] text.\n\n[b]: https://old.example/badge.svg\n[l]: https://ci.example\n",
+        "Intro [![Build][b]][l] text.\n\n[b]: https://new.example/badge.svg\n[l]: https://ci.example\n",
+    )
+    .expect("diff");
+    let sources: Vec<String> = diff
+        .inline
+        .rows
+        .iter()
+        .flat_map(|row| row.inline_images.iter())
+        .map(|image| image.image.source.to_string())
+        .collect();
+    assert!(
+        sources
+            .iter()
+            .any(|source| source == "https://new.example/badge.svg"),
+        "{sources:?}"
+    );
+}
+
+#[test]
+fn inline_diff_does_not_repeat_items_renumbered_by_an_insertion() {
+    let diff = build_markdown_diff_preview("1. a\n1. b\n1. c\n", "1. a\n1. new\n1. b\n1. c\n")
+        .expect("diff");
+    assert_eq!(row_texts(&diff.inline), vec!["a", "new", "b", "c"]);
+}
+
+#[test]
+fn a_byte_order_mark_does_not_hide_the_first_heading() {
+    let doc = parse("\u{feff}# Title\n\nPara\n");
+    assert_eq!(
+        doc.rows[0].kind,
+        MarkdownPreviewRowKind::Heading { level: 1 }
+    );
+    assert_eq!(doc.rows[0].text.as_ref(), "Title");
+    assert_eq!(markdown_preview_anchor_row(&doc, "title"), Some(0));
+}
+
+#[test]
+fn an_email_autolink_is_not_a_repository_file() {
+    let doc = parse("Contact <security@example.com>.\n");
+    for (_, url) in doc.rows.iter().flat_map(link_spans) {
+        assert!(
+            !matches!(
+                classify_markdown_link_destination(url),
+                Some(MarkdownLinkTarget::LocalFile(_))
+            ),
+            "{url} is offered as a file in the repository"
+        );
+    }
+}
+
+#[test]
+fn heading_slugs_keep_combining_marks() {
+    assert_eq!(markdown_heading_slug("नमस्ते दुनिया"), "नमस्ते-दुनिया");
+    assert_eq!(markdown_heading_slug("Cafe\u{301}"), "cafe\u{301}");
+}
+
+#[test]
+fn repeated_heading_numbering_follows_github_slugger() {
+    // github-slugger: example-1, example, example-2, example-1-1
+    let doc = parse("## Example 1\n\n## Example\n\n## Example\n\n## Example 1\n");
+    let last = doc
+        .rows
+        .iter()
+        .rposition(|row| row.text.as_ref() == "Example 1")
+        .expect("heading");
+    assert_eq!(markdown_preview_anchor_row(&doc, "example-1-1"), Some(last));
+}
+
+#[test]
+fn block_html_inside_a_list_item_leaves_no_newline_in_the_row() {
+    let doc = parse("- item\n  <div>x</div>\n- next\n");
+    assert!(
+        doc.rows.iter().all(|row| !row.text.contains('\n')),
+        "{:?}",
+        row_texts(&doc)
+    );
+}
+
+#[test]
+fn a_br_in_a_heading_keeps_its_words_apart() {
+    let doc = parse("# a<br>b\n");
+    assert_eq!(doc.rows[0].text.as_ref(), "a b");
+}
+
+#[test]
+fn a_tab_inside_a_table_cell_does_not_open_a_column() {
+    let doc = parse("| a\tb | c |\n|---|---|\n| 1 | 2 |\n");
+    assert_eq!(
+        table_rows(&doc)[0]
+            .table
+            .as_ref()
+            .expect("cells")
+            .cells
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn a_task_marker_after_a_tab_points_at_its_bracket() {
+    let source = " 1. \t[x] foo\n";
+    let task = parse(source).rows[0].task.expect("task");
+    let offset = task.byte_offset(source.as_bytes()).expect("marker line");
+    assert_eq!(&source[offset..offset + 3], "[x]");
+}
+
+#[test]
+fn tight_list_item_in_a_quote_keeps_its_text_before_a_nested_quote() {
+    let doc = parse("> - a\n>   > b\n> - c\n");
+    assert!(
+        doc.rows.iter().any(|row| row.text.as_ref() == "a"
+            && matches!(row.kind, MarkdownPreviewRowKind::ListItem { .. })),
+        "item text dropped: {:?}",
+        row_summary(&doc)
+    );
+}
+
+// Task-list checkbox bugs from the review of the toggle feature.
+
+#[test]
+fn an_empty_task_item_keeps_its_checkbox_to_itself() {
+    let doc = parse("- [ ]\n  - child\n");
+    let child = doc
+        .rows
+        .iter()
+        .find(|row| row.text.as_ref() == "child")
+        .expect("child row");
+    assert_eq!(
+        child.task,
+        None,
+        "the parent's checkbox moved onto its plain child, so clicking it toggles the parent: {:?}",
+        row_summary(&doc)
+    );
+
+    let doc = parse("- [ ] a\n- [ ]\n- b\n");
+    assert_eq!(
+        doc.rows.iter().filter(|row| row.task.is_some()).count(),
+        2,
+        "an empty task item vanished: {:?}",
+        row_summary(&doc)
+    );
+}
+
+#[test]
+fn a_diff_side_that_renders_nothing_says_why() {
+    let added = build_markdown_diff_preview_of(None, Some("# Added\n")).expect("parses");
+    assert!(added.old_blocks.is_empty());
+    assert_eq!(added.old_empty_notice(), "File added.");
+
+    let deleted = build_markdown_diff_preview_of(Some("# Gone\n"), None).expect("parses");
+    assert!(deleted.new_blocks.is_empty());
+    assert_eq!(deleted.new_empty_notice(), "File deleted.");
+
+    let emptied = build_markdown_diff_preview("# Was\n", "").expect("parses");
+    assert_eq!(emptied.new_empty_notice(), "Empty file.");
+
+    // Link definitions are text, and none of it renders.
+    let definitions = "[spec]: https://example.com/spec\n";
+    let unrendered = build_markdown_diff_preview("# Was\n", definitions).expect("parses");
+    assert!(unrendered.new_blocks.is_empty());
+    assert_eq!(unrendered.new_empty_notice(), "Nothing to render.");
+
+    // With no block on either side the whole diff says so, once.
+    let neither = build_markdown_diff_preview("", definitions).expect("parses");
+    assert_eq!(neither.empty_notice(), "Nothing to render.");
+    let blank = build_markdown_diff_preview_of(None, Some("")).expect("parses");
+    assert_eq!(blank.empty_notice(), "Empty file.");
+}
+
+#[test]
+fn a_picture_is_one_row_that_knows_the_room_it_needs() {
+    // Pictures were cut into eight bands for a renderer with fixed row
+    // heights; every consumer then had to skip the other seven.
+    let doc = parse("![logo](logo.png)\n\n<img src=\"wide.png\" width=\"80\">\n");
+    let pictures: Vec<_> = doc
+        .rows
+        .iter()
+        .filter(|row| matches!(row.kind, MarkdownPreviewRowKind::Image))
+        .collect();
+    assert_eq!(pictures.len(), 2, "one row per picture: {:?}", doc.rows);
+    let height =
+        |row: &MarkdownPreviewRow| row.image.as_ref().expect("a picture").reserved_height_px();
+    assert_eq!(
+        height(pictures[0]),
+        224,
+        "an undeclared picture keeps the old block's room"
+    );
+    assert_eq!(
+        height(pictures[1]),
+        80,
+        "a width alone is taken as a square"
+    );
 }

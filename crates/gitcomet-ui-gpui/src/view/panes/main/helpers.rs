@@ -3192,10 +3192,7 @@ pub(crate) struct MainPaneView {
     /// stale range.
     pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
-    pub(in crate::view) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
-    pub(in crate::view) approved_remote_markdown_image_urls: Arc<FxHashSet<SharedString>>,
-    pub(super) remote_markdown_image_approval_revision: u64,
-    pub(super) remote_markdown_image_summary_cache: RefCell<RemoteMarkdownImageSummaryCache>,
+    pub(in crate::view) remote_markdown_images: RemoteMarkdownImages,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
@@ -3426,18 +3423,13 @@ pub(crate) struct MainPaneView {
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
 
-    pub(in crate::view) file_markdown_preview_cache_repo_id: Option<RepoId>,
-    pub(in crate::view) file_markdown_preview_cache_rev: u64,
-    pub(in crate::view) file_markdown_preview_cache_content_signature: Option<u64>,
-    pub(in crate::view) file_markdown_preview_cache_target: Option<DiffTarget>,
-    pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
-    pub(in crate::view) file_markdown_preview_seq: u64,
-    pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
-    pub(in crate::view) markdown_preview_wrap: MarkdownPreviewWrapCache,
-    /// Row the quick-search cursor wants revealed in the flowing markdown
-    /// preview, shared with the renderer that measures it. See
-    /// [`rows::MarkdownPreviewRevealRequest`].
-    pub(in crate::view) markdown_preview_reveal: rows::MarkdownPreviewRevealRequest,
+    pub(in crate::view) diff_markdown: DiffMarkdownPreview,
+    pub(in crate::view) markdown_interaction: MarkdownPreviewInteraction,
+    /// Frames drawn, which is how often the preview surface re-reads the disk.
+    pub(in crate::view) main_pane_surface_frame: u64,
+    /// The preview surface this frame, once resolved; see
+    /// [`MainPaneView::main_pane_surface`].
+    pub(in crate::view) main_pane_surface_memo: RefCell<Option<MainPaneSurfaceMemo>>,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
@@ -3470,23 +3462,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_search_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) worktree_preview_content_rev: u64,
-    pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
-    pub(in crate::view) worktree_markdown_preview_source_rev: u64,
-    pub(in crate::view) worktree_markdown_preview: LoadableMarkdownDoc,
-    /// Sizes read from the headers of the pictures the rendered preview draws,
-    /// so a picture that has not decoded yet can still hold its box open.
-    pub(in crate::view) worktree_markdown_preview_picture_sizes: rows::MarkdownPreviewPictureSizes,
-    /// Where each sideways-scrolling block of the rendered preview is scrolled
-    /// to, so its scrollbar has something to read.
-    pub(in crate::view) worktree_markdown_preview_block_scrolls: rows::MarkdownDocumentBlockScrolls,
-    /// Block grouping of the document the rendered preview last drew, so it is
-    /// not re-derived on every frame.
-    pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,
-    /// Pictures in the rendered preview that are still decoding and already
-    /// have someone waiting to repaint the pane when they finish.
-    pub(in crate::view) worktree_markdown_preview_image_waits: FxHashSet<gpui::Resource>,
-    pub(in crate::view) worktree_markdown_preview_seq: u64,
-    pub(in crate::view) worktree_markdown_preview_inflight: Option<u64>,
+    pub(in crate::view) worktree_markdown: WorktreeMarkdownPreview,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
@@ -3494,6 +3470,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_segments_cache:
         FxHashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
+    /// What the read-only preview was read from. See `super::file_disk`.
+    pub(in crate::view) worktree_preview_disk: DiskIdentity,
+    /// Scroll offset to restore after a reload that must not jump to the top.
+    pub(in crate::view) worktree_preview_restore_scroll_offset: Option<gpui::Point<Pixels>>,
 
     /// The editable working-tree buffer. See `super::file_editor`.
     pub(in crate::view) file_editor_input: Entity<components::TextInput>,
@@ -3503,10 +3483,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_key: Option<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_editor_loading: bool,
-    /// Repo status revision the buffer was last read at. A clean buffer re-reads
-    /// when this moves, so an external write to the open file is picked up
-    /// rather than silently overwritten by the next save.
-    pub(in crate::view) file_editor_loaded_status_rev: u64,
+    /// Generation of the last disk read, so a superseded read is dropped.
+    pub(in crate::view) file_editor_reread_seq: u64,
+    /// What the buffer was read from (or last wrote). See `super::file_disk`.
+    pub(in crate::view) file_editor_disk: DiskIdentity,
     pub(in crate::view) file_editor_error: Option<SharedString>,
     pub(in crate::view) file_editor_dirty: bool,
     /// The topmost 0-based line an unsaved edit has touched, or `None` while the
@@ -3523,6 +3503,16 @@ pub(crate) struct MainPaneView {
     /// Fingerprint of the text last known to be on disk. `None` before the
     /// first read lands, which reads as "everything is unsaved".
     pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,
+    /// "File changed on disk", for the surface it names. See `super::file_disk`.
+    pub(in crate::view) file_disk_notice: Option<FileDiskNotice>,
+    /// Generation of the last disk check, so a superseded check is dropped.
+    pub(in crate::view) file_disk_check_seq: u64,
+    /// Why the check in flight was started, if one is.
+    pub(in crate::view) file_disk_check_in_flight: Option<DiskCheckCause>,
+    /// The surface on screen and the repo revisions it was last read or
+    /// checked at. `None` until a read lands, so bumps that predate the read
+    /// never fire a check.
+    pub(in crate::view) file_disk_seen: Option<FileDiskSeen>,
     /// Unsaved buffers the user navigated away from, keyed by path. This is what
     /// makes leaving a file and coming back non-destructive with auto-save off.
     /// Keyed by repo *and* path: two repo tabs can hold the same relative path,

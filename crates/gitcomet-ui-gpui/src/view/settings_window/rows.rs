@@ -72,7 +72,7 @@ impl SettingsWindowView {
                         d.child(svg_icon(
                             "icons/check.svg",
                             theme.colors.accent.foreground,
-                            px(12.0),
+                            ui_scale.px(12.0),
                         ))
                     }),
             )
@@ -166,7 +166,7 @@ impl SettingsWindowView {
                         d.child(svg_icon(
                             "icons/check.svg",
                             theme.colors.accent.foreground,
-                            px(12.0),
+                            ui_scale.px(12.0),
                         ))
                     }),
             )
@@ -353,7 +353,7 @@ impl SettingsWindowView {
                             "icons/arrow_right.svg"
                         },
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        self.row_scale(theme).px(12.0),
                     ))),
             )
     }
@@ -548,7 +548,7 @@ impl SettingsWindowView {
                     .child(div().flex_shrink_0().child(svg_icon(
                         "icons/open_external.svg",
                         theme.colors.accent.foreground,
-                        px(13.0),
+                        self.row_scale(theme).px(13.0),
                     ))),
             )
     }
@@ -595,7 +595,7 @@ impl SettingsWindowView {
                             .child(svg_icon(
                                 "icons/warning.svg",
                                 theme.colors.status.warning.foreground,
-                                px(13.0),
+                                self.row_scale(theme).px(13.0),
                             ))
                             .child(div().flex_1().min_w(px(0.0)).child(name)),
                     )
@@ -748,7 +748,7 @@ impl SettingsWindowView {
                             .items_center()
                             .gap_1()
                             .when_some(icon, |this, (path, color)| {
-                                this.child(svg_icon(path, color, px(14.0)))
+                                this.child(svg_icon(path, color, self.row_scale(theme).px(14.0)))
                             })
                             .child(
                                 div()
@@ -1419,11 +1419,11 @@ impl SettingsWindowView {
                 InteractionState::default()
                     .selected(selected, theme.colors.interaction.pressed_background),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .child(svg_icon(category.icon(), icon_color, px(15.0))),
-            )
+            .child(div().flex_shrink_0().child(svg_icon(
+                category.icon(),
+                icon_color,
+                self.row_scale(theme).px(15.0),
+            )))
             .child(
                 div()
                     .flex_1()

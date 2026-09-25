@@ -638,11 +638,12 @@ impl DetailsPaneView {
             return;
         }
         self.clear_status_multi_selection(repo_id);
-        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-        self.store.dispatch(Msg::StagePaths {
+        crate::view::status_actions::stage_or_unstage_paths(
+            &self.store,
             repo_id,
-            paths: paths.into(),
-        });
+            DiffArea::Unstaged,
+            paths,
+        );
         cx.notify();
     }
 

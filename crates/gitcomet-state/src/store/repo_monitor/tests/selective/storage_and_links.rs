@@ -34,8 +34,9 @@ fn custom_lfs_status_stays_quiet(absolute: bool) {
     for _ in 0..3 {
         let status = repo.status().unwrap();
         assert!(status.staged.is_empty() && status.unstaged.is_empty());
-        monitor.quiet();
     }
+    // One window covers all three: an earlier status's refresh would stay queued.
+    monitor.quiet();
     assert!(raw_rx.try_iter().any(|event| event.is_ok_and(|event| {
         !should_ignore_event_kind(&event)
             && event
@@ -196,6 +197,25 @@ fn link_file(target: &Path, link: &Path) {
     std::os::windows::fs::symlink_file(target, link).unwrap();
 }
 
+/// External inputs sit outside every native root, so Revalidate alone reloads
+/// them, synchronously; a drain replaces the quiet window. Only a policy
+/// reload sets `verification_context`, so late worktree residue cannot pass.
+fn expect_policy_reload(monitor: &RunningMonitor) {
+    monitor.revalidate();
+    monitor.drain_delivered();
+    let messages: Vec<_> = monitor.rx.try_iter().collect();
+    assert!(
+        messages
+            .iter()
+            .all(|message| matches!(message, Msg::RepoExternallyChanged { .. }))
+            && messages.iter().any(|message| matches!(
+                message,
+                Msg::RepoExternallyChanged { change, .. } if change.verification_context
+            )),
+        "revalidation did not reload the policy: {messages:?}"
+    );
+}
+
 #[test]
 fn symlinked_ignore_input_observes_target_edits_and_link_replacement() {
     let (_temp, root) = repository();
@@ -213,36 +233,44 @@ fn symlinked_ignore_input_observes_target_edits_and_link_replacement() {
         &["config", "core.excludesFile", link.to_str().unwrap()],
     );
     fs::create_dir_all(root.join("generated/source")).unwrap();
-    fs::write(root.join("generated/source/file.txt"), "before").unwrap();
+    // Only awaited edits touch `file`; the quiet check edits its own file.
+    let file = root.join("generated/source/file.txt");
+    let ignored = root.join("generated/source/ignored.txt");
+    fs::write(&file, "before").unwrap();
+    fs::write(&ignored, "before").unwrap();
     let mut rules = load_gitignore_rules(&root);
     assert!(rules.is_ignored_rel(Path::new("generated"), Some(true)));
     let monitor = RunningMonitor::start(&root);
     monitor.quiet();
     fs::write(&target, "").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
-    fs::write(root.join("generated/source/file.txt"), "newly eligible").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
+    assert!(
+        monitor
+            .expect_change(&file, || {
+                fs::write(&file, "newly eligible").unwrap();
+                monitor.revalidate();
+            })
+            .worktree
+    );
     fs::remove_file(&link).unwrap();
     link_file(&replacement, &link);
-    monitor.revalidate();
-    monitor.refresh();
-    fs::write(root.join("generated/source/file.txt"), "ignored again").unwrap();
+    expect_policy_reload(&monitor);
+    monitor.settle();
+    fs::write(&ignored, "ignored again").unwrap();
     monitor.quiet();
     // Atomic replacement at the new target must reload the same policy too.
     let save = target_dir.join("atomic-save");
     fs::write(&save, "").unwrap();
     fs::rename(save, replacement).unwrap();
-    monitor.revalidate();
-    monitor.refresh();
-    fs::write(
-        root.join("generated/source/file.txt"),
-        "eligible after target save",
-    )
-    .unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
+    assert!(
+        monitor
+            .expect_change(&file, || {
+                fs::write(&file, "eligible after target save").unwrap();
+                monitor.revalidate();
+            })
+            .worktree
+    );
 }
 
 #[test]
@@ -266,15 +294,12 @@ fn symlinked_ignore_input_observes_missing_target_and_intermediate_link() {
     let monitor = RunningMonitor::start(&root);
     monitor.quiet();
     fs::write(&missing, "generated/\n").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
     fs::remove_file(&intermediate).unwrap();
     link_file(&replacement, &intermediate);
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
     fs::write(&replacement, "generated/\n").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
 }
 
 #[test]

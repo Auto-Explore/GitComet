@@ -73,7 +73,34 @@ enum ClickTarget {
 
 impl Global for ClickOrigin {}
 
+#[cfg(test)]
+thread_local! {
+    // Click targets installed, and writes to the shared press state.
+    static CLICK_TARGETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CLICK_STATE_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Click targets installed since the last call, which resets the count.
+#[cfg(test)]
+pub(crate) fn take_click_targets_installed_for_tests() -> usize {
+    CLICK_TARGETS.with(|count| count.replace(0))
+}
+
+/// Press-state writes since the last call, which resets the count.
+#[cfg(test)]
+pub(crate) fn take_click_state_writes_for_tests() -> usize {
+    CLICK_STATE_WRITES.with(|count| count.replace(0))
+}
+
+/// Every clickable element resets on each press and idle move, and a write is
+/// a new global plus observer effects, so nothing is written with no press
+/// pending.
 pub(crate) fn reset(cx: &mut App) {
+    if !is_pending(cx) {
+        return;
+    }
+    #[cfg(test)]
+    CLICK_STATE_WRITES.with(|count| count.set(count.get() + 1));
     cx.set_global(ClickOrigin::default());
 }
 
@@ -157,6 +184,8 @@ pub(crate) fn on_click<E: Element + InteractiveElement>(
     button: MouseButton,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<E> {
+    #[cfg(test)]
+    CLICK_TARGETS.with(|count| count.set(count.get() + 1));
     let target = std::rc::Rc::new(std::cell::RefCell::new(None));
     let rendered_target = target.clone();
     control.interactivity().on_prepaint(move |_, window, _| {
@@ -254,6 +283,15 @@ impl<E: Element + InteractiveElement> PointerClickExt for Stateful<E> {
     }
 }
 
+/// A canvas click target's id: `name` plus a hash of what identifies the
+/// target. A formatted string cost several allocations per row, every frame.
+pub(crate) fn canvas_target(name: &'static str, key: impl std::hash::Hash) -> ElementId {
+    use std::hash::Hasher as _;
+    let mut hasher = rustc_hash::FxHasher::default();
+    key.hash(&mut hasher);
+    (name, hasher.finish()).into()
+}
+
 /// Each canvas action has a stable semantic id, including its view, document
 /// revision and subtarget. A redraw retains ownership; replacement content
 /// cannot inherit it. Call during paint, just as for ordinary hitbox handlers.
@@ -265,6 +303,8 @@ pub(crate) fn on_canvas_click(
     consume_press: bool,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) {
+    #[cfg(test)]
+    CLICK_TARGETS.with(|count| count.set(count.get() + 1));
     let target = ClickTarget::Canvas(target);
     let press_target = target.clone();
     let press_hitbox = hitbox.clone();
@@ -303,4 +343,24 @@ pub(crate) fn on_canvas_click(
             handler(&click, window, cx);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canvas_target;
+    use gpui::ElementId;
+
+    #[test]
+    fn canvas_targets_are_integers_that_tell_their_keys_apart() {
+        let row = canvas_target("diff-click", (7u64, 3usize, "row"));
+        assert!(
+            matches!(row, ElementId::NamedInteger(..)),
+            "no string is built for a target"
+        );
+        assert_eq!(row, canvas_target("diff-click", (7u64, 3usize, "row")));
+        assert_ne!(row, canvas_target("diff-click", (7u64, 3usize, "context")));
+        assert_ne!(row, canvas_target("diff-click", (7u64, 4usize, "row")));
+        assert_ne!(row, canvas_target("diff-click", (8u64, 3usize, "row")));
+        assert_ne!(row, canvas_target("history-menu", (7u64, 3usize, "row")));
+    }
 }

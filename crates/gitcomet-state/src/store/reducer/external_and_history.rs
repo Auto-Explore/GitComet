@@ -124,6 +124,9 @@ pub(super) fn reload_repo(
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
+    // The view re-requests sidebar data only when its request changes, so
+    // worktrees and stashes reset above would otherwise stay NotLoaded.
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
     // repo's own `.git`, so a commit or stash made inside a linked worktree
@@ -184,6 +187,11 @@ pub(super) fn repo_externally_changed(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Outside the index/worktree chain below: an event that touched both must
+    // still tell the view to look at the open file.
+    if change.worktree {
+        repo_state.bump_worktree_change_rev();
+    }
 
     let file_browser_effect =
         file_browser_refresh_for_external_change(repo_state, change, sidebar_shows_this_files_tree);
@@ -837,6 +845,9 @@ fn finish_repo_action(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
+        if action.writes_worktree() {
+            repo_state.bump_local_worktree_write_rev();
+        }
         match completion {
             RepoActionCompletion::Succeeded => {
                 repo_state.feedback.last_error = None;

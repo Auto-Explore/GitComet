@@ -75,18 +75,22 @@ fn full_rebuild_discards_nested_ignore_inputs_in_newly_ignored_trees() {
             ..Default::default()
         },
     );
+    // The fixture never wrote .gitignore, so startup residue cannot satisfy this.
+    let gitignore = root.join(".gitignore");
+    let ignore_build = || fs::write(&gitignore, "build/\n").unwrap();
+    assert!(monitor.expect_change(&gitignore, ignore_build).worktree);
     monitor.settle();
-    fs::write(root.join(".gitignore"), "build/\n").unwrap();
-    monitor.refresh();
     let before = builds.load(Ordering::Relaxed);
     fs::write(&nested_ignore, "*.log\n*.generated\n").unwrap();
     monitor.revalidate();
     monitor.quiet(); // Covers native events, activation and idle stamp checks.
     assert_eq!(builds.load(Ordering::Relaxed), before);
-    fs::write(root.join(".gitignore"), "").unwrap();
-    monitor.refresh();
-    fs::write(&nested_ignore, "*.generated\n").unwrap();
-    monitor.refresh(); // A newly visible input must be discovered again.
+    let unignore = || fs::write(&gitignore, "").unwrap();
+    assert!(monitor.expect_change(&gitignore, unignore).worktree);
+    // A newly visible input must be discovered again. Its ignored edit above
+    // was unwatched and predates the quiet window.
+    let edit_nested = || fs::write(&nested_ignore, "*.generated\n").unwrap();
+    assert!(monitor.expect_change(&nested_ignore, edit_nested).worktree);
 }
 
 fn apply_directory_event(

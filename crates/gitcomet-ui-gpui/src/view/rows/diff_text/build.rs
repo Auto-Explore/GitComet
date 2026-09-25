@@ -280,7 +280,7 @@ pub(in crate::view::rows) fn hash_rgba_bits(hasher: &mut FxHasher, rgba: gpui::R
     rgba.alpha.to_bits().hash(hasher);
 }
 
-pub(super) fn syntax_theme_signature(theme: AppTheme) -> u64 {
+pub(in crate::view::rows) fn syntax_theme_signature(theme: AppTheme) -> u64 {
     let mut hasher = FxHasher::default();
     let syntax = theme.syntax;
     hash_rgba_bits(&mut hasher, syntax.comment);

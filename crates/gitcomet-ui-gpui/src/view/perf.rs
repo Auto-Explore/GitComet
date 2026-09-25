@@ -19,7 +19,6 @@ pub(crate) enum ViewPerfSpan {
     SyntaxHighlighting,
     WordQueryHighlighting,
     MarkdownPreviewParse,
-    MarkdownPreviewStyledRowBuild,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +65,6 @@ pub(crate) struct ViewPerfSnapshot {
     pub syntax_highlighting: SpanStats,
     pub word_query_highlighting: SpanStats,
     pub markdown_preview_parse: SpanStats,
-    pub markdown_preview_styled_row_build: SpanStats,
 }
 
 pub(crate) struct PerfScope {
@@ -140,7 +138,6 @@ pub(crate) fn snapshot() -> ViewPerfSnapshot {
             syntax_highlighting: SYNTAX_HIGHLIGHTING_SPAN.snapshot(),
             word_query_highlighting: WORD_QUERY_HIGHLIGHTING_SPAN.snapshot(),
             markdown_preview_parse: MARKDOWN_PREVIEW_PARSE_SPAN.snapshot(),
-            markdown_preview_styled_row_build: MARKDOWN_PREVIEW_STYLED_ROW_BUILD_SPAN.snapshot(),
         }
     }
     #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
@@ -169,7 +166,6 @@ pub(crate) fn reset() {
         SYNTAX_HIGHLIGHTING_SPAN.reset();
         WORD_QUERY_HIGHLIGHTING_SPAN.reset();
         MARKDOWN_PREVIEW_PARSE_SPAN.reset();
-        MARKDOWN_PREVIEW_STYLED_ROW_BUILD_SPAN.reset();
     }
 }
 
@@ -288,8 +284,6 @@ static WORD_QUERY_HIGHLIGHTING_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 static MARKDOWN_PREVIEW_PARSE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
-static MARKDOWN_PREVIEW_STYLED_ROW_BUILD_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 static RENDER_RESOLVED_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
@@ -311,7 +305,6 @@ fn span_stats(span: ViewPerfSpan) -> &'static AtomicSpanStats {
         ViewPerfSpan::SyntaxHighlighting => &SYNTAX_HIGHLIGHTING_SPAN,
         ViewPerfSpan::WordQueryHighlighting => &WORD_QUERY_HIGHLIGHTING_SPAN,
         ViewPerfSpan::MarkdownPreviewParse => &MARKDOWN_PREVIEW_PARSE_SPAN,
-        ViewPerfSpan::MarkdownPreviewStyledRowBuild => &MARKDOWN_PREVIEW_STYLED_ROW_BUILD_SPAN,
     }
 }
 
@@ -604,9 +597,6 @@ mod tests {
         {
             let _scope = span(ViewPerfSpan::MarkdownPreviewParse);
         }
-        {
-            let _scope = span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
-        }
 
         let snapshot = snapshot();
 
@@ -619,7 +609,6 @@ mod tests {
             }
         );
         assert!(snapshot.markdown_preview_parse.calls >= 1);
-        assert!(snapshot.markdown_preview_styled_row_build.calls >= 1);
     }
 
     // -- Frame timing capture tests ------------------------------------------

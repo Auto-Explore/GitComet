@@ -1121,3 +1121,31 @@ fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppCon
         assert_eq!(view.read(app).child_clicks, 1);
     });
 }
+
+#[gpui::test]
+fn idle_pointer_moves_leave_the_press_state_alone(cx: &mut TestAppContext) {
+    // Clearing the shared press state writes a new global and queues an
+    // observer effect; with no press pending there is nothing to clear.
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, cx) =
+        cx.add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::Row, false, cx));
+    redraw(cx);
+    let subject = cx.debug_bounds("subject").unwrap();
+
+    crate::kit::click::take_click_state_writes_for_tests();
+    for step in 0..5 {
+        cx.simulate_mouse_move(
+            point(subject.left() + px(2.0 + step as f32), subject.center().y),
+            None,
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(
+        crate::kit::click::take_click_state_writes_for_tests(),
+        0,
+        "moving over a control with nothing pressed writes no press state"
+    );
+
+    cx.simulate_click(subject.center(), Modifiers::default());
+    cx.update(|_, app| assert_eq!(view.read(app).clicks, 1, "a click still completes"));
+}

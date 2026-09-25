@@ -444,21 +444,6 @@ impl MainPaneView {
         )
     }
 
-    /// Widths a wrapped markdown preview row may occupy: the full content
-    /// width for the inline and worktree lists, and the narrower of the two
-    /// split columns for the side-by-side lists, so both columns wrap
-    /// identically and stay row-aligned.
-    pub(in crate::view) fn markdown_preview_wrap_widths(
-        &self,
-        cx: &mut gpui::Context<Self>,
-    ) -> (Pixels, Pixels) {
-        let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
-        let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
-        let (left_w, right_w) =
-            crate::view::diff_split_column_widths(content_width, self.diff_split_ratio);
-        (content_width, left_w.min(right_w).max(px(0.0)))
-    }
-
     pub(super) fn diff_wrap_ranges_for_source_visible_ix(
         &self,
         source_visible_ix: usize,

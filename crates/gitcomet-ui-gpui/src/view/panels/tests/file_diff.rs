@@ -2709,6 +2709,122 @@ fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppCont
     );
 }
 
+/// Every row that did not wrap measures its own line, and at least one such
+/// row sits below a wrapped line, where row position and line number differ.
+fn assert_unwrapped_rows_measure_their_own_line(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let mut shifted_rows = 0;
+        for visible_ix in 0..pane.diff_wrap_visible_rows.len() {
+            if pane.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
+                continue;
+            }
+            let source_ix = pane
+                .diff_source_visible_ix_for_visible_ix(visible_ix)
+                .expect("every row maps to a line");
+            if source_ix != visible_ix {
+                shifted_rows += 1;
+            }
+            assert_eq!(
+                pane.diff_text_line_len_for_region(visible_ix, DiffTextRegion::Inline),
+                pane.diff_text_full_line_for_region(source_ix, DiffTextRegion::Inline)
+                    .len(),
+                "row {visible_ix} measures line {source_ix}"
+            );
+        }
+        assert!(
+            shifted_rows > 0,
+            "the fixture needs rows below a wrapped line"
+        );
+    });
+}
+
+#[gpui::test]
+fn collapsed_diff_word_wrap_measures_rows_below_a_wrapped_line(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(820.0), px(420.0)));
+
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(192),
+        "collapsed_word_wrap_row_len",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert_unwrapped_rows_measure_their_own_line(cx, &view);
+}
+
+#[gpui::test]
+fn full_diff_word_wrap_measures_rows_below_a_wrapped_line(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(820.0), px(420.0)));
+
+    let long_new_line = format!("wrapped {}", "payload ".repeat(60));
+    let tail = (1..=6)
+        .map(|n| format!("{}\n", "x".repeat(n)))
+        .collect::<String>();
+    let unified = format!(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-old line
++{long_new_line}
+"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(193),
+        "full_word_wrap_row_len",
+        PathBuf::from("src/lib.rs"),
+        unified,
+        format!("old line\n{tail}"),
+        format!("{long_new_line}\n{tail}"),
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full diff fixture ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| format!("cache_inflight={:?}", pane.file_diff_cache_inflight),
+    );
+    draw_and_drain_test_window(cx);
+
+    assert_unwrapped_rows_measure_their_own_line(cx, &view);
+}
+
 #[gpui::test]
 fn diff_word_wrap_columns_follow_scaled_font_metrics(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

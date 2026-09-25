@@ -204,17 +204,6 @@ fn write_text_to_x11(_text: &str) {
 mod tests {
     use super::{ClipboardBackend, replace_clipboard_owner, select_clipboard_backend};
 
-    fn rust_sources_under(dir: &std::path::Path, sources: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("read source directory") {
-            let path = entry.expect("read source entry").path();
-            if path.is_dir() {
-                rust_sources_under(&path, sources);
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
-                sources.push(path);
-            }
-        }
-    }
-
     #[test]
     fn wslg_all_copy_paths_exclusively_use_x11() {
         assert_eq!(
@@ -273,7 +262,7 @@ mod tests {
     fn production_clipboard_access_is_centralized_in_this_module() {
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut sources = Vec::new();
-        rust_sources_under(&src_dir, &mut sources);
+        crate::test_support::rust_sources_under(&src_dir, &mut sources);
 
         for path in sources {
             let relative = path.strip_prefix(&src_dir).expect("source below src");

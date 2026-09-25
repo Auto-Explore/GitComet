@@ -183,6 +183,7 @@ fn runtime_ignore_failure_warns_and_recovers_without_another_edit() {
         other => panic!("runtime failure did not reconcile missed changes: {other:?}"),
     }
     monitor.settle();
-    fs::write(root.join("source/file.txt"), "edit after recovery").unwrap();
-    monitor.refresh();
+    let file = root.join("source/file.txt");
+    let edit = || fs::write(&file, "edit after recovery").unwrap();
+    assert!(monitor.expect_change(&file, edit).worktree);
 }

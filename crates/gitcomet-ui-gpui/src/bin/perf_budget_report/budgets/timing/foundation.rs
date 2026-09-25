@@ -71,16 +71,15 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         estimate_path: "markdown_preview_parse_build/two_sided_diff/medium/new/estimates.json",
         threshold_ns: 500.0 * NANOS_PER_MILLISECOND,
     },
-    // Turn 26 flattened the markdown element tree (−20%), bringing render_single
-    // to ~1.02ms. Remaining cost is GPUI element construction — 200 rows with
-    // ~15 property setters each. Budget allows marginal variance.
+    // Building the flowing preview's blocks for 200 rows inside a window draw,
+    // as a frame builds those near the viewport: ~0.45ms (2026-09-23).
     PerfBudgetSpec {
         label: "markdown_preview_render_single/window_rows/200",
         estimate_path: "markdown_preview_render_single/window_rows/200/new/estimates.json",
         threshold_ns: 1.5 * NANOS_PER_MILLISECOND,
     },
-    // render_diff builds 400 rows (2 × 200 window) through the same GPUI
-    // element path; measured at ~2.09ms after Turn 26 element tree flattening.
+    // render_diff builds both sides' blocks for a 200-row window through the
+    // same path: ~1.03ms (2026-09-23).
     PerfBudgetSpec {
         label: "markdown_preview_render_diff/window_rows/200",
         estimate_path: "markdown_preview_render_diff/window_rows/200/new/estimates.json",

@@ -130,6 +130,12 @@
             "alpha": 0.64
           }
         },
+        "notice": {
+          "background": "#fcf3e8ff",
+          "border": "#956f24ff",
+          "foreground": "#211a14ff",
+          "secondary": "#56473aff"
+        },
         "shadow": "#2b1f14ff",
         "graph_lane_palette": null,
         "graph_lane_hues": [

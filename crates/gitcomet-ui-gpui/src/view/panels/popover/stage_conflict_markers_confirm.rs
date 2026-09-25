@@ -60,11 +60,12 @@ pub(super) fn panel(
                     if clear_selection {
                         this.clear_status_multi_selection(repo_id, cx);
                     }
-                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    this.store.dispatch(Msg::StagePaths {
+                    crate::view::status_actions::stage_or_unstage_paths(
+                        &this.store,
                         repo_id,
-                        paths: paths.clone().into(),
-                    });
+                        DiffArea::Unstaged,
+                        paths.clone(),
+                    );
                     this.close_popover(cx);
                 }),
             cx,

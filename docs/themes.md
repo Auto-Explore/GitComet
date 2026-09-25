@@ -98,6 +98,12 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
           "thumb_hover": { "hex": "#9ea7b8ff", "alpha": 0.42 },
           "thumb_pressed": { "hex": "#9ea7b8ff", "alpha": 0.52 }
         },
+        "notice": {
+          "background": { "hex": "#ffc06aff", "alpha": 0.13 },
+          "border": { "hex": "#ffc06aff", "alpha": 0.30 },
+          "foreground": "#edf1f7ff",
+          "secondary": "#9ea7b8ff"
+        },
         "shadow": "#000000ff",
         "graph_lane_palette": [                         // Optional
           "#ff6b6bff",
@@ -219,6 +225,9 @@ you misspell is still an error — the file is rejected rather than half-applied
   `background`, `word_background`, and `focused_background`
 - `tooltip`: `background`, `foreground`
 - `scrollbar`: `thumb`, `thumb_hover`, `thumb_pressed`
+- `notice`: `background`, `border`, `foreground`, `secondary` — inline notices
+  that ask for a decision, such as "File changed on disk". `foreground` colors
+  the title and `secondary` the explanation beside it
 - `shadow`
 - `graph_lane_palette` and `graph_lane_hues` are optional
 

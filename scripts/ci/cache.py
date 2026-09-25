@@ -54,7 +54,9 @@ def cache_keys(context):
         if name.upper() in ("IMAGEOS", "IMAGEVERSION") or name.startswith(("CARGO_PROFILE_", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "CFLAGS", "CMAKE")):
             compatibility.update(f"{name}={value}".encode())
     restore_key = f"{PREFIX}deps-{context}-{compatibility.hexdigest()[:16]}-"
-    source_prefix = f"{PREFIX}sources-{platform.system().lower()}-"
+    # Sources restore by prefix, so a packing change must not fall back to older bundles.
+    layout = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+    source_prefix = f"{PREFIX}sources-{platform.system().lower()}-{layout}-"
     dependency_hash = dependencies.hexdigest()[:16]
     return {"key": restore_key + dependency_hash, "restore-key": restore_key,
             "source-key": source_prefix + dependency_hash, "source-restore-key": source_prefix}
@@ -90,8 +92,9 @@ def source_entries(cargo_home):
 
 def write_bundle(destination, entries, *, mode=None):
     def allowed(member):
-        # Git checkouts can contain build artifacts; no need to archive those.
-        if "target" in Path(member.name).parts[1:-1] and member.name.startswith("cargo/"):
+        # Skip build output at a git checkout's root only; crates have `target` modules (cc).
+        parts = Path(member.name).parts
+        if parts[:3] == ("cargo", "git", "checkouts") and parts[5:] == ("target",):
             return None
         return member
 
