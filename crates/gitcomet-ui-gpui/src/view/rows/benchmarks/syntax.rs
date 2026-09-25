@@ -2322,7 +2322,7 @@ fn build_synthetic_rich_markdown_scroll_document() -> MarkdownPreviewDocument {
     }
 
     debug_assert_eq!(rows.len(), RICH_MARKDOWN_SCROLL_TOTAL_ROWS);
-    MarkdownPreviewDocument { rows }
+    MarkdownPreviewDocument::new(rows)
 }
 
 fn build_markdown_preview_row(

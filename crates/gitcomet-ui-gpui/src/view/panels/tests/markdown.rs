@@ -4166,6 +4166,143 @@ fn copied_preview_selection(
     cx.read_from_clipboard().and_then(|item| item.text())
 }
 
+/// A preview too long for its 600 px window, with the pointer pressed on its
+/// first paragraph. Returns the fixture, the preview's scroll handle and where
+/// the press landed.
+fn press_in_long_preview(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: u64,
+    name: &str,
+    before_press: impl FnOnce(&mut gpui::VisualTestContext, Bounds<Pixels>),
+) -> (
+    RenderedPreviewFixture,
+    gpui::ScrollHandle,
+    gpui::Point<Pixels>,
+) {
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+    let source: String = (0..300)
+        .map(|ix| format!("Paragraph number {ix}.\n\n"))
+        .collect();
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        view,
+        gitcomet_state::model::RepoId(repo_id),
+        name,
+        &source,
+    );
+    let scroll = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.worktree_preview_scroll.0.borrow().base_handle.clone()
+    });
+    let first = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Paragraph number 0.")
+        )))
+        .expect("the first paragraph is drawn");
+    before_press(cx, first);
+    let at = point(first.left() + px(1.0), first.center().y);
+    cx.simulate_mouse_move(at, None, Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: at,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    (fixture, scroll, at)
+}
+
+/// Let `ticks` autoscroll ticks of 16 ms run.
+fn run_autoscroll_ticks(cx: &mut gpui::VisualTestContext, ticks: usize) {
+    for _ in 0..ticks {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn a_drag_past_the_preview_autoscrolls_after_an_earlier_selection(cx: &mut gpui::TestAppContext) {
+    // A press over an existing selection began a new one without the timer
+    // that scrolls it, so after any selection a drag stopped at the pane edge.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let (fixture, scroll, at) = press_in_long_preview(
+        cx,
+        &view,
+        8841,
+        "markdown_autoscroll_after_selection",
+        |cx, first| {
+            // The earlier selection: a double-clicked word.
+            simulate_counted_click(cx, point(first.left() + px(20.0), first.center().y), 2);
+            cx.update(|_window, app| {
+                assert!(
+                    view.read(app).main_pane.read(app).diff_text_has_selection(),
+                    "the double-click selects a word"
+                );
+            });
+        },
+    );
+    let under_pane = point(at.x, scroll.bounds().bottom() + px(10.0));
+    assert!(under_pane.y < px(600.0), "the point is inside the window");
+    cx.simulate_mouse_move(under_pane, Some(MouseButton::Left), Modifiers::default());
+    run_autoscroll_ticks(cx, 10);
+
+    assert!(
+        scroll.offset().y < px(0.0),
+        "held below the pane, the drag scrolls the preview"
+    );
+
+    cx.simulate_mouse_up(under_pane, MouseButton::Left, Modifiers::default());
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_drag_held_outside_the_window_autoscrolls_by_the_pointers_distance(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Past the window edge only the drag's own window-wide listener sees the
+    // pointer. Each tick replaced that with the last point the root view saw
+    // inside the window, so the drag slowed to a crawl and the selection
+    // snapped back to that point.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let (fixture, scroll, at) = press_in_long_preview(
+        cx,
+        &view,
+        8842,
+        "markdown_autoscroll_outside_window",
+        |_, _| {},
+    );
+    // Out through the strip of window under the pane, as a real pointer goes.
+    let under_pane = point(at.x, scroll.bounds().bottom() + px(10.0));
+    assert!(under_pane.y < px(600.0), "the point is inside the window");
+    cx.simulate_mouse_move(under_pane, Some(MouseButton::Left), Modifiers::default());
+    let outside = point(at.x, px(900.0));
+    cx.simulate_mouse_move(outside, Some(MouseButton::Left), Modifiers::default());
+    let before = scroll.offset().y;
+    run_autoscroll_ticks(cx, 5);
+
+    // A pointer that far out scrolls at the 48 px cap; ten pixels under the
+    // pane, 4 px a tick.
+    let moved = before - scroll.offset().y;
+    assert!(
+        moved >= px(200.0),
+        "five ticks with the pointer 300 px past the pane moved {moved:?}"
+    );
+
+    cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+    fixture.cleanup();
+}
+
 #[gpui::test]
 fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
@@ -5567,6 +5704,84 @@ fn row_ix_with_text(
 }
 
 #[gpui::test]
+fn dragging_the_split_markdown_preview_divider_resizes_its_columns(cx: &mut gpui::TestAppContext) {
+    // The rendered split drew its two halves 50/50 with a plain line between
+    // them: nothing to drag, unlike the text split beside it.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1400.0), px(700.0)));
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8845),
+        "markdown_split_resize",
+        "Intro.\n\nOld paragraph.\n",
+        "Intro.\n\nNew paragraph.\n",
+        DiffViewMode::Split,
+    );
+    let intro = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        row_ix_with_text(&preview.old, "Intro.")
+    });
+    let left_width = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_text_hitbox_bounds_for_tests(intro, DiffTextRegion::SplitLeft)
+                .expect("the old side's first row is drawn")
+                .size
+                .width
+        })
+    };
+    assert!(
+        cx.debug_bounds("markdown_split_resize_handle_header")
+            .is_some(),
+        "the column header carries the divider too"
+    );
+    let handle = cx
+        .debug_bounds("markdown_split_resize_handle_body")
+        .expect("the split preview mounts a resize handle on its divider");
+    let before = left_width(cx);
+
+    let from = handle.center();
+    let to = point(from.x + px(150.0), from.y);
+    cx.simulate_mouse_move(from, None, Modifiers::default());
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        point(from.x + px(10.0), from.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let ratio = cx.update(|_window, app| view.read(app).main_pane.read(app).diff_split_ratio);
+    assert!(ratio > 0.55, "the drag moves the split, got ratio {ratio}");
+    let grown = left_width(cx) - before;
+    assert!(
+        (grown - px(150.0)).abs() <= px(2.0),
+        "the old side widens by as much as the divider moved, got {grown:?}"
+    );
+    let moved = cx
+        .debug_bounds("markdown_split_resize_handle_body")
+        .expect("the handle is still drawn");
+    assert!(
+        (moved.center().x - to.x).abs() <= px(2.0),
+        "the divider follows the pointer: {moved:?} vs {to:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown split resize fixture");
+}
+
+#[gpui::test]
 fn split_markdown_diff_leaves_blank_space_so_both_sides_stay_lined_up(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -6067,6 +6282,157 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
             );
         });
     });
+
+    fixture.cleanup();
+}
+
+/// Where row `row_ix`'s first visual line ends, in row bytes.
+fn first_wrap_offset(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    row_ix: usize,
+) -> usize {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hitbox = pane
+            .diff_text_hitboxes
+            .get(&(row_ix, DiffTextRegion::Inline))
+            .expect("the row is drawn");
+        let layout = &hitbox.wrapped.as_ref().expect("a wrapping row").layout;
+        let line = layout.line_layout_for_index(0).expect("laid out");
+        let boundary = line.wrap_boundaries().first().expect("the row wraps");
+        line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+    })
+}
+
+/// A point on the link to `url` in each visual line of `row_ix` that holds it.
+fn link_points_by_line(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    row_ix: usize,
+    url: &str,
+) -> Vec<gpui::Point<Pixels>> {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hitbox = pane
+            .diff_text_hitboxes
+            .get(&(row_ix, DiffTextRegion::Inline))
+            .expect("the row is drawn");
+        let line_height = hitbox
+            .wrapped
+            .as_ref()
+            .expect("a wrapping row")
+            .layout
+            .line_height();
+        let mut points = Vec::new();
+        let mut y = hitbox.bounds.top() + line_height / 2.0;
+        while y < hitbox.bounds.bottom() {
+            let mut x = hitbox.bounds.left() + px(1.0);
+            while x < hitbox.bounds.right() {
+                let at = point(x, y);
+                if pane
+                    .markdown_preview_link_span_at(row_ix, DiffTextRegion::Inline, at)
+                    .is_some_and(|(link, _)| link.as_ref() == url)
+                {
+                    points.push(at);
+                    break;
+                }
+                x += px(2.0);
+            }
+            y += line_height;
+        }
+        points
+    })
+}
+
+#[gpui::test]
+fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppContext) {
+    // gpui puts an offset at a wrap boundary at the end of the line above, so
+    // a link that began a visual line hung its menu off the far end of the
+    // previous one; a link over two lines hung it off its first part wherever
+    // it was clicked.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+    let words = |count: usize| "word ".repeat(count);
+
+    let probe = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8843),
+        "markdown_link_menu_wrap_probe",
+        &format!("{}\n", words(200)),
+    );
+    let wrap = first_wrap_offset(cx, &view, 0);
+    assert_eq!(wrap % "word ".len(), 0, "lines break between words");
+    let per_line = wrap / "word ".len();
+    probe.cleanup();
+
+    // The same words, so the lines break in the same places: the first link
+    // starts the second line, the second begins at the end of the first.
+    let at_wrap = "https://example.com/at-wrap";
+    let across = "https://example.com/across";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8844),
+        "markdown_link_menu_wrap",
+        &format!(
+            "{}[link at wrap]({at_wrap}) {}\n\n{}[link link link]({across}) {}\n",
+            words(per_line),
+            words(30),
+            words(per_line - 1),
+            words(30),
+        ),
+    );
+    let row_with = |text: &str| {
+        fixture
+            .document
+            .rows
+            .iter()
+            .position(|row| row.text.contains(text))
+            .expect("the paragraph")
+    };
+    for (row_ix, url, lines) in [
+        (row_with("link at wrap"), at_wrap, 1),
+        (row_with("link link link"), across, 2),
+    ] {
+        let points = link_points_by_line(cx, &view, row_ix, url);
+        assert_eq!(points.len(), lines, "{url} is on {lines} visual line(s)");
+        let row_top = cx.update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_text_hitbox_bounds_for_tests(row_ix, DiffTextRegion::Inline)
+                .expect("the row is drawn")
+                .top()
+        });
+        // The part on the second visual line.
+        let on_link = *points.last().expect("a point on the link");
+        assert!(
+            on_link.y > row_top + px(20.0),
+            "clicked below the first line"
+        );
+
+        simulate_counted_click(cx, on_link, 1);
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            let host = view.read(app).popover_host.clone();
+            let anchor = host
+                .read(app)
+                .popover_anchor_bounds_for_tests()
+                .expect("the link menu anchors on the link");
+            assert!(
+                anchor.contains(&on_link),
+                "{url}: the menu hangs off the words clicked at {on_link:?}, not {anchor:?}"
+            );
+            host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+    }
 
     fixture.cleanup();
 }
@@ -8980,6 +9346,367 @@ fn markdown_preview_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
     fixture.cleanup();
 }
 
+/// A CHANGELOG whose contents list links to release headings near its top,
+/// middle and end — the last with a screenful below it, so it can reach the
+/// top of the viewport. Returns the source and each link's text with the
+/// heading it names.
+fn changelog_with_contents(releases: usize) -> (String, Vec<(&'static str, String)>) {
+    let heading = |release: usize| format!("[1.{release}.0] - 2026-09-{:02}", release % 28 + 1);
+    let targets = [
+        ("Jump near", releases.saturating_sub(1)),
+        ("Jump middle", releases / 2),
+        ("Jump far", 6.min(releases / 4)),
+    ];
+    let mut contents = String::from("## Contents\n\n");
+    for (label, release) in targets {
+        let slug = crate::view::markdown_preview::markdown_heading_slug(&heading(release));
+        contents.push_str(&format!("- [{label}](#{slug})\n"));
+    }
+    contents.push('\n');
+    let source = changelog_markdown(releases).replacen("\n\n", &format!("\n\n{contents}"), 1);
+    let targets = targets
+        .into_iter()
+        .map(|(label, release)| (label, heading(release)))
+        .collect();
+    (source, targets)
+}
+
+/// Draw the next frame until one passes without the main pane asking for
+/// another, and return how many did. `notified` counts the pane's notifies;
+/// other views (a busy spinner) keep queueing frames of their own.
+fn settle_preview_frames(
+    cx: &mut gpui::VisualTestContext,
+    notified: &std::cell::Cell<usize>,
+    limit: usize,
+) -> usize {
+    for frame in 0..limit {
+        let before = notified.get();
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+        if notified.get() == before {
+            return frame;
+        }
+    }
+    limit
+}
+
+#[gpui::test]
+#[ignore = "production GPUI benchmark for markdown selection and anchor links"]
+fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
+    use std::time::{Duration, Instant};
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let releases: usize = std::env::var("GITCOMET_BENCH_MD_RELEASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(280);
+    let (source, targets) = changelog_with_contents(releases);
+    // Production mounts the panes as cached views; frames reuse the ones that
+    // did not change.
+    let _cached_views = std::env::var_os("GITCOMET_BENCH_UNCACHED_VIEWS")
+        .is_none()
+        .then(crate::view::enable_stable_cached_views_for_test);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8830),
+        "markdown_interaction_benchmark",
+        &source,
+    );
+    // Loaded, not opening: an opening repository spins a busy icon in its tab,
+    // which queues a frame every frame and would count in every measurement.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut state = (*this.store.snapshot()).clone();
+            for repo in &mut state.repos {
+                repo.open = gitcomet_state::model::Loadable::Ready(());
+            }
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    draw_frames(cx, 2);
+    let rows = fixture.document.rows.len();
+    let profile = if cfg!(debug_assertions) {
+        "test"
+    } else {
+        "release"
+    };
+    // Cached views replay no debug bounds, so geometry comes from the text
+    // hitboxes the preview records as it paints.
+    let row_bounds = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_text_hitbox_bounds_for_tests(row_ix, DiffTextRegion::Inline)
+        })
+    };
+    let point_on_link = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        let bounds = row_bounds(cx, row_ix).expect("the link's row is drawn");
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            let mut y = bounds.top() + px(2.0);
+            while y < bounds.bottom() {
+                let mut x = bounds.left();
+                while x < bounds.right() {
+                    let position = point(x, y);
+                    if pane
+                        .markdown_preview_link_span_at(row_ix, DiffTextRegion::Inline, position)
+                        .is_some()
+                    {
+                        return position;
+                    }
+                    x += px(2.0);
+                }
+                y += px(4.0);
+            }
+            panic!("no link in row {row_ix}");
+        })
+    };
+    if row_bounds(cx, 0).is_none() {
+        eprintln!("markdown interaction rows={rows}: not drawn (past the parser's cap)");
+        fixture.cleanup();
+        return;
+    }
+    let scroll = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .worktree_preview_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone()
+    });
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _subscription = cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let notified = std::rc::Rc::clone(&notified);
+        app.observe(&main_pane, move |_, _| notified.set(notified.get() + 1))
+    });
+    let to_top = |cx: &mut gpui::VisualTestContext| {
+        set_scroll_handle_offset(&scroll, point(px(0.0), px(0.0)));
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        settle_preview_frames(cx, &notified, 64);
+    };
+    let elapsed_ms = |started: Instant| started.elapsed().as_secs_f64() * 1000.0;
+    let percentile = |samples: &mut Vec<f64>, p: usize| {
+        samples.sort_by(f64::total_cmp);
+        samples[(samples.len() - 1) * p / 100]
+    };
+    let press = |cx: &mut gpui::VisualTestContext, position, click_count| {
+        cx.simulate_event(gpui::MouseDownEvent {
+            position,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count,
+            first_mouse: false,
+        });
+    };
+    let release = |cx: &mut gpui::VisualTestContext, position| {
+        cx.simulate_event(gpui::MouseUpEvent {
+            position,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+    };
+    let selection_rows = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            let rows = pane
+                .diff_text_anchor
+                .zip(pane.diff_text_head)
+                .map_or(0, |(anchor, head)| {
+                    anchor.source_visible_ix.abs_diff(head.source_visible_ix)
+                });
+            (rows, pane.diff_text_hitboxes.len())
+        })
+    };
+    eprintln!(
+        "markdown interaction rows={rows} blocks={} profile={profile}",
+        crate::view::markdown_preview::markdown_document_blocks(&fixture.document).len()
+    );
+
+    // Anchor links: hover (the first hover checks the link goes somewhere),
+    // click, then the frames the jump takes to come to rest.
+    for (label, heading) in &targets {
+        to_top(cx);
+        let heading_row = fixture.row_ix(heading);
+        let on_link = point_on_link(cx, fixture.row_ix(label));
+        let started = Instant::now();
+        cx.simulate_mouse_move(on_link, None, Modifiers::default());
+        let hover_ms = elapsed_ms(started);
+        let started = Instant::now();
+        press(cx, on_link, 1);
+        release(cx, on_link);
+        let click_ms = elapsed_ms(started);
+        let started = Instant::now();
+        let frames = settle_preview_frames(cx, &notified, 64);
+        let settle_ms = elapsed_ms(started);
+        let heading_offset = row_bounds(cx, heading_row)
+            .map(|bounds| f32::from(bounds.top() - scroll.bounds().top()));
+        eprintln!(
+            "markdown interaction anchor={label} heading_row={heading_row} hover_ms={hover_ms:.2} \
+             click_ms={click_ms:.2} settle_frames={frames} settle_ms={settle_ms:.2} \
+             heading_offset_px={heading_offset:?} scroll_y={:.0}",
+            f32::from(scroll.offset().y)
+        );
+    }
+
+    const FRAMES: usize = 40;
+    to_top(cx);
+    let start_row = fixture.row_ix("All notable changes to this project.");
+    let start = row_bounds(cx, start_row).expect("the first paragraph is drawn");
+    let viewport = scroll.bounds();
+    let anchor_at = point(start.left() + px(1.0), start.center().y);
+
+    // Word and line selection.
+    let on_word = point(start.left() + px(30.0), start.center().y);
+    let mut word_ms = Vec::new();
+    let mut line_ms = Vec::new();
+    for _ in 0..FRAMES / 4 {
+        for (clicks, samples) in [(2, &mut word_ms), (3, &mut line_ms)] {
+            cx.simulate_mouse_move(on_word, None, Modifiers::default());
+            let started = Instant::now();
+            press(cx, on_word, clicks);
+            release(cx, on_word);
+            samples.push(elapsed_ms(started));
+        }
+    }
+
+    // A drag down the window: every move lands on a new row, so each one
+    // extends the selection and draws a frame.
+    cx.simulate_mouse_move(anchor_at, None, Modifiers::default());
+    let started = Instant::now();
+    press(cx, anchor_at, 1);
+    let press_ms = elapsed_ms(started);
+    let mut drag_ms = Vec::new();
+    let mut drag_allocs = crate::perf_alloc::PerfAllocMetrics::default();
+    let mut last = anchor_at;
+    for step in 0..FRAMES {
+        last = point(
+            viewport.left() + px(120.0 + 37.0 * (step % 7) as f32),
+            viewport.top() + viewport.size.height * ((step + 1) as f32 / (FRAMES + 1) as f32),
+        );
+        let started = Instant::now();
+        let (_, allocations) = crate::perf_alloc::measure_allocations(|| {
+            cx.simulate_mouse_move(last, Some(MouseButton::Left), Modifiers::default())
+        });
+        drag_ms.push(elapsed_ms(started));
+        drag_allocs = drag_allocs.saturating_add(allocations);
+    }
+    let (drag_rows, hitboxes) = selection_rows(cx);
+    release(cx, last);
+    eprintln!(
+        "markdown interaction select press_ms={press_ms:.2} word_ms_p50={:.2} line_ms_p50={:.2} \
+         drag_move_ms_p50={:.2} drag_move_ms_p95={:.2} allocs_per_drag_move={:.0} \
+         drag_rows={drag_rows} hitboxes={hitboxes}",
+        percentile(&mut word_ms, 50),
+        percentile(&mut line_ms, 50),
+        percentile(&mut drag_ms, 50),
+        percentile(&mut drag_ms, 95),
+        drag_allocs.alloc_ops as f64 / FRAMES as f64,
+    );
+
+    // A drag held below the window: the selection autoscrolls one tick every
+    // 16 ms, each tick moving the view and extending the selection. It leaves
+    // the pane across the strip of window below it, as a real pointer does.
+    to_top(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.clear_diff_text_selection();
+                cx.notify();
+            });
+        });
+    });
+    cx.simulate_mouse_move(anchor_at, None, Modifiers::default());
+    press(cx, anchor_at, 1);
+    let under_pane = point(viewport.center().x, viewport.bottom() + px(20.0));
+    cx.simulate_mouse_move(under_pane, Some(MouseButton::Left), Modifiers::default());
+    let below = point(viewport.center().x, viewport.bottom() + px(200.0));
+    cx.simulate_mouse_move(below, Some(MouseButton::Left), Modifiers::default());
+    let offset_before = scroll.offset().y;
+    let mut tick_ms = Vec::new();
+    let mut tick_frames = 0usize;
+    const TICKS: usize = 120;
+    for _ in 0..TICKS {
+        let started = Instant::now();
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        tick_frames += 1 + settle_preview_frames(cx, &notified, 8);
+        tick_ms.push(elapsed_ms(started));
+    }
+    let scrolled = f32::from(offset_before - scroll.offset().y);
+    let (autoscroll_rows, _) = selection_rows(cx);
+    release(cx, below);
+    eprintln!(
+        "markdown interaction autoscroll ticks={TICKS} tick_ms_p50={:.2} tick_ms_p95={:.2} \
+         frames_per_tick={:.2} scrolled_px={scrolled:.0} rows_selected={autoscroll_rows} \
+         rows_per_second={:.0}",
+        percentile(&mut tick_ms, 50),
+        percentile(&mut tick_ms, 95),
+        tick_frames as f64 / TICKS as f64,
+        autoscroll_rows as f64 / (TICKS as f64 * 0.016),
+    );
+
+    // Select everything, draw with it selected, copy it.
+    to_top(cx);
+    let started = Instant::now();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.select_all_diff_text(window, cx);
+                cx.notify();
+            });
+        });
+    });
+    let select_all_ms = elapsed_ms(started);
+    let mut selected_frame_ms = Vec::new();
+    crate::view::rows::take_markdown_flow_texts_built_for_tests();
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        selected_frame_ms.push(elapsed_ms(started));
+    }
+    let rows_built = crate::view::rows::take_markdown_flow_texts_built_for_tests();
+    let started = Instant::now();
+    let (_, copy_allocs) = crate::perf_alloc::measure_allocations(|| {
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.copy_selected_diff_text_to_clipboard(cx)
+            });
+        })
+    });
+    let copy_ms = elapsed_ms(started);
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .map_or(0, |text| text.len());
+    eprintln!(
+        "markdown interaction select_all_ms={select_all_ms:.2} selected_frame_ms_p50={:.2} \
+         rows_built_per_frame={} copy_ms={copy_ms:.2} copy_allocs={} copied_bytes={copied}",
+        percentile(&mut selected_frame_ms, 50),
+        rows_built / FRAMES,
+        copy_allocs.alloc_ops,
+    );
+
+    fixture.cleanup();
+}
+
 // ── Frame-cost regression tests: counts, not timings, so they are stable ──
 
 #[gpui::test]
@@ -9649,6 +10376,54 @@ fn a_frame_of_the_markdown_preview_installs_pointer_listeners_once_per_document(
         long_targets, short_targets,
         "{long_rows} rows install as many click targets as {short_rows}"
     );
+}
+
+#[gpui::test]
+fn a_jump_into_a_long_markdown_preview_comes_to_rest(cx: &mut gpui::TestAppContext) {
+    // Blocks above the viewport that were never drawn are measured out of
+    // sight. Measured at another width than the column lays them out at, each
+    // frame threw away every height the other had taken and asked for one more.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+    let source: String = (0..1_200)
+        .map(|ix| format!("Paragraph number {ix}.\n\n"))
+        .collect();
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8840),
+        "markdown_jump_comes_to_rest",
+        &source,
+    );
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _subscription = cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let notified = std::rc::Rc::clone(&notified);
+        app.observe(&main_pane, move |_, _| notified.set(notified.get() + 1))
+    });
+    let scroll = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.worktree_preview_scroll.0.borrow().base_handle.clone()
+    });
+
+    // As a scrollbar drag does: halfway down, past blocks never drawn.
+    let max = scroll_handle_max_offset(&scroll).height;
+    set_scroll_handle_offset(&scroll, point(px(0.0), -max / 2.0));
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let frames = settle_preview_frames(cx, &notified, 16);
+    assert!(
+        frames < 16,
+        "the preview still asks for a frame after {frames}: its layout never settles"
+    );
+
+    fixture.cleanup();
 }
 
 /// A conflicted `conflict.md` in the merge tool's rendered preview, parsed.

@@ -20,6 +20,16 @@ const MAX_INLINE_SPANS_PER_ROW: usize = 512;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownPreviewDocument {
     pub(super) rows: Vec<MarkdownPreviewRow>,
+    pub(super) anchors: MarkdownAnchorIndexCell,
+}
+
+impl MarkdownPreviewDocument {
+    pub(super) fn new(rows: Vec<MarkdownPreviewRow>) -> Self {
+        Self {
+            rows,
+            anchors: MarkdownAnchorIndexCell::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

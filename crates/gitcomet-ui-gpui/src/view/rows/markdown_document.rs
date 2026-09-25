@@ -806,11 +806,13 @@ pub(in crate::view) fn render_markdown_document_with_blocks(
 }
 
 /// The split markdown diff: each band's old and new blocks side by side, so
-/// the shorter side of a band is left blank and the two stay lined up.
+/// the shorter side of a band is left blank and the two stay lined up. The old
+/// side takes `split_ratio` of the width.
 pub(in crate::view) fn render_markdown_diff_split(
     diff: &MarkdownPreviewDiff,
     left: &MarkdownDocumentContext,
     right: &MarkdownDocumentContext,
+    split_ratio: f32,
 ) -> AnyElement {
     let divider = left.theme.colors.stroke.default;
 
@@ -907,7 +909,7 @@ pub(in crate::view) fn render_markdown_diff_split(
             };
             let gap_side = |context: &MarkdownDocumentContext| {
                 let selector_ix = band_ix * 2 + usize::from(context.text_region.order());
-                split_side(context).child(render_block_gap(
+                split_side(context, split_ratio).child(render_block_gap(
                     move || format!("markdown_preview_block_gap_{selector_ix}"),
                     band.rows.start,
                     gap,
@@ -929,7 +931,7 @@ pub(in crate::view) fn render_markdown_diff_split(
                     all_blocks: &[MarkdownBlock],
                     notice: &'static str,
                     context: &MarkdownDocumentContext| {
-            let side = split_side(context);
+            let side = split_side(context, split_ratio);
             // A side with no block at all says why.
             if band_ix == 0 && all_blocks.is_empty() {
                 return side.child(empty_split_side(notice, context));
@@ -989,6 +991,7 @@ pub(in crate::view) fn render_markdown_diff_split(
                 .child(
                     div()
                         .flex_1()
+                        .flex_grow(split_ratio)
                         .flex()
                         .flex_col()
                         .child(flowing_diff_text_empty_space(left_view, left.text_region)),
@@ -997,6 +1000,7 @@ pub(in crate::view) fn render_markdown_diff_split(
                 .child(
                     div()
                         .flex_1()
+                        .flex_grow(1.0 - split_ratio)
                         .flex()
                         .flex_col()
                         .child(flowing_diff_text_empty_space(right_view, right.text_region)),
@@ -1024,15 +1028,22 @@ fn empty_split_side(notice: &'static str, context: &MarkdownDocumentContext) -> 
         )
 }
 
-/// One column of a split band. Both columns render the same row indices, so
-/// the column's id is what keeps every element id beneath it distinct.
-fn split_side(context: &MarkdownDocumentContext) -> gpui::Stateful<gpui::Div> {
+/// One column of a split band, `split_ratio` of the width on the old side.
+/// Both columns render the same row indices, so the column's id is what keeps
+/// every element id beneath it distinct.
+fn split_side(context: &MarkdownDocumentContext, split_ratio: f32) -> gpui::Stateful<gpui::Div> {
+    let share = if context.text_region == DiffTextRegion::SplitRight {
+        1.0 - split_ratio
+    } else {
+        split_ratio
+    };
     div()
         .id((
             "markdown_diff_side",
             usize::from(context.text_region.order()),
         ))
         .flex_1()
+        .flex_grow(share)
         .min_w(px(0.0))
 }
 
@@ -1099,7 +1110,13 @@ fn render_windowed_block_column(
         let rows_from = ix
             .checked_sub(1)
             .map_or(0, |previous| blocks[previous].row_range().end);
-        let mut item = div().w_full().min_w(px(0.0));
+        // Padded per item, not on the column: the measuring layer is
+        // positioned absolutely, so it would span the column's padding too and
+        // measure every block wider than the column lays it out.
+        let mut item = div()
+            .w_full()
+            .min_w(px(0.0))
+            .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context));
         if ix > 0 {
             item = item.child(render_column_gap(blocks, ix, context, false));
         }
@@ -1112,7 +1129,6 @@ fn render_windowed_block_column(
         ))
         .into_any_element()
     })
-    .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
     .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, context))
     .text_color(context.theme.colors.foreground.primary)
 }
