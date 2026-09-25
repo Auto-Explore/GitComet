@@ -15,6 +15,8 @@ use super::RepoPathList;
 #[derive(Clone, Debug)]
 pub enum Effect {
     Filesystem(gitcomet_core::filesystem::Request),
+    IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     PersistSession {
         repo_id: Option<RepoId>,
         action: &'static str,
@@ -70,6 +72,8 @@ pub enum Effect {
     },
     LoadUncommittedLineStats {
         repo_id: RepoId,
+        generation: crate::model::LineStatsGeneration,
+        status: std::sync::Arc<RepoStatus>,
     },
     LoadStatus {
         repo_id: RepoId,
@@ -163,8 +167,12 @@ pub enum Effect {
     VerifyCommitSignatures {
         repo_id: RepoId,
         epoch: u64,
+        batch: u64,
         cancellation: gitcomet_core::services::CancellationToken,
         commit_ids: std::sync::Arc<[CommitId]>,
+        /// Only signatures in these formats are checked: the others have no
+        /// verifier installed.
+        formats: gitcomet_core::domain::SignatureFormats,
     },
     LoadHoverCommitMessage {
         repo_id: RepoId,
@@ -182,6 +190,7 @@ pub enum Effect {
     ResolveCommitLookup {
         repo_id: RepoId,
         reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer lookup can be dropped. See `CommitLookup::request`.
         request: u64,
@@ -310,6 +319,11 @@ pub enum Effect {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
+        /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
     },
     CreateBranch {
         repo_id: RepoId,

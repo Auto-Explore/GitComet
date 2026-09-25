@@ -9,8 +9,8 @@
 //!
 //! So a gesture owner — text-input drag-selection, a resize handle, a scrollbar
 //! thumb — claims the press in its own mouse-*down* handler with
-//! [`claim_press`], and release handlers that cannot use `on_click` consult
-//! [`is_press_claimed`] and stand down.
+//! [`claim_press`]. The shared canvas click adapter consults
+//! [`is_press_claimed`] before acquiring a discrete press.
 //!
 //! The claim deliberately outlives the release: it is cleared at the *start* of
 //! the next press, by [`install_reset`]. Clearing it on the release itself
@@ -18,12 +18,11 @@
 //! handlers that read it run in the bubble phase of that same event.
 //!
 //! Every window that renders `view::window_frame` mounts the reset.
-//! `focused_diff` renders its own root outside the frame; it hosts no text
-//! input and no click-like release handler, so it neither claims nor reads.
+//! Standalone canvas roots also install the discrete-click reset through the
+//! shared adapter; ownership never depends on a component's release handler.
 //!
-//! Not covered: context-menu entries (`view/panels/popover/context_menu.rs`)
-//! activate on release *by design* — the menu opens on press and the pointer
-//! drags onto the entry — so they cannot be guarded this way.
+//! Discrete controls and canvas hitboxes use `kit::click` for completed-click
+//! ownership. Menus obey the same rule; a release never transfers ownership.
 
 use gpui::{App, DispatchPhase, MouseDownEvent, MouseMoveEvent, Window};
 
@@ -40,6 +39,7 @@ impl gpui::Global for PressGesture {}
 pub(crate) fn is_press_claimed(cx: &App) -> bool {
     cx.try_global::<PressGesture>()
         .is_some_and(|state| state.claimed)
+        || crate::kit::click::is_pending(cx)
 }
 
 /// Claims the press in flight. Call from the gesture owner's own mouse-*down*
@@ -50,7 +50,11 @@ pub(crate) fn claim_press(cx: &mut App) {
 }
 
 fn set_claimed(claimed: bool, cx: &mut App) {
-    if is_press_claimed(cx) != claimed {
+    if cx
+        .try_global::<PressGesture>()
+        .is_some_and(|state| state.claimed)
+        != claimed
+    {
         cx.set_global(PressGesture { claimed });
     }
 }
@@ -61,6 +65,7 @@ pub(crate) fn install_reset(window: &mut Window) {
     // claims the new press in the bubble phase.
     window.on_mouse_event(|_event: &MouseDownEvent, phase, _window, cx| {
         if phase == DispatchPhase::Capture {
+            crate::kit::click::reset(cx);
             set_claimed(false, cx);
         }
     });
@@ -69,6 +74,7 @@ pub(crate) fn install_reset(window: &mut Window) {
     // Bounds any claim left stranded by a release the window never saw.
     window.on_mouse_event(|event: &MouseMoveEvent, phase, _window, cx| {
         if phase == DispatchPhase::Capture && !event.dragging() {
+            crate::kit::click::reset(cx);
             set_claimed(false, cx);
         }
     });

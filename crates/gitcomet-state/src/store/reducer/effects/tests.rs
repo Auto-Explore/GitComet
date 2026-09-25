@@ -47,7 +47,7 @@ fn commit_details_for(id: CommitId) -> CommitDetails {
 
 #[test]
 fn browse_history_pushes_dedups_and_go_live_clears() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -105,7 +105,7 @@ fn empty_conflict_file(path: &Path) -> ConflictFile {
 }
 
 fn new_state_with_repo(repo_id: RepoId) -> AppState {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -135,7 +135,7 @@ fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: u32) {
 
 #[test]
 fn unknown_repo_handlers_are_noops() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(42);
     let path = PathBuf::from("tracked.txt");
     let commit_id = CommitId("abc".into());
@@ -1036,7 +1036,7 @@ fn toggle_click_adds_and_removes_commits() {
         None,
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, vec![a.clone(), b.clone()]);
+    assert_eq!(*sel.commits, vec![a.clone(), b.clone()]);
     assert_eq!(sel.anchor.as_ref(), Some(&b));
     assert_eq!(
         repo_mut(&mut state, repo_id).history_state.selected_commit,
@@ -1054,7 +1054,7 @@ fn toggle_click_adds_and_removes_commits() {
         None,
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, vec![a.clone()]);
+    assert_eq!(*sel.commits, vec![a.clone()]);
     assert_eq!(
         repo_mut(&mut state, repo_id).history_state.selected_commit,
         Some(a.clone())
@@ -1107,7 +1107,7 @@ fn preserve_if_selected_moves_focus_without_collapsing() {
         None,
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, vec![a.clone(), b.clone()]);
+    assert_eq!(*sel.commits, vec![a.clone(), b.clone()]);
     assert_eq!(
         repo_mut(&mut state, repo_id).history_state.selected_commit,
         Some(a.clone())
@@ -1123,7 +1123,7 @@ fn preserve_if_selected_moves_focus_without_collapsing() {
         None,
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, vec![c.clone()]);
+    assert_eq!(*sel.commits, vec![c.clone()]);
     assert_eq!(
         repo_mut(&mut state, repo_id).history_state.selected_commit,
         Some(c)
@@ -1210,7 +1210,7 @@ fn shift_click_selects_range_from_anchor_in_both_directions() {
         Some(ids.clone()),
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, ids[1..=3].to_vec());
+    assert_eq!(*sel.commits, ids[1..=3].to_vec());
     assert_eq!(sel.anchor.as_ref(), Some(&ids[1]));
 
     // Extending upward from the same anchor replaces the range.
@@ -1223,7 +1223,7 @@ fn shift_click_selects_range_from_anchor_in_both_directions() {
         Some(ids.clone()),
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, ids[0..=1].to_vec());
+    assert_eq!(*sel.commits, ids[0..=1].to_vec());
 }
 
 #[test]
@@ -1255,7 +1255,7 @@ fn shift_click_ignores_stale_anchor_index_hint() {
     );
     // The anchor is re-resolved by id, so the range is a..=c, not c..=d.
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, ids[0..=2].to_vec());
+    assert_eq!(*sel.commits, ids[0..=2].to_vec());
 }
 
 #[test]
@@ -1278,7 +1278,7 @@ fn plain_click_collapses_multi_selection() {
 
     select_commit(&mut state, repo_id, a.clone());
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, vec![a.clone()]);
+    assert_eq!(*sel.commits, vec![a.clone()]);
     assert_eq!(sel.anchor.as_ref(), Some(&a));
 }
 
@@ -1299,7 +1299,7 @@ fn range_click_without_entries_falls_back_to_single() {
         None,
     );
     let sel = multi_selection(&mut state, repo_id);
-    assert_eq!(sel.commits, vec![b]);
+    assert_eq!(*sel.commits, vec![b]);
 }
 
 fn test_commit(id: &str, parent: Option<&str>) -> gitcomet_core::domain::Commit {
@@ -2070,7 +2070,7 @@ fn file_browser_loaded_discards_stale_results() {
 
 #[test]
 fn reveal_file_browser_path_expands_every_ancestor_and_clears_the_search() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,

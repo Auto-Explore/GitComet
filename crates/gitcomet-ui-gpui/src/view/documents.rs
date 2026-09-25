@@ -396,14 +396,16 @@ impl DocumentsView {
                                             "Remove from recent documents",
                                         ),
                                     )
-                                    .render(theme, ui_scale::current(cx).percent, cx)
-                                    .on_click(cx.listener(
+                                    .on_select(
+                                        theme,
+                                        ui_scale::current(cx).percent,
+                                        cx,
                                         move |this, _: &gpui::ClickEvent, _, cx| {
                                             update_recent(path.clone(), true, cx);
                                             this.row_menu = None;
                                             cx.notify();
                                         },
-                                    )),
+                                    ),
                                 ),
                             )),
                     ),
@@ -621,7 +623,7 @@ impl StandaloneBuffer {
                 let text = if image {
                     SharedString::default()
                 } else {
-                    panes::read_worktree_file_for_editing(&path)?
+                    panes::read_worktree_file_for_editing(&path)?.0
                 };
                 if DiskVersion::read(&path).map_err(|e| e.to_string())? != version {
                     return Err("File changed while reading. Open it again.".into());

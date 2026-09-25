@@ -12,6 +12,8 @@ pub(in crate::view) enum AppMenuAction {
     /// variant here, whether it can run is carried by the menu item's own
     /// `disabled` flag rather than duplicated in the payload.
     LocateFileInExplorer,
+    /// Open the active repository's remote in the browser, or its picker.
+    OpenRemoteInBrowser,
     Settings,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
@@ -473,20 +475,14 @@ pub(in crate::view) enum ContextMenuAction {
         visible_ix: usize,
         region: DiffTextRegion,
     },
-    TerminalCopy {
+    TerminalCommand {
         repo_id: RepoId,
-    },
-    TerminalPaste {
-        repo_id: RepoId,
-    },
-    TerminalSelectAll {
-        repo_id: RepoId,
-    },
-    TerminalClear {
-        repo_id: RepoId,
+        session_seq: u64,
+        command: terminal_panel::TerminalCommand,
     },
     TerminalOpenExternal {
         repo_id: RepoId,
+        session_seq: u64,
     },
     ApplyIndexPatch {
         repo_id: RepoId,

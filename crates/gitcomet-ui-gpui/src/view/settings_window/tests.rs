@@ -350,7 +350,7 @@ fn settings_theme_modes_include_automatic_and_all_available_named_themes() {
 #[gpui::test]
 fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -380,7 +380,7 @@ fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -464,7 +464,7 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -518,7 +518,7 @@ fn general_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -578,7 +578,7 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -633,7 +633,7 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
 #[gpui::test]
 fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -676,7 +676,7 @@ fn expanded_git_log_default_mode_section_renders_modes_in_order_and_updates_sele
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -767,7 +767,7 @@ fn expanded_git_log_default_mode_section_renders_before_history_columns_row(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -813,7 +813,7 @@ fn expanded_git_log_default_mode_section_renders_before_history_columns_row(
 #[gpui::test]
 fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -855,7 +855,7 @@ fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::Test
 #[gpui::test]
 fn custom_git_executable_mode_renders_detail_container(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -898,7 +898,7 @@ fn custom_git_executable_mode_renders_detail_container(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn custom_external_editor_renders_detail_container(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -953,7 +953,7 @@ fn custom_external_editor_renders_detail_container(cx: &mut gpui::TestAppContext
 #[gpui::test]
 fn external_editor_detection_waits_for_the_row_to_expand(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1012,7 +1012,7 @@ fn external_editor_detection_waits_for_the_row_to_expand(cx: &mut gpui::TestAppC
 fn browsed_external_editor_path_updates_custom_setting_and_notifies(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1093,7 +1093,7 @@ fn external_editor_setting_seeds_from_pending_override_and_can_clear(
     };
     crate::external_editor::set_configured_setting_override(Some(pending_setting.clone()));
 
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1164,7 +1164,7 @@ fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
 #[gpui::test]
 fn generic_preference_persistence_omits_external_editor_snapshot(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1196,7 +1196,7 @@ fn generic_preference_persistence_omits_external_editor_snapshot(cx: &mut gpui::
 #[gpui::test]
 fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1261,7 +1261,7 @@ fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn settings_window_open_source_licenses_row_switches_content(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1373,7 +1373,7 @@ fn settings_window_professional_edition_waitlist_row_opens_editions_page(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1424,7 +1424,7 @@ fn settings_window_professional_edition_waitlist_row_opens_editions_page(
 #[gpui::test]
 fn settings_window_links_card_includes_theme_guide_row(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1473,7 +1473,7 @@ fn settings_window_links_card_includes_theme_guide_row(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1537,7 +1537,7 @@ fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1566,6 +1566,24 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
         settings.runtime_info.git.version_display =
             "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
         settings.runtime_info.git.compatibility = GitCompatibility::Supported;
+        settings.runtime_info.signing_tools = Some({
+            use gitcomet_core::signing_tools::{
+                SigningTool, SigningToolAvailability, SigningToolsState,
+            };
+            let found = |program: &str, version: &str| SigningTool {
+                program: program.to_string(),
+                availability: SigningToolAvailability::Available {
+                    version: Some(version.to_string()),
+                },
+            };
+            SigningToolsState {
+                gpg: found(
+                    "gpg",
+                    "gpg (GnuPG) 2.4.7 (overflow-regression-build-with-very-long-metadata)",
+                ),
+                ssh_keygen: found("ssh-keygen", "OpenSSH_10.3p1, LibreSSL 3.3.6"),
+            }
+        });
         settings.overflow_probe = true;
         cx.notify();
     });
@@ -1605,9 +1623,44 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
             "settings_window_git_runtime_label",
             "settings_window_git_runtime_value",
         ),
+        (
+            "settings_window_gpg_runtime",
+            "settings_window_gpg_runtime_label",
+            "settings_window_gpg_runtime_value",
+        ),
     ] {
         assert_debug_bounds_within(&mut settings_cx, row_selector, label_selector);
         assert_debug_bounds_within(&mut settings_cx, row_selector, value_selector);
+    }
+
+    // Executables stack the version under the program name, so a long version
+    // never competes with the name and status for one line on narrow windows.
+    for (row_selector, label_selector, status_selector, version_selector) in [
+        (
+            "settings_window_git_runtime",
+            "settings_window_git_runtime_label",
+            "settings_window_git_runtime_status",
+            "settings_window_git_runtime_value",
+        ),
+        (
+            "settings_window_gpg_runtime",
+            "settings_window_gpg_runtime_label",
+            "settings_window_gpg_runtime_status",
+            "settings_window_gpg_runtime_value",
+        ),
+    ] {
+        assert_debug_bounds_within(&mut settings_cx, row_selector, status_selector);
+        let label = settings_cx
+            .debug_bounds(label_selector)
+            .unwrap_or_else(|| panic!("expected `{label_selector}` bounds"));
+        let version = settings_cx
+            .debug_bounds(version_selector)
+            .unwrap_or_else(|| panic!("expected `{version_selector}` bounds"));
+        assert!(
+            version.top() >= label.bottom() - px(0.5),
+            "expected `{version_selector}` on its own line below `{label_selector}` \
+             (label={label:?}, version={version:?})"
+        );
     }
 }
 
@@ -1616,7 +1669,7 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1736,7 +1789,7 @@ fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestA
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1781,7 +1834,7 @@ fn linux_settings_window_close_button_closes_only_the_settings_window(
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1839,7 +1892,7 @@ fn linux_settings_window_close_button_closes_only_the_settings_window(
 #[gpui::test]
 fn show_timezone_toggle_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1895,7 +1948,7 @@ fn show_timezone_toggle_defers_main_window_update(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn change_tracking_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1955,7 +2008,7 @@ fn change_tracking_setting_defers_main_window_update(cx: &mut gpui::TestAppConte
 #[gpui::test]
 fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2060,7 +2113,7 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn action_bar_terminal_target_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2127,7 +2180,7 @@ fn action_bar_terminal_target_setting_defers_main_window_update(cx: &mut gpui::T
 #[gpui::test]
 fn diff_scroll_sync_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2189,7 +2242,7 @@ fn diff_scroll_sync_setting_defers_main_window_update(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn diff_content_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2249,7 +2302,7 @@ fn diff_content_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn diff_whitespace_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2306,7 +2359,7 @@ fn diff_whitespace_mode_setting_defers_main_window_update(cx: &mut gpui::TestApp
 #[gpui::test]
 fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2364,7 +2417,7 @@ fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
 
@@ -2405,7 +2458,7 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn files_follow_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
 
@@ -2460,7 +2513,7 @@ fn files_follow_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let observed_store = store.clone();
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2528,7 +2581,7 @@ fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpu
 #[gpui::test]
 fn diff_render_settings_update_main_window(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2618,7 +2671,7 @@ fn diff_render_defaults_from_session_subprocess(cx: &mut gpui::TestAppContext) {
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2669,7 +2722,7 @@ fn diff_render_defaults_from_session_subprocess(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn external_terminal_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2738,7 +2791,7 @@ fn terminal_external_draft_save_trims_multiline_args_before_persistence(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2827,7 +2880,7 @@ fn terminal_external_draft_save_trims_multiline_args_before_persistence(
 #[gpui::test]
 fn terminal_external_draft_save_and_reset(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2927,7 +2980,7 @@ fn terminal_external_draft_save_and_reset(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3108,7 +3161,7 @@ fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independen
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = lock_visual_test();
-    let (first_store, first_events) = AppStore::new(Arc::new(TestBackend));
+    let (first_store, first_events) = AppStore::new_test(Arc::new(TestBackend));
     let (first, first_cx) = cx.add_window_view(|window, cx| {
         GitCometView::new(first_store, first_events, None, window, cx)
     });
@@ -3121,7 +3174,7 @@ fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independen
             .unwrap()
     });
     // A second window participates in the same application-wide preferences.
-    let (second_store, second_events) = AppStore::new(Arc::new(TestBackend));
+    let (second_store, second_events) = AppStore::new_test(Arc::new(TestBackend));
     let (second, second_cx) = cx.add_window_view(|window, cx| {
         GitCometView::new(second_store, second_events, None, window, cx)
     });
@@ -3231,4 +3284,204 @@ fn signature_verification_is_discoverable_in_settings_search() {
             "query: {query}"
         );
     }
+}
+
+#[gpui::test]
+fn history_branch_names_options_update_every_main_window(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (first, first_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    first_cx.update(|_, app| open_settings_window(app));
+    first_cx.run_until_parked();
+    let settings_window = first_cx.update(|_, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .unwrap()
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (second, second_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), second_cx);
+    settings_cx.simulate_resize(size(px(720.0), px(1200.0)));
+    settings_window
+        .update(&mut settings_cx, |settings, _, cx| {
+            assert_eq!(
+                settings.history_branch_names,
+                HistoryBranchNamesMode::SeparateColumn
+            );
+            settings.set_expanded_section(Some(SettingsSection::GitLogBranchNames), cx);
+        })
+        .unwrap();
+    settings_cx.run_until_parked();
+    for (mode, selector) in [
+        (
+            HistoryBranchNamesMode::Inline,
+            "settings_window_git_log_branch_names_inline",
+        ),
+        (
+            HistoryBranchNamesMode::SeparateColumn,
+            "settings_window_git_log_branch_names_separate",
+        ),
+    ] {
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let option = settings_cx
+            .debug_bounds(selector)
+            .expect("branch names option");
+        settings_cx.simulate_click(option.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_window
+            .update(&mut settings_cx, |settings, _, _| {
+                assert_eq!(settings.history_branch_names, mode);
+                assert_eq!(
+                    settings
+                        .preference_settings()
+                        .history_branch_names
+                        .as_deref(),
+                    Some(mode.key())
+                );
+            })
+            .unwrap();
+        settings_cx.update(|_, app| {
+            for view in [&first, &second] {
+                let root = view.read(app);
+                assert_eq!(
+                    root.ui_model.read(app).preferences.history.branch_names,
+                    mode
+                );
+                let history = root.main_pane.read(app).history_view.read(app);
+                assert_eq!(history.history_branch_names, mode);
+                assert_eq!(
+                    history.history_ref_column_width(),
+                    if mode == HistoryBranchNamesMode::Inline {
+                        px(0.0)
+                    } else {
+                        history.history_col_branch
+                    }
+                );
+            }
+        });
+    }
+}
+
+fn signing_tools_fixture() -> gitcomet_core::signing_tools::SigningToolsState {
+    use gitcomet_core::signing_tools::{SigningTool, SigningToolAvailability, SigningToolsState};
+    SigningToolsState {
+        gpg: SigningTool {
+            program: "gpg".to_string(),
+            availability: SigningToolAvailability::NotFound {
+                detail: "`gpg` was not found on Git's PATH.".to_string(),
+            },
+        },
+        ssh_keygen: SigningTool {
+            program: "/usr/bin/ssh-keygen".to_string(),
+            availability: SigningToolAvailability::Available {
+                version: Some("OpenSSH_10.3p1".to_string()),
+            },
+        },
+    }
+}
+
+#[test]
+fn a_missing_signing_tool_explains_what_is_lost_and_how_to_fix_it() {
+    let tools = signing_tools_fixture();
+    let gpg = gpg_info(Some(&tools));
+
+    assert_eq!(gpg.status, SigningToolStatus::NotFound);
+    let detail = gpg.detail.expect("a missing gpg must explain itself");
+    assert!(detail.contains("not verified"), "{detail}");
+    assert!(detail.contains("gpg.program"), "{detail}");
+}
+
+#[test]
+fn a_found_signing_tool_shows_its_version_and_custom_program() {
+    let tools = signing_tools_fixture();
+    let ssh_keygen = ssh_keygen_info(Some(&tools));
+
+    assert_eq!(ssh_keygen.status, SigningToolStatus::Found);
+    assert_eq!(ssh_keygen.version_display.as_ref(), "OpenSSH_10.3p1");
+    let detail = ssh_keygen.detail.expect("a non-default program is named");
+    assert!(detail.contains("gpg.ssh.program"), "{detail}");
+}
+
+#[test]
+fn signing_tools_show_as_detecting_until_probed() {
+    assert_eq!(gpg_info(None).status, SigningToolStatus::Detecting);
+    assert_eq!(ssh_keygen_info(None).status, SigningToolStatus::Detecting);
+}
+
+#[test]
+fn unrequested_signing_tools_are_not_displayed_as_a_running_probe() {
+    let tools = gitcomet_core::signing_tools::SigningToolsState::default();
+    assert_eq!(gpg_info(Some(&tools)).status, SigningToolStatus::NotChecked);
+    assert_eq!(
+        ssh_keygen_info(Some(&tools)).status,
+        SigningToolStatus::NotChecked
+    );
+}
+
+#[test]
+fn pending_git_discovery_is_displayed_without_an_unavailable_error() {
+    let info = git_runtime_info_from_state(GitRuntimeState {
+        preference: GitExecutablePreference::SystemPath,
+        availability: gitcomet_core::process::GitExecutableAvailability::Checking,
+    });
+    assert_eq!(info.compatibility, GitCompatibility::Checking);
+    assert_eq!(info.version_display.as_ref(), "Checking...");
+    assert!(info.detail.is_none());
+}
+
+#[test]
+fn the_executables_page_is_found_by_its_tools() {
+    for query in ["executables", "git executable", "gpg", "ssh-keygen"] {
+        assert!(
+            SettingsCategory::GitExecutable.matches_query(query),
+            "{query}"
+        );
+    }
+}
+
+#[gpui::test]
+fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.run_until_parked();
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    settings_cx.run_until_parked();
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::GitExecutable, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let guide_bounds = settings_cx
+        .debug_bounds("settings_window_signature_guide")
+        .expect("expected signature guide row bounds");
+    settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
+    settings_cx.run_until_parked();
+
+    assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
 }

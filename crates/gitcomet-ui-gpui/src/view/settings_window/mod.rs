@@ -3,7 +3,11 @@ use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::ui_scale;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
-    GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
+    GitExecutablePreference, GitRuntimeState, current_git_runtime, select_git_executable_path,
+};
+use gitcomet_core::signing_tools::{
+    DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
+    SigningToolsState,
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
@@ -28,6 +32,8 @@ const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
+const SIGNATURE_GUIDE_URL: &str =
+    "https://github.com/Auto-Explore/GitComet/blob/main/docs/commit-signatures.md";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
 
@@ -285,6 +291,7 @@ enum SettingsSection {
     DiffViewMode,
     GitLogDefaultMode,
     GitLogColumns,
+    GitLogBranchNames,
     GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
@@ -307,9 +314,10 @@ impl SettingsSection {
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout => SettingsCategory::ChangeTracking,
             Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
-            Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
-                SettingsCategory::GitLog
-            }
+            Self::GitLogDefaultMode
+            | Self::GitLogColumns
+            | Self::GitLogBranchNames
+            | Self::GitLogTagFetch => SettingsCategory::GitLog,
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -362,7 +370,7 @@ impl SettingsCategory {
             Self::GitLog => "Git log",
             Self::Remotes => "Remotes",
             Self::Tags => "Tags",
-            Self::GitExecutable => "Git executable",
+            Self::GitExecutable => "Executables",
             Self::Environment => "Environment",
             Self::Links => "Links",
         }
@@ -432,7 +440,10 @@ impl SettingsCategory {
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
-            Self::GitExecutable => "git executable custom path system path version",
+            Self::GitExecutable => {
+                "executables git executable custom path system path version gpg gnupg \
+                 openpgp x.509 ssh-keygen openssh commit signature verification verified trust key guide"
+            }
             Self::Environment => "environment build operating system app version",
             Self::Links => {
                 "links theme guide github license open source licenses professional edition \
@@ -537,6 +548,7 @@ pub(crate) struct SettingsWindowView {
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
     diff_scroll_sync: DiffScrollSync,
+    history_branch_names: HistoryBranchNamesMode,
     history_show_graph: bool,
     history_show_author: bool,
     history_show_date: bool,
@@ -557,6 +569,8 @@ pub(crate) struct SettingsWindowView {
     nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    signing_tools_probe: Option<gpui::Task<()>>,
+    signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
@@ -913,6 +927,7 @@ impl SettingsWindowView {
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let history_branch_names = ui_preferences.history.branch_names;
         let history_show_graph = ui_preferences.history.show_graph;
         let history_show_author = ui_preferences.history.show_author;
         let history_show_date = ui_preferences.history.show_date;
@@ -951,6 +966,7 @@ impl SettingsWindowView {
             };
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
+        let signing_tools_probe = None;
         let git_executable_mode =
             GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
         let git_custom_path_draft = match &runtime_info.git.runtime.preference {
@@ -1196,6 +1212,7 @@ impl SettingsWindowView {
             remote_markdown_image_policy,
             check_for_updates_on_startup,
             diff_scroll_sync,
+            history_branch_names,
             history_show_graph,
             history_show_author,
             history_show_date,
@@ -1216,6 +1233,8 @@ impl SettingsWindowView {
             nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            signing_tools_probe,
+            signing_tools_cancellation: Default::default(),
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,
@@ -1246,6 +1265,9 @@ impl SettingsWindowView {
             return;
         }
         self.selected_category = category;
+        if category == SettingsCategory::GitExecutable {
+            super::runtime_probe::request(cx, true);
+        }
         // Collapse any expanded row so the new page starts clean, and scroll
         // the content pane back to the top.
         self.set_expanded_section(None, cx);

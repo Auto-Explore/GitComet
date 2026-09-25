@@ -4,7 +4,7 @@ use super::*;
 fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -142,7 +142,7 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
             ..GitLogSettings::default()
         },
-        ..AppState::default()
+        ..AppState::test_default()
     };
 
     reduce(
@@ -187,7 +187,7 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
 fn repo_opened_ok_for_closed_repo_is_ignored() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -224,7 +224,7 @@ fn repo_opened_ok_for_closed_repo_is_ignored() {
 fn repo_opened_err_for_closed_repo_is_ignored() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -266,7 +266,7 @@ fn repo_opened_err_for_closed_repo_is_ignored() {
 fn repo_action_finished_clears_error_and_refreshes() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -300,7 +300,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
 fn repo_action_finished_err_records_diagnostic() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -342,7 +342,7 @@ fn repo_action_finished_err_records_diagnostic() {
 fn create_branch_collision_opens_prompt_without_recording_a_repo_error() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -392,7 +392,7 @@ fn create_branch_collision_opens_prompt_without_recording_a_repo_error() {
 fn hook_activity_owns_wrapped_repo_action_failure_diagnostic() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     let operation_id = gitcomet_core::git_operation::GitOperationId(41);
     state.repos.push(RepoState::new_opening(
@@ -462,7 +462,7 @@ fn hook_activity_owns_wrapped_repo_action_failure_diagnostic() {
 fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     let operation_id = gitcomet_core::git_operation::GitOperationId(42);
     let hook_id = gitcomet_core::git_operation::HookExecutionId {
@@ -481,7 +481,7 @@ fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
         crate::msg::InternalMsg::GitOperationStarted {
             repo_id,
             operation_id,
-            label: "Revert".to_string(),
+            label: "Checkout".to_string(),
             context: Some("01234567".to_string()),
             time: SystemTime::UNIX_EPOCH,
         },
@@ -517,7 +517,7 @@ fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
             duration: Duration::from_millis(20),
             message: Box::new(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id,
-                action: RepoActionKind::RevertCommit,
+                action: RepoActionKind::CheckoutCommit,
                 result: Err(Error::new(ErrorKind::Backend(
                     "failed to update the ref after hooks passed".to_string(),
                 ))),
@@ -543,7 +543,7 @@ fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
 fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -593,10 +593,70 @@ fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
 }
 
 #[test]
+fn revert_error_completion_refreshes_status_log_and_sequencer_state() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].local_actions_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: crate::msg::RepoCommandKind::Revert {
+                commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+            },
+            result: Err(Error::new(ErrorKind::Backend("conflict".to_string()))),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(
+        state.repos[0]
+            .feedback
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Revert failed") && error.contains("conflict")),
+        "got {:?}",
+        state.repos[0].feedback.last_error
+    );
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "revert errors should refresh status so conflicts are visible, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadLog { repo_id: candidate, .. } if *candidate == repo_id)
+        ),
+        "revert errors should refresh the log, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadRebaseAndMergeState { repo_id: candidate } if *candidate == repo_id
+        )),
+        "revert errors should refresh sequencer state, got {effects:?}"
+    );
+}
+
+#[test]
 fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale_in_flight() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -643,7 +703,7 @@ fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale
 fn repo_action_finished_reissues_inflight_non_status_loads() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -702,7 +762,7 @@ fn repo_action_finished_reissues_inflight_non_status_loads() {
 fn repo_action_finished_reissues_inflight_sidebar_data_loads() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -763,7 +823,7 @@ fn repo_action_finished_reissues_inflight_sidebar_data_loads() {
 fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -819,7 +879,7 @@ fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
 fn repo_action_finished_reissues_selected_commit_diff() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -864,7 +924,7 @@ fn repo_action_finished_reissues_selected_commit_diff() {
 fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_repo() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let background = RepoId(1);
     let active = RepoId(2);
     state.repos.push(RepoState::new_opening(
@@ -933,7 +993,7 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
 fn repo_opened_err_records_diagnostic() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -978,7 +1038,7 @@ fn repo_opened_err_records_diagnostic() {
 fn repo_opened_err_not_found_marks_repo_missing_without_banner_error() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -1012,7 +1072,7 @@ fn repo_opened_err_not_found_marks_repo_missing_without_banner_error() {
 fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let invalid_repo = PathBuf::from("/tmp/not-a-repo");
     let normalized_invalid_repo = crate::store::reducer::normalize_repo_path(invalid_repo.clone());
@@ -1053,7 +1113,7 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
 fn repo_opened_err_not_a_repository_opens_restored_fallback_tab() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let invalid_repo = dir.path().join("invalid");
@@ -1100,7 +1160,7 @@ fn repo_opened_err_not_a_repository_opens_restored_fallback_tab() {
 fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -1152,7 +1212,7 @@ fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
 fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -1206,7 +1266,7 @@ fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
 }
 
 fn state_with_action_in_flight(repo_id: RepoId, workdir: &str) -> AppState {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {

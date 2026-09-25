@@ -104,13 +104,22 @@ impl PopoverHost {
         });
     }
 
-    pub(super) fn clear_active_context_menu_invoker(&self, cx: &mut gpui::Context<Self>) {
+    fn publish_active_context_menu_invoker(&self, cx: &mut gpui::Context<Self>) {
+        let host = cx.entity().downgrade();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
+            let next = host
+                .upgrade()
+                .and_then(|host| host.read(cx).active_invoker.clone());
             let _ = root_view.update(cx, |root, cx| {
-                root.set_active_context_menu_invoker(None, cx);
+                root.set_active_context_menu_invoker(next, cx)
             });
         });
+    }
+
+    pub(super) fn clear_active_context_menu_invoker(&mut self, cx: &mut gpui::Context<Self>) {
+        self.active_invoker = None;
+        self.publish_active_context_menu_invoker(cx);
     }
 
     pub(super) fn history_refs_menu_active(&self, cx: &mut gpui::Context<Self>) -> bool {
@@ -200,8 +209,14 @@ impl PopoverHost {
                     .map(|repo| repo.feedback.hook_activity_rev)
             });
             let follow_hook_output = hook_activity_repo_id.is_some()
+                && !this
+                    .hook_activity_text
+                    .is_interacting(hook_activity::TextSection::Output, cx)
                 && scroll_is_near_bottom(&this.hook_activity_output_scroll, px(24.0));
             let follow_hook_list = hook_activity_repo_id.is_some()
+                && !this
+                    .hook_activity_text
+                    .is_interacting(hook_activity::TextSection::Hooks, cx)
                 && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
 
             let selected_action = this
@@ -279,6 +294,10 @@ impl PopoverHost {
             // rather than in the render path, so the generated message never
             // clobbers text the user typed while it was loading.
             this.sync_squash_prompt_prefill(cx);
+
+            // Any repo load can cancel the parent lookup an open confirmation
+            // waits on; re-issue it instead of leaving the dialog disabled.
+            this.request_confirm_dialog_parents();
 
             let Some(popover) = this.popover.as_ref() else {
                 return;
@@ -842,12 +861,15 @@ impl PopoverHost {
             popover: None,
             popover_anchor: None,
             hook_activity_selected: None,
+            hook_activity_text: Default::default(),
             hook_activity_history_scroll: ScrollHandle::new(),
             hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
-            cherry_pick_mainline: None,
+            commit_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
+            focus_return: None,
+            active_invoker: None,
             popover_opened_from_diff_panel: false,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
@@ -1035,6 +1057,19 @@ impl PopoverHost {
     }
 
     #[cfg(test)]
+    pub(in crate::view) fn hook_activity_text_for_test(
+        &self,
+        key: &str,
+    ) -> Entity<components::TextInput> {
+        self.hook_activity_text.input_for_test(key)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_output_offset_for_test(&self) -> Point<Pixels> {
+        self.hook_activity_output_scroll.offset()
+    }
+
+    #[cfg(test)]
     pub(in crate::view) fn hook_activity_output_is_near_bottom_for_test(&self) -> bool {
         scroll_is_near_bottom(&self.hook_activity_output_scroll, px(24.0))
     }
@@ -1119,6 +1154,38 @@ impl PopoverHost {
         }
     }
 
+    /// Asks for the open cherry-pick/revert confirmation's parent list when no
+    /// answer is loaded and none is on its way.
+    fn request_confirm_dialog_parents(&mut self) {
+        let (repo_id, commit_id) = match self.popover.as_ref() {
+            Some(
+                PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
+                | PopoverKind::RevertCommitConfirm { repo_id, commit_id },
+            ) => (*repo_id, commit_id.clone()),
+            _ => return,
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return;
+        };
+        if matches!(
+            &repo.history_state.commit_details,
+            Loadable::Ready(details) if details.id == commit_id
+        ) {
+            return;
+        }
+        let lookup = &repo.history_state.mainline_lookup;
+        if lookup.reference.as_ref() == Some(&commit_id)
+            && !matches!(lookup.result, Loadable::NotLoaded)
+        {
+            return;
+        }
+        self.store.dispatch(Msg::ResolveCommitLookup {
+            repo_id,
+            reference: commit_id,
+            purpose: gitcomet_state::model::CommitLookupPurpose::MainlineParents,
+        });
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
@@ -1127,6 +1194,16 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn popover_opened_from_diff_panel_for_tests(&self) -> bool {
         self.popover_opened_from_diff_panel
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_focus_handle_for_tests(&self) -> FocusHandle {
+        self.context_menu_focus_handle.clone()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_selected_ix_for_tests(&self) -> Option<usize> {
+        self.context_menu_selected_ix
     }
 
     /// The box the open popover hangs off, when it was anchored to one.
@@ -1160,6 +1237,9 @@ impl PopoverHost {
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();
+        if dismissing_hook_activity {
+            self.hook_activity_text = Default::default();
+        }
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -1173,6 +1253,7 @@ impl PopoverHost {
         self.expanded_history_ref = None;
         self.picker_row_menu = None;
         self.menu_invoker_focus = None;
+        self.focus_return = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
@@ -1191,6 +1272,22 @@ impl PopoverHost {
         cx.notify();
     }
 
+    pub(in crate::view) fn dismiss_stale_terminal_menu(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(PopoverKind::TerminalMenu {
+            repo_id,
+            session_seq,
+            ..
+        }) = self.popover
+            && self.root_view.upgrade().is_none_or(|root| {
+                root.read(cx)
+                    .terminal_viewport_for_session(repo_id, session_seq)
+                    .is_none()
+            })
+        {
+            self.close_popover(cx);
+        }
+    }
+
     /// Validates the repo's current multi-selection against its loaded log and
     /// HEAD, returning a squash plan when the selection is eligible. Shared by
     /// the squash prompt's render, prefill, and submit paths so they always
@@ -1200,15 +1297,7 @@ impl PopoverHost {
         repo_id: RepoId,
     ) -> Option<gitcomet_core::squash::SquashPlan> {
         let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(page) = &repo.log else {
-            return None;
-        };
-        let head = repo.head_commit_id()?;
-        gitcomet_core::squash::squash_eligibility(
-            &page.commits,
-            &repo.history_state.multi_selection.commits,
-            &head,
-        )
+        repo.history_squash_plan()
     }
 
     /// Populates the squash prompt's inputs from the loaded message preview.
@@ -1301,12 +1390,14 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         let menu_invoker_focus = self.menu_invoker_focus.take();
+        let focus_return = self.focus_return.take();
         let restore_diff_panel_focus = matches!(
             self.popover,
             Some(
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
                     | PopoverKind::WebLinkMenu { .. }
+                    | PopoverKind::LocalFileLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
                     | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
@@ -1316,7 +1407,9 @@ impl PopoverHost {
               // move the keyboard somewhere the user never was.
         ) && self.popover_opened_from_diff_panel;
         self.close_popover(cx);
-        if restore_diff_panel_focus {
+        if let Some(focus) = focus_return {
+            window.focus(&focus, cx);
+        } else if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
             window.focus(&focus, cx);
         } else if let Some(focus) = menu_invoker_focus {
@@ -1514,17 +1607,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.save_commit_prompt_draft(cx);
-        self.clear_truncated_tooltip(cx);
-        self.popover = None;
-        self.popover_anchor = None;
-        self.clear_active_context_menu_invoker(cx);
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_history_refs_hover_item_menu_open(false, cx);
-            });
-        });
+        self.close_popover(cx);
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
         cx.notify();
@@ -2309,30 +2392,33 @@ impl PopoverHost {
 
     pub(in crate::view) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         self.open_popover(kind, PopoverAnchor::Point(anchor), window, cx);
     }
 
     pub(in crate::view) fn open_popover_centered(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         self.open_popover(kind, PopoverAnchor::Centered, window, cx);
     }
 
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         self.open_popover(kind, PopoverAnchor::Bounds(anchor_bounds), window, cx);
     }
 
@@ -2392,11 +2478,18 @@ impl PopoverHost {
 
     pub(super) fn open_popover(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: PopoverAnchor,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let PopoverRequest {
+            kind,
+            invoker,
+            focus_return,
+            new_source,
+        } = kind.into();
+        self.focus_return = focus_return;
         // Branch-collision prompts are also held in shared state. Replacing one
         // without resolving it leaves that state occupied, so the same
         // collision cannot emit a fresh prompt later.
@@ -2409,23 +2502,34 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
-        if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
-            self.cherry_pick_mainline = None;
+        if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
+        | PopoverKind::RevertCommitConfirm { repo_id, commit_id } = &kind
+        {
+            self.commit_mainline = None;
+            // History rows can omit a merge's parents; the dialogs wait for
+            // the commit object's own list.
+            self.store.dispatch(Msg::ResolveCommitLookup {
+                repo_id: *repo_id,
+                reference: commit_id.clone(),
+                purpose: gitcomet_state::model::CommitLookupPurpose::MainlineParents,
+            });
         }
-        self.menu_invoker_focus = if matches!(
-            &kind,
-            PopoverKind::AppMenu
-                | PopoverKind::AddRepoMenu
-                | PopoverKind::FileBrowserFileMenu { .. }
-                | PopoverKind::FileBrowserFolderMenu { .. }
-                | PopoverKind::StageConflictMarkersConfirm { .. }
-                | PopoverKind::CommitMenu { .. }
-                | PopoverKind::PushPicker
-        ) {
+        let is_context_menu = popover_is_context_menu(&kind);
+        self.menu_invoker_focus = if is_context_menu
+            || matches!(
+                &kind,
+                PopoverKind::StageConflictMarkersConfirm { .. }
+                    | PopoverKind::CherryPickCommitConfirm { .. }
+                    | PopoverKind::RevertCommitConfirm { .. }
+            ) {
             window
                 .focused(cx)
                 .filter(|focus| *focus != self.context_menu_focus_handle)
-                .or_else(|| self.menu_invoker_focus.clone())
+                .or_else(|| {
+                    (!new_source)
+                        .then(|| self.menu_invoker_focus.clone())
+                        .flatten()
+                })
         } else {
             None
         };
@@ -2436,8 +2540,16 @@ impl PopoverHost {
             .read(cx)
             .diff_panel_focus_handle
             .is_focused(window);
-        let is_context_menu = popover_is_context_menu(&kind);
-        let keep_active_invoker = is_context_menu
+        // The remote picker opens from a shortcut or menu, never from a row, so
+        // a row lit by an earlier right-click must not stay lit behind it.
+        let opened_from_row = !matches!(
+            &kind,
+            PopoverKind::Repo {
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+                ..
+            }
+        );
+        let keep_active_invoker = (is_context_menu && opened_from_row)
             || matches!(
                 &kind,
                 PopoverKind::CreateBranchFromRefPrompt { .. }
@@ -2460,9 +2572,12 @@ impl PopoverHost {
                         ..
                     }
             );
-        if !keep_active_invoker {
-            self.clear_active_context_menu_invoker(cx);
+        if new_source {
+            self.active_invoker = invoker;
+        } else if !keep_active_invoker {
+            self.active_invoker = None;
         }
+        self.publish_active_context_menu_invoker(cx);
 
         self.popover_anchor = Some(anchor);
         self.cancel_tag_push_previews();
@@ -2532,6 +2647,7 @@ impl PopoverHost {
                                 .map(|operation| operation.id)
                         });
                     self.hook_activity_selected = selected;
+                    self.hook_activity_text = Default::default();
                     self.hook_activity_history_scroll = ScrollHandle::new();
                     self.hook_activity_hooks_scroll = ScrollHandle::new();
                     self.hook_activity_hooks_scroll.scroll_to_bottom();
@@ -2882,8 +2998,14 @@ impl PopoverHost {
                         limit: 200,
                     });
                 }
-                PopoverKind::HistoryAuthorFilter { .. } => {
+                PopoverKind::HistoryAuthorFilter { repo_id } => {
                     self.ensure_history_author_filter_search_input(window, cx);
+                    self.store.dispatch(Msg::HistoryAuthors(
+                        gitcomet_state::history_authors::HistoryAuthorsMsg::Ensure {
+                            repo_id: *repo_id,
+                            retry: true,
+                        },
+                    ));
                 }
                 PopoverKind::PushSetUpstreamPrompt {
                     repo_id,

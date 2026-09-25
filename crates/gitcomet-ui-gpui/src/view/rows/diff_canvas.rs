@@ -13,8 +13,8 @@ use super::diff_text::{
     whitespace_visible_styled_text,
 };
 use super::*;
-use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::main::{DiffChangeSide, DiffHorizontalScrollColumn, FocusedChangeBlockRow};
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
@@ -41,6 +41,8 @@ const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 38.0;
 const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
+/// Outline around the change block F2/F3 landed on.
+const FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX: f32 = 1.0;
 const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 /// Default width of the blame/annotate column shown to the left of the diff
@@ -635,13 +637,20 @@ fn paint_stage_gutter(
         // The chip is opaque so it masks any line-number digits it covers. Over
         // the row it stays quiet; under the pointer it takes a tint of the
         // action it performs.
-        let (chip, icon) = if hover.on_button {
-            (
-                crate::theme::composite_over(row_bg, with_alpha(color, 0.22)),
-                color,
-            )
+        let chip = crate::kit::interaction::InteractionStyle::tinted(theme, color)
+            .resolved_background(
+                row_bg,
+                crate::kit::interaction::InteractionState::default(),
+                if hover.on_button {
+                    crate::kit::interaction::InteractionFeedback::Hovered
+                } else {
+                    crate::kit::interaction::InteractionFeedback::Resting
+                },
+            );
+        let icon = if hover.on_button {
+            color
         } else {
-            (row_bg, with_alpha(color, 0.75))
+            with_alpha(color, 0.75)
         };
         window.paint_quad(fill(prepaint.cell, chip).corner_radii(px(theme.radii.control)));
         paint_centered_svg_icon(
@@ -729,6 +738,7 @@ fn install_stage_gutter_hover_handler(
 fn install_blame_annotation_mouse_handler(
     window: &mut Window,
     view: &Entity<MainPaneView>,
+    scope: gpui::ElementId,
     message_hitbox: &Hitbox,
     prior_icon_hitbox: &Hitbox,
     browse_icon_hitbox: &Hitbox,
@@ -740,68 +750,77 @@ fn install_blame_annotation_mouse_handler(
     prior_enabled: bool,
     browse_enabled: bool,
 ) {
-    window.on_mouse_event({
-        let view = view.clone();
-        let message_hitbox = message_hitbox.clone();
-        let prior_icon_hitbox = prior_icon_hitbox.clone();
-        let browse_icon_hitbox = browse_icon_hitbox.clone();
-        move |event: &gpui::MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble || event.button != gpui::MouseButton::Left {
-                return;
-            }
-            let commit_id = commit_id.clone();
-            let path = path.clone();
-            // For renamed files, navigate to the historical name at this commit
-            // rather than the current path (which may not exist in that tree).
-            let historical_path = source_path
-                .as_deref()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_else(|| path.to_path_buf());
-            // `is_hovered`, not `contains`: this is a window-level listener, so
-            // it runs even for clicks that landed on something painted over the
-            // diff. Only the hit test knows what actually owns the pointer.
-            let action = if browse_enabled && browse_icon_hitbox.is_hovered(window) {
-                BlameClickAction::Browse
-            } else if prior_enabled && prior_icon_hitbox.is_hovered(window) {
-                BlameClickAction::PriorRevision
-            } else if message_enabled && message_hitbox.is_hovered(window) {
-                BlameClickAction::OpenDetails
-            } else {
-                return;
-            };
-            let prior_commit = prior_commit.clone();
-            view.update(cx, |this, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                let msg = match action {
-                    BlameClickAction::Browse => Msg::OpenFileAtCommit {
-                        repo_id,
-                        commit_id,
-                        path: historical_path,
-                    },
-                    // An uncommitted ("Now") line's prior is the base revision it
-                    // was edited from: open that commit directly. A committed line
-                    // resolves and opens its commit's parent.
-                    BlameClickAction::PriorRevision => match prior_commit {
-                        Some(base) => Msg::OpenFileAtCommit {
-                            repo_id,
-                            commit_id: base,
-                            path: historical_path,
-                        },
-                        None => Msg::OpenFileAtCommitParent {
-                            repo_id,
-                            commit_id,
-                            path: historical_path,
-                        },
-                    },
-                    BlameClickAction::OpenDetails => Msg::SelectCommit { repo_id, commit_id },
-                };
-                this.store.dispatch(msg);
-                cx.notify();
-            });
+    for (name, hitbox, enabled, action) in [
+        (
+            "details",
+            message_hitbox,
+            message_enabled,
+            BlameClickAction::OpenDetails,
+        ),
+        (
+            "prior",
+            prior_icon_hitbox,
+            prior_enabled,
+            BlameClickAction::PriorRevision,
+        ),
+        (
+            "browse",
+            browse_icon_hitbox,
+            browse_enabled,
+            BlameClickAction::Browse,
+        ),
+    ] {
+        if !enabled {
+            continue;
         }
-    });
+        let target = crate::kit::click::canvas_target(
+            "blame-click",
+            (&scope, name, commit_id.as_ref(), &path),
+        );
+        let view = view.clone();
+        let commit_id = commit_id.clone();
+        let historical_path = source_path.as_deref().unwrap_or(&path).to_path_buf();
+        let prior_commit = prior_commit.clone();
+        crate::kit::click::on_canvas_click(
+            window,
+            target,
+            hitbox,
+            gpui::MouseButton::Left,
+            true,
+            move |_, _, cx| {
+                view.update(cx, |this, cx| {
+                    let Some(repo_id) = this.active_repo_id() else {
+                        return;
+                    };
+                    let msg = match action {
+                        BlameClickAction::Browse => Msg::OpenFileAtCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                            path: historical_path.clone(),
+                        },
+                        BlameClickAction::PriorRevision => match prior_commit.clone() {
+                            Some(base) => Msg::OpenFileAtCommit {
+                                repo_id,
+                                commit_id: base,
+                                path: historical_path.clone(),
+                            },
+                            None => Msg::OpenFileAtCommitParent {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                path: historical_path.clone(),
+                            },
+                        },
+                        BlameClickAction::OpenDetails => Msg::SelectCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                    };
+                    this.store.dispatch(msg);
+                    cx.notify();
+                });
+            },
+        );
+    }
 }
 
 enum BlameClickAction {
@@ -891,6 +910,7 @@ fn render_blame_column(
         install_blame_annotation_mouse_handler(
             window,
             view,
+            diff_canvas_click_target(view, visible_ix, "blame", cx),
             &hb.message,
             &hb.prior_icon,
             &hb.browse_icon,
@@ -1195,6 +1215,121 @@ fn semantic_diff_row_bg(theme: AppTheme, bg: gpui::Rgba) -> Option<gpui::Rgba> {
 
 fn focused_row_outline_color(theme: AppTheme, bg: gpui::Rgba) -> gpui::Rgba {
     with_alpha(bg, if theme.is_dark { 0.72 } else { 0.56 })
+}
+
+/// Marks a row of the change block F2/F3 landed on: the accent bar the
+/// conflict resolver puts on its active conflict, plus an outline in the
+/// change's colour that the block's first and last rows close. `left..right`
+/// is the column; both edges are pinned to the visible area so horizontal
+/// scrolling keeps the marks in view.
+#[allow(clippy::too_many_arguments)]
+fn paint_focused_change_block_marks(
+    window: &mut Window,
+    row_bounds: Bounds<Pixels>,
+    left: Pixels,
+    right: Pixels,
+    row: FocusedChangeBlockRow,
+    outline: Option<DiffChangeSide>,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) {
+    let clip = window.content_mask().bounds;
+    let left = left.max(clip.left());
+    let right = right.min(clip.right());
+    if right <= left {
+        return;
+    }
+    let top = row_bounds.top();
+    let height = row_bounds.size.height;
+    // Overdrawn like the row fill so stacked rows join, but not past the block.
+    let run_height = if row.bottom {
+        height
+    } else {
+        height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
+    };
+
+    if let Some(side) = outline {
+        let color = match side {
+            DiffChangeSide::Removed => theme.colors.diff.removed.foreground,
+            DiffChangeSide::Added => theme.colors.diff.added.foreground,
+        };
+        let line_w = diff_scaled_px(FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX, ui_scale_percent);
+        let width = right - left;
+        window.paint_quad(fill(
+            Bounds::new(point(right - line_w, top), size(line_w, run_height)),
+            color,
+        ));
+        if row.top {
+            window.paint_quad(fill(
+                Bounds::new(point(left, top), size(width, line_w)),
+                color,
+            ));
+        }
+        if row.bottom {
+            window.paint_quad(fill(
+                Bounds::new(point(left, top + height - line_w), size(width, line_w)),
+                color,
+            ));
+        }
+    }
+
+    // The bar is the outline's left edge, painted last so it caps the corners.
+    window.paint_quad(fill(
+        Bounds::new(
+            point(left, top),
+            size(
+                diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent),
+                run_height,
+            ),
+        ),
+        theme.colors.accent.foreground,
+    ));
+}
+
+/// One column of one row painting the focused change block's marks.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FocusedChangeBlockPaint {
+    pub(in crate::view) visible_ix: usize,
+    pub(in crate::view) region: DiffTextRegion,
+    pub(in crate::view) outline: Option<DiffChangeSide>,
+    pub(in crate::view) top: bool,
+    pub(in crate::view) bottom: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FOCUSED_CHANGE_BLOCK_PAINT_LOG: RefCell<Vec<FocusedChangeBlockPaint>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_focused_change_block_for_tests(
+    visible_ix: usize,
+    region: DiffTextRegion,
+    row: FocusedChangeBlockRow,
+    outline: Option<DiffChangeSide>,
+) {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| {
+        log.borrow_mut().push(FocusedChangeBlockPaint {
+            visible_ix,
+            region,
+            outline,
+            top: row.top,
+            bottom: row.bottom,
+        })
+    });
+}
+
+#[cfg(test)]
+pub(in crate::view) fn clear_focused_change_block_paint_log_for_tests() {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| log.borrow_mut().clear());
+}
+
+/// Focused change block marks painted since the last clear.
+#[cfg(test)]
+pub(in crate::view) fn focused_change_block_paint_log_for_tests() -> Vec<FocusedChangeBlockPaint> {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| log.borrow().clone())
 }
 
 #[cfg(test)]
@@ -2242,6 +2377,27 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                let outline = Some(row.inline_outline());
+                paint_focused_change_block_marks(
+                    window,
+                    prepaint.bounds,
+                    prepaint.bounds.left() + prepaint.annot_w,
+                    prepaint.bounds.right(),
+                    row,
+                    outline,
+                    theme,
+                    ui_scale_percent,
+                );
+                #[cfg(test)]
+                record_focused_change_block_for_tests(
+                    visible_ix,
+                    DiffTextRegion::Inline,
+                    row,
+                    outline,
+                );
+            }
+
             if show_line_numbers {
                 paint_gutter_text_right_aligned(
                     &old,
@@ -2325,6 +2481,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
                     stage: stage_buttons,
                 },
+                cx,
             );
 
             if selected {
@@ -2530,6 +2687,33 @@ pub(super) fn split_diff_line_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                for (column, old_side) in [(prepaint.left_col, true), (prepaint.right_col, false)] {
+                    let outline = row.column_outline(old_side);
+                    paint_focused_change_block_marks(
+                        window,
+                        prepaint.bounds,
+                        column.left(),
+                        column.right(),
+                        row,
+                        outline,
+                        theme,
+                        ui_scale_percent,
+                    );
+                    #[cfg(test)]
+                    record_focused_change_block_for_tests(
+                        visible_ix,
+                        if old_side {
+                            DiffTextRegion::SplitLeft
+                        } else {
+                            DiffTextRegion::SplitRight
+                        },
+                        row,
+                        outline,
+                    );
+                }
+            }
+
             if show_line_numbers {
                 let gutter_total = gutter_cell_total_width(
                     prepaint.pad,
@@ -2656,6 +2840,7 @@ pub(super) fn split_diff_line_row_canvas(
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
                     stage: stage_buttons,
                 },
+                cx,
             );
 
             if selected {
@@ -2813,6 +2998,22 @@ pub(super) fn patch_split_column_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                let outline = row.column_outline(region == DiffTextRegion::SplitLeft);
+                paint_focused_change_block_marks(
+                    window,
+                    prepaint.bounds,
+                    prepaint.bounds.left() + prepaint.annot_w,
+                    prepaint.bounds.right(),
+                    row,
+                    outline,
+                    theme,
+                    ui_scale_percent,
+                );
+                #[cfg(test)]
+                record_focused_change_block_for_tests(visible_ix, region, row, outline);
+            }
+
             if show_line_numbers {
                 let gutter_total = gutter_cell_total_width(
                     prepaint.pad,
@@ -2886,6 +3087,7 @@ pub(super) fn patch_split_column_row_canvas(
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
                     stage: stage_buttons,
                 },
+                cx,
             );
 
             if selected {
@@ -3161,20 +3363,30 @@ pub(super) fn worktree_preview_row_canvas(
                             );
                             cx.notify();
                         });
-                    } else if event.button == gpui::MouseButton::Right {
-                        view.update(cx, |this, cx| {
-                            this.open_diff_editor_context_menu(
-                                ix,
-                                DiffTextRegion::Inline,
-                                event.position,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
                     }
                 }
             });
+            let target = diff_canvas_click_target(&view, ix, "preview-context", cx);
+            let view = view.clone();
+            crate::kit::click::on_canvas_click(
+                window,
+                target,
+                &prepaint.text_hitbox,
+                gpui::MouseButton::Right,
+                true,
+                move |event, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.open_diff_editor_context_menu(
+                            ix,
+                            DiffTextRegion::Inline,
+                            event.position(),
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    })
+                },
+            );
         },
     )
     .h(theme.editor_row_height(ui_scale_percent))
@@ -3359,11 +3571,40 @@ fn should_handle_row_mouse_event(
     phase == DispatchPhase::Bubble && row_hitbox.is_hovered(window)
 }
 
+/// A row's click target, scoped to the view and to the repo, file and
+/// revisions it shows: a redraw keeps a pending click, new content never
+/// inherits one.
+fn diff_canvas_click_target(
+    view: &Entity<MainPaneView>,
+    visible_ix: usize,
+    action: impl Hash,
+    cx: &App,
+) -> gpui::ElementId {
+    let pane = view.read(cx);
+    let mut target = FxHasher::default();
+    if let Some(diff_target) = pane.rendered_diff_target() {
+        crate::view::fingerprint::hash_diff_target(diff_target, &mut target);
+    }
+    crate::kit::click::canvas_target(
+        "diff-click",
+        (
+            view.entity_id(),
+            pane.active_repo_id(),
+            target.finish(),
+            pane.rendered_patch_diff_rev(),
+            pane.diff_visible_projection_rev,
+            visible_ix,
+            action,
+        ),
+    )
+}
+
 fn install_diff_row_mouse_handlers(
     window: &mut Window,
     view: &Entity<MainPaneView>,
     visible_ix: usize,
     handlers: DiffRowMouseHandlers,
+    cx: &App,
 ) {
     let DiffRowMouseHandlers {
         row_hitbox,
@@ -3372,115 +3613,117 @@ fn install_diff_row_mouse_handlers(
         mouse_up,
         stage,
     } = handlers;
-    let row_hitbox_for_down = row_hitbox.clone();
-    let regions = regions.clone();
+    if mouse_up != DiffRowMouseUpBehavior::None {
+        let target = diff_canvas_click_target(view, visible_ix, "row", cx);
+        let view = view.clone();
+        let stage = stage.clone();
+        crate::kit::click::on_canvas_click(
+            window,
+            target,
+            &row_hitbox,
+            gpui::MouseButton::Left,
+            false,
+            move |event, window, cx| {
+                if StageGutterMouse::hovered(&stage, window).is_some() {
+                    return;
+                }
+                view.update(cx, |this, cx| {
+                    if !this.consume_suppress_click_after_drag() {
+                        this.handle_patch_row_click(
+                            visible_ix,
+                            DiffClickKind::Line,
+                            event.modifiers().shift,
+                        );
+                    }
+                    cx.notify();
+                });
+            },
+        );
+    }
+    let text_hitbox = row_hitbox.clone();
+    let text_regions = regions.clone();
     let stage_for_down = stage.clone();
     window.on_mouse_event({
         let view = view.clone();
         move |event: &gpui::MouseDownEvent, phase, window, cx| {
-            if !should_handle_row_mouse_event(phase, &row_hitbox_for_down, window) {
+            if event.button != gpui::MouseButton::Left
+                || !should_handle_row_mouse_event(phase, &text_hitbox, window)
+            {
                 return;
             }
-
-            let region = regions.region_at(event.position);
-
-            if event.button == gpui::MouseButton::Left {
-                let focus = view.read(cx).diff_panel_focus_handle.clone();
-                window.focus(&focus, cx);
-                // The gutter button owns the whole press: staging happens here,
-                // and neither text selection nor row selection may see it.
-                // Claiming the press is what stands the release handlers down —
-                // staging reloads the diff, so the release lands on a repainted
-                // row whose fresh handlers would otherwise read it as an
-                // ordinary click. The claim outlives the release and is cleared
-                // by the next press, so it cannot swallow a later click.
-                // A repeat click of a double-click stages nothing: the first one
-                // is still in flight, and window-activating clicks
-                // (`first_mouse`) must not act at all.
-                if let Some(kind) = StageGutterMouse::hovered(&stage_for_down, window) {
-                    crate::press_gesture::claim_press(cx);
-                    cx.stop_propagation();
-                    if event.click_count > 1 || event.first_mouse {
-                        return;
-                    }
-                    view.update(cx, |this, cx| {
-                        this.stage_or_unstage_diff_line(visible_ix, kind, cx);
-                        cx.notify();
-                    });
-                    return;
-                }
-                if let Some(region) = region {
-                    let click_count = event.click_count;
-                    let position = event.position;
-                    view.update(cx, |this, cx| {
-                        this.handle_diff_text_mouse_down(
-                            visible_ix,
-                            region,
-                            position,
-                            click_count,
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    });
-                }
-            } else if event.button == gpui::MouseButton::Right
-                && let Some(region) = region
-            {
+            let focus = view.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+            if StageGutterMouse::hovered(&stage_for_down, window).is_some() {
+                return;
+            }
+            if let Some(region) = text_regions.region_at(event.position) {
+                view.update(cx, |this, cx| {
+                    this.handle_diff_text_mouse_down(
+                        visible_ix,
+                        region,
+                        event.position,
+                        event.click_count,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            }
+        }
+    });
+    let target = diff_canvas_click_target(view, visible_ix, "context", cx);
+    let menu_view = view.clone();
+    crate::kit::click::on_canvas_click(
+        window,
+        target,
+        &row_hitbox,
+        gpui::MouseButton::Right,
+        true,
+        move |event, window, cx| {
+            if let Some(region) = regions.region_at(event.position()) {
                 match right_click {
                     DiffRowRightClickBehavior::OpenContextMenu => {
-                        view.update(cx, |this, cx| {
+                        menu_view.update(cx, |this, cx| {
                             this.open_diff_editor_context_menu(
                                 visible_ix,
                                 region,
-                                event.position,
+                                event.position(),
                                 window,
                                 cx,
                             );
                             cx.notify();
-                        });
+                        })
                     }
                 }
             }
-        }
-    });
-
-    if mouse_up == DiffRowMouseUpBehavior::None {
-        return;
-    }
-
-    window.on_mouse_event({
+        },
+    );
+    for (slot, button) in stage.into_iter().enumerate() {
+        let target = diff_canvas_click_target(
+            view,
+            visible_ix,
+            ("stage", slot, std::mem::discriminant(&button.kind)),
+            cx,
+        );
         let view = view.clone();
-        move |event: &gpui::MouseUpEvent, phase, window, cx| {
-            if event.button != gpui::MouseButton::Left
-                || !should_handle_row_mouse_event(phase, &row_hitbox, window)
-            {
-                return;
-            }
-
-            // A canvas cannot lean on `on_click` to pair press and release, so
-            // it asks who owns the press instead.
-            if crate::press_gesture::is_press_claimed(cx) {
-                return;
-            }
-
-            // A release over a gutter button belongs to that button (it already
-            // staged on press): it must not also move the row selection.
-            if StageGutterMouse::hovered(&stage, window).is_some() {
-                return;
-            }
-
-            let shift = event.modifiers.shift;
-            view.update(cx, |this, cx| {
-                if this.consume_suppress_click_after_drag() {
-                    cx.notify();
+        crate::kit::click::on_canvas_click(
+            window,
+            target,
+            &button.hitbox,
+            gpui::MouseButton::Left,
+            true,
+            move |event, window, cx| {
+                if event.click_count() > 1 {
                     return;
                 }
-                this.handle_patch_row_click(visible_ix, DiffClickKind::Line, shift);
-                cx.notify();
-            });
-        }
-    });
+                view.update(cx, |this, cx| {
+                    window.focus(&this.diff_panel_focus_handle, cx);
+                    this.stage_or_unstage_diff_line(visible_ix, button.kind, cx);
+                    cx.notify();
+                });
+            },
+        );
+    }
 }
 
 /// Smaller font metrics for the "X ago" sub-column in the annotation panel.
@@ -3956,6 +4199,7 @@ fn paint_selectable_diff_text(
         painted_text: paint_text.clone(),
         streamed_ascii_monospace_cell_width: hitbox_cell_width,
         wrapped: None,
+        cells: Vec::new(),
     };
 
     view.update(cx, |this, cx| {

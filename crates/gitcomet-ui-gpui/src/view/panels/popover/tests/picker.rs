@@ -4,7 +4,7 @@ use gitcomet_core::domain::{Branch, CommitId};
 
 #[gpui::test]
 fn repo_picker_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -304,7 +304,7 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
     }
 
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -373,7 +373,7 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn repo_picker_sort_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -913,6 +913,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         click_count: 1,
         first_mouse: false,
     });
+    cx.simulate_mouse_up(anchor, gpui::MouseButton::Right, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -933,7 +934,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         "the picker stays open underneath its row menu"
     );
 
-    // A press outside the menu dismisses it — and only it.
+    // A completed click outside the menu dismisses it — and only it.
     let outside = gpui::point(
         menu.origin.x - gpui::px(20.0),
         menu.origin.y - gpui::px(20.0),
@@ -946,6 +947,8 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         click_count: 1,
         first_mouse: false,
     });
+    assert!(cx.debug_bounds("picker_row_menu").is_some());
+    cx.simulate_mouse_up(outside, MouseButton::Left, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);

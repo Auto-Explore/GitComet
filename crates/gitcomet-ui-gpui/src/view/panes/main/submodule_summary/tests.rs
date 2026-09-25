@@ -70,7 +70,7 @@ fn publish(
             let state = Arc::new(AppState {
                 active_repo: Some(repo_id),
                 repos: vec![repo],
-                ..AppState::default()
+                ..AppState::test_default()
             });
             view.store.replace_snapshot_for_test(Arc::clone(&state));
             test_support::push_test_state(view, state, cx);
@@ -135,7 +135,7 @@ fn large_submodule_summaries_render_a_bounded_window_and_reuse_their_rows(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     for (count, last_selector) in [
@@ -286,7 +286,7 @@ fn submodule_summary_rows_keep_section_specific_navigation_and_menus(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut data = summary(1);
@@ -331,6 +331,11 @@ fn submodule_summary_rows_keep_section_specific_navigation_and_menus(
         button: MouseButton::Right,
         ..Default::default()
     });
+    cx.simulate_mouse_up(
+        bounds.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
     test_support::redraw(cx);
     let menu = cx.update(|_window, app| test_support::popover_kind(view.read(app), app));
     assert!(
@@ -414,7 +419,7 @@ fn restoring_scroll_clamps_past_the_end_of_a_shorter_rebuild() {
 #[gpui::test]
 fn summary_redraws_reuse_the_cached_repo_path(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -466,7 +471,7 @@ fn summary_redraws_reuse_the_cached_repo_path(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn leaving_the_diff_panel_releases_the_summary_cache(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -510,7 +515,7 @@ fn leaving_the_diff_panel_releases_the_summary_cache(cx: &mut gpui::TestAppConte
 #[gpui::test]
 fn a_failed_load_releases_another_targets_summary_cache(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -571,7 +576,7 @@ fn a_failed_load_releases_another_targets_summary_cache(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn a_commit_range_target_draws_no_submodule_summary(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

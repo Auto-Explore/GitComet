@@ -138,6 +138,85 @@ pub(crate) fn redraw(cx: &mut gpui::VisualTestContext) {
     });
 }
 
+/// Blocks until the store worker has reduced every message dispatched so far.
+///
+/// GPUI's test executor does not drive the worker thread, so a snapshot read
+/// right after a dispatch may predate it. A plain message sent now is reduced
+/// strictly after everything already queued (only control messages overtake,
+/// and only internal ones), so once its effect is visible, so is every earlier
+/// dispatch. The message flips the default tag type, which nothing here reads.
+/// Messages the worker itself sends while handling a command's effects can
+/// still land later; wait on their own state when a test depends on them.
+pub(crate) fn drain_store_worker(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+) {
+    use gitcomet_state::model::DefaultTagType;
+    let store = cx.update(|_window, app| view.read(app).store.clone());
+    let sentinel = match store.snapshot().default_tag_type {
+        DefaultTagType::Lightweight => DefaultTagType::Annotated,
+        DefaultTagType::Annotated => DefaultTagType::Lightweight,
+    };
+    store.dispatch(gitcomet_state::msg::Msg::SetDefaultTagType(sentinel));
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        redraw(cx);
+        cx.run_until_parked();
+        if store.snapshot().default_tag_type == sentinel {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the store worker did not reduce the sentinel message"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The repo's `ops_rev`, bumped when a local action begins and again when it
+/// finishes. Read after [`drain_store_worker`], it has moved since an earlier
+/// read if and only if an action was dispatched in between. The in-flight
+/// counters cannot say that: against a backend that never opens a repository
+/// an action completes at once with a missing-handle error, so they are back
+/// to zero on both sides of the worker.
+pub(crate) fn repo_ops_rev(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    repo_id: gitcomet_state::model::RepoId,
+) -> u64 {
+    cx.update(|_window, app| {
+        view.read(app)
+            .store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.ops_rev)
+            .expect("the repo under test is in the store")
+    })
+}
+
+/// Inspect render output inside a frame so GPUI releases arena-owned elements.
+/// Return only inspected data; rendered elements must stay inside the callback.
+pub(crate) fn inspect_render<R>(
+    cx: &mut gpui::VisualTestContext,
+    inspect: impl FnOnce(&mut Window, &mut App) -> R,
+) -> R {
+    let mut result = None;
+    cx.draw(
+        gpui::point(px(0.0), px(0.0)),
+        gpui::size(
+            gpui::AvailableSpace::MinContent,
+            gpui::AvailableSpace::MinContent,
+        ),
+        |window, app| {
+            result = Some(inspect(window, app));
+            gpui::Empty
+        },
+    );
+    result.expect("render inspection should run while drawing the test frame")
+}
+
 pub(crate) fn wait_for_native_tooltip(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(500));

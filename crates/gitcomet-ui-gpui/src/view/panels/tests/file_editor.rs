@@ -5,6 +5,9 @@ use crate::view::panes::main::{
 };
 use palette::IntoColor;
 
+#[path = "file_editor_scrolling.rs"]
+mod scrolling;
+
 /// A repo whose working tree holds `file_rel` with `contents`, already showing
 /// that file in the editor.
 fn editor_state(
@@ -59,7 +62,7 @@ fn finish_editor_saves(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualT
 #[gpui::test]
 async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -101,7 +104,7 @@ async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui:
 #[gpui::test]
 async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -165,7 +168,7 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
 #[gpui::test]
 async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -244,7 +247,7 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
 #[gpui::test]
 async fn file_editor_refuses_a_non_utf8_file(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -481,7 +484,7 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -569,7 +572,7 @@ async fn typing_and_undoing_returns_the_buffer_to_clean(cx: &mut gpui::TestAppCo
     // byte-identical to disk hashed differently and the buffer could never
     // settle. It has to be big enough to span several chunks (512 bytes each).
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -638,7 +641,7 @@ async fn a_pending_read_does_not_land_in_another_repos_buffer(cx: &mut gpui::Tes
     // seated the first repo's contents in the second repo's buffer — and a save
     // would then have written them to the wrong file.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -687,7 +690,7 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
     // fingerprint — so a restored buffer could never settle, or worse, could be
     // reported clean and then dropped.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -760,7 +763,7 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
     // Blame. The highlight assertions pin the other half: the editor really is
     // running the markdown grammar, injections included.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -817,7 +820,7 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
 /// but no identifier click produced occurrence highlights.
 #[gpui::test]
 async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -968,7 +971,7 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
     // The editor used to leave Blame inert: the toggle was reachable but the
     // buffer had no annotation column, so turning it on did nothing visible.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1047,7 +1050,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
     // The editor drew the annotation column but mounted no drag handle, so the
     // column was stuck at whatever width the diff view had last left it at.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1122,7 +1125,7 @@ async fn annotate_resize_handle_waits_for_the_column_it_resizes(cx: &mut gpui::T
     // the handle has to follow the column rather than the toggle: gated on
     // `annotation_active()` it would sit at x=0 over a column nobody drew.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1178,7 +1181,7 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     // The editor was built at content width, so long lines ran off to the right
     // whatever the word-wrap preference said.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1203,8 +1206,8 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             pane.set_diff_word_wrap(true, cx);
-            let _ = pane.diff_view(window, cx);
         });
+        let _ = window.draw(app);
     });
 
     cx.update(|_window, app| {
@@ -1219,8 +1222,8 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             pane.set_diff_word_wrap(false, cx);
-            let _ = pane.diff_view(window, cx);
         });
+        let _ = window.draw(app);
     });
     cx.update(|_window, app| {
         assert!(
@@ -1240,7 +1243,7 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 async fn file_editor_mounts_a_vertical_scrollbar(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1289,7 +1292,7 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
     // Rendered is still the picture; Code is the source, and the source is
     // editable text like any other file.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1393,7 +1396,7 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
     // laid out one per *visual* row, so from the first wrap onward the numbers
     // labelled the wrong lines.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1417,16 +1420,15 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             pane.set_diff_word_wrap(true, cx);
-            let _ = pane.diff_view(window, cx);
         });
+        let _ = window.draw(app);
     });
     cx.run_until_parked();
     // A second pass: the row counts are maintained during the buffer's prepaint,
     // so the frame that can project them is the one after it has laid out.
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
-            let _ = pane.diff_view(window, cx);
-        });
+        window.refresh();
+        let _ = window.draw(app);
     });
 
     cx.update(|_window, app| {
@@ -1484,7 +1486,7 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
     // a scheduling accident, so this reconstructs the state it produced rather
     // than trying to race it.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1540,12 +1542,12 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
 
 #[gpui::test]
 async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext) {
-    // Regression: a save bumps the repo's status revision, which the clean-buffer
-    // disk-follow treats as "the file may have moved". That path used to blank
-    // the input before re-reading, so every save re-seated the buffer — resetting
+    // Regression: a save is followed by a disk check (the write bumps the
+    // repo's revisions), and an earlier version of that follow-up blanked the
+    // input before re-reading, so every save re-seated the buffer — resetting
     // the caret to 0 and clearing undo, once per auto-save.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1625,7 +1627,7 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
     // messages for a repo it no longer has), and the retry raised the dialog
     // again — the window could never be closed.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1664,7 +1666,7 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
             "the stashed edit is unsaved while its repo is still open"
         );
         view.update(app, |this, cx| {
-            let mut state = AppState::default();
+            let mut state = AppState::test_default();
             state.active_repo = None;
             push_test_state(this, Arc::new(state), cx);
         });
@@ -1751,7 +1753,7 @@ fn blame_lines_shift_with_unsaved_edits_instead_of_vanishing() {
 #[gpui::test]
 async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1853,7 +1855,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
 #[gpui::test]
 async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1912,7 +1914,7 @@ async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestApp
 #[gpui::test]
 async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2043,7 +2045,7 @@ async fn assert_editor_renders_the_engines_highlights(
     file_rel: &str,
     contents: &str,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2177,13 +2179,19 @@ async fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestA
         gitcomet_state::model::RepoId(964),
         "file_editor_nunjucks_highlights",
         "index.njk",
+        // Front matter (yaml), markup (html) and a script body (javascript,
+        // depth 2) all on one fixture, since each is its own layer.
         concat!(
+            "---\n",
+            "title: Home\n",
+            "---\n",
             "{# navigation #}\n",
             "<nav class=\"menu\">\n",
             "  {% for item in items %}\n",
             "    <a href=\"{{ item.url }}\">{{ item.label | upper }}</a>\n",
             "  {% endfor %}\n",
             "</nav>\n",
+            "<script>\nconst open = false;\n</script>\n",
         ),
     )
     .await;
@@ -2192,7 +2200,7 @@ async fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestA
 #[gpui::test]
 async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2266,7 +2274,7 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
 #[gpui::test]
 async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2336,7 +2344,7 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2426,7 +2434,7 @@ async fn switching_files_mid_load_never_stashes_the_blank_placeholder(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2518,7 +2526,7 @@ fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2663,7 +2671,7 @@ async fn file_editor_search_counts_every_occurrence_in_the_live_buffer(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2702,7 +2710,7 @@ async fn file_editor_search_counts_every_occurrence_in_the_live_buffer(
 #[gpui::test]
 async fn file_editor_search_reads_the_buffer_not_the_stale_preview(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2742,7 +2750,7 @@ async fn file_editor_search_selects_the_current_match_and_washes_the_rest(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2798,7 +2806,7 @@ async fn file_editor_search_selects_the_current_match_and_washes_the_rest(
 #[gpui::test]
 async fn file_editor_search_next_match_steps_within_a_line(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2841,13 +2849,74 @@ async fn file_editor_search_next_match_steps_within_a_line(cx: &mut gpui::TestAp
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+#[gpui::test]
+async fn file_editor_search_keeps_navigation_relative_to_the_match_before_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let contents = "needle\nneedle\nneedle\n";
+    let workdir = seed_editor(
+        &view,
+        cx,
+        999,
+        "file_editor_search_pending_navigation",
+        contents,
+    );
+    search_the_editor_for(&view, cx, "needle");
+
+    for (case, (current, edits, next, expected)) in [
+        (1, 1, true, 2),
+        (1, 2, true, 2),
+        (1, 2, false, 0),
+        (0, 1, false, 2),
+        (2, 1, true, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.clone();
+            pane.update(app, |pane, cx| {
+                pane.diff_search_match_ix = Some(current);
+                for edit in 0..edits {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.set_text(format!("{contents}case {case} edit {edit}"), cx);
+                    });
+                    pane.on_file_editor_edited(cx);
+                }
+                assert!(pane.diff_search_worker_running);
+                assert!(pane.diff_search_matches.is_empty());
+                if next {
+                    pane.diff_search_next_match();
+                } else {
+                    pane.diff_search_prev_match();
+                }
+            });
+        });
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(pane.diff_search_matches, vec![0, 1, 2]);
+            assert_eq!(pane.diff_search_match_ix, Some(expected), "case {case}");
+            assert!(!pane.diff_search_worker_running);
+            assert!(pane.diff_search_pending_previous_query.is_none());
+        });
+    }
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 /// A match below the fold has to bring the buffer with it. The editor is a
 /// `TextInput` over a plain `ScrollHandle`, so there is no deferred
 /// `scroll_to_item` to inherit.
 #[gpui::test]
 async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2898,7 +2967,7 @@ async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2963,7 +3032,7 @@ async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
 #[gpui::test]
 async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3060,7 +3129,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
 #[gpui::test]
 async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3115,7 +3184,7 @@ async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpu
 async fn file_editor_occurrences_do_not_depend_on_the_direction_of_approach(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3195,7 +3264,7 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
 ) {
     use gitcomet_core::filesystem::{DocumentIdentity, Filesystem, Operation, Request};
     let _guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

@@ -21,6 +21,46 @@ pub struct SplitButton {
 }
 
 impl SplitButton {
+    /// Construct both segments through Button's shared interaction and callback
+    /// handling. Only the menu segment needs anchor bounds.
+    pub fn action_menu<V: 'static>(
+        main: super::Button,
+        menu: super::Button,
+        theme: AppTheme,
+        cx: &mut gpui::Context<V>,
+        action: impl Fn(&mut V, &gpui::ClickEvent, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+        open_menu: impl Fn(
+            &mut V,
+            &gpui::ClickEvent,
+            gpui::Bounds<gpui::Pixels>,
+            &mut gpui::Window,
+            &mut gpui::Context<V>,
+        ) + 'static,
+    ) -> Self {
+        Self::from_buttons(
+            main,
+            menu,
+            cx,
+            |button, cx| button.on_click(theme, cx, action),
+            |button, cx| button.on_click_with_bounds(theme, cx, open_menu),
+        )
+    }
+
+    /// Keep segment geometry shared when callers add per-segment tooltips or
+    /// other content around their Button handlers.
+    pub fn from_buttons<V: 'static, A: IntoElement, M: IntoElement>(
+        main: super::Button,
+        menu: super::Button,
+        cx: &mut gpui::Context<V>,
+        render_main: impl FnOnce(super::Button, &mut gpui::Context<V>) -> A,
+        render_menu: impl FnOnce(super::Button, &mut gpui::Context<V>) -> M,
+    ) -> Self {
+        Self::new(
+            render_main(main.rounded_left(), cx),
+            render_menu(menu.rounded_right(), cx),
+        )
+    }
+
     pub fn new(left: impl IntoElement, right: impl IntoElement) -> Self {
         Self {
             left: left.into_any_element(),

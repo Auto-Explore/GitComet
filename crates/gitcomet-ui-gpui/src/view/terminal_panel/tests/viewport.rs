@@ -1,7 +1,7 @@
 use super::super::viewport::trim_terminal_copy;
 use super::super::*;
 use super::support::*;
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::vte::ansi::Handler;
 
 fn test_viewport_bounds() -> Bounds<Pixels> {
@@ -488,6 +488,131 @@ fn select_all_covers_the_whole_buffer_and_stays_visible_when_scrolled(
         .expect("select-all is visible at every scroll offset");
         assert_eq!(visible.clone().count(), TEST_ROWS);
         assert_eq!(*visible.start(), -(offset as i32));
+    }
+}
+
+#[gpui::test]
+fn clear_screen_and_scrollback_cancels_drag_and_repaints_without_backend_output(
+    cx: &mut gpui::TestAppContext,
+) {
+    let term = test_term_with_lines(30);
+    term.lock().scroll_display(Scroll::Delta(5));
+    let (view, cx) = test_viewport(term.clone(), cx);
+    with_viewport(&view, cx, |view, window, cx| {
+        view.select_all(window, cx);
+        view.selecting = true;
+        view.selection_last_mouse_pos = point(px(101.0), px(190.0));
+        let before = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(
+            before
+                .lines
+                .iter()
+                .any(|(line, _, _)| !line.text.trim().is_empty())
+        );
+        assert!(!before.selection_rects.is_empty());
+        let epoch = view.content_epoch;
+        let drag_seq = view.selection_autoscroll_seq;
+        view.clear_screen_and_scrollback(cx);
+        assert_ne!(view.content_epoch, epoch);
+        assert_ne!(view.selection_autoscroll_seq, drag_seq);
+        assert!(view.render_cache.viewport_key.is_none());
+        assert!(view.render_cache.rows.is_empty());
+        assert!(!view.has_selection());
+        assert!(!view.select_all_active);
+        assert!(!view.selecting);
+        assert!(!view.tick_selection_autoscroll());
+        assert_eq!(view.copy_entire_buffer(), "");
+        let cleared = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(
+            cleared
+                .lines
+                .iter()
+                .all(|(line, _, _)| line.text.trim().is_empty())
+        );
+        assert!(cleared.selection_rects.is_empty());
+        let mut term = term.lock();
+        assert_eq!(term.grid().history_size(), 0);
+        assert_eq!(term.grid().display_offset(), 0);
+        assert_eq!(
+            term.grid().cursor.point,
+            alacritty_terminal::index::Point::default()
+        );
+        term.input('N');
+        drop(term);
+        let next = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(
+            next.lines
+                .iter()
+                .any(|(line, _, _)| line.text.trim_end() == "N")
+        );
+        assert_eq!(view.copy_entire_buffer(), "N");
+    });
+}
+
+#[gpui::test]
+fn clear_screen_and_scrollback_preserves_alternate_screen_and_terminal_modes(
+    cx: &mut gpui::TestAppContext,
+) {
+    use alacritty_terminal::term::{TermDamage, TermMode};
+    use alacritty_terminal::vte::ansi::Processor;
+
+    for alternate in [false, true] {
+        let term = test_term_with_lines(30);
+        {
+            let mut term = term.lock();
+            let mut parser: Processor = Processor::new();
+            if alternate {
+                parser.advance(&mut *term, b"\x1b[?1049hfull screen app");
+            }
+            parser.advance(
+                &mut *term,
+                b"\x1b[?2004h\x1b[?1h\x1b[?1000h\x1b[31m\x1b[2;5r\x1b[?6h\x1b[>1u",
+            );
+            // A full last column leaves a pending wrap which clearing must drop.
+            for _ in 0..TEST_COLS {
+                term.input('X');
+            }
+            assert!(term.grid().cursor.input_needs_wrap);
+        }
+        let (view, cx) = test_viewport(term.clone(), cx);
+        with_viewport(&view, cx, |view, _, cx| {
+            let (modes, template) = {
+                let mut term = term.lock();
+                term.reset_damage();
+                (*term.mode(), term.grid().cursor.template.clone())
+            };
+            view.clear_screen_and_scrollback(cx);
+            let mut term = term.lock();
+            assert_eq!(*term.mode(), modes);
+            assert_eq!(term.mode().contains(TermMode::ALT_SCREEN), alternate);
+            assert_eq!(term.grid().cursor.template, template);
+            assert_eq!(
+                term.grid().cursor.point,
+                alacritty_terminal::index::Point::default()
+            );
+            assert_eq!(
+                term.grid().saved_cursor.point,
+                alacritty_terminal::index::Point::default()
+            );
+            assert!(!term.grid().cursor.input_needs_wrap);
+            assert!(matches!(term.damage(), TermDamage::Full));
+            assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
+            term.input('Z');
+            assert_eq!(
+                term.grid()[alacritty_terminal::index::Line(0)]
+                    [alacritty_terminal::index::Column(0)]
+                .c,
+                'Z'
+            );
+            term.swap_alt();
+            assert_eq!(
+                term.grid().history_size(),
+                0,
+                "clearing the alternate screen must purge hidden primary scrollback too"
+            );
+            assert_eq!(term.grid().display_offset(), 0);
+            assert!(term.grid().display_iter().all(|cell| cell.c == ' '));
+        });
     }
 }
 

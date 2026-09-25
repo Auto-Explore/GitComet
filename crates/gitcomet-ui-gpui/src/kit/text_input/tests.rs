@@ -4,6 +4,66 @@ use super::state::*;
 use super::wrap::*;
 use super::*;
 
+#[gpui::test]
+fn content_events_exclude_focus_selection_and_identical_replacements(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::sync::Mutex;
+    let (input, cx) = multiline_input(cx);
+    let changes = Arc::new(Mutex::new(Vec::new()));
+    let sink = changes.clone();
+    let _subscription = cx.update(|_, app| {
+        app.subscribe(&input, move |_, event: &TextInputChanged, _| {
+            sink.lock().unwrap().push(*event);
+        })
+    });
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("hello", cx);
+            input.set_selected_range(1..3, false, window, cx);
+            window.focus(&input.focus_handle(), cx);
+            cx.notify();
+            input.replace_utf8_range(0..5, "hello", cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(changes.lock().unwrap().len(), 1);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(Some(0..5), "world", window, cx);
+            input.undo(&Undo, window, cx);
+            input.redo(&Redo, window, cx);
+            input.replace_and_mark_text_in_range(Some(0..5), "猫", Some(0..1), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    let changes = changes.lock().unwrap();
+    assert_eq!(
+        changes.len(),
+        5,
+        "typing/paste, undo, redo and IME each emit one content change"
+    );
+    assert!(changes.windows(2).all(|events| events[0] != events[1]));
+}
+
+// The identical-replacement shortcut compared by copying the replaced range
+// first, so select-all and typing copied the whole buffer on every keystroke.
+#[gpui::test]
+fn replacing_a_large_selection_does_not_copy_it(cx: &mut gpui::TestAppContext) {
+    use crate::kit::text_model::OWNED_SLICES;
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(20_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            OWNED_SLICES.with(|count| count.set(0));
+            input.replace_utf8_range(0..text.len(), "x", cx);
+            assert_eq!(input.text(), "x");
+            assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
+        })
+    });
+}
+
 #[test]
 fn mask_text_preserves_length_and_newlines() {
     let input = "a\nb\r\nc";
@@ -819,96 +879,6 @@ fn estimate_wrap_rows_for_line_matches_reference_for_ascii_tabs() {
             );
         }
     }
-}
-
-#[test]
-fn expanded_dirty_wrap_line_range_for_edit_keeps_tab_affected_line_dirty() {
-    let text = "ax\tbb\nnext";
-    let starts = compute_line_starts(text);
-    let dirty = expanded_dirty_wrap_line_range_for_edit(text, starts.as_slice(), &(1..1), &(1..2));
-    assert_eq!(dirty, 0..1);
-}
-
-#[test]
-fn apply_interpolated_wrap_patch_delta_adjusts_rows_by_delta() {
-    let mut rows = vec![6, 5, 4, 3];
-    let patch = InterpolatedWrapPatch {
-        width_key: 80,
-        line_start: 1,
-        old_rows: vec![3, 2],
-        new_rows: vec![5, 1],
-    };
-    apply_interpolated_wrap_patch_delta(rows.as_mut_slice(), &patch);
-    assert_eq!(rows, vec![6, 7, 3, 3]);
-}
-
-#[test]
-fn reset_interpolated_wrap_patches_on_overflow_requests_full_recompute() {
-    let patch = InterpolatedWrapPatch {
-        width_key: 80,
-        line_start: 12,
-        old_rows: vec![1],
-        new_rows: vec![2],
-    };
-
-    let mut below_limit =
-        vec![patch.clone(); TEXT_INPUT_MAX_INTERPOLATED_WRAP_PATCHES.saturating_sub(1)];
-    let mut recompute_requested = false;
-    assert!(!reset_interpolated_wrap_patches_on_overflow(
-        &mut below_limit,
-        &mut recompute_requested
-    ));
-    assert_eq!(
-        below_limit.len(),
-        TEXT_INPUT_MAX_INTERPOLATED_WRAP_PATCHES.saturating_sub(1)
-    );
-    assert!(!recompute_requested);
-
-    let mut saturated = vec![patch; TEXT_INPUT_MAX_INTERPOLATED_WRAP_PATCHES];
-    assert!(reset_interpolated_wrap_patches_on_overflow(
-        &mut saturated,
-        &mut recompute_requested
-    ));
-    assert!(saturated.is_empty());
-    assert!(recompute_requested);
-}
-
-#[test]
-fn pending_wrap_job_accepts_interpolated_patch_respects_prepaint_launch_gate() {
-    let job = PendingWrapJob {
-        sequence: 5,
-        width_key: 120,
-        line_count: 64,
-        wrap_columns: 80,
-    };
-
-    assert!(pending_wrap_job_accepts_interpolated_patch(
-        Some(&job),
-        120,
-        64,
-        true
-    ));
-    assert!(!pending_wrap_job_accepts_interpolated_patch(
-        Some(&job),
-        120,
-        64,
-        false
-    ));
-    assert!(!pending_wrap_job_accepts_interpolated_patch(
-        Some(&job),
-        121,
-        64,
-        true
-    ));
-    assert!(!pending_wrap_job_accepts_interpolated_patch(
-        Some(&job),
-        120,
-        63,
-        true
-    ));
-    assert!(!pending_wrap_job_accepts_interpolated_patch(
-        None, 120, 64, true
-    ));
 }
 
 fn runs_fingerprint(runs: &[TextRun]) -> Vec<String> {
@@ -2300,6 +2270,41 @@ fn multiline_input(
             cx,
         )
     })
+}
+
+#[gpui::test]
+fn read_only_appends_preserve_selection_direction_and_drag(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_read_only(true, cx);
+            input.set_text("héllo\nworld", cx);
+            input.set_selected_range(1..6, false, window, cx);
+            input.selection.reversed = true;
+            input.interaction.is_selecting = true;
+            input.interaction.mouse_selection_anchor = Some(6);
+            input.layout.scroll_x = px(12.0);
+            input.set_text_preserving_selection_on_append("héllo\nworld\nnext", cx);
+            assert_eq!(input.selected_text().as_deref(), Some("éllo"));
+            assert!(input.selection.reversed);
+            assert!(input.interaction.is_selecting);
+            assert_eq!(input.interaction.mouse_selection_anchor, Some(6));
+            assert_eq!(input.layout.scroll_x, px(12.0));
+            assert!(!input.selection_owner.is_stale(cx));
+
+            input.set_text_preserving_selection_on_append("world\nnext", cx);
+            assert!(input.selected_range().is_empty());
+            assert!(!input.interaction.is_selecting);
+            assert_eq!(input.interaction.mouse_selection_anchor, None);
+
+            input.set_selected_range(0..5, false, window, cx);
+            input.set_text("world\nnext\nordinary setter", cx);
+            assert!(
+                input.selected_range().is_empty(),
+                "ordinary setters retain their behavior"
+            );
+        });
+    });
 }
 
 #[gpui::test]

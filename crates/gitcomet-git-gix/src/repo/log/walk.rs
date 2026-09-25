@@ -497,7 +497,7 @@ impl DecodeWorkers {
         ) -> Result<()> {
             for info in chunk {
                 out.push(commit_from_walk_parts(
-                    repo,
+                    &repo.objects,
                     &info.id,
                     &info.parent_ids,
                     info.commit_time,

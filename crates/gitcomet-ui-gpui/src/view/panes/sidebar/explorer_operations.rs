@@ -624,7 +624,7 @@ impl SidebarPaneView {
                 .overflow_hidden()
                 .bg(self.theme.colors.surface.raised)
                 .shadow(vec![gpui::BoxShadow {
-                    color: self.theme.colors.accent.foreground.into_color(),
+                    color: self.theme.colors.accent.foreground.into(),
                     offset: gpui::Point::default(),
                     blur_radius: px(0.0),
                     spread_radius: px(1.0),

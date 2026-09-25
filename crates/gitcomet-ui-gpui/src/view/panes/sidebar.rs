@@ -5,6 +5,8 @@ use super::super::sidebar_presentation::{
     SidebarPresentation, SidebarPresentationCache, SidebarRequestFingerprint,
 };
 use super::super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
@@ -580,8 +582,9 @@ impl SidebarPaneView {
             )
         });
         let store_for_search = Arc::clone(&store);
-        let search_input_subscription =
-            cx.observe(&file_browser_search_input, move |this, input, cx| {
+        let search_input_subscription = cx.subscribe(
+            &file_browser_search_input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
                 // The TextInput entity owns its text (uncontrolled). We only read
                 // the typed value and mirror it into app state for filtering — we
                 // never write back into the input on a keystroke, which would reset
@@ -597,7 +600,8 @@ impl SidebarPaneView {
                     });
                 }
                 cx.notify();
-            });
+            },
+        );
 
         let branch_filter_input = cx.new(|cx| {
             TextInput::new_inert(
@@ -610,8 +614,9 @@ impl SidebarPaneView {
                 cx,
             )
         });
-        let branch_filter_subscription =
-            cx.observe(&branch_filter_input, move |this, input, cx| {
+        let branch_filter_subscription = cx.subscribe(
+            &branch_filter_input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
                 // The input owns its text (uncontrolled); mirror it into the
                 // local query used by the row builder, never writing back.
                 let text = input.read(cx).text().to_string();
@@ -622,7 +627,8 @@ impl SidebarPaneView {
                     this.sync_popover_branch_filter(cx);
                     cx.notify();
                 }
-            });
+            },
+        );
 
         let collapsed_popover_filter_input = cx.new(|cx| {
             TextInput::new_inert(
@@ -635,8 +641,9 @@ impl SidebarPaneView {
                 cx,
             )
         });
-        let collapsed_popover_filter_subscription =
-            cx.observe(&collapsed_popover_filter_input, move |this, input, cx| {
+        let collapsed_popover_filter_subscription = cx.subscribe(
+            &collapsed_popover_filter_input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
                 // Uncontrolled, like the sidebar filter: mirror the text into the
                 // query the popover presentation builder reads, never writing back.
                 let text = input.read(cx).text().to_string();
@@ -646,7 +653,8 @@ impl SidebarPaneView {
                         .set_offset(gpui::point(px(0.0), px(0.0)));
                     cx.notify();
                 }
-            });
+            },
+        );
 
         let mut this = Self {
             explorer_focus: cx.focus_handle(),
@@ -1275,7 +1283,7 @@ impl SidebarPaneView {
                     components::Button::new("collapsed_popover_filter_toggle", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
-                        .selected(filter_open)
+                        .open(filter_open)
                         .selected_bg(with_alpha(
                             theme.colors.accent.foreground,
                             if theme.is_dark { 0.34 } else { 0.24 },
@@ -1310,7 +1318,7 @@ impl SidebarPaneView {
                     components::Button::new("collapsed_popover_section_menu", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
-                        .selected(section_menu_active)
+                        .open(section_menu_active)
                         .selected_bg(with_alpha(
                             theme.colors.accent.foreground,
                             if theme.is_dark { 0.34 } else { 0.24 },
@@ -1325,8 +1333,12 @@ impl SidebarPaneView {
                             scaled_px(15.0),
                         ))
                         .on_click(theme, cx, move |this, e, window, cx| {
-                            this.activate_context_menu_invoker(invoker.clone(), cx);
-                            this.open_popover_at(kind.clone(), e.position(), window, cx);
+                            this.open_popover_at(
+                                kind.clone().invoked_by(invoker.clone()),
+                                e.position(),
+                                window,
+                                cx,
+                            );
                         })
                         .w(components::control_height(ui_scale))
                         .h(components::control_height(ui_scale))
@@ -1572,7 +1584,11 @@ impl SidebarPaneView {
 
         div()
             .id("explorer_popover_focus_scope")
-            .on_click(cx.listener(|this, _, window, cx| this.explorer_background_click(window, cx)))
+            .on_activate(
+                false,
+                controls::ControlActivation::Composite,
+                cx.listener(|this, _, window, cx| this.explorer_background_click(window, cx)),
+            )
             .on_drag_move(cx.listener(
                 |this,
                  event: &gpui::DragMoveEvent<explorer_operations::ExplorerDrag>,
@@ -1847,136 +1863,43 @@ impl SidebarPaneView {
             theme.colors.surface.chrome
         };
 
-        let store_branches = Arc::clone(&self.store);
-        let store_files = Arc::clone(&self.store);
-        // `theme.colors.interaction.hover_background` is nearly identical to the sidebar chrome bg,
-        // so use the standard text-tinted overlay that reads on hover.
-        let tab_hover_bg = theme.hover_overlay();
-        // Lifts the active chip, which already carries `interaction.selected_background` and so
-        // cannot show the plain overlay the inactive one uses.
-        let tab_active_hover_bg = crate::theme::mix_colors(
-            theme.colors.interaction.selected_background,
-            theme.colors.foreground.primary,
-            if theme.is_dark { 0.08 } else { 0.05 },
-        );
-        // Same value as `ButtonStyle::Subtle`'s hover border, so the chips match
-        // the locate action sharing their strip.
-        let tab_hover_border = with_alpha(
-            theme.colors.foreground.secondary,
-            if theme.is_dark { 0.45 } else { 0.32 },
-        );
-        // On light themes `interaction.selected_background` lands almost on top
-        // of the chrome this strip paints, so a filled chip has no edge of its
-        // own and the selected tab does not read as selected at all. Give it
-        // the same selection indicator outline that selected rows and buttons
-        // already carry on light themes, at rest and on hover alike. Dark
-        // themes have the fill contrast already, so they stay borderless.
-        let tab_selected_border = if theme.is_dark {
-            gpui::rgba(0x00000000)
-        } else {
-            theme.colors.interaction.selected_indicator
-        };
-        // Hovering the selected chip must not trade its outline down for the
-        // weaker idle-hover one, so on light themes it keeps the indicator and
-        // only the fill lifts.
-        let tab_selected_hover_border = if theme.is_dark {
-            tab_hover_border
-        } else {
-            tab_selected_border
-        };
-
-        // The ids are load-bearing, not just for tests: gpui only allocates the
-        // element state that makes a `.hover()` repaint the view for *stateful*
-        // elements. On a bare `div()` the hover style is computed but nothing
-        // ever asks for a new frame, so it never reaches the screen.
-        let branches_tab = div()
-            .id("sidebar_tab_branches")
-            .debug_selector(|| "sidebar_tab_branches".to_string())
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(scaled_px(8.0))
-            .h(components::control_height(ui_scale))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .when(mode == SidebarMode::Branches, |d| {
-                d.bg(theme.colors.interaction.selected_background)
-                    .border_color(tab_selected_border)
-                    .text_color(theme.colors.interaction.selected_foreground)
-            })
-            .when(mode != SidebarMode::Branches, |d| {
-                d.bg(gpui::transparent_black())
-                    .border_color(gpui::transparent_black())
-                    .text_color(theme.colors.foreground.secondary)
-            })
-            .hover(move |d| {
-                if mode != SidebarMode::Branches {
-                    d.border_color(tab_hover_border).bg(tab_hover_bg)
+        let make_tab = |id: &'static str,
+                        label: &'static str,
+                        tab_mode: SidebarMode,
+                        cx: &mut gpui::Context<Self>| {
+            let selected = mode == tab_mode;
+            let selected_bg = if tab_mode == SidebarMode::Files && browsing_files {
+                crate::theme::historical_header_bg(
+                    theme,
+                    theme.colors.interaction.selected_background,
+                )
+            } else {
+                theme.colors.interaction.selected_background
+            };
+            let store = Arc::clone(&self.store);
+            components::Button::new(id, label)
+                .borderless()
+                .selected(selected)
+                .selected_bg(selected_bg)
+                .text_color(if selected {
+                    theme.colors.interaction.selected_foreground
                 } else {
-                    d.border_color(tab_selected_hover_border)
-                        .bg(tab_active_hover_bg)
-                }
-            })
-            .cursor(CursorStyle::PointingHand)
-            .text_size(theme.ui_text(12.0))
-            .child("Branches")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_this, _e, _window, _cx| {
-                    store_branches.dispatch(Msg::SetSidebarMode {
-                        mode: SidebarMode::Branches,
-                    });
-                }),
-            );
-
-        let files_tab = div()
-            .id("sidebar_tab_files")
-            .debug_selector(|| "sidebar_tab_files".to_string())
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(scaled_px(8.0))
-            .h(components::control_height(ui_scale))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .when(mode == SidebarMode::Files, |d| {
-                // Carry the tint onto the active chip too, so it does not read
-                // as a neutral hole punched in a tinted bar.
-                d.bg(if browsing_files {
-                    crate::theme::historical_header_bg(
-                        theme,
-                        theme.colors.interaction.selected_background,
-                    )
-                } else {
-                    theme.colors.interaction.selected_background
+                    theme.colors.foreground.secondary
                 })
-                .border_color(tab_selected_border)
-                .text_color(theme.colors.interaction.selected_foreground)
-            })
-            .when(mode != SidebarMode::Files, |d| {
-                d.bg(gpui::transparent_black())
-                    .border_color(gpui::transparent_black())
-                    .text_color(theme.colors.foreground.secondary)
-            })
-            .hover(move |d| {
-                if mode != SidebarMode::Files {
-                    d.border_color(tab_hover_border).bg(tab_hover_bg)
-                } else {
-                    d.border_color(tab_selected_hover_border)
-                        .bg(tab_active_hover_bg)
-                }
-            })
-            .cursor(CursorStyle::PointingHand)
-            .text_size(theme.ui_text(12.0))
-            .child("Files")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_this, _e, _window, _cx| {
-                    store_files.dispatch(Msg::SetSidebarMode {
-                        mode: SidebarMode::Files,
-                    });
-                }),
-            );
+                .on_click(theme, cx, move |_, _, _, _| {
+                    store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
+                })
+                .px(scaled_px(8.0))
+                .h(components::control_height(ui_scale))
+                .text_size(theme.ui_text(12.0))
+        };
+        let branches_tab = make_tab(
+            "sidebar_tab_branches",
+            "Branches",
+            SidebarMode::Branches,
+            cx,
+        );
+        let files_tab = make_tab("sidebar_tab_files", "Files", SidebarMode::Files, cx);
 
         // Each tab keeps its locate action in the same trailing slot for the
         // whole time its tree is visible. Unavailable actions grey out instead
@@ -2600,10 +2523,14 @@ impl SidebarPaneView {
         });
         div()
             .id("explorer_focus_scope")
-            .on_click(cx.listener(|this, _, window, cx| this.explorer_background_click(window, cx)))
+            .on_activate(
+                false,
+                controls::ControlActivation::Composite,
+                cx.listener(|this, _, window, cx| this.explorer_background_click(window, cx)),
+            )
             .track_focus(&self.explorer_focus)
             .capture_key_down(cx.listener(Self::explorer_key_down))
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                     if let Some(repo_id) = this.active_repo_id() {
@@ -3167,14 +3094,16 @@ impl SidebarPaneView {
                                     row_style,
                                     components::InteractiveRowState::default(),
                                 )
-                                .on_click(cx.listener(
-                                    move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                .on_activate(
+                                    false,
+                                    controls::ControlActivation::Composite,
+                                    cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                         this.toggle_active_repo_collapse_key(
                                             SharedString::from(FILE_BROWSER_UNSAVED_SECTION_KEY),
                                             cx,
                                         );
-                                    },
-                                ))
+                                    }),
+                                )
                                 .child(chevron_slot(true, !unsaved_collapsed))
                                 .child(icon_slot_tinted(
                                     "icons/pencil.svg",
@@ -3393,11 +3322,19 @@ impl SidebarPaneView {
                         let path = (*entry.path).clone();
                         let menu_path = path.clone();
                         row_div = row_div
-                            .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
-                                this.explorer_folder_click(path.clone(), e.modifiers(), window, cx);
-                                cx.stop_propagation();
-                            }))
-                            .on_mouse_down(
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                                    this.explorer_folder_click(
+                                        path.clone(),
+                                        e.modifiers(),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .on_pointer_click(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
@@ -3408,12 +3345,12 @@ impl SidebarPaneView {
                                         window,
                                         cx,
                                     );
-                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
                                     this.open_popover_at(
-                                        PopoverKind::FileBrowserFolderMenu {
+                                        (PopoverKind::FileBrowserFolderMenu {
                                             repo_id,
                                             path: menu_path.clone(),
-                                        },
+                                        })
+                                        .invoked_by(menu_invoker.clone()),
                                         e.position,
                                         window,
                                         cx,
@@ -3427,38 +3364,41 @@ impl SidebarPaneView {
                             .map(|r| r.file_browser.source.clone())
                             .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
                         row_div = row_div
-                            .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
-                                this.explorer_select(
-                                    path.clone(),
-                                    e.modifiers(),
-                                    false,
-                                    window,
-                                    cx,
-                                );
-                                cx.stop_propagation();
-                                let modifiers = e.modifiers();
-                                if modifiers.control || modifiers.platform || modifiers.shift {
-                                    return;
-                                }
-                                this.show_repository_canvas(cx);
-                                // A file the editor is holding unsaved text for
-                                // opens straight back into the editor. Opening
-                                // the read-only view would show the text on
-                                // disk, which is not what the user left here.
-                                if has_unsaved_edits {
-                                    store.dispatch(Msg::OpenFileEditor {
-                                        repo_id,
-                                        path: path.clone(),
-                                    });
-                                } else {
-                                    store.dispatch(Msg::OpenFileContent {
-                                        repo_id,
-                                        source: source.clone(),
-                                        path: path.clone(),
-                                    });
-                                }
-                            }))
-                            .on_mouse_down(
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                                    this.explorer_select(
+                                        path.clone(),
+                                        e.modifiers(),
+                                        false,
+                                        window,
+                                        cx,
+                                    );
+                                    let modifiers = e.modifiers();
+                                    if modifiers.control || modifiers.platform || modifiers.shift {
+                                        return;
+                                    }
+                                    this.show_repository_canvas(cx);
+                                    // A file the editor is holding unsaved text for
+                                    // opens straight back into the editor. Opening
+                                    // the read-only view would show the text on
+                                    // disk, which is not what the user left here.
+                                    if has_unsaved_edits {
+                                        store.dispatch(Msg::OpenFileEditor {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                    } else {
+                                        store.dispatch(Msg::OpenFileContent {
+                                            repo_id,
+                                            source: source.clone(),
+                                            path: path.clone(),
+                                        });
+                                    }
+                                }),
+                            )
+                            .on_pointer_click(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
@@ -3469,12 +3409,12 @@ impl SidebarPaneView {
                                         window,
                                         cx,
                                     );
-                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
                                     this.open_popover_at(
-                                        PopoverKind::FileBrowserFileMenu {
+                                        (PopoverKind::FileBrowserFileMenu {
                                             repo_id,
                                             path: menu_path.clone(),
-                                        },
+                                        })
+                                        .invoked_by(menu_invoker.clone()),
                                         e.position,
                                         window,
                                         cx,
@@ -3489,17 +3429,22 @@ impl SidebarPaneView {
                             chevron_slot(is_directory && !expansion_frozen, is_expanded)
                                 .id(("explorer_chevron", ix))
                                 .when(is_directory && !expansion_frozen, |d| {
-                                    d.on_click(cx.listener(
-                                        move |this, event: &gpui::ClickEvent, window, cx| {
-                                            cx.stop_propagation();
-                                            this.explorer_folder_click(
-                                                path.clone(),
-                                                event.modifiers(),
-                                                window,
-                                                cx,
-                                            );
-                                        },
-                                    ))
+                                    // The innermost click target owns the click,
+                                    // so the row's own activation does not also run.
+                                    d.on_activate(
+                                        false,
+                                        controls::ControlActivation::Composite,
+                                        cx.listener(
+                                            move |this, event: &gpui::ClickEvent, window, cx| {
+                                                this.explorer_folder_click(
+                                                    path.clone(),
+                                                    event.modifiers(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        ),
+                                    )
                                 })
                         })
                         .child(if cut {
@@ -3583,23 +3528,14 @@ impl SidebarPaneView {
 
     pub(in super::super) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
-        });
-    }
-
-    pub(in super::super) fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -3954,7 +3890,7 @@ fn unsaved_file_row(
     } = ctx;
     let ui_scale_percent = crate::ui_scale::current(cx).percent;
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-    let icon_px = crate::ui_scale::design_px_from_percent(12.0, 100);
+    let icon_px = scaled_px(12.0);
     // The full repo-relative path, not just the file name: two `mod.rs` under
     // different folders are indistinguishable here, and this row is the only
     // place they appear side by side.
@@ -3979,7 +3915,9 @@ fn unsaved_file_row(
         // Straight into the editor, not the read-only view: every row in this
         // section has unsaved text, and the read-only view would show the file
         // on disk instead of what the user was in the middle of writing.
-        .on_click(
+        .on_activate(
+            false,
+            controls::ControlActivation::Composite,
             cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                 this.show_repository_canvas(cx);
                 store.dispatch(Msg::OpenFileEditor {
@@ -4239,7 +4177,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4251,7 +4189,7 @@ mod tests {
 
     #[test]
     fn sidebar_notify_fingerprint_tracks_sidebar_mode() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let initial = SidebarNotifyFingerprint::from_state(&state);
 
         state.sidebar_mode = SidebarMode::Files;
@@ -4274,7 +4212,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, worktree_repo],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4300,7 +4238,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, worktree_repo],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4325,7 +4263,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, worktree_repo],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4345,7 +4283,7 @@ mod tests {
                 repo_state(RepoId(2), "/tmp/repo-wt"),
             ],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let state_b = AppState {
@@ -4354,7 +4292,7 @@ mod tests {
                 repo_state(RepoId(1), "/tmp/repo"),
             ],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert_eq!(
@@ -4409,7 +4347,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, inactive],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4439,7 +4377,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, related, unrelated],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4455,7 +4393,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4477,7 +4415,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -4498,7 +4436,7 @@ mod tests {
                 repo_state(RepoId(2), "/tmp/inactive"),
             ],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);

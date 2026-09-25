@@ -1,183 +1,159 @@
 name: Rust
 
 on:
-  push:
-    branches: [ "main", "dev" ]
-  pull_request:
-    branches: [ "main", "dev" ]
+  workflow_call:
+    inputs:
+      cold-cache:
+        type: boolean
+        default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: string
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      cold-cache:
+        description: Bypass dependency caches
+        type: boolean
+        default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: choice
+        options: [serial, balanced]
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: rust-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
-  # Build gitcomet in headless mode (no GPUI system deps required).
-  # The UI-only code paths are behind #[cfg(feature = "ui-gpui")] guards.
-  APP_FEATURES: "--no-default-features --features gix"
+  CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
+  GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
 jobs:
   fmt:
-    name: Rustfmt
+    name: Rustfmt and CI configuration
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-        components: rustfmt
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: Check formatting
-      run: cargo fmt --all --check
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install repository toolchain
+        run: rustup show active-toolchain
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Install Python for CI helpers
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14.7"
+      - name: Check CI helpers
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Lint workflows
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash -o "$RUNNER_TEMP/actionlint-installer.bash"
+          bash "$RUNNER_TEMP/actionlint-installer.bash" 1.7.12 "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" -color -shellcheck=""
 
   audit:
     name: Dependency audit (cargo-audit)
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    env:
+      CARGO_AUDIT_VERSION: "0.22.2"
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: Install cargo-audit
-      run: cargo install cargo-audit --locked
-    - name: Run cargo-audit
-      run: cargo audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install repository toolchain
+        run: rustup show active-toolchain
+      - name: Restore cargo-audit binary
+        if: inputs.cold-cache != true
+        id: audit-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: gitcomet-ci-audit-ubuntu22-x64-${{ env.CARGO_AUDIT_VERSION }}
+      - name: Install cargo-audit
+        if: steps.audit-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+      - name: Run cargo-audit
+        run: cargo audit
+      - name: Check audit cache budget
+        shell: bash
+        run: python3 -c 'import pathlib; assert (pathlib.Path.home()/".cargo/bin/cargo-audit").stat().st_size <= 64*1024**2, "cargo-audit exceeds its cache allocation"'
+      - name: Save cargo-audit binary
+        if: success() && inputs.cold-cache != true && steps.audit-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: gitcomet-ci-audit-ubuntu22-x64-${{ env.CARGO_AUDIT_VERSION }}
 
   clippy:
     name: Clippy
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: Clippy (core + state + git backend + tree-sitter allocator)
-      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
-    - name: Clippy (GPUI UI crate -- intentionally skipped on headless CI)
-      run: |
-        echo "Skipping cargo clippy -p gitcomet-ui-gpui in this job."
-        echo "Reason: GPUI requires native windowing/system dependencies that are not available in headless CI."
-    - name: Clippy (app — headless)
-      run: cargo clippy -p gitcomet $APP_FEATURES -- -D warnings
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/ci-setup
+        id: setup
+        with:
+          context: ubuntu22-x64-clippy
+          cold-cache: ${{ inputs.cold-cache }}
+          nextest: "false"
+          compiled: "false"
+      - name: Clippy (libraries)
+        run: cargo clippy --locked -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+      - name: Clippy (headless app)
+        run: cargo clippy --locked -p gitcomet --no-default-features --features gix -- -D warnings
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: clippy
+          cache-key: ${{ steps.setup.outputs.cache-key }}
+          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+          cold-cache: ${{ inputs.cold-cache }}
+          compiled: "false"
 
-  build:
-    name: Build
+  headless:
+    name: Headless builds and package test suites
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: Build (core + state + backend)
-      run: cargo build -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix --verbose
-    - name: Build (app — headless)
-      run: cargo build -p gitcomet $APP_FEATURES --verbose
-
-  # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
-  merge-algorithm:
-    name: Merge algorithm parity (t6403/t6427)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    needs: build
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: t6403/t6427 merge algorithm portability
-      run: cargo test -p gitcomet-core --test merge_algorithm --verbose
-    - name: Conflict label formatting (Phase 1C)
-      run: cargo test -p gitcomet-core --test conflict_label_formatting --verbose
-    - name: Meld algorithm parity (Phase 5)
-      run: cargo test -p gitcomet-core --lib meld_tests --verbose
-    - name: Core library unit tests
-      run: cargo test -p gitcomet-core --lib --verbose
-    - name: State management (conflict session, reducers, effects)
-      run: cargo test -p gitcomet-state --verbose
-
-  # Fixture harness and corpus — Phase 2/3A regression gates
-  merge-regression:
-    name: Merge regression suite (fixtures + corpus)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    needs: build
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: KDiff3-style fixture harness (Phase 2)
-      run: cargo test -p gitcomet-core --test merge_fixture_harness --verbose
-    - name: Permutation corpus (Phase 3A — 243 sampled cases)
-      run: cargo test -p gitcomet-core --test merge_permutation_corpus --verbose
-    - name: Real-world merge extraction (Phase 3C)
-      run: cargo test -p gitcomet-core --test merge_git_extraction --verbose
-
-  # E2E integration with git mergetool/difftool — Phase 4A/4B
-  tool-integration:
-    name: Git mergetool/difftool E2E parity
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    needs: build
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: Build gitcomet binary (headless)
-      run: cargo build -p gitcomet $APP_FEATURES
-    - name: Git mergetool E2E (Phase 4A — t7610 parity)
-      run: cargo test -p gitcomet $APP_FEATURES --test mergetool_git_integration --verbose
-    - name: Git difftool E2E (Phase 4B — t7800 parity)
-      run: cargo test -p gitcomet $APP_FEATURES --test difftool_git_integration --verbose
-    - name: Standalone tool-mode E2E (exit codes + validation)
-      run: cargo test -p gitcomet $APP_FEATURES --test standalone_tool_mode_integration --verbose
-    - name: Mergetool/difftool runtime unit tests (bin target)
-      run: cargo test -p gitcomet $APP_FEATURES --bin gitcomet --verbose
-
-  # Backend integration — mergetool launcher, status, conflict checkout
-  backend-integration:
-    name: Git backend integration
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    needs: build
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        toolchain: stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - name: Git CLI migration scoreboard
-      run: cargo test -p gitcomet-git-gix --test git_cli_scoreboard -- --nocapture
-    - name: Status and mergetool backend integration
-      run: cargo test -p gitcomet-git-gix --verbose
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require Git LFS
+        run: git lfs version
+      - uses: ./.github/actions/ci-setup
+        id: setup
+        with:
+          context: ubuntu22-x64-headless-ci-test
+          cold-cache: ${{ inputs.cold-cache }}
+      - name: Build libraries and headless app
+        run: |
+          python3 scripts/ci/run.py command --name headless-build-libraries -- cargo build --locked --profile ci-test -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix
+          python3 scripts/ci/run.py command --name headless-build-app -- cargo build --locked --profile ci-test -p gitcomet --no-default-features --features gix
+      - name: Compile package test contexts
+        run: |
+          for context in core state backend app; do
+            python3 scripts/ci/run.py compile --context "$context"
+          done
+      - name: Run every package context and doctests
+        run: |
+          result=0
+          for context in core state backend app; do
+            python3 scripts/ci/run.py test --context "$context" --schedule "$CI_TEST_SCHEDULE" || result=1
+            python3 scripts/ci/run.py doc --context "$context" || result=1
+          done
+          exit "$result"
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: headless
+          cache-key: ${{ steps.setup.outputs.cache-key }}
+          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+          cold-cache: ${{ inputs.cold-cache }}
+          budget-mib: "400"

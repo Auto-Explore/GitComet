@@ -1,4 +1,7 @@
 use gitcomet_core::process::background_command as no_window_command;
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+};
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 use gitcomet_test_bin::gitcomet_bin;
@@ -6,14 +9,13 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-#[cfg(windows)]
-use std::sync::OnceLock;
 
 fn run_gitcomet<I, S>(args: I) -> Output
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _timer = FixtureTimer::new("subprocess", "gitcomet");
     no_window_command(gitcomet_bin())
         .args(args)
         .output()
@@ -25,6 +27,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _timer = FixtureTimer::new("subprocess", "gitcomet");
     no_window_command(gitcomet_bin())
         .current_dir(dir)
         .args(args)
@@ -41,6 +44,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _timer = FixtureTimer::new("subprocess", "gitcomet");
     let mut command = no_window_command(gitcomet_bin());
     env.apply_to_command(&mut command);
     command
@@ -113,73 +117,6 @@ fn output_text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stderr)
     )
 }
-#[cfg(windows)]
-fn is_git_shell_startup_failure(text: &str) -> bool {
-    text.contains("sh.exe: *** fatal error -")
-        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-}
-
-#[cfg(windows)]
-fn git_shell_available_for_tooling() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let output = match no_window_command("git")
-            .args(["difftool", "--tool-help"])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return true,
-        };
-        if output.status.success() {
-            return true;
-        }
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        !is_git_shell_startup_failure(&text)
-    })
-}
-
-#[cfg(windows)]
-fn posix_sh_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        no_window_command("sh")
-            .args(["-lc", "exit 0"])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    })
-}
-
-fn require_git_shell_for_setup_integration_tests() -> bool {
-    #[cfg(windows)]
-    {
-        if !git_shell_available_for_tooling() {
-            eprintln!(
-                "skipping setup integration test: Git-for-Windows shell startup failed in this environment"
-            );
-            return false;
-        }
-    }
-    true
-}
-
-fn require_posix_shell_binary_for_setup_test() -> bool {
-    #[cfg(windows)]
-    {
-        if !posix_sh_available() {
-            eprintln!(
-                "skipping setup dry-run shell execution test: `sh` is unavailable in PATH on this environment"
-            );
-            return false;
-        }
-    }
-    true
-}
-
 fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
 }
@@ -1553,9 +1490,6 @@ fn setup_dry_run_local_uses_local_scope() {
 
 #[test]
 fn setup_dry_run_commands_execute_verbatim_in_shell() {
-    if !require_posix_shell_binary_for_setup_test() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
 
     let init = no_window_command("git")
@@ -1784,9 +1718,6 @@ fn setup_local_writes_config_to_repo() {
 
 #[test]
 fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1822,9 +1753,6 @@ fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
 
 #[test]
 fn setup_local_difftool_tool_help_lists_headless_and_gui_entries() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2424,6 +2352,7 @@ fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
 
 /// Run a git command in a repo; assert success.
 fn setup_e2e_git(repo: &Path, args: &[&str]) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = no_window_command("git")
         .arg("-C")
         .arg(repo)
@@ -2443,6 +2372,7 @@ fn setup_e2e_git(repo: &Path, args: &[&str]) {
 
 /// Run a git command in a repo; return output (may succeed or fail).
 fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     no_window_command("git")
         .arg("-C")
         .arg(repo)
@@ -2455,10 +2385,17 @@ fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 /// Initialize a git repo with user config for tests.
 fn setup_e2e_init(repo: &Path) {
-    setup_e2e_git(repo, &["init", "-b", "main"]);
-    setup_e2e_git(repo, &["config", "user.email", "test@test.com"]);
-    setup_e2e_git(repo, &["config", "user.name", "Test"]);
-    setup_e2e_git(repo, &["config", "commit.gpgsign", "false"]);
+    init_repository(repo, |repo| {
+        setup_e2e_git(repo, &["init", "-b", "main"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "test@test.com"),
+                ("user.name", "Test"),
+                ("commit.gpgsign", "false"),
+            ],
+        );
+    });
 }
 
 /// Stage all and commit.
@@ -2467,6 +2404,31 @@ fn setup_e2e_commit(repo: &Path, message: &str) {
     setup_e2e_git(
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", message],
+    );
+}
+
+/// Seed ordinary history only. Keep the other branch's commit and the actual
+/// merge in the test, so Git still constructs the conflicted index itself.
+fn setup_e2e_import_base_and_ours(command: &mut Command, path: &str) {
+    import_linear_history(
+        command,
+        "ours",
+        [
+            LinearCommit {
+                author: "Test <test@test.com>",
+                timestamp: 1_600_000_000,
+                message: "base",
+                path,
+                contents: "line1\nline2\nline3\n",
+            },
+            LinearCommit {
+                author: "Test <test@test.com>",
+                timestamp: 1_600_000_001,
+                message: "ours",
+                path,
+                contents: "line1\nOURS_CHANGE\nline3\n",
+            },
+        ],
     );
 }
 
@@ -2510,6 +2472,7 @@ fn setup_e2e_git_capture_with_env(
     args: &[&str],
     env: &IsolatedGlobalGitEnv,
 ) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut command = no_window_command("git");
     env.apply_to_command(&mut command);
     command
@@ -2533,9 +2496,14 @@ fn setup_e2e_git_with_env(repo: &Path, args: &[&str], env: &IsolatedGlobalGitEnv
 
 fn setup_e2e_init_with_env(repo: &Path, env: &IsolatedGlobalGitEnv) {
     setup_e2e_git_with_env(repo, &["init", "-b", "main"], env);
-    setup_e2e_git_with_env(repo, &["config", "user.email", "test@test.com"], env);
-    setup_e2e_git_with_env(repo, &["config", "user.name", "Test"], env);
-    setup_e2e_git_with_env(repo, &["config", "commit.gpgsign", "false"], env);
+    append_config(
+        repo,
+        &[
+            ("user.email", "test@test.com"),
+            ("user.name", "Test"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 }
 
 fn setup_e2e_commit_with_env(repo: &Path, message: &str, env: &IsolatedGlobalGitEnv) {
@@ -2570,9 +2538,6 @@ fn git_config_get_global_with_env(env: &IsolatedGlobalGitEnv, key: &str) -> Opti
 /// stderr messages, which differ from git's own merge output.
 #[test]
 fn setup_local_enables_git_mergetool_end_to_end() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -2583,14 +2548,8 @@ fn setup_local_enables_git_mergetool_end_to_end() {
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
 
     // 2. Create a merge conflict (both sides modify line 2).
-    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
-    setup_e2e_commit(repo, "base");
-
-    setup_e2e_git(repo, &["checkout", "-b", "ours"]);
-    write_file(&repo.join("file.txt"), "line1\nOURS_CHANGE\nline3\n");
-    setup_e2e_commit(repo, "ours");
-
-    setup_e2e_git(repo, &["checkout", "main"]);
+    setup_e2e_import_base_and_ours(no_window_command("git").arg("-C").arg(repo), "file.txt");
+    setup_e2e_git(repo, &["checkout", "-B", "main", "ours^"]);
     write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit(repo, "theirs");
 
@@ -2629,9 +2588,6 @@ fn setup_local_enables_git_mergetool_end_to_end() {
 /// gitcomet's built-in diff and produce unified diff output.
 #[test]
 fn setup_local_enables_git_difftool_end_to_end() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -2677,9 +2633,6 @@ fn setup_local_enables_git_difftool_end_to_end() {
 /// mergetool command must preserve paths containing spaces/unicode.
 #[test]
 fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let conflict_path = "docs/spaced 日本語 file.txt";
@@ -2689,14 +2642,8 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    write_file(&repo.join(conflict_path), "line1\nline2\nline3\n");
-    setup_e2e_commit(repo, "base");
-
-    setup_e2e_git(repo, &["checkout", "-b", "ours"]);
-    write_file(&repo.join(conflict_path), "line1\nOURS_CHANGE\nline3\n");
-    setup_e2e_commit(repo, "ours");
-
-    setup_e2e_git(repo, &["checkout", "main"]);
+    setup_e2e_import_base_and_ours(no_window_command("git").arg("-C").arg(repo), conflict_path);
+    setup_e2e_git(repo, &["checkout", "-B", "main", "ours^"]);
     write_file(&repo.join(conflict_path), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit(repo, "theirs");
 
@@ -2733,9 +2680,6 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
 /// difftool command must preserve paths containing spaces/unicode.
 #[test]
 fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let diff_path = "docs/spaced 日本語 file.txt";
@@ -2781,9 +2725,6 @@ fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
 /// gitconfig so `git mergetool` works end-to-end without local repo config.
 #[test]
 fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2818,14 +2759,10 @@ fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
         "setup without --local should not set repo-local merge.tool"
     );
 
-    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
-    setup_e2e_commit_with_env(&repo, "base", &env);
-
-    setup_e2e_git_with_env(&repo, &["checkout", "-b", "ours"], &env);
-    write_file(&repo.join("file.txt"), "line1\nOURS_CHANGE\nline3\n");
-    setup_e2e_commit_with_env(&repo, "ours", &env);
-
-    setup_e2e_git_with_env(&repo, &["checkout", "main"], &env);
+    let mut command = no_window_command("git");
+    env.apply_to_command(&mut command);
+    setup_e2e_import_base_and_ours(command.arg("-C").arg(&repo), "file.txt");
+    setup_e2e_git_with_env(&repo, &["checkout", "-B", "main", "ours^"], &env);
     write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit_with_env(&repo, "theirs", &env);
 
@@ -2858,9 +2795,6 @@ fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
 /// gitconfig so `git difftool` works end-to-end without local repo config.
 #[test]
 fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2915,9 +2849,6 @@ fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
 /// mergetool entries discoverable via `git mergetool --tool-help`.
 #[test]
 fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2967,9 +2898,6 @@ fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
 /// difftool entries discoverable via `git difftool --tool-help`.
 #[test]
 fn setup_global_difftool_tool_help_lists_headless_and_gui_entries() {
-    if !require_git_shell_for_setup_integration_tests() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -3059,4 +2987,63 @@ fn subcommand_help_exits_zero() {
 fn help_subcommand_exits_zero() {
     let out = run_gitcomet(["help"]);
     assert_eq!(out.status.code(), Some(0), "help subcommand should exit 0");
+}
+
+#[test]
+fn setup_uninstall_reads_configuration_once_per_command() {
+    for local in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let env = IsolatedGlobalGitEnv::new(root.path());
+        setup_e2e_init_with_env(&repo, &env);
+        for (round, (operation, limit)) in [
+            ("setup", 29),
+            ("setup", 1),
+            ("uninstall", 29),
+            ("uninstall", 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let trace = root.path().join(format!("trace-{round}.jsonl"));
+            let mut cmd = no_window_command(gitcomet_bin());
+            env.apply_to_command(&mut cmd);
+            cmd.arg(operation);
+            if local {
+                cmd.arg("--local");
+            }
+            let output = cmd
+                .current_dir(&repo)
+                .env("GIT_TRACE2_EVENT", &trace)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", output_text(&output));
+            let events: Vec<serde_json::Value> = fs::read_to_string(trace)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let starts: Vec<_> = events
+                .iter()
+                .filter(|event| event["event"] == "start")
+                .collect();
+            assert_eq!(
+                starts.len(),
+                limit,
+                "unexpected Git process count for {operation}: {starts:?}"
+            );
+            let reads = starts
+                .iter()
+                .filter(|event| {
+                    event["argv"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|arg| arg == "--get-regexp")
+                })
+                .count();
+            assert_eq!(reads, 1, "each operation must read one scoped snapshot");
+        }
+    }
 }

@@ -888,8 +888,15 @@ impl GixRepo {
             .collect::<Vec<_>>();
         let mut decode_state = CommitDecodeState::default();
         // No author filter, so the decoder never returns `None`.
-        commit_from_walk_parts(&repo, &id, &parent_oids, None, &mut decode_state, None)?
-            .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
+        commit_from_walk_parts(
+            &repo.objects,
+            &id,
+            &parent_oids,
+            None,
+            &mut decode_state,
+            None,
+        )?
+        .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
     }
 
     pub(in super::super) fn diff_range_files_impl(

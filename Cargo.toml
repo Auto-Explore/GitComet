@@ -5,6 +5,7 @@ members = [
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
+  "crates/gitcomet-fs-watch",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
 ]
@@ -28,6 +29,7 @@ exclude = [
   "vendor/tree-sitter-gitignore",
   "vendor/tree-sitter-haskell",
   "vendor/tree-sitter-html",
+  "vendor/tree-sitter-jinja-dialects",
   "vendor/tree-sitter-julia",
   "vendor/tree-sitter-just",
   "vendor/tree-sitter-kdl",
@@ -58,7 +60,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.5"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
@@ -76,7 +78,7 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 criterion = "0.8.2"
 # Runs the tree-sitter allocator install before `main` in every binary that
 # links gitcomet-tree-sitter-alloc, tests included, so no process ever switches
@@ -89,39 +91,25 @@ dekobon-tree-sitter-groovy = "0.3.0"
 fontdb = "0.24.0"
 futures = "0.3.34"
 gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "b3c53b4aa7fd8c9d8b524b16cd1bf853ef674bad" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "b3c53b4aa7fd8c9d8b524b16cd1bf853ef674bad", features = ["font-kit"] }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "afb4b1883a454c79b4e4fc86fa5340b02b00503a" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "afb4b1883a454c79b4e4fc86fa5340b02b00503a", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
 log = "0.4.34"
 lru = "0.18"
 memchr = "2.8.3"
-mimalloc = "0.1.52"
-# The same mimalloc `mimalloc` builds on, bound directly so tree-sitter's C can be
-# pointed at it. `#[global_allocator]` only routes Rust's allocations; C `malloc`
-# calls still reach libc unless mimalloc is built to interpose the symbol, which
-# this is not. "extended" adds `mi_calloc`/`mi_usable_size` bindings and does not
-# change how the C library is compiled.
-#
-# Both crates must resolve to one native library or `mi_free` would be handed
-# pointers from a heap it does not own. They do, and cargo enforces it rather
-# than us: libmimalloc-sys declares `links = "mimalloc"`, so two versions of it
-# in one graph is a resolve error, not a silent second heap.
-#
-# Neither enables the `v2` feature, so this builds mimalloc **v3**. That was
-# already true of the Rust side via `mimalloc`; pointing tree-sitter here puts
-# its C on the same v3 heap rather than introducing a new one, which is the
-# point of the exercise.
-libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.5"
 palette = "0.7.7"
+process-wrap = { version = "10.0.1", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
 raw-window-handle = "0.6"
 regex = "1.13.1"
 resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 rustc-hash = "2.1.3"
-rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
+rustfs-mimalloc = "0.5.6"
+rustfs-mimalloc-sys = "0.5.6"
+rustix = { version = "1.1.5", default-features = false, features = ["std", "process"] }
 semver = "1.0.28"
 sha2 = "0.10.9"
 filetime = "0.2.27"
@@ -129,7 +117,7 @@ schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 signal-hook = "0.4.4"
-smallvec = "1.16.0"
+smallvec = "1.16.1"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
@@ -167,7 +155,7 @@ tree-sitter-clojure-orchard = "0.2.8"
 tree-sitter-caddyfile = { path = "vendor/tree-sitter-caddyfile" }
 # Written here rather than vendored: no CIL or crontab grammar exists upstream.
 tree-sitter-cil = { path = "vendor/tree-sitter-cil" }
-tree-sitter-cmake = "0.7.4"
+tree-sitter-cmake = "0.7.5"
 # Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
 # the grammar is the Docker one.
 tree-sitter-containerfile = "0.9.2"
@@ -208,7 +196,7 @@ tree-sitter-html = { path = "vendor/tree-sitter-html" }
 tree-sitter-ini = "1.4.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
-tree-sitter-jinja-dialects = "0.1.1"
+tree-sitter-jinja-dialects = { path = "vendor/tree-sitter-jinja-dialects" }
 tree-sitter-jsdoc = "0.25.0"
 tree-sitter-jsonnet = "0.0.1"
 tree-sitter-json = "0.24.8"
@@ -270,8 +258,9 @@ tree-sitter-wat = { path = "vendor/tree-sitter-wat" }
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
+unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.3"
-ureq = { version = "3.4.1", default-features = false, features = ["rustls", "gzip"] }
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
 wayland-client = "0.31.15"
 x11-clipboard = "0.9.3"
@@ -283,9 +272,66 @@ unsafe_code = "forbid"
 incremental = true
 opt-level = 0
 
+# Keep application code quick to rebuild while optimizing the layout/render
+# dependencies. Windows measurements and reproduction: scripts/profiling/README.md.
+[profile.dev.package.gpui-ce]
+opt-level = 2
+
+[profile.dev.package.gpui_ce_windows]
+opt-level = 2
+
+[profile.dev.package.taffy]
+opt-level = 2
+
 [profile.test]
 opt-level = 1
 split-debuginfo = "packed"
+
+# Test profiles inherit dev package overrides; retain their measured settings.
+[profile.test.package.gpui-ce]
+opt-level = 1
+
+[profile.test.package.gpui_ce_windows]
+opt-level = 1
+
+[profile.test.package.taffy]
+opt-level = 1
+
+# CI avoids generating and packaging debugger symbols on ephemeral runners.
+# Keep algorithm/dependency optimization; the large UI crate favors fast builds.
+[profile.ci-test]
+inherits = "dev"
+opt-level = 1
+debug = 0
+split-debuginfo = "off"
+lto = "off"
+codegen-units = 256
+incremental = false
+debug-assertions = true
+overflow-checks = true
+
+[profile.ci-test.package.gitcomet-ui-gpui]
+opt-level = 0
+
+[profile.ci-test.package.gpui-ce]
+opt-level = 1
+
+[profile.ci-test.package.gpui_ce_windows]
+opt-level = 1
+
+[profile.ci-test.package.taffy]
+opt-level = 1
+
+# Compile/link coverage only. Actual performance measurements still use bench,
+# which inherits the production release settings below.
+[profile.ci-bench]
+inherits = "release"
+opt-level = 1
+debug = 0
+split-debuginfo = "off"
+lto = "off"
+codegen-units = 256
+incremental = false
 
 [profile.release]
 lto = "fat"
@@ -318,3 +364,10 @@ strip = "debuginfo"
 inherits = "release"
 debug = 2
 strip = "none"
+
+# Diagnostic compile/link candidate. Promote only after paired hosted measurements.
+[profile.ci-bench-candidate]
+inherits = "ci-bench"
+
+[profile.ci-bench-candidate.package.gitcomet-ui-gpui]
+opt-level = 0

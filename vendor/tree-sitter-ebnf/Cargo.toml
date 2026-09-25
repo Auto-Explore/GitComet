@@ -10,7 +10,7 @@
 # workspace resolves through `tree-sitter-language`, which is what
 # `bindings/rust/lib.rs` is rewritten to use.
 #
-# `src/` is upstream's generated parser at ABI 14, which is inside the range this
+# `src/` is regenerated here at ABI 15, which is inside the range this
 # tree-sitter accepts (13..=15); `grammar.js` is beside it, so `tree-sitter
 # generate` regenerates. The `tree_sitter/` headers come from
 # vendor/tree-sitter-headers -- see the README there.

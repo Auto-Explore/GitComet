@@ -295,14 +295,16 @@ type RefMetadataCache =
 /// an object read per ref, so a page request whose fingerprint matches skips
 /// that entirely.
 /// Identity of a file as it sat on disk when we last read it. Inode and ctime
-/// (Unix only) detect replacements and edits that keep length and mtime, but
-/// rapid writes can share even the same ctime. Verification memos must exclude
+/// detect replacements and edits that keep
+/// length and mtime, but rapid writes can share even the same ctime.
+/// Verification memos must exclude
 /// racy stamps before recording them. `None` where those fields are unavailable,
 /// which disables the memo rather than weakening it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DiskFileStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
+    device: u64,
     inode: u64,
     ctime_nanos: i128,
 }
@@ -314,6 +316,7 @@ impl DiskFileStamp {
         metadata.is_file().then(|| Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
+            device: metadata.dev(),
             inode: metadata.ino(),
             ctime_nanos: i128::from(metadata.ctime()) * 1_000_000_000
                 + i128::from(metadata.ctime_nsec()),
@@ -322,12 +325,17 @@ impl DiskFileStamp {
 
     #[cfg(not(unix))]
     fn from_metadata(_metadata: &std::fs::Metadata) -> Option<Self> {
+        // Windows timestamps and USN records can be deferred/coalesced while
+        // writers remain open. Excluding writers would break editor saves.
+        // Verify content instead until a nonblocking identity is available.
         None
     }
 
     /// Stamp of the regular file at `path`; `None` for symlinks, non-files and
     /// platforms without the fields above.
     fn read(path: &Path) -> Option<Self> {
+        #[cfg(test)]
+        DISK_FILE_STATS.with(|stats| stats.set(stats.get() + 1));
         let metadata = std::fs::symlink_metadata(path).ok()?;
         Self::from_metadata(&metadata)
     }
@@ -352,8 +360,52 @@ impl DiskFileStamp {
     fn read_for_verification_memo(path: &Path) -> Option<Self> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
-        let now = std::time::SystemTime::now();
+        let now = racy_check_now();
         Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
+    }
+}
+
+fn racy_check_now() -> std::time::SystemTime {
+    let now = std::time::SystemTime::now();
+    #[cfg(test)]
+    let now = now + RACY_CLOCK_SKEW.with(std::cell::Cell::get);
+    now
+}
+
+// Tests cannot backdate ctime, so they move the racy-check clock forward instead.
+#[cfg(test)]
+thread_local! {
+    static RACY_CLOCK_SKEW: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static DISK_FILE_STATS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Stamp stats taken on this thread.
+#[cfg(test)]
+pub(crate) fn disk_file_stats_for_test() -> usize {
+    DISK_FILE_STATS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) struct RacyClockSkew(());
+
+#[cfg(test)]
+impl RacyClockSkew {
+    /// Makes every stamp taken on this thread look `skew` older until dropped.
+    pub(crate) fn set(skew: std::time::Duration) -> Self {
+        RACY_CLOCK_SKEW.with(|cell| cell.set(skew));
+        Self(())
+    }
+}
+
+#[cfg(test)]
+impl Drop for RacyClockSkew {
+    fn drop(&mut self) {
+        RACY_CLOCK_SKEW.with(|cell| cell.set(std::time::Duration::ZERO));
     }
 }
 
@@ -400,6 +452,8 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
+    history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
+    range_reader: std::sync::Mutex<Option<RangeReader>>,
     all_branches_tips: std::sync::Mutex<Option<AllBranchesTipsCacheEntry>>,
     divergence_cache: DivergenceCache,
     /// `list_ref_metadata` output keyed by the ref namespace fingerprint; the
@@ -424,6 +478,8 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
+            history_authors_cache: Default::default(),
+            range_reader: Default::default(),
             all_branches_tips: std::sync::Mutex::new(None),
             divergence_cache: DivergenceCache::default(),
             ref_metadata_cache: std::sync::Mutex::new(None),
@@ -460,15 +516,77 @@ impl GixRepo {
         crate::open::open_worktree_repo(&self.spec.workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
     }
+
+    /// The object store for indexed range reads, re-opened every
+    /// [`RANGE_READER_REOPEN_BLOCKS`] blocks. Range reads touch commit objects
+    /// across the whole pack set, and every page of a mapped pack they touch
+    /// stays resident until the mapping is dropped; scrolling a large history
+    /// this way grew resident memory by gigabytes. A fresh open costs a config
+    /// parse and releases the mappings, so the store's footprint stays bounded
+    /// by the blocks read since.
+    pub(super) fn range_reader_repo(&self) -> Result<gix::Repository> {
+        let mut slot = self.range_reader.lock().expect("range reader");
+        if slot
+            .as_ref()
+            .is_none_or(|reader| reader.blocks >= RANGE_READER_REOPEN_BLOCKS)
+        {
+            gitcomet_core::history_perf::record(
+                gitcomet_core::history_perf::Work::RangeStoreReopen,
+            );
+            *slot = Some(RangeReader {
+                repo: self.reopen_repo()?.into_sync(),
+                blocks: 0,
+            });
+        }
+        let reader = slot.as_mut().expect("range reader is open");
+        reader.blocks += 1;
+        Ok(reader.repo.to_thread_local())
+    }
 }
+
+/// See [`GixRepo::range_reader_repo`].
+struct RangeReader {
+    repo: gix::ThreadSafeRepository,
+    blocks: usize,
+}
+
+/// Blocks of 256 commits read through one range-reader store before it is
+/// re-opened. On chromium a block touches roughly 0.2 MiB of pack pages.
+const RANGE_READER_REOPEN_BLOCKS: usize = 64;
 
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     mergetool::allow_test_repo_local_mergetool_command(workdir, tool_name);
 }
 
 impl GitRepository for GixRepo {
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        self.history_authors_impl(mode, cancellation)
+    }
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn build_history_index(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        cancellation: &CancellationToken,
+        on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
+    ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
+        self.build_history_index_impl(mode, author, cancellation, on_progress)
+    }
+
+    fn read_history_range(
+        &self,
+        index: &gitcomet_core::history_index::HistoryIndexHandle,
+        range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::history_index::HistoryRange> {
+        self.read_history_range_impl(index, range, cancellation)
     }
 
     fn read_history(
@@ -603,9 +721,10 @@ impl GitRepository for GixRepo {
     fn verify_commit_signatures_cancellable(
         &self,
         ids: &[CommitId],
+        formats: gitcomet_core::domain::SignatureFormats,
         cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
-        self.verify_commit_signatures_cancellable_impl(ids, Some(cancellation))
+        self.verify_commit_signatures_cancellable_impl(ids, formats, Some(cancellation))
     }
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
@@ -843,6 +962,16 @@ impl GitRepository for GixRepo {
         self.diff_file_text_impl(target)
     }
 
+    fn diff_file_text_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        let result = self.diff_file_text_impl_cancellable(target, cancellation);
+        cancellation.check_cancelled()?;
+        result
+    }
+
     fn diff_preview_text_file(
         &self,
         target: &DiffTarget,
@@ -853,6 +982,27 @@ impl GitRepository for GixRepo {
 
     fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         self.diff_file_image_impl(target)
+    }
+
+    fn diff_file_image_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        let result = self.diff_file_image_impl_cancellable(target, cancellation);
+        cancellation.check_cancelled()?;
+        result
+    }
+
+    fn diff_preview_text_file_cancellable(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<PathBuf>> {
+        let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
+        cancellation.check_cancelled()?;
+        result
     }
 
     fn conflict_file_stages(&self, path: &Path) -> Result<Option<ConflictFileStages>> {
@@ -922,8 +1072,17 @@ impl GitRepository for GixRepo {
         self.cherry_pick_with_output_impl(id, commit, mainline)
     }
 
-    fn revert(&self, id: &CommitId) -> Result<()> {
-        self.revert_impl(id)
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        self.commit_message_template_impl()
+    }
+
+    fn revert_with_output(
+        &self,
+        id: &CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        self.revert_with_output_impl(id, commit, mainline)
     }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
@@ -1507,6 +1666,7 @@ mod tests {
         let stamp = DiskFileStamp {
             len: 15,
             modified: Some(now - Duration::from_secs(2)),
+            device: 1,
             inode: 1,
             ctime_nanos: 98_000_000_000,
         };

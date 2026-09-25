@@ -38,6 +38,39 @@ pub(in crate::view) enum PullRequest {
     NotReady,
 }
 
+/// What opening the repository's remote in a web browser should do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum RemoteWebRequest {
+    NotReady,
+    NoRemotes,
+    NoWebPage,
+    Open(super::permalink::RemoteWebPage),
+    /// Several remotes have a page; `origin`'s comes first.
+    Choose(Vec<super::permalink::RemoteWebPage>),
+}
+
+impl RemoteWebRequest {
+    /// Why nothing can be opened, for a disabled palette or menu row.
+    pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("The repository is still loading"),
+            Self::NoRemotes => Some("Add a remote first"),
+            Self::NoWebPage => Some("No remote URL points to a web page"),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+
+    /// The same, as the sentence a shortcut press shows in a toast.
+    pub(in crate::view) fn unavailable_message(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("This repository's remotes are still loading."),
+            Self::NoRemotes => Some("This repository has no remotes to open in a web browser."),
+            Self::NoWebPage => Some("None of this repository's remote URLs points to a web page."),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+}
+
 pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
     matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
 }
@@ -106,8 +139,8 @@ pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
     matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
 }
 
-/// The rebase, apply, or cherry-pick the repository is part-way through, if
-/// any. `rebase_in_progress` stands in until the sequencer state loads.
+/// The rebase, apply, cherry-pick, or revert the repository is part-way
+/// through, if any. `rebase_in_progress` stands in until the sequencer state loads.
 pub(in crate::view) fn active_sequencer_state(
     repo: &RepoState,
 ) -> gitcomet_core::services::SequencerState {
@@ -155,6 +188,23 @@ pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
         .name
         .clone();
     PushRequest::SetUpstream { remote }
+}
+
+/// Decide what "Open remote in web browser" does: open the one remote with a
+/// web page, or let the user choose when several have one.
+pub(in crate::view) fn remote_web_request(repo: &RepoState) -> RemoteWebRequest {
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return RemoteWebRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return RemoteWebRequest::NoRemotes;
+    }
+    let mut pages = super::permalink::remote_web_pages(remotes);
+    match pages.len() {
+        0 => RemoteWebRequest::NoWebPage,
+        1 => RemoteWebRequest::Open(pages.remove(0)),
+        _ => RemoteWebRequest::Choose(pages),
+    }
 }
 
 pub(in crate::view) fn selected_remote_branch_is_missing(
@@ -402,6 +452,9 @@ pub(super) enum RenderedPreviewMode {
 pub(super) struct RenderedPreviewModes {
     pub(super) svg: RenderedPreviewMode,
     pub(super) markdown: RenderedPreviewMode,
+    /// Markdown shows Source because a file's diff was too big to render, not
+    /// because the reader chose it; the next file gets Rendered back.
+    markdown_budget_fallback: bool,
 }
 
 impl Default for RenderedPreviewModes {
@@ -409,6 +462,7 @@ impl Default for RenderedPreviewModes {
         Self {
             svg: RenderedPreviewMode::Rendered,
             markdown: RenderedPreviewMode::Rendered,
+            markdown_budget_fallback: false,
         }
     }
 }
@@ -424,7 +478,26 @@ impl RenderedPreviewModes {
     pub(super) fn set(&mut self, kind: RenderedPreviewKind, mode: RenderedPreviewMode) {
         match kind {
             RenderedPreviewKind::Svg => self.svg = mode,
-            RenderedPreviewKind::Markdown => self.markdown = mode,
+            RenderedPreviewKind::Markdown => {
+                self.markdown = mode;
+                self.markdown_budget_fallback = false;
+            }
+        }
+    }
+
+    /// Show this markdown file as source because its diff is too big to
+    /// render, leaving the reader's own choice to come back with the next file.
+    pub(super) fn fall_back_to_markdown_source(&mut self) {
+        if self.markdown == RenderedPreviewMode::Rendered {
+            self.markdown = RenderedPreviewMode::Source;
+            self.markdown_budget_fallback = true;
+        }
+    }
+
+    /// The file that needed the fallback is gone.
+    pub(super) fn end_markdown_budget_fallback(&mut self) {
+        if std::mem::take(&mut self.markdown_budget_fallback) {
+            self.markdown = RenderedPreviewMode::Rendered;
         }
     }
 }
@@ -826,6 +899,9 @@ pub(super) struct DiffTextHitbox {
     /// several visual lines, so a click resolves through the layout they were
     /// painted with rather than through an x offset along one shaped line.
     pub(super) wrapped: Option<DiffTextWrappedHit>,
+    /// A table row's cells, each painted and hit-tested on its own; the row's
+    /// `bounds` then span them all.
+    pub(super) cells: Vec<DiffTextHitbox>,
 }
 
 /// A selectable document range painted by something other than text.
@@ -961,6 +1037,10 @@ pub struct GitCometView {
     /// Set when a deactivation was caused by a move/resize grab we requested, so
     /// the matching re-activation does not trigger a repo refresh.
     pub(super) window_grab_activation_suppressed_at: Option<Instant>,
+    /// Background gpg/ssh-keygen detection. A newer probe supersedes older ones.
+    pub(super) signing_tools_probe_seq: u64,
+    pub(super) signing_tools_probe_in_flight: bool,
+    pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
@@ -1086,14 +1166,14 @@ pub(super) struct DiffTextLayoutCacheEntry {
 }
 
 mod conflict_resolver_ui_state;
-mod markdown_wrap_cache;
+mod markdown_preview_state;
 mod mode_impls;
 mod status_sections;
 mod three_way;
 mod toasts;
 
 pub(super) use conflict_resolver_ui_state::*;
-pub(super) use markdown_wrap_cache::*;
+pub(super) use markdown_preview_state::*;
 pub use mode_impls::*;
 pub(super) use status_sections::*;
 pub(super) use three_way::*;

@@ -13,6 +13,23 @@ workspace = true
 [features]
 benchmarks = ["gitcomet-core/benchmarks"]
 
+[[example]]
+name = "status-refresh-bench"
+required-features = ["benchmarks"]
+
+[[example]]
+name = "operation-context-probe"
+required-features = ["benchmarks"]
+
+# Cargo builds this fixture for integration tests. Application packages depend
+# only on this package's library, so it is not part of application distributions.
+[[bin]]
+name = "gitcomet-test-mergetool"
+path = "tests/support/mergetool_helper.rs"
+test = false
+bench = false
+doc = false
+
 [dependencies]
 gitcomet-core = { workspace = true }
 gix = { workspace = true }

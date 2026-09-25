@@ -25,7 +25,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
         let spec = RepoSpec {
             workdir: PathBuf::from("/tmp/signature-scheduling"),
         };
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state
             .repos
             .push(RepoState::new_opening(repo_id, spec.clone()));
@@ -50,8 +50,10 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             Effect::VerifyCommitSignatures {
                 repo_id,
                 epoch: 0,
+                batch: 1,
                 cancellation: CancellationToken::new(),
                 commit_ids: vec![CommitId("aaaa".into())].into(),
+                formats: gitcomet_core::domain::SignatureFormats::ALL,
             },
         );
         if cancel_repo_loads {
@@ -176,7 +178,7 @@ fn schedule_effect_for_test(
         session_persist_executor,
         backend,
         repos,
-        AppState::default(),
+        AppState::test_default(),
         msg_tx,
         effect,
     );
@@ -311,7 +313,7 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
                 detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
             },
         },
-        ..AppState::default()
+        ..AppState::test_default()
     };
 
     schedule_effect_with_state_for_test(
@@ -348,6 +350,76 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
         }
         other => panic!("unexpected message: {other:?}"),
     }
+}
+
+#[test]
+fn unavailable_git_revert_emits_synthetic_revert_command_error() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let state = AppState {
+        git_runtime: gitcomet_core::process::GitRuntimeState {
+            preference: gitcomet_core::process::GitExecutablePreference::Custom(PathBuf::new()),
+            availability: gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                detail: "git missing".to_string(),
+            },
+        },
+        ..AppState::test_default()
+    };
+    let commit_id = CommitId("deadbeef".into());
+
+    schedule_effect_with_state_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        state,
+        msg_tx,
+        Effect::RevertCommit {
+            repo_id: RepoId(7),
+            commit_id: commit_id.clone(),
+            commit: false,
+            mainline: Some(1),
+            summary: "revert me".into(),
+            auth: None,
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected synthetic unavailable-git message");
+    let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+        repo_id,
+        command,
+        result,
+    }) = msg
+    else {
+        panic!("unexpected message: {msg:?}");
+    };
+    assert_eq!(repo_id, RepoId(7));
+    assert_eq!(
+        command,
+        RepoCommandKind::Revert {
+            commit_id,
+            commit: false,
+            mainline: Some(1),
+            summary: "revert me".into(),
+        }
+    );
+    assert!(
+        result
+            .expect_err("unavailable git")
+            .to_string()
+            .contains("git missing")
+    );
 }
 
 #[test]
@@ -414,9 +486,6 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
 
 #[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
-    if !super::require_git_shell_for_store_tests() {
-        return;
-    }
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
@@ -505,9 +574,6 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 
 #[test]
 fn clone_repo_effect_abort_removes_partially_created_destination() {
-    if !super::require_git_shell_for_store_tests() {
-        return;
-    }
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
@@ -679,9 +745,6 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -871,9 +934,6 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1089,9 +1149,6 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1321,9 +1378,6 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1543,9 +1597,6 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1811,9 +1862,6 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2057,9 +2105,6 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2258,9 +2303,6 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2422,9 +2464,6 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -2591,9 +2630,6 @@ fn load_stashes_effect_truncates_results_to_limit() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -2763,10 +2799,6 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
             self.calls.lock().unwrap().push(format!(
                 "stash {message} include_untracked={include_untracked}"
@@ -2937,10 +2969,6 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3109,10 +3137,6 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3280,10 +3304,6 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3448,10 +3468,6 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3641,10 +3657,6 @@ impl GitRepository for UnsupportedRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -3727,7 +3739,7 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
         &repos,
         AppState {
             repos: vec![repo_state],
-            ..AppState::default()
+            ..AppState::test_default()
         },
         msg_tx,
         Effect::Push {
@@ -3928,9 +3940,6 @@ impl GitRepository for MetadataSchedulingRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -4016,18 +4025,14 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         unsupported_repo_result()
     }
     fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
-        // Deliberately blind to cancellation, like a backend's plain scan: the
-        // only way out is the test releasing it.
-        let _ = self.started_tx.send(self.started_repo_id);
-        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
-            wait_for_release_signal(&self.release);
-        }
-        Ok(Default::default())
+        panic!("the executor must reuse the supplied status, not rescan");
     }
-    fn uncommitted_line_stats_cancellable(
+    fn uncommitted_line_stats_for_status_cancellable(
         &self,
+        status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        assert_eq!(status.unstaged[0].path, PathBuf::from("snapshot-only.txt"));
         let _ = self.started_tx.send(self.started_repo_id);
         if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
             while !cancellation.is_cancelled() {
@@ -4081,9 +4086,6 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         unsupported_repo_result()
     }
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -4245,9 +4247,6 @@ impl GitRepository for RecordingLogRepo {
         unsupported_repo_result()
     }
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -4433,10 +4432,6 @@ impl GitRepository for RecordingCheckoutRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -4968,7 +4963,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -5071,7 +5066,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::default())));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::test_default())));
     let mut repo_task_tokens = FxHashMap::default();
     let executors = super::effects::EffectExecutors {
         executor: &executor,
@@ -5284,7 +5279,7 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
                 calls: Arc::clone(&calls),
             }),
         );
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut repo = RepoState::new_opening(repo_id, spec);
         repo.set_log(if loading {
             Loadable::Loading
@@ -5433,7 +5428,7 @@ fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
         super::executor::TaskExecutor::new(super::executor::metadata_worker_threads());
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_a,
         RepoSpec {
@@ -5541,7 +5536,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         path: PathBuf::from("repo-b.txt"),
         area: DiffArea::Unstaged,
     };
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state_a = RepoState::new_opening(
         repo_a,
         RepoSpec {
@@ -5634,6 +5629,14 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
 /// will use.
 #[test]
 fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
+    let snapshot = Arc::new(RepoStatus {
+        staged: Default::default(),
+        unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+            path: PathBuf::from("snapshot-only.txt"),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+            conflict: None,
+        }]),
+    });
     let repo_a = RepoId(530);
     let repo_b = RepoId(531);
     let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -5675,7 +5678,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
     let metadata_executor = super::executor::TaskExecutor::new(1);
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_a,
         RepoSpec {
@@ -5705,7 +5708,11 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx.clone(),
-        Effect::LoadUncommittedLineStats { repo_id: repo_a },
+        Effect::LoadUncommittedLineStats {
+            repo_id: repo_a,
+            generation: 1,
+            status: Arc::clone(&snapshot),
+        },
     );
     assert_eq!(
         started_rx
@@ -5733,7 +5740,11 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx,
-        Effect::LoadUncommittedLineStats { repo_id: repo_b },
+        Effect::LoadUncommittedLineStats {
+            repo_id: repo_b,
+            generation: 1,
+            status: snapshot,
+        },
     );
 
     assert_eq!(
@@ -5778,7 +5789,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         path: PathBuf::from("tracked.txt"),
         area: DiffArea::Unstaged,
     };
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = crate::model::RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -5951,6 +5962,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::RevertCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+                auth: None,
             },
             1,
         ),
@@ -6880,4 +6895,50 @@ fn branch_action_in_other_worktree_fails_when_backend_opens_own_workdir() {
     ));
     assert!(fixture.origin_calls.lock().unwrap().is_empty());
     assert!(fixture.worktree_calls.lock().unwrap().is_empty());
+}
+
+/// A repo action dispatched while the worker holds no handle for the repo (the
+/// tab is still opening, or the open failed) must still complete, or the
+/// in-flight counter that disables the stage/unstage controls never releases.
+#[test]
+fn repo_action_without_open_handle_releases_in_flight_counter() {
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (store, _event_rx) = AppStore::new_test(backend);
+    let repo_id = RepoId(1);
+    let spec = RepoSpec {
+        workdir: PathBuf::from("/tmp/gitcomet-missing-handle"),
+    };
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    };
+    state.repos.push(RepoState::new_opening(repo_id, spec));
+    store.replace_snapshot_for_test(Arc::new(state));
+
+    store.dispatch(Msg::StagePaths {
+        repo_id,
+        paths: vec![PathBuf::from("a.txt")].into(),
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let repo = loop {
+        let snapshot = store.snapshot();
+        let repo = snapshot.repos.first().expect("the injected repo");
+        // The begin bumps `ops_rev` once; the completion bumps it again.
+        if repo.ops_rev >= 2 {
+            break repo.clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the action never completed: in flight = {}, ops_rev = {}",
+            repo.local_actions_in_flight,
+            repo.ops_rev
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert_eq!(repo.local_actions_in_flight, 0);
+    assert!(
+        repo.feedback.last_error.is_some(),
+        "the missing handle must surface as an action failure"
+    );
 }

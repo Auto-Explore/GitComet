@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 fn annotated_toggle(
     theme: AppTheme,
@@ -87,10 +88,14 @@ pub(super) fn panel(
                 &this.create_tag_annotated_focus_handle,
                 cx,
             )
-            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                this.create_tag_annotated = !this.create_tag_annotated;
-                cx.notify();
-            })),
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                    this.create_tag_annotated = !this.create_tag_annotated;
+                    cx.notify();
+                }),
+            ),
         )
         .child(
             div()

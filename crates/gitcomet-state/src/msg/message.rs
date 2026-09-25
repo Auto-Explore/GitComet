@@ -17,6 +17,7 @@ use gitcomet_core::services::{
     SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
     SubmoduleTrustTarget,
 };
+use gitcomet_core::signing_tools::SigningToolsState;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -31,7 +32,6 @@ pub enum RepoActionKind {
     CheckoutRemoteBranch,
     CheckoutCommit,
     CherryPickCommit,
-    RevertCommit,
     CreateBranch,
     CreateBranchAndCheckout,
     RenameBranch,
@@ -58,11 +58,45 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
+        match self {
+            Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
+            Self::UnstagePath | Self::UnstagePaths => Some(DiffArea::Staged),
+            _ => None,
+        }
+    }
+
+    /// Whether the action can rewrite files in the checkout (index-only and
+    /// ref-only actions cannot).
+    pub fn writes_worktree(self) -> bool {
+        match self {
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash => true,
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DropStash => false,
+        }
+    }
+
     pub(crate) fn hook_activity_label(self) -> &'static str {
         match self {
             Self::CheckoutBranch | Self::CheckoutRemoteBranch | Self::CheckoutCommit => "Checkout",
             Self::CherryPickCommit => "Cherry-pick",
-            Self::RevertCommit => "Revert",
             Self::CreateBranch => "Create branch",
             Self::CreateBranchAndCheckout => "Create branch and checkout",
             Self::RenameBranch => "Rename branch",
@@ -168,11 +202,13 @@ impl ConflictAutosolveStats {
 /// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepoWatchDegradedReason {
-    /// The worktree has more non-ignored folders than the watch budget, so its source folders are
-    /// not watched live at all. Carries the folder count.
+    /// Ignore/configuration inputs could not be read; existing selective coverage is retained.
+    IgnorePolicyFailed,
+    /// The worktree exceeds its watch budget; only the worktree root and Git
+    /// metadata retain coverage. Carries a lower bound on the folder count.
     TooManyFolders { dir_count: usize },
-    /// Some per-directory watches could not be added (the kernel inotify limit was reached), so part
-    /// of the worktree is not watched live. Carries the number of folders left unwatched.
+    /// Some native registrations failed, so coverage is incomplete. Carries the
+    /// number of locations that could not be watched.
     WatchLimitReached { unwatched_dirs: usize },
 }
 
@@ -219,6 +255,8 @@ pub enum Msg {
         hidden: bool,
         ignored: bool,
     },
+    IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
+    HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
     OpenRepo(PathBuf),
     /// Opens a repository candidate supplied by an external file-system drop.
     /// The candidate is not persisted until the backend has opened it
@@ -253,6 +291,12 @@ pub enum Msg {
     },
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
+    SetSigningToolsState(SigningToolsState),
+    SetCommitSignatureTargets {
+        repo_id: RepoId,
+        epoch: u64,
+        commit_ids: Arc<[CommitId]>,
+    },
     SetRemoteUrlPolicy(RemoteUrlPolicy),
     SetGitLogSettings {
         show_history_tags: bool,
@@ -545,6 +589,7 @@ pub enum Msg {
     ResolveCommitLookup {
         repo_id: RepoId,
         reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
     },
     /// Exit file browsing and keep the explorer on the working tree.
     ResetBrowseToLive {
@@ -609,6 +654,9 @@ pub enum Msg {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
     },
     CreateBranch {
         repo_id: RepoId,
@@ -1173,6 +1221,7 @@ pub enum InternalMsg {
     },
     UncommittedLineStatsLoaded {
         repo_id: RepoId,
+        generation: crate::model::LineStatsGeneration,
         result: Result<UncommittedLineStats, Error>,
     },
     StatusLoaded {
@@ -1245,6 +1294,12 @@ pub enum InternalMsg {
     MergeCommitMessageLoaded {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
+    },
+    /// The message git prepared for the next commit (after a `--no-commit`
+    /// revert), offered as the commit box's starting text.
+    CommitMessageSuggested {
+        repo_id: RepoId,
+        message: String,
     },
     HoverCommitMessageLoaded {
         repo_id: RepoId,
@@ -1319,6 +1374,7 @@ pub enum InternalMsg {
     CommitSignaturesVerified {
         repo_id: RepoId,
         epoch: u64,
+        batch: u64,
         result: Result<Vec<(CommitId, CommitSignature)>, Error>,
     },
     /// A [`Msg::RevealCommit`] reference resolved (or failed to).
@@ -1334,6 +1390,7 @@ pub enum InternalMsg {
         /// The `Effect::ResolveCommitLookup` request this answers; a reply that
         /// lost a race against a newer lookup is dropped.
         request: u64,
+        purpose: crate::model::CommitLookupPurpose,
         result: Result<Commit, Error>,
     },
     RangeFilesLoaded {
@@ -1408,6 +1465,14 @@ pub enum InternalMsg {
     RepoActionFinished {
         repo_id: RepoId,
         action: RepoActionKind,
+        result: Result<(), Error>,
+    },
+    /// Carries the affected paths so the reducer can retire their status diffs
+    /// only after a successful stage, unstage, or discard.
+    RepoPathsActionFinished {
+        repo_id: RepoId,
+        action: RepoActionKind,
+        paths: RepoPathList,
         result: Result<(), Error>,
     },
     /// The action ran into an existing branch; open the collision prompt.

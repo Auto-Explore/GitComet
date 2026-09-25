@@ -10,6 +10,7 @@ callgrind.out*
 gitcomet-agent*
 local_*.sh
 tmp/*
+.tmp/
 feat/*
 .autoresearch/*
 dist/
@@ -19,6 +20,7 @@ criterion
 .codex
 .worktrees/
 .reasonix/
+.envrc
 
 # `cargo test --manifest-path vendor/tree-sitter-vue/Cargo.toml` (the standalone
 # check for the vendored grammar's own bindings) writes a lockfile there. The

@@ -1,8 +1,9 @@
 use super::super::super::*;
 use super::helpers::{ICommitEditorMode, IRebaseDragState, IRebaseViewState};
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use rustc_hash::{FxHashMap, FxHasher};
-use std::{cell::RefCell, rc::Rc};
 
 const ACTION_BTN_W: f32 = 76.0;
 
@@ -373,7 +374,8 @@ struct IRebaseDragPreview {
 impl Render for IRebaseDragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let action_btn_w = px(ACTION_BTN_W * self.ui_scale_percent as f32 / 100.0);
+        let scaled_px = ui_scale::scaler(self.ui_scale_percent);
+        let action_btn_w = scaled_px(ACTION_BTN_W);
         let is_squash_like = matches!(
             self.action,
             InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
@@ -384,7 +386,7 @@ impl Render for IRebaseDragPreview {
         );
         div()
             .h(px(self.row_h))
-            .w(px(440.0 * self.ui_scale_percent as f32 / 100.0))
+            .w(scaled_px(440.0))
             .flex()
             .items_center()
             .gap_1()
@@ -405,7 +407,7 @@ impl Render for IRebaseDragPreview {
                     crate::view::icons::svg_icon(
                         "icons/squash_arrow.svg",
                         with_alpha(theme.colors.accent.foreground, 0.7),
-                        px(14.0),
+                        scaled_px(14.0),
                     ),
                 ))
             })
@@ -426,7 +428,7 @@ impl Render for IRebaseDragPreview {
                     .child(crate::view::icons::svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        scaled_px(12.0),
                     )),
             )
             .child(
@@ -772,25 +774,19 @@ impl MainPaneView {
             Vec::new()
         };
 
-        let btn_bounds: Rc<RefCell<Option<gpui::Bounds<gpui::Pixels>>>> =
-            Rc::new(RefCell::new(None));
-        let btn_bounds_prepaint = Rc::clone(&btn_bounds);
         let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
-        let inner_btn = components::Button::new(format!("action_{ix}"), action.to_todo_str())
+        let invoker: SharedString = format!("irebase_action_{}_{}", repo_id.0, ix).into();
+        let menu_open = self.active_context_menu_invoker.as_ref() == Some(&invoker);
+        let action_btn = components::Button::new(format!("action_{ix}"), action.to_todo_str())
             .style(components::ButtonStyle::Outlined)
+            .open(menu_open)
             .end_slot(crate::view::icons::svg_icon(
                 "icons/chevron_down.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
-            .render(theme, ui_scale_percent)
-            .w(action_btn_w)
-            .flex_shrink_0()
-            .on_click(cx.listener(move |this, _e, window, cx| {
-                let bounds = (*btn_bounds.borrow()).unwrap_or(gpui::Bounds {
-                    origin: gpui::point(px(0.0), px(0.0)),
-                    size: gpui::size(px(0.0), px(0.0)),
-                });
+            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                let invoker = invoker.clone();
                 let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
                     return;
                 };
@@ -804,11 +800,12 @@ impl MainPaneView {
                     let _ = wh.update(cx, |_, window, cx| {
                         let _ = root.update(cx, |root, cx| {
                             root.open_popover_for_bounds(
-                                PopoverKind::InteractiveRebaseActionMenu {
+                                (PopoverKind::InteractiveRebaseActionMenu {
                                     ix,
                                     can_squash,
                                     can_drop,
-                                },
+                                })
+                                .invoked_by(invoker.clone()),
                                 bounds,
                                 window,
                                 cx,
@@ -816,71 +813,70 @@ impl MainPaneView {
                         });
                     });
                 });
-            }));
-
-        let action_btn = div()
-            .on_children_prepainted(move |children_bounds, _w, _cx| {
-                if let Some(b) = children_bounds.first() {
-                    *btn_bounds_prepaint.borrow_mut() = Some(*b);
-                }
             })
-            .child(inner_btn)
-            .id(format!("action_w_{ix}"));
+            .w(action_btn_w)
+            .flex_shrink_0();
 
         let up_btn = components::Button::new(format!("up_{ix}"), "")
             .start_slot(crate::view::icons::svg_icon(
                 "icons/arrow_up.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .style(components::ButtonStyle::Subtle)
             .no_focus()
             .disabled(display_pos == 0)
-            .render(theme, ui_scale_percent)
-            .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
-                    return;
-                };
-                let entry_display_pos = display_pos_for_data_ix(st, ix);
-                if entry_display_pos > 0 {
-                    let swap_ix = data_ix_for_display(st, entry_display_pos - 1);
-                    let edit_signatures = reword_edit_signatures(&st.entries);
-                    st.entries.swap(ix, swap_ix);
-                    clear_stale_reword_edits(&edit_signatures, &mut st.entries);
-                    validate_squash_entries(&mut st.entries);
-                    let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
-                    st.reorder_anim = Some((ix, swap_ix, ver));
-                }
-                cx.notify();
-            }));
+            .on_click_handler(
+                theme,
+                ui_scale_percent,
+                cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
+                    let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                        return;
+                    };
+                    let entry_display_pos = display_pos_for_data_ix(st, ix);
+                    if entry_display_pos > 0 {
+                        let swap_ix = data_ix_for_display(st, entry_display_pos - 1);
+                        let edit_signatures = reword_edit_signatures(&st.entries);
+                        st.entries.swap(ix, swap_ix);
+                        clear_stale_reword_edits(&edit_signatures, &mut st.entries);
+                        validate_squash_entries(&mut st.entries);
+                        let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                        st.reorder_anim = Some((ix, swap_ix, ver));
+                    }
+                    cx.notify();
+                }),
+            );
 
         let down_btn = components::Button::new(format!("down_{ix}"), "")
             .start_slot(crate::view::icons::svg_icon(
                 "icons/arrow_down.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .style(components::ButtonStyle::Subtle)
             .no_focus()
             .disabled(display_pos + 1 >= entry_count)
-            .render(theme, ui_scale_percent)
-            .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
-                    return;
-                };
-                let len = st.entries.len();
-                let entry_display_pos = display_pos_for_data_ix(st, ix);
-                if entry_display_pos + 1 < len {
-                    let swap_ix = data_ix_for_display(st, entry_display_pos + 1);
-                    let edit_signatures = reword_edit_signatures(&st.entries);
-                    st.entries.swap(ix, swap_ix);
-                    clear_stale_reword_edits(&edit_signatures, &mut st.entries);
-                    validate_squash_entries(&mut st.entries);
-                    let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
-                    st.reorder_anim = Some((ix, swap_ix, ver));
-                }
-                cx.notify();
-            }));
+            .on_click_handler(
+                theme,
+                ui_scale_percent,
+                cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
+                    let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                        return;
+                    };
+                    let len = st.entries.len();
+                    let entry_display_pos = display_pos_for_data_ix(st, ix);
+                    if entry_display_pos + 1 < len {
+                        let swap_ix = data_ix_for_display(st, entry_display_pos + 1);
+                        let edit_signatures = reword_edit_signatures(&st.entries);
+                        st.entries.swap(ix, swap_ix);
+                        clear_stale_reword_edits(&edit_signatures, &mut st.entries);
+                        validate_squash_entries(&mut st.entries);
+                        let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                        st.reorder_anim = Some((ix, swap_ix, ver));
+                    }
+                    cx.notify();
+                }),
+            );
 
         let drag_val = IRebaseDragValue { ix };
         let pf_action = action;
@@ -919,12 +915,15 @@ impl MainPaneView {
             .px_2()
             .py_0p5()
             .rounded(px(theme.radii.row))
-            .when(!is_drag_source && is_selected, |d| {
-                d.bg(theme.colors.interaction.pressed_background)
-            })
-            .when(!is_drag_source && !is_selected, |d| {
-                d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
-            })
+            .control_interaction(
+                controls::InteractionStyle::new(theme),
+                controls::InteractionState::default()
+                    .selected(
+                        !is_drag_source && is_selected,
+                        theme.colors.interaction.selected_background,
+                    )
+                    .disabled(is_drag_source),
+            )
             .when(is_dropped, |d| d.opacity(0.5))
             .when(show_top_line, |d| {
                 d.child(
@@ -1026,9 +1025,10 @@ impl MainPaneView {
                             .child(down_btn),
                     ),
             )
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, _e: &gpui::MouseDownEvent, _w, cx| {
+            .on_activate(
+                is_drag_source,
+                controls::ControlActivation::Composite,
+                cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
                     this.store.dispatch(Msg::SelectCommit {
                         repo_id,
                         commit_id: commit_id_val.clone(),
@@ -1036,14 +1036,11 @@ impl MainPaneView {
                     cx.notify();
                 }),
             )
-            .on_mouse_up(
+            .on_pointer_click(
                 gpui::MouseButton::Right,
-                cx.listener(move |this, e: &gpui::MouseUpEvent, window, cx| {
+                cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                     // Checked before `stop_propagation`: declining to open the
                     // menu must not swallow the release either.
-                    if crate::press_gesture::is_press_claimed(cx) {
-                        return;
-                    }
                     cx.stop_propagation();
                     let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
                         return;
@@ -1107,6 +1104,7 @@ impl MainPaneView {
     ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         self.sync_interactive_commit_editor_states();
 
         // Sync the variable-height virtualized list state before borrowing the
@@ -1388,7 +1386,7 @@ impl MainPaneView {
                                         .end_slot(crate::view::icons::svg_icon(
                                             "icons/chevron_down.svg",
                                             theme.colors.foreground.secondary,
-                                            px(12.0),
+                                            scaled_px(12.0),
                                         ))
                                         .on_click_with_bounds(
                                             theme,
@@ -1422,8 +1420,7 @@ impl MainPaneView {
                                 components::Button::new("irebase_reset", "Reset All")
                                     .style(components::ButtonStyle::Outlined)
                                     .disabled(!is_modified)
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(cx.listener(
+                                    .on_click_handler(theme, ui_scale_percent, cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
                                             let Some(st) =
                                                 this.interactive_rebase_states.get_mut(&repo_id)
@@ -1440,8 +1437,7 @@ impl MainPaneView {
                             .child(
                                 components::Button::new("irebase_cancel", "Cancel")
                                     .style(components::ButtonStyle::Outlined)
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(cx.listener(
+                                    .on_click_handler(theme, ui_scale_percent, cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
                                             this.store.dispatch(
                                                 Msg::CancelInteractiveRebaseSetup { repo_id },
@@ -1472,8 +1468,7 @@ impl MainPaneView {
                                             || !matches!(loading_state, Loadable::Ready(_))
                                             || history_rewrite_busy,
                                     )
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(cx.listener(
+                                    .on_click_handler(theme, ui_scale_percent, cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
                                             let Some(st) =
                                                 this.interactive_rebase_states.get_mut(&repo_id)

@@ -91,7 +91,7 @@ fn open_file_history_with(
 /// block so that rebinding `cx` to the visual context reaches the test body.
 macro_rules! file_history_picker {
     ($cx:ident, $host:ident) => {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, $cx) =
             $cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
         let $host = open_file_history(&view, $cx);
@@ -104,7 +104,7 @@ macro_rules! file_history_picker {
 #[gpui::test]
 fn file_history_reports_older_commits_still_loading(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pending = Some(gitcomet_core::domain::LogCursor {
@@ -412,6 +412,7 @@ fn file_history_ignores_a_page_for_a_different_file(cx: &mut gpui::TestAppContex
 fn right_click_history_row(cx: &mut gpui::VisualTestContext) {
     let center = cx.debug_bounds("picker_prompt_item_1").unwrap().center();
     cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
     draw_picker(cx);
 }
 
@@ -484,6 +485,32 @@ fn copying_file_history_sha_keeps_picker_open(cx: &mut gpui::TestAppContext) {
         assert!(host.picker_row_menu.is_none());
         assert_eq!(crate::clipboard::read_text(cx).as_deref(), Some(commit(1).id.as_ref()));
     }));
+}
+
+#[gpui::test]
+fn file_history_row_revert_opens_the_revert_confirmation(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    file_history_picker!(cx, host);
+    right_click_history_row(cx);
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            let action = picker_row_menu::nav_actions(host, cx)
+                .unwrap()
+                .into_iter()
+                .find(|action| matches!(action, ContextMenuAction::RevertCommit { .. }))
+                .expect("file history rows offer Revert");
+            picker_row_menu::activate(host, action, window, cx);
+            assert_eq!(
+                host.popover_kind_for_tests(),
+                Some(PopoverKind::RevertCommitConfirm {
+                    repo_id: RepoId(1),
+                    commit_id: commit(1).id,
+                })
+            );
+        })
+    });
+    draw_picker(cx);
+    assert!(cx.update(|_, app| host.read(app).is_open()));
 }
 
 #[gpui::test]

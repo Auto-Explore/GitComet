@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::components::ControlInteractionExt;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 mod add_repo_menu;
@@ -10,6 +11,7 @@ mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
 mod clone_repo;
+mod commit_mainline;
 mod commit_prompt;
 pub(in super::super) mod context_menu;
 mod create_branch_from_ref_prompt;
@@ -36,6 +38,7 @@ mod remote_remove_confirm;
 mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
+mod revert_commit_confirm;
 mod rows_cache;
 mod search_inputs;
 mod squash_prompt;
@@ -123,6 +126,8 @@ const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0,
 /// default.
 const HISTORY_AUTHOR_FILTER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 240.0, 420.0);
 const REPO_TAB_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
+/// Rows read "origin — github.com/owner/repo", so wider than a plain menu.
+const REMOTE_WEB_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(360.0, 260.0, 520.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
 const DIALOG_320_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -213,17 +218,18 @@ pub(in super::super) struct PopoverHost {
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
     hook_activity_selected: Option<GitOperationId>,
+    hook_activity_text: hook_activity::TextState,
     hook_activity_history_scroll: ScrollHandle,
     hook_activity_hooks_scroll: ScrollHandle,
     hook_activity_output_scroll: ScrollHandle,
-    /// Explicit 1-based mainline selected for the currently open single
-    /// merge-commit cherry-pick confirmation. Reset every time that dialog
-    /// opens; drafts are intentionally session-local.
-    cherry_pick_mainline: Option<usize>,
+    /// Explicit 1-based mainline selected in the open merge-commit
+    /// cherry-pick or revert confirmation. Reset every time either opens.
+    commit_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
-    /// Focus held by the App/Add Repository menu or staging confirmation invoker,
-    /// restored when dismissed without replacing it with another prompt.
+    /// Focus held by the menu or confirmation's invoker, restored on dismissal.
     menu_invoker_focus: Option<FocusHandle>,
+    focus_return: Option<FocusHandle>,
+    active_invoker: Option<SharedString>,
     /// Whether the open popover was invoked from inside the diff panel.
     ///
     /// Some menus — the web link menu above all — can be raised from either the
@@ -265,12 +271,8 @@ pub(in super::super) struct PopoverHost {
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
     history_author_filter_selected_index: Option<usize>,
-    /// Author suggestions for the history author filter, keyed by repository and
-    /// the log revision they were collected from. Collecting them walks the
-    /// whole accumulated log, and the popover re-renders on every mouse move
-    /// over it, so the result has to outlive the frame. See
-    /// [`author_filter::suggestions`].
-    history_author_suggestions: Option<(RepoId, u64, std::sync::Arc<[SharedString]>)>,
+    /// Collected author names survive frames and active author filters.
+    history_author_suggestions: Option<author_filter::SuggestionCache>,
     /// Row models for the pickers that build one row per repository, ref or
     /// worktree, rebuilt only when the data behind them changes rather than on
     /// every frame. See [`rows_cache`] — a hover moving between rows re-renders
@@ -446,8 +448,6 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
     cx: &mut gpui::Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
     let focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
-    let hover_bg = theme.hover_overlay();
-    let active_bg = theme.active_overlay();
     div()
         .id(id)
         .debug_selector(move || debug_selector.to_string())
@@ -462,12 +462,10 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(hover_bg))
-        .active(move |s| s.bg(active_bg))
-        .focus(move |s| {
-            s.bg(theme.colors.interaction.focus_background)
-                .border_color(theme.colors.interaction.focus_ring)
-        })
+        .control_interaction(
+            components::InteractionStyle::new(theme),
+            components::InteractionState::default(),
+        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |_this, _e: &MouseDownEvent, window, cx| {
@@ -487,6 +485,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::WebLinkMenu { .. }
+            | PopoverKind::LocalFileLinkMenu { .. }
             | PopoverKind::CommitShaLinkMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
@@ -511,7 +510,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
-                kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
+                kind: RepoPopoverKind::Remote(
+                    RemotePopoverKind::Menu { .. } | RemotePopoverKind::OpenInBrowserMenu,
+                ),
                 ..
             }
             | PopoverKind::StashMenu { .. }
@@ -542,6 +543,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
         PopoverKind::StashDropConfirm { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
+            | PopoverKind::RevertCommitConfirm { .. }
             | PopoverKind::MergeCommitConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
@@ -618,8 +620,8 @@ pub(super) fn dialog_cancel_button(
     theme: AppTheme,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
-    cancel_button(id, hint_debug_selector, theme).on_click(theme, cx, |this, _e, _w, cx| {
-        this.close_popover(cx);
+    cancel_button(id, hint_debug_selector, theme).on_click(theme, cx, |this, _e, window, cx| {
+        this.close_popover_and_restore_focus(window, cx);
     })
 }
 
@@ -839,6 +841,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PushSetUpstreamPrompt { .. }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::BranchExistsPrompt { .. }
@@ -909,6 +912,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
@@ -962,9 +966,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             Some(DIALOG_440_WIDTH)
         }
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::WebLinkMenu { .. } | PopoverKind::DiffActionMenu => {
-            Some(DIFF_ACTION_MENU_WIDTH)
-        }
+        PopoverKind::WebLinkMenu { .. }
+        | PopoverKind::LocalFileLinkMenu { .. }
+        | PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         // SHA-link and commit menus share their width to keep navigation
         // and file-browsing actions consistent.
         PopoverKind::CommitShaLinkMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
@@ -1009,6 +1013,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+            ..
+        } => Some(REMOTE_WEB_PICKER_WIDTH),
         PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings

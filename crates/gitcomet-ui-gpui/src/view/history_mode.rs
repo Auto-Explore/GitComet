@@ -47,9 +47,6 @@ const HISTORY_MODE_UI_SPECS: [HistoryModeUiSpec; 5] = [
     },
 ];
 
-pub(crate) const HISTORY_MODE_TOOLTIP_TEXT: &str =
-    "History mode (Full reachable / First-parent / No merges / Merges only / All branches)";
-
 pub(crate) fn history_mode_ui_specs() -> &'static [HistoryModeUiSpec] {
     &HISTORY_MODE_UI_SPECS
 }

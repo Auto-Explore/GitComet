@@ -48,6 +48,7 @@ exact_filtered_target!(bench_branch_sidebar_cache_selected => bench_branch_sideb
     "branch_sidebar/cache_invalidation_worktrees_ready",
 ]);
 exact_filtered_target!(bench_history_graph_selected => bench_history_graph);
+exact_filtered_target!(bench_indexed_history_selected => bench_indexed_history);
 exact_filtered_target!(bench_history_cache_build_selected => bench_history_cache_build, [
     "history_cache_build/balanced",
     "history_cache_build/merge_dense",
@@ -245,6 +246,7 @@ criterion_group! {
         bench_branch_sidebar_extreme_scale_selected,
         bench_branch_sidebar_cache_selected,
         bench_history_graph_selected,
+        bench_indexed_history_selected,
         bench_history_cache_build_selected,
         bench_history_cache_build_extreme_scale_selected,
         bench_history_load_more_append_selected,

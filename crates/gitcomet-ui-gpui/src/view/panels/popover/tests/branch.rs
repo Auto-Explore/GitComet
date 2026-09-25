@@ -298,10 +298,6 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
         self.actions
             .lock()
@@ -440,11 +436,14 @@ pub(super) fn create_tracking_store(
     let workdir = unique_temp_dir(label);
     let expected_workdir = normalize_store_workdir(&workdir);
     let repo = Arc::new(TrackingRepo::new(workdir.clone()));
-    let (store, events) = AppStore::new(Arc::new(TrackingBackend {
+    let (store, events) = AppStore::new_test(Arc::new(TrackingBackend {
         repo: Arc::clone(&repo),
     }));
     store.dispatch(Msg::OpenRepo(workdir.clone()));
-    wait_until("tracked test repo to open", || {
+    // Branches load after `open` turns Ready. The ref pickers index rows by
+    // position (HEAD, then branches), so a view built before they land is
+    // missing rows; slow CI runners (Windows) hit that.
+    wait_until("tracked test repo to open and list branches", || {
         let snapshot = store.snapshot();
         snapshot
             .active_repo
@@ -457,6 +456,7 @@ pub(super) fn create_tracking_store(
             .is_some_and(|repo_state| {
                 repo_state.spec.workdir == expected_workdir
                     && matches!(repo_state.open, Loadable::Ready(()))
+                    && matches!(repo_state.branches, Loadable::Ready(_))
             })
     });
     (store, events, repo, workdir)
@@ -613,15 +613,15 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranchFromRefPrompt {
+                    (PopoverKind::CreateBranchFromRefPrompt {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
                         name_prefix: String::new(),
-                    },
+                    })
+                    .invoked_by("create_branch_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -678,7 +678,9 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAppContext) {
+fn create_branch_source_picker_preserves_focus_and_selects_on_completed_click(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events, _repo, _workdir) = create_tracking_store("create-branch-source-click");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");
     let store_for_view = store.clone();
@@ -718,6 +720,48 @@ fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAp
     });
     cx.update(|window, app| {
         let _ = window.draw(app);
+    });
+
+    let target = cx.debug_bounds("picker_prompt_item_1").unwrap().center();
+    cx.simulate_mouse_move(target, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(target, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(host.create_branch_source_target, "HEAD");
+        assert_window_focus(
+            window,
+            app,
+            host.branch_picker_search_input
+                .as_ref()
+                .unwrap()
+                .read(app)
+                .focus_handle(),
+            "a suggestion press must retain input focus until release",
+        );
+    });
+    assert!(cx.debug_bounds("picker_prompt_item_1").is_some());
+    let other_row = cx.debug_bounds("picker_prompt_item_0").unwrap().center();
+    cx.simulate_mouse_move(
+        other_row,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        other_row,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app)
+                .popover_host
+                .read(app)
+                .create_branch_source_target,
+            "HEAD"
+        );
     });
 
     click_debug_selector(cx, "picker_prompt_item_1");
@@ -929,7 +973,7 @@ fn worktree_ref_picker_enter_selects_and_focuses_add(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn rename_branch_prompt_cancel_button_and_escape_close(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1023,7 +1067,7 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
 
 #[gpui::test]
 fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -1153,15 +1197,15 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranchFromRefPrompt {
+                    (PopoverKind::CreateBranchFromRefPrompt {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
                         name_prefix: String::new(),
-                    },
+                    })
+                    .invoked_by("create_branch_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1594,15 +1638,15 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranchFromRefPrompt {
+                    (PopoverKind::CreateBranchFromRefPrompt {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
                         name_prefix: String::new(),
-                    },
+                    })
+                    .invoked_by("create_branch_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1792,7 +1836,7 @@ mod checkout_picker {
         repo: RepoState,
         repo_id: RepoId,
     ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2428,6 +2472,7 @@ mod checkout_picker {
             click_count: 1,
             first_mouse: false,
         });
+        cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
         cx.run_until_parked();
         redraw(cx);
 
@@ -2589,7 +2634,7 @@ fn branch_group_menu_model_filtered(
     filter: &str,
     configure: impl FnOnce(&mut RepoState),
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2634,7 +2679,7 @@ fn branch_group_menu_model_filtered(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -2688,7 +2733,7 @@ fn branch_group_delete_confirm_names_with_head(
     head: &str,
     configure: impl FnOnce(&mut RepoState),
 ) -> Vec<String> {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2728,7 +2773,7 @@ fn branch_group_delete_confirm_names_with_head(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -2974,7 +3019,7 @@ fn pinned_section_menu_model(
     section: BranchSection,
     pins: &[(BranchSection, &str)],
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3019,7 +3064,7 @@ fn pinned_section_menu_model(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -3104,7 +3149,7 @@ fn activate_sidebar_action_with(
     collapsed_keys: &[&str],
     pick: impl FnOnce(&mut PopoverHost, &mut gpui::Context<PopoverHost>) -> ContextMenuAction,
 ) -> (BTreeSet<String>, BTreeSet<String>) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3138,7 +3183,7 @@ fn activate_sidebar_action_with(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -3423,7 +3468,7 @@ fn branch_group_menu_treats_a_blank_filter_as_no_filter(cx: &mut gpui::TestAppCo
 /// collapse key alone would offer "Expand" on a visibly open section.
 #[gpui::test]
 fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3444,7 +3489,7 @@ fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::Te
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -3697,7 +3742,9 @@ fn rename_branch_prompt_existing_name_opens_collision_dialog(cx: &mut gpui::Test
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(!cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()));
-    assert!(store.snapshot().branch_exists_prompt.is_none());
+    wait_until("rename collision prompt cancellation", || {
+        store.snapshot().branch_exists_prompt.is_none()
+    });
 }
 
 #[gpui::test]

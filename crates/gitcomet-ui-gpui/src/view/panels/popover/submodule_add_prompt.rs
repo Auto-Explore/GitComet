@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 fn advanced_toggle(
     theme: AppTheme,
@@ -114,7 +115,7 @@ pub(super) fn panel(
                 &this.submodule_advanced_focus_handle,
                 cx,
             )
-            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+            .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _w, cx| {
                 this.submodule_add_advanced_expanded = !this.submodule_add_advanced_expanded;
                 cx.notify();
             })),
@@ -137,7 +138,7 @@ pub(super) fn panel(
                         &this.submodule_force_focus_handle,
                         cx,
                     )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                    .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _w, cx| {
                         this.submodule_force_enabled = !this.submodule_force_enabled;
                         cx.notify();
                     })),

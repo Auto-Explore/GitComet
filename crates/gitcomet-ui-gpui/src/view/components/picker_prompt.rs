@@ -1,4 +1,7 @@
 use super::control_height_md;
+use super::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction as controls;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
@@ -45,7 +48,6 @@ pub struct PickerPrompt {
     accent_selection: bool,
     attached_list_surface: bool,
     padded_query_row: bool,
-    select_on_mouse_down: bool,
     query_row_trailing: Option<gpui::AnyElement>,
     list_override: Option<gpui::AnyElement>,
     remove_tooltip: Option<SharedString>,
@@ -533,7 +535,6 @@ impl PickerPrompt {
             accent_selection: false,
             attached_list_surface: false,
             padded_query_row: false,
-            select_on_mouse_down: false,
             query_row_trailing: None,
             list_override: None,
             remove_tooltip: None,
@@ -619,11 +620,6 @@ impl PickerPrompt {
         self
     }
 
-    pub fn select_on_mouse_down(mut self) -> Self {
-        self.select_on_mouse_down = true;
-        self
-    }
-
     /// Control pinned to the right of the query row, e.g. a sort toggle.
     pub fn query_row_trailing(mut self, element: impl IntoElement) -> Self {
         self.query_row_trailing = Some(element.into_any_element());
@@ -694,7 +690,6 @@ impl PickerPrompt {
         let accent_selection = self.accent_selection;
         let attached_list_surface = self.attached_list_surface;
         let padded_query_row = self.padded_query_row;
-        let select_on_mouse_down = self.select_on_mouse_down;
         let ui_scale = ui_scale.into();
         let scaled_px = crate::ui_scale::scaler(ui_scale);
 
@@ -972,21 +967,15 @@ impl PickerPrompt {
                             cx,
                         ))
                     });
-                if select_on_mouse_down {
-                    row = row.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            (on_select)(this, original_index, &ClickEvent::default(), window, cx);
-                        }),
-                    );
-                } else {
-                    row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                row = row.on_activate(
+                    false,
+                    controls::ControlActivation::PreserveFocus,
+                    cx.listener(move |this, event: &ClickEvent, window, cx| {
                         (on_select)(this, original_index, event, window, cx);
-                    }));
-                }
+                    }),
+                );
                 if let Some(on_context_menu) = on_context_menu.clone() {
-                    row = row.on_mouse_down(
+                    row = row.on_pointer_click(
                         MouseButton::Right,
                         move |event: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
@@ -1004,7 +993,6 @@ impl PickerPrompt {
                 }
                 // Text-alpha overlays keep the highlight visible on the
                 // elevated popover surface, unlike the canvas-tuned tokens.
-                let hover_overlay = theme.hover_overlay();
                 let active_overlay = theme.active_overlay();
                 if is_selected {
                     row = row.bg(active_overlay).when(accent_selection, |row| {
@@ -1021,9 +1009,10 @@ impl PickerPrompt {
                         )
                     });
                 }
-                row = row
-                    .hover(move |s| s.bg(hover_overlay))
-                    .active(move |s| s.bg(active_overlay));
+                row = row.control_interaction(
+                    InteractionStyle::new(theme).selection_outline(false),
+                    InteractionState::default().selected(is_selected, active_overlay),
+                );
                 list = list.child(row);
             }
             if window.rows.end == row_count {
@@ -1520,12 +1509,15 @@ fn section_header_row(
             .w_full()
             .rounded(scaled_px(ROW_CORNER_PX))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.hover_overlay()))
-            .active(move |s| s.bg(theme.active_overlay()))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(label_row)
-            .on_click(move |_event: &ClickEvent, window, cx| {
-                (on_toggle)(&label, window, cx);
-            }),
+            .on_activate(
+                false,
+                controls::ControlActivation::PreserveFocus,
+                move |_event: &ClickEvent, window, cx| {
+                    (on_toggle)(&label, window, cx);
+                },
+            ),
     );
     row
 }
@@ -1710,18 +1702,10 @@ fn remove_row_button<V: 'static>(
                 .invisible()
                 .group_hover(row_group, |style| style.visible())
         })
-        .hover(move |s| {
-            s.bg(with_alpha(
-                theme.colors.status.danger.foreground,
-                super::REMOVE_BUTTON_HOVER_ALPHA,
-            ))
-        })
-        .active(move |s| {
-            s.bg(with_alpha(
-                theme.colors.status.danger.foreground,
-                super::REMOVE_BUTTON_PRESSED_ALPHA,
-            ))
-        })
+        .control_interaction(
+            InteractionStyle::destructive(theme),
+            InteractionState::default(),
+        )
         .child(crate::view::icons::svg_icon(
             super::REMOVE_BUTTON_ICON,
             theme.colors.status.danger.foreground,
@@ -1747,15 +1731,13 @@ fn remove_row_button<V: 'static>(
                 host.clear_tooltip_if_matches(tooltip, cx);
             });
         }))
-        // Keeps the press off the row, which may activate on mouse-down.
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_this, _event: &MouseDownEvent, _w, cx| cx.stop_propagation()),
+        .on_activate(
+            false,
+            controls::ControlActivation::Nested,
+            cx.listener(move |this, _event: &ClickEvent, window, cx| {
+                (on_remove)(this, index, window, cx);
+            }),
         )
-        .on_click(cx.listener(move |this, _event: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            (on_remove)(this, index, window, cx);
-        }))
 }
 
 use crate::theme::with_alpha;

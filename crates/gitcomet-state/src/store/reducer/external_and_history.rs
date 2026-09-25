@@ -76,6 +76,9 @@ pub(super) fn reload_repo(
     let mut effects = Vec::new();
     append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
     let repo_state = &mut state.repos[repo_ix];
+    if git_log_settings.verify_commit_signatures {
+        repo_state.clear_commit_signatures();
+    }
 
     repo_state.set_head_branch(Loadable::Loading);
     repo_state.set_detached_head_commit(None);
@@ -121,6 +124,9 @@ pub(super) fn reload_repo(
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
+    // The view re-requests sidebar data only when its request changes, so
+    // worktrees and stashes reset above would otherwise stay NotLoaded.
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
     // repo's own `.git`, so a commit or stash made inside a linked worktree
@@ -160,6 +166,13 @@ pub(super) fn repo_externally_changed(
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
 ) -> Vec<Effect> {
+    if change.verification_context && state.git_log_settings.verify_commit_signatures {
+        // Config includes and control-file replacements can change the verifier
+        // or trust settings without changing any commit. Wait for fresh tool
+        // discovery; the GUI republishes its viewport for the new epoch.
+        state.signing_tools = Default::default();
+        super::util::reverify_all_commit_signatures_effects(state);
+    }
     let sidebar_shows_this_files_tree =
         state.sidebar_mode == SidebarMode::Files && state.active_repo == Some(repo_id);
     if change.git_state {
@@ -174,6 +187,11 @@ pub(super) fn repo_externally_changed(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Outside the index/worktree chain below: an event that touched both must
+    // still tell the view to look at the open file.
+    if change.worktree {
+        repo_state.bump_worktree_change_rev();
+    }
 
     let file_browser_effect =
         file_browser_refresh_for_external_change(repo_state, change, sidebar_shows_this_files_tree);
@@ -210,12 +228,14 @@ pub(super) fn repo_externally_changed(
             // between the staged and unstaged sections; refreshing only the staged lane would
             // leave the file lingering (stale) in the unstaged section (or vice-versa).
             append_requested_status_refresh_effects(repo_state, &mut effects);
-        } else if change.worktree
-            && repo_state
+        } else if change.worktree {
+            repo_state.loads_in_flight.invalidate_line_stats();
+            if repo_state
                 .loads_in_flight
                 .request(RepoLoadsInFlight::WORKTREE_STATUS)
-        {
-            effects.push(Effect::LoadWorktreeStatus { repo_id });
+            {
+                effects.push(Effect::LoadWorktreeStatus { repo_id });
+            }
         }
         effects
     };
@@ -526,6 +546,9 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
                         ));
                         return vec![];
                     };
+                    if entry.summary.is_empty() {
+                        entry.summary = message.lines().next().unwrap_or_default().to_owned();
+                    }
                     entry.message = message;
                     ordered_entries.push(entry);
                 }
@@ -617,10 +640,14 @@ pub(super) fn log_loaded(
     result: std::result::Result<gitcomet_core::services::HistoryReadResult, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let verification_enabled = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = if state.active_repo == Some(repo_id) {
+        state.signature_verification_formats()
+    } else {
+        gitcomet_core::domain::SignatureFormats::NONE
+    };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
-        let mut appended_signature_ids = Vec::new();
 
         // Drop replies from a walk that a newer request superseded. That walk
         // was cancelled and its replacement is still running, so the in-flight
@@ -640,12 +667,9 @@ pub(super) fn log_loaded(
                 // A failed checkout may have changed the optimistic detached
                 // HEAD even though the retained history still matches Git.
                 reconcile_detached_head_from_log(repo_state, scope);
-                effects.extend(super::util::reverify_loaded_commit_signatures_effect(
-                    verify_signatures,
-                    repo_state,
-                ));
-                effects.extend(finish_log_load(repo_state));
-                return effects;
+                // Activation and watcher checks can leave history unchanged.
+                // Keep its badges and ongoing verification until a page reloads.
+                return finish_log_load(repo_state);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);
@@ -653,13 +677,6 @@ pub(super) fn log_loaded(
                 return finish_log_load(repo_state);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
-                if is_load_more {
-                    appended_signature_ids = page
-                        .commits
-                        .iter()
-                        .map(|commit| commit.id.clone())
-                        .collect();
-                }
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     // Drop the history_state copy first so the Arc's refcount
                     // goes to 1 and make_mut can mutate in-place instead of
@@ -708,6 +725,7 @@ pub(super) fn log_loaded(
         // paging toward its target — one clear per batch, which the details pane
         // shows as a flicker between the commit and the working tree.
         if !is_load_more
+            && repo_state.history_state.indexed.index.is_none()
             && !repo_state.history_state.multi_selection.commits.is_empty()
             && let Loadable::Ready(page) = &repo_state.log
         {
@@ -721,7 +739,7 @@ pub(super) fn log_loaded(
             };
 
             let mut next = repo_state.history_state.multi_selection.clone();
-            next.commits.retain(&survives);
+            Arc::make_mut(&mut next.commits).retain(&survives);
             if let Some(anchor) = &next.anchor
                 && !survives(anchor)
             {
@@ -766,17 +784,10 @@ pub(super) fn log_loaded(
             repo_state.set_log_loading_more(false);
         }
 
-        if !is_load_more {
+        if !is_load_more && verification_enabled {
             effects.extend(super::util::reverify_loaded_commit_signatures_effect(
-                verify_signatures,
+                signature_formats,
                 repo_state,
-            ));
-        } else {
-            effects.extend(super::util::verify_commit_signatures_effect(
-                verify_signatures,
-                repo_state,
-                repo_id,
-                appended_signature_ids,
             ));
         }
 
@@ -834,6 +845,9 @@ fn finish_repo_action(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
+        if action.writes_worktree() {
+            repo_state.bump_local_worktree_write_rev();
+        }
         match completion {
             RepoActionCompletion::Succeeded => {
                 repo_state.feedback.last_error = None;
@@ -966,7 +980,6 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
             | RepoActionKind::CheckoutRemoteBranch
             | RepoActionKind::CheckoutCommit
             | RepoActionKind::CherryPickCommit
-            | RepoActionKind::RevertCommit
             | RepoActionKind::CreateBranchAndCheckout
             | RepoActionKind::RenameBranch
     )

@@ -17,6 +17,7 @@ test-support = []
 [dependencies]
 gitcomet-core = { workspace = true }
 notify = { workspace = true }
+rustfs-mimalloc = { workspace = true }
 smol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -27,3 +28,9 @@ tempfile = { workspace = true }
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gitcomet-git-gix = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gitcomet-fs-watch = { path = "../gitcomet-fs-watch" }
+
+[target.'cfg(any(target_os = "macos", windows))'.dev-dependencies]
+gitcomet-fs-watch = { path = "../gitcomet-fs-watch", features = ["test-support"] }

@@ -14,6 +14,8 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+mod worker_limit;
+
 impl GixRepo {
     fn may_have_gitlink_status_supplement(
         &self,
@@ -103,14 +105,19 @@ impl GixRepo {
             // Fast path: HEAD and index unchanged — skip Tree→Index comparison and
             // collect Index→Worktree changes directly without the generic iterator's
             // extra thread/channel hop.
-            let direct =
-                collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+            let direct = collect_index_worktree_status_direct(
+                &repo,
+                &mut unstaged,
+                may_have_gitlinks,
+                cancellation,
+            )?;
             cancellation.check_cancelled()?;
             has_conflicted_unstaged = direct.has_conflicted_unstaged;
             (cached_staged, direct.index_stamp_after_write)
         } else {
             // Full path: run both Tree→Index and Index→Worktree comparisons.
             cancellation.check_cancelled()?;
+            let thread_limit = worker_limit::for_repo(&repo, cancellation)?;
             let platform = repo
                 .status(gix::progress::Discard)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status platform: {e}"))))?
@@ -118,6 +125,9 @@ impl GixRepo {
                 // `git status` parity, so skip gix's default submodule probing on the
                 // common no-submodule path.
                 .index_worktree_submodules(None)
+                .index_worktree_options_mut(|options| {
+                    options.thread_limit = thread_limit;
+                })
                 .untracked_files(gix::status::UntrackedFiles::Files);
             let mut staged = Vec::new();
             let mut iter = platform
@@ -199,7 +209,12 @@ impl GixRepo {
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+        let direct = collect_index_worktree_status_direct(
+            &repo,
+            &mut unstaged,
+            may_have_gitlinks,
+            cancellation,
+        )?;
         cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
@@ -213,6 +228,7 @@ impl GixRepo {
         if may_have_gitlinks {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
+                &repo,
                 &mut Vec::new(),
                 &mut unstaged,
             )?;
@@ -255,6 +271,7 @@ impl GixRepo {
         if self.may_have_gitlink_status_supplement(&repo, &index_stamp) {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
+                &repo,
                 &mut staged,
                 &mut Vec::new(),
             )?;
@@ -376,7 +393,7 @@ fn finalize_status(
     // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
     // case.
     if may_have_gitlinks {
-        supplement_gitlink_status_from_porcelain(workdir, &mut staged, &mut unstaged)?;
+        supplement_gitlink_status_from_porcelain(workdir, repo, &mut staged, &mut unstaged)?;
     }
 
     sort_and_dedup_status_entries(&mut staged);
@@ -750,11 +767,18 @@ fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
+    cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
-    collect_index_worktree_status_direct_from_index(repo, &index, unstaged, may_have_gitlinks)
+    collect_index_worktree_status_direct_from_index(
+        repo,
+        &index,
+        unstaged,
+        may_have_gitlinks,
+        cancellation,
+    )
 }
 
 fn collect_index_worktree_status_direct_from_index(
@@ -762,6 +786,7 @@ fn collect_index_worktree_status_direct_from_index(
     index: &gix::worktree::Index,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
+    cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let dirwalk_options = repo
         .dirwalk_options()
@@ -786,6 +811,7 @@ fn collect_index_worktree_status_direct_from_index(
             dirwalk_options,
             unstaged,
             submodule,
+            cancellation,
         )?
     } else {
         collect_index_worktree_status_direct_with_submodule(
@@ -794,6 +820,7 @@ fn collect_index_worktree_status_direct_from_index(
             dirwalk_options,
             unstaged,
             NoopSubmoduleStatus,
+            cancellation,
         )?
     };
     let index_stamp_after_write =
@@ -826,6 +853,7 @@ fn collect_index_worktree_status_direct_with_submodule<S, E>(
     dirwalk_options: gix::dirwalk::Options,
     unstaged: &mut Vec<FileStatus>,
     submodule: S,
+    cancellation: &CancellationToken,
 ) -> Result<StatusEntryCollection>
 where
     S: gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus<
@@ -918,7 +946,7 @@ where
             fscache: false,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
-                thread_limit: None,
+                thread_limit: worker_limit::for_index(repo, index, cancellation)?,
                 fscache: false,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
@@ -1286,16 +1314,24 @@ fn apply_porcelain_v2_gitlink_status_record(
 
 fn supplement_gitlink_status_from_porcelain(
     workdir: &Path,
+    repo: &gix::Repository,
     staged: &mut Vec<FileStatus>,
     unstaged: &mut Vec<FileStatus>,
 ) -> Result<()> {
     let mut command = git_workdir_cmd_for(workdir);
     command
+        .arg("--literal-pathspecs")
         .arg("--no-optional-locks")
         .arg("status")
         .arg("--porcelain=v2")
         .arg("-z")
         .arg("--ignore-submodules=none");
+    if let Some(paths) = gitlink_status_paths(repo, staged) {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        command.arg("--").args(paths);
+    }
     let output = match run_git_raw_output(command, "git status --porcelain=v2") {
         Ok(output) => output,
         // Gitlink supplementation is best-effort parity glue on top of the primary
@@ -1326,6 +1362,50 @@ fn supplement_gitlink_status_from_porcelain(
     }
 
     Ok(())
+}
+
+// Restrict only the supplemental Git query; gix remains responsible for ordinary
+// paths. None means the selection is uncertain and requires a full Git query,
+// while Some(empty) proves there is nothing left to supplement.
+fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option<Vec<PathBuf>> {
+    let index = repo.index_or_empty().ok()?;
+    // Collapsed sparse directories can hide gitlinks. Let Git expand them for
+    // the existing complete query instead of treating this as an empty list.
+    if index.is_sparse() {
+        return None;
+    }
+    let mut paths = Vec::new();
+    for entry in index.entries() {
+        if entry.mode == gix::index::entry::Mode::COMMIT {
+            paths.push(path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?);
+        }
+    }
+    // Deleted/replaced gitlinks are absent from the index. Check only the
+    // staged paths in HEAD so ordinary staged files do not broaden the query
+    // or prevent the empty-selection fast path.
+    if !staged.is_empty()
+        && let Some(head) = super::history::gix_head_id_or_none(repo).ok()?
+    {
+        let tree = repo.find_object(head).ok()?.peel_to_tree().ok()?;
+        for entry in staged {
+            if tree
+                .lookup_entry_by_path(&entry.path)
+                .ok()?
+                .is_some_and(|entry| entry.mode().is_commit())
+            {
+                paths.push(entry.path.clone());
+            }
+        }
+    }
+    paths.sort_unstable();
+    paths.dedup();
+    // Leave room for the executable, workdir, options and Windows quoting in
+    // CreateProcess's 32K command line. Large selections keep the full query.
+    let bytes: usize = paths
+        .iter()
+        .map(|path| path.as_os_str().len() * 2 + 3)
+        .sum();
+    (bytes < 16_000).then_some(paths)
 }
 
 #[cfg(test)]
@@ -1472,6 +1552,50 @@ pub(crate) mod tests {
             kind,
             conflict: None,
         }
+    }
+
+    #[test]
+    fn gitlink_query_excludes_ordinary_staged_paths_but_keeps_removed_and_replaced_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        init_test_repo(root);
+        write_file(root, "ordinary.txt", "base\n");
+        git_success(root, &["add", "ordinary.txt"]);
+        git_success(root, &["commit", "-m", "base"]);
+        let oid = gix::open(root).unwrap().head_id().unwrap().to_string();
+        for path in ["removed", "replaced", "retained"] {
+            git_success(
+                root,
+                &["update-index", "--add", "--cacheinfo", "160000", &oid, path],
+            );
+        }
+        git_success(root, &["commit", "-m", "gitlinks"]);
+        git_success(root, &["update-index", "--force-remove", "removed"]);
+        git_success(root, &["update-index", "--force-remove", "replaced"]);
+        write_file(root, "replaced", "regular file\n");
+        write_file(root, "ordinary.txt", "changed\n");
+        git_success(root, &["add", "replaced", "ordinary.txt"]);
+        let staged = [
+            file_status("ordinary.txt", FileStatusKind::Modified),
+            file_status("removed", FileStatusKind::Deleted),
+            file_status("replaced", FileStatusKind::Modified),
+        ];
+        assert_eq!(
+            super::gitlink_status_paths(&gix::open(root).unwrap(), &staged),
+            Some(
+                ["removed", "replaced", "retained"]
+                    .map(PathBuf::from)
+                    .to_vec()
+            )
+        );
+        git_success(root, &["update-index", "--force-remove", "retained"]);
+        git_success(root, &["commit", "-m", "remove gitlinks"]);
+        write_file(root, "ordinary.txt", "changed again\n");
+        git_success(root, &["add", "ordinary.txt"]);
+        assert_eq!(
+            super::gitlink_status_paths(&gix::open(root).unwrap(), &staged[..1]),
+            Some(Vec::new())
+        );
     }
 
     fn conflicted_file_status(path: &str, conflict: FileConflictKind) -> FileStatus {

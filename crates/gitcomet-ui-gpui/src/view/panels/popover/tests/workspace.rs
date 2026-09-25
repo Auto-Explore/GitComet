@@ -47,7 +47,7 @@ fn open_workspace_picker(
     repo: RepoState,
     repo_id: RepoId,
 ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -406,7 +406,7 @@ mod badges {
         repo: RepoState,
         repo_id: RepoId,
     ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -714,7 +714,7 @@ mod badges {
 
     #[gpui::test]
     fn no_badges_without_an_active_repo(cx: &mut gpui::TestAppContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
         redraw(cx);
@@ -744,6 +744,7 @@ mod badges {
             click_count: 1,
             first_mouse: false,
         });
+        cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
         cx.run_until_parked();
         cx.update(|window, app| {
             let _ = window.draw(app);

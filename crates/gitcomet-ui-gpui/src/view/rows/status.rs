@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::domain::SubmoduleStatus;
 use std::sync::Arc;
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
@@ -482,19 +484,23 @@ fn render_status_rows_for_section(
                             format!("status_dir_{}_{}_{}", repo_id.0, section.id_label(), ix)
                         })
                         .child(action)
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
-                            if !e.standard_click() {
-                                return;
-                            }
-                            this.toggle_file_list_dir(
-                                repo_id,
-                                crate::view::rows::FileListId::Status(section),
-                                Arc::clone(&key),
-                                Arc::clone(&chain),
-                                collapsed,
-                                cx,
-                            );
-                        }))
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::Status(section),
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }),
+                        )
                         .into_any_element(),
                     );
                 }
@@ -653,16 +659,7 @@ fn status_folder_action(
                 return;
             }
 
-            match area {
-                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-            }
+            crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
             cx.notify();
         })
         .gitcomet_tooltip(theme, format!("{label} this folder").into());
@@ -778,16 +775,17 @@ fn status_row(
             this.focus_diff_panel(window, cx);
 
             if is_conflicted {
-                this.activate_context_menu_invoker(
-                    status_file_menu_invoker(repo_id, section, &path_for_stage),
-                    cx,
-                );
                 this.open_popover_at(
-                    PopoverKind::StatusFileMenu {
+                    (PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
                         path: (*path_for_stage).clone(),
-                    },
+                    })
+                    .invoked_by(status_file_menu_invoker(
+                        repo_id,
+                        section,
+                        &path_for_stage,
+                    )),
                     e.position(),
                     window,
                     cx,
@@ -818,19 +816,7 @@ fn status_row(
                 this.clear_status_multi_selection(repo_id);
             }
 
-            match area {
-                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths {
-                    repo_id,
-                    paths: paths.into(),
-                }),
-            }
-
-            this.clear_status_multi_selection(repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
 
             cx.notify();
         })
@@ -848,26 +834,9 @@ fn status_row(
             crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics),
         ));
 
-    // Mirrors the row's own `.bg()` ladder below, so the badge disc is always
-    // the colour of the row it is punched out of.
-    let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
-    let badge_disc = crate::view::rows::FileRowBadgeDisc {
-        resting: if context_menu_active {
-            tinted(theme.colors.interaction.pressed_background)
-        } else if selected {
-            tinted(theme.colors.interaction.hover_background)
-        } else {
-            tinted(theme.colors.surface.canvas)
-        },
-        hover: Some((
-            row_group.clone(),
-            tinted(if context_menu_active {
-                theme.colors.interaction.pressed_background
-            } else {
-                theme.colors.interaction.hover_background
-            }),
-        )),
-    };
+    let interaction =
+        crate::view::rows::FileRowInteraction::new(theme, tint, selected, context_menu_active);
+    let badge_disc = interaction.badge_disc(row_group.clone());
 
     let path_display_for_label = path_display.clone();
 
@@ -889,69 +858,26 @@ fn status_row(
         .pr(scaled_px(8.0))
         .h(crate::ui_scale::UiScale::current(cx).row_height(STATUS_ROW_HEIGHT_PX, 32.0))
         .w_full()
-        .cursor(CursorStyle::PointingHand)
-        // Resting fill: without a tint the row stays transparent and the panel
-        // shows through, as before.
-        .when_some(tint, |s, tint| {
-            s.bg(crate::view::rows::tinted_row_bg(
-                theme.colors.surface.canvas,
-                Some(tint),
-            ))
-        })
-        .when(selected, |s| {
-            s.bg(crate::view::rows::tinted_row_bg(
-                theme.colors.interaction.hover_background,
-                tint,
-            ))
-        })
-        // Light themes keep selection legible with a ring: `hover_background`
-        // alone is barely a shade off the panel it sits on, so a selected row
-        // and a merely hovered one look identical.
-        .when_some(
-            selected
-                .then(|| components::light_theme_selection_outline(theme))
-                .flatten(),
-            |s, outline| s.shadow(vec![outline]),
-        )
-        .when(context_menu_active, |s| {
-            s.bg(crate::view::rows::tinted_row_bg(
-                theme.colors.interaction.pressed_background,
-                tint,
-            ))
-        })
-        .hover(move |s| {
-            s.bg(crate::view::rows::tinted_row_bg(
-                if context_menu_active {
-                    theme.colors.interaction.pressed_background
-                } else {
-                    theme.colors.interaction.hover_background
-                },
-                tint,
-            ))
-        })
-        .active(move |s| {
-            s.bg(crate::view::rows::tinted_row_bg(
-                theme.colors.interaction.pressed_background,
-                tint,
-            ))
-        })
-        .on_mouse_down(
+        .map(|row| interaction.apply(row))
+        .on_pointer_click(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 // Right-click only opens the menu: it must not open the diff (that is
                 // left-click's job) and must not touch the left-click selection. The
                 // right-clicked row is marked separately via the context menu invoker.
-                this.activate_context_menu_invoker(
-                    status_file_menu_invoker(repo_id, section, &path_for_menu),
-                    cx,
-                );
+
                 this.open_popover_at(
-                    PopoverKind::StatusFileMenu {
+                    (PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
                         path: (*path_for_menu).clone(),
-                    },
+                    })
+                    .invoked_by(status_file_menu_invoker(
+                        repo_id,
+                        section,
+                        &path_for_menu,
+                    )),
                     e.position,
                     window,
                     cx,
@@ -1022,52 +948,56 @@ fn status_row(
                 .gap(scaled_px(4.0))
                 .child(stage_button),
         )
-        .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-            let modifiers = _e.modifiers();
-            this.focus_status_section(section, window, cx);
-            let modifies_selection = modifiers.shift || modifiers.control || modifiers.platform;
-            let target = DiffTarget::WorkingTree {
-                path: (*path_for_row).clone(),
-                area,
-            };
-            let should_unselect = _e.standard_click()
-                && this.status_selected_paths_for_area(repo_id, area)
-                    == std::slice::from_ref(path_for_row.as_ref())
-                && this.active_repo().is_some_and(|repo| {
-                    repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
-                });
-            let entries = if modifiers.shift {
-                Some(this.status_display_order_paths(repo_id, section))
-            } else {
-                None
-            };
-            this.status_selection_apply_click(
-                repo_id,
-                section,
-                (*path_for_row).clone(),
-                // Drawn-row position: not the row index (directories count
-                // too), not the ordinal (a tree reorders it).
-                Some(display_position),
-                modifiers,
-                entries.as_deref(),
-            );
-            if modifies_selection {
-                cx.notify();
-                return;
-            }
-            if should_unselect {
-                this.clear_status_multi_selection(repo_id);
-                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            } else if is_conflicted && area == DiffArea::Unstaged {
-                this.store.dispatch(Msg::SelectConflictDiff {
-                    repo_id,
+        .on_activate(
+            false,
+            controls::ControlActivation::Composite,
+            cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                let modifiers = _e.modifiers();
+                this.focus_status_section(section, window, cx);
+                let modifies_selection = modifiers.shift || modifiers.control || modifiers.platform;
+                let target = DiffTarget::WorkingTree {
                     path: (*path_for_row).clone(),
-                });
-            } else {
-                this.store.dispatch(Msg::SelectDiff { repo_id, target });
-            }
-            cx.notify();
-        }))
+                    area,
+                };
+                let should_unselect = _e.standard_click()
+                    && this.status_selected_paths_for_area(repo_id, area)
+                        == std::slice::from_ref(path_for_row.as_ref())
+                    && this.active_repo().is_some_and(|repo| {
+                        repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
+                    });
+                let entries = if modifiers.shift {
+                    Some(this.status_display_order_paths(repo_id, section))
+                } else {
+                    None
+                };
+                this.status_selection_apply_click(
+                    repo_id,
+                    section,
+                    (*path_for_row).clone(),
+                    // Drawn-row position: not the row index (directories count
+                    // too), not the ordinal (a tree reorders it).
+                    Some(display_position),
+                    modifiers,
+                    entries.as_deref(),
+                );
+                if modifies_selection {
+                    cx.notify();
+                    return;
+                }
+                if should_unselect {
+                    this.clear_status_multi_selection(repo_id);
+                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                } else if is_conflicted && area == DiffArea::Unstaged {
+                    this.store.dispatch(Msg::SelectConflictDiff {
+                        repo_id,
+                        path: (*path_for_row).clone(),
+                    });
+                } else {
+                    this.store.dispatch(Msg::SelectDiff { repo_id, target });
+                }
+                cx.notify();
+            }),
+        )
         .into_any_element()
 }
 

@@ -1,3 +1,7 @@
+pub(crate) mod click;
+pub(crate) mod interaction;
+pub(crate) mod interaction_paint;
+pub(crate) mod menu;
 mod minimap;
 pub(crate) mod rope;
 mod scrollbar;
@@ -18,7 +22,7 @@ pub use text_input::{
     End, Enter, HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste,
     Redo, Right, SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectPageDown,
     SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShiftEnter, TextInput,
-    TextInputOptions, Undo, Up, WordLeft, WordRight,
+    TextInputChanged, TextInputOptions, Undo, Up, WordLeft, WordRight,
 };
 #[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{

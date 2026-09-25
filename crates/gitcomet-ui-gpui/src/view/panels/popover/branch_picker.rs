@@ -662,9 +662,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                     ),
                             )
                             .tooltip_host(this.tooltip_host.clone())
-                            .render(theme, ui_scale_percent, cx)
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, window, cx| {
+                            .on_select(
+                                theme,
+                                ui_scale_percent,
+                                cx,
+                                move |this, _e, window, cx| {
                                     this.handle_inline_branch_picker_select(
                                         name.clone(),
                                         repo_id,
@@ -672,7 +674,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                         cx,
                                     );
                                 },
-                            )),
+                            ),
                         );
                     }
                 }

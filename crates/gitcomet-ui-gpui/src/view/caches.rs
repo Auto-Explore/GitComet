@@ -33,7 +33,6 @@ pub(super) struct HistoryBaseCache {
     /// called during layout, where a scan of a 50k-commit page is a scan too many.
     pub(super) visible_ix_by_commit: Arc<FxHashMap<CommitId, usize>>,
     pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
-    pub(super) max_lanes: usize,
     pub(super) row_vms: Vec<HistoryBaseRowVm>,
 }
 

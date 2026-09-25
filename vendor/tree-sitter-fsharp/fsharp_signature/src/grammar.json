@@ -1092,17 +1092,21 @@
       }
     },
     "class_as_reference": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "as"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "identifier"
-        }
-      ]
+      "type": "PREC",
+      "value": 1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "as"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        ]
+      }
     },
     "primary_constr_args": {
       "type": "SEQ",
@@ -2399,27 +2403,6 @@
           {
             "type": "SYMBOL",
             "name": "_expression"
-          },
-          {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SEQ",
-                "members": [
-                  {
-                    "type": "STRING",
-                    "value": "as"
-                  },
-                  {
-                    "type": "SYMBOL",
-                    "name": "identifier"
-                  }
-                ]
-              },
-              {
-                "type": "BLANK"
-              }
-            ]
           },
           {
             "type": "SYMBOL",
@@ -7009,18 +6992,6 @@
           ]
         },
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "access_modifier"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
           "type": "SYMBOL",
           "name": "identifier"
         },
@@ -7387,7 +7358,7 @@
         "members": [
           {
             "type": "SYMBOL",
-            "name": "_type"
+            "name": "_argument_type"
           },
           {
             "type": "SEQ",
@@ -7402,7 +7373,7 @@
               },
               {
                 "type": "SYMBOL",
-                "name": "_type"
+                "name": "_argument_type"
               }
             ]
           }
@@ -8013,18 +7984,6 @@
                     ]
                   },
                   {
-                    "type": "CHOICE",
-                    "members": [
-                      {
-                        "type": "SYMBOL",
-                        "name": "access_modifier"
-                      },
-                      {
-                        "type": "BLANK"
-                      }
-                    ]
-                  },
-                  {
                     "type": "SYMBOL",
                     "name": "member_signature"
                   }
@@ -8033,6 +7992,18 @@
               {
                 "type": "SEQ",
                 "members": [
+                  {
+                    "type": "CHOICE",
+                    "members": [
+                      {
+                        "type": "STRING",
+                        "value": "static"
+                      },
+                      {
+                        "type": "BLANK"
+                      }
+                    ]
+                  },
                   {
                     "type": "STRING",
                     "value": "member"
@@ -8634,6 +8605,18 @@
         {
           "type": "SYMBOL",
           "name": "_pattern"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "class_as_reference"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "STRING",
@@ -11764,5 +11747,24 @@
   "supertypes": [
     "_module_signature_elements"
   ],
-  "reserved": {}
+  "reserved": {
+    "global": [
+      {
+        "type": "STRING",
+        "value": "as"
+      },
+      {
+        "type": "STRING",
+        "value": "namespace"
+      },
+      {
+        "type": "STRING",
+        "value": "open"
+      },
+      {
+        "type": "STRING",
+        "value": "type"
+      }
+    ]
+  }
 }

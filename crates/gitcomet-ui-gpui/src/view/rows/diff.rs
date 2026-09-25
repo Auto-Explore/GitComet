@@ -1,6 +1,8 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::panes::main::{
     CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
@@ -193,52 +195,36 @@ fn collapsed_hunk_reveal_button(
 ) -> AnyElement {
     let ui_scale_percent = crate::ui_scale::current(cx).percent;
     let size = collapsed_hunk_reveal_button_size(theme, ui_scale_percent);
-    let mut button = div()
-        .id(id)
-        .debug_selector(move || debug_selector.to_string())
-        .w(size)
-        .h(size)
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme.radii.row));
-
-    if enabled {
-        button = button
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
-                    cx.stop_propagation();
-                }),
-            )
-            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                cx.stop_propagation();
-                match click.action {
-                    CollapsedHunkRevealAction::Up => {
-                        this.collapsed_diff_reveal_hunk_up(click.src_ix, cx);
-                    }
-                    CollapsedHunkRevealAction::Down => {
-                        this.collapsed_diff_reveal_hunk_down(click.src_ix, cx);
-                    }
-                    CollapsedHunkRevealAction::DownBefore => {
-                        this.collapsed_diff_reveal_hunk_down_before(click.src_ix, cx);
-                    }
-                    CollapsedHunkRevealAction::Short => {
-                        this.collapsed_diff_reveal_hunk_short(click.src_ix, cx);
-                    }
-                }
-            }));
-    }
+    let button = components::inline_icon_button(
+        id,
+        theme,
+        size,
+        icon,
+        crate::ui_scale::design_px_from_percent(10.0, ui_scale_percent),
+        icon_color,
+        enabled,
+    )
+    .debug_selector(move || debug_selector.to_string())
+    .on_activate(
+        !enabled,
+        controls::ControlActivation::Nested,
+        cx.listener(move |this, _e: &ClickEvent, _w, cx| match click.action {
+            CollapsedHunkRevealAction::Up => {
+                this.collapsed_diff_reveal_hunk_up(click.src_ix, cx);
+            }
+            CollapsedHunkRevealAction::Down => {
+                this.collapsed_diff_reveal_hunk_down(click.src_ix, cx);
+            }
+            CollapsedHunkRevealAction::DownBefore => {
+                this.collapsed_diff_reveal_hunk_down_before(click.src_ix, cx);
+            }
+            CollapsedHunkRevealAction::Short => {
+                this.collapsed_diff_reveal_hunk_short(click.src_ix, cx);
+            }
+        }),
+    );
 
     button
-        .child(svg_icon(
-            icon,
-            icon_color,
-            crate::ui_scale::design_px_from_percent(10.0, ui_scale_percent),
-        ))
         .gitcomet_tooltip(theme, tooltip.into())
         .into_any_element()
 }
@@ -1036,9 +1022,13 @@ impl MainPaneView {
         if this.is_collapsed_diff_projection_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
-            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                .into();
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
-            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitRight)
+                .into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
             let pinned_hunk_shell_scroll = this.diff_scroll.clone();
@@ -1267,9 +1257,13 @@ impl MainPaneView {
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
-            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                .into();
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
-            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitRight)
+                .into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             // Inline syntax is now projected from the real old/new (split)
             // documents instead of parsing a synthetic mixed inline stream.
@@ -1828,9 +1822,11 @@ impl MainPaneView {
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
             let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
-                this.file_diff_old_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                    .into()
             } else {
-                this.file_diff_new_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitRight)
+                    .into()
             };
             let line_starts = if is_left {
                 Arc::clone(&this.file_diff_old_line_starts)
@@ -2023,9 +2019,11 @@ impl MainPaneView {
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
             let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
-                this.file_diff_old_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                    .into()
             } else {
-                this.file_diff_new_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitRight)
+                    .into()
             };
             let line_starts = if is_left {
                 Arc::clone(&this.file_diff_old_line_starts)
@@ -2443,7 +2441,7 @@ fn diff_row(
                 let (a, r) = file_stat.unwrap_or_default();
                 this.child(components::diff_stat(theme, ui_scale_percent, a, r))
             })
-            .on_click(on_click);
+            .on_activate(false, controls::ControlActivation::Composite, on_click);
 
         if selected {
             row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -2484,7 +2482,7 @@ fn diff_row(
                 display,
                 cx,
             ))
-            .on_click(on_click);
+            .on_activate(false, controls::ControlActivation::Composite, on_click);
         let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
             cx.stop_propagation();
             if this.is_inline_submodule_diff_active() {
@@ -2498,15 +2496,15 @@ fn diff_row(
             };
             let context_menu_invoker: SharedString =
                 format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-            this.activate_context_menu_invoker(context_menu_invoker, cx);
+
             this.open_popover_at(
-                PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                (PopoverKind::DiffHunkMenu { repo_id, src_ix }).invoked_by(context_menu_invoker),
                 e.position,
                 window,
                 cx,
             );
         });
-        row = row.on_mouse_down(MouseButton::Right, on_right_click);
+        row = row.on_pointer_click(MouseButton::Right, on_right_click);
 
         if selected {
             row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -2755,9 +2753,10 @@ fn collapsed_inline_header_row(
                 };
                 let context_menu_invoker: SharedString =
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    (PopoverKind::DiffHunkMenu { repo_id, src_ix })
+                        .invoked_by(context_menu_invoker),
                     e.position,
                     window,
                     cx,
@@ -2910,7 +2909,7 @@ fn collapsed_inline_header_row(
                             cx,
                         )),
                 )
-                .on_mouse_down(MouseButton::Right, on_right_click);
+                .on_pointer_click(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(painted_row_bg);
@@ -3099,7 +3098,7 @@ fn patch_split_header_row(
                     let (a, r) = file_stat.unwrap_or_default();
                     this.child(components::diff_stat(theme, ui_scale_percent, a, r))
                 })
-                .on_click(on_click);
+                .on_activate(false, controls::ControlActivation::Composite, on_click);
 
             if selected {
                 row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -3145,7 +3144,7 @@ fn patch_split_header_row(
                     display,
                     cx,
                 ))
-                .on_click(on_click);
+                .on_activate(false, controls::ControlActivation::Composite, on_click);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if this.is_inline_submodule_diff_active() {
@@ -3166,15 +3165,16 @@ fn patch_split_header_row(
                 };
                 let context_menu_invoker: SharedString =
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    (PopoverKind::DiffHunkMenu { repo_id, src_ix })
+                        .invoked_by(context_menu_invoker),
                     e.position,
                     window,
                     cx,
                 );
             });
-            row = row.on_mouse_down(MouseButton::Right, on_right_click);
+            row = row.on_pointer_click(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(focused_diff_neutral_row_bg(theme));
@@ -3330,9 +3330,10 @@ fn collapsed_split_header_row(
                 };
                 let context_menu_invoker: SharedString =
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    (PopoverKind::DiffHunkMenu { repo_id, src_ix })
+                        .invoked_by(context_menu_invoker),
                     e.position,
                     window,
                     cx,
@@ -3482,7 +3483,7 @@ fn collapsed_split_header_row(
                             cx,
                         )),
                 )
-                .on_mouse_down(MouseButton::Right, on_right_click);
+                .on_pointer_click(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(painted_row_bg);
@@ -3564,7 +3565,7 @@ fn patch_split_meta_row(
             SharedString::from(line.text.as_ref().to_owned()),
             cx,
         ))
-        .on_click(on_click);
+        .on_activate(false, controls::ControlActivation::Composite, on_click);
 
     if selected {
         row = row.bg(focused_diff_line_bg(theme, line.kind));

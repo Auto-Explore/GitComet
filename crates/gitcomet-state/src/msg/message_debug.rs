@@ -124,8 +124,13 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
-            InternalMsg::UncommittedLineStatsLoaded { repo_id, result } => f
+            InternalMsg::UncommittedLineStatsLoaded {
+                repo_id,
+                generation,
+                result,
+            } => f
                 .debug_struct("UncommittedLineStatsLoaded")
+                .field("generation", generation)
                 .field("repo_id", repo_id)
                 .field("ok", &result.is_ok())
                 .finish(),
@@ -224,6 +229,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("requested_count", &requested_ids.len())
                 .field("ok", &result.is_ok())
+                .finish(),
+            InternalMsg::CommitMessageSuggested { repo_id, message } => f
+                .debug_struct("CommitMessageSuggested")
+                .field("repo_id", repo_id)
+                .field("message_len", &message.len())
                 .finish(),
             InternalMsg::MergeCommitMessageLoaded { repo_id, result } => f
                 .debug_struct("MergeCommitMessageLoaded")
@@ -353,11 +363,13 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::CommitSignaturesVerified {
                 repo_id,
                 epoch,
+                batch,
                 result,
             } => f
                 .debug_struct("CommitSignaturesVerified")
                 .field("repo_id", repo_id)
                 .field("epoch", epoch)
+                .field("batch", batch)
                 .field("verified", &result.as_ref().map(Vec::len))
                 .finish(),
             InternalMsg::CommitRevealResolved {
@@ -374,12 +386,14 @@ impl std::fmt::Debug for InternalMsg {
                 repo_id,
                 reference,
                 request,
+                purpose,
                 result,
             } => f
                 .debug_struct("CommitLookupResolved")
                 .field("repo_id", repo_id)
                 .field("reference", reference)
                 .field("request", request)
+                .field("purpose", purpose)
                 .field("result", result)
                 .finish(),
             InternalMsg::RangeFilesLoaded {
@@ -522,6 +536,18 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("RepoActionFinished")
                 .field("repo_id", repo_id)
                 .field("action", action)
+                .field("result", result)
+                .finish(),
+            InternalMsg::RepoPathsActionFinished {
+                repo_id,
+                action,
+                paths,
+                result,
+            } => f
+                .debug_struct("RepoPathsActionFinished")
+                .field("repo_id", repo_id)
+                .field("action", action)
+                .field("paths", paths)
                 .field("result", result)
                 .finish(),
             InternalMsg::BranchAlreadyExists { action, prompt } => f

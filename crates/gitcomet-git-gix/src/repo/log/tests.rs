@@ -1353,6 +1353,7 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
             .expect("set mtime");
     };
     age_out(&file);
+    let clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
@@ -1360,11 +1361,12 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
         .expect("source")
         .expect("file exists");
-    assert_eq!(repo.worktree_source_memo.lock().expect("memo").len(), 1);
+    // The fresh private cache file can be reused on the second read.
     let second = repo
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
         .expect("source again")
         .expect("file exists");
+    assert_eq!(repo.worktree_source_memo.lock().expect("memo").len(), 1);
     assert_eq!(first.path, second.path);
     assert_eq!(first.identity, second.identity);
 
@@ -1383,6 +1385,7 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
     );
 
     // A freshly written file (within the racy window) is served but not memoized.
+    drop(clock);
     std::fs::write(&file, "fresh\n").expect("fresh write");
     let fresh = repo
         .cached_git_normalized_worktree_file_source(&handle, Path::new("src.txt"))
@@ -1396,6 +1399,42 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
         Some(fresh.identity.clone()),
         "a racy-fresh file must not be memoized"
     );
+}
+
+// A settled worktree file must memoize on its first read even though that read
+// creates the cache file: the file is private to this process, so its fresh
+// timestamps cannot hide a later write. Real time, not RacyClockSkew, because
+// the skew would also age the cache file and mask the difference.
+#[cfg(unix)]
+#[test]
+fn worktree_file_source_memo_trusts_a_cache_file_it_just_created() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_repo(tmp.path());
+    commit_file(tmp.path(), "settled.txt", "settled\n", "base");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+
+    let repo = open_repo(tmp.path());
+    let handle = repo.repo();
+    let read = || {
+        repo.cached_git_normalized_worktree_file_source(&handle, Path::new("settled.txt"))
+            .expect("source")
+            .expect("file exists")
+    };
+    let first = read();
+    assert_eq!(
+        repo.worktree_source_memo.lock().expect("memo").len(),
+        1,
+        "the first read of a settled file must memoize"
+    );
+    let filtered = crate::repo::diff::worktree_filter_runs_for_test();
+    let second = read();
+    assert_eq!(
+        crate::repo::diff::worktree_filter_runs_for_test(),
+        filtered,
+        "a read within 2 s of creating the cache file must still hit the memo"
+    );
+    assert_eq!(first.path, second.path);
+    assert_eq!(first.identity, second.identity);
 }
 
 #[cfg(unix)]
@@ -1522,6 +1561,7 @@ fn assert_attribute_source_invalidates_memo(index_only: bool) {
         .unwrap()
         .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30))
         .unwrap();
+    let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
     let repo = open_repo(tmp.path());
     let read_source = |repo: &GixRepo| {
         let source = repo
@@ -1530,6 +1570,8 @@ fn assert_attribute_source_invalidates_memo(index_only: bool) {
             .expect("exists");
         fs::read(source.path).unwrap()
     };
+    assert_eq!(read_source(&repo), b"one\r\ntwo\r\n");
+    // Re-reading also exercises the memo when the platform supports it.
     assert_eq!(read_source(&repo), b"one\r\ntwo\r\n");
     // DiskFileStamp has no inode/ctime off Unix, so nothing is memoized there.
     if cfg!(unix) {

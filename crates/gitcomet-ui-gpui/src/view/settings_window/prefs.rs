@@ -65,6 +65,7 @@ impl SettingsWindowView {
             mergetool_view_three_way: None,
             change_tracking_height: None,
             untracked_height: None,
+            history_branch_names: Some(self.history_branch_names.key().to_string()),
             history_show_graph: Some(self.history_show_graph),
             history_show_author: Some(self.history_show_author),
             history_show_date: Some(self.history_show_date),
@@ -857,6 +858,22 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_branch_names == next {
+            return;
+        }
+        self.history_branch_names = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_branch_names(next, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -960,6 +977,11 @@ impl SettingsWindowView {
         }
 
         self.history_verify_commit_signatures = enabled;
+        if enabled {
+            self.refresh_signing_tools(cx);
+        } else {
+            self.cancel_signing_tools_probe();
+        }
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_verify_commit_signatures_preference(enabled, cx);

@@ -31,8 +31,6 @@ pub const SPLIT_BUTTON_DIVIDER_HEIGHT_PX: f32 = 11.0;
 pub const REMOVE_BUTTON_ICON: &str = "icons/repo_tab_close.svg";
 pub const REMOVE_BUTTON_SIZE_PX: f32 = 18.0;
 pub const REMOVE_BUTTON_ICON_SIZE_PX: f32 = 12.0;
-pub const REMOVE_BUTTON_HOVER_ALPHA: f32 = 0.18;
-pub const REMOVE_BUTTON_PRESSED_ALPHA: f32 = 0.26;
 
 pub fn control_height(scale: impl Into<UiScale>) -> gpui::Pixels {
     scale.into().row_height(CONTROL_HEIGHT_PX, 32.0)

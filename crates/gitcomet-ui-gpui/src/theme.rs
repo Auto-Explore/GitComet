@@ -59,6 +59,7 @@ pub struct Colors {
     pub diff: DiffColors,
     pub tooltip: TooltipColors,
     pub scrollbar: ScrollbarColors,
+    pub notice: NoticeColors,
     pub shadow: Rgba,
 }
 
@@ -202,6 +203,17 @@ pub struct ScrollbarColors {
     pub thumb: Rgba,
     pub thumb_hover: Rgba,
     pub thumb_pressed: Rgba,
+}
+
+/// Inline notices that ask for a decision, such as "File changed on disk".
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoticeColors {
+    pub background: Rgba,
+    pub border: Rgba,
+    /// The bold title.
+    pub foreground: Rgba,
+    /// The explanation beside the title.
+    pub secondary: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -652,6 +664,7 @@ struct ThemeFileColors {
     diff: ThemeFileDiffColors,
     tooltip: ThemeFileTooltipColors,
     scrollbar: ThemeFileScrollbarColors,
+    notice: ThemeFileNoticeColors,
     shadow: ThemeColor,
     #[serde(default)]
     graph_lane_palette: Option<Vec<ThemeColor>>,
@@ -776,6 +789,15 @@ struct ThemeFileScrollbarColors {
     thumb: ThemeColor,
     thumb_hover: ThemeColor,
     thumb_pressed: ThemeColor,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFileNoticeColors {
+    background: ThemeColor,
+    border: ThemeColor,
+    foreground: ThemeColor,
+    secondary: ThemeColor,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -962,6 +984,7 @@ impl From<ThemeFile> for AppTheme {
             diff,
             tooltip,
             scrollbar,
+            notice,
             shadow,
             graph_lane_palette,
             graph_lane_hues,
@@ -1051,6 +1074,12 @@ impl From<ThemeFile> for AppTheme {
                 thumb: scrollbar.thumb.into_rgba(),
                 thumb_hover: scrollbar.thumb_hover.into_rgba(),
                 thumb_pressed: scrollbar.thumb_pressed.into_rgba(),
+            },
+            notice: NoticeColors {
+                background: notice.background.into_rgba(),
+                border: notice.border.into_rgba(),
+                foreground: notice.foreground.into_rgba(),
+                secondary: notice.secondary.into_rgba(),
             },
             shadow: shadow.into_rgba(),
         };
@@ -1249,7 +1278,7 @@ fn resolve_syntax_colors(
 
 fn shadow_layer(base: Rgba, alpha: f32, y: f32, blur: f32) -> gpui::BoxShadow {
     gpui::BoxShadow {
-        color: with_alpha(base, alpha).into_color(),
+        color: with_alpha(base, alpha).into(),
         offset: gpui::point(gpui::px(0.0), gpui::px(y)),
         blur_radius: gpui::px(blur),
         spread_radius: gpui::px(0.0),
@@ -2964,6 +2993,109 @@ mod tests {
     }
 
     #[test]
+    fn bundled_themes_define_their_notice_colors() {
+        let dark = AppTheme::gitcomet_dark();
+        let light = AppTheme::gitcomet_light();
+
+        assert_eq!(
+            dark.colors.notice.background,
+            with_alpha(gpui::rgba(0xf2a53aff), 0.13)
+        );
+        assert_eq!(
+            dark.colors.notice.border,
+            with_alpha(gpui::rgba(0xf2a53aff), 0.30)
+        );
+        assert_eq!(dark.colors.notice.foreground, gpui::rgba(0xeff1f5ff));
+        assert_eq!(dark.colors.notice.secondary, gpui::rgba(0x9ea5b4ff));
+        assert_eq!(light.colors.notice.background, gpui::rgba(0xf8fafcff));
+        assert_eq!(light.colors.notice.border, gpui::rgba(0x96701eff));
+        assert_eq!(light.colors.notice.foreground, gpui::rgba(0x111827ff));
+        assert_eq!(light.colors.notice.secondary, gpui::rgba(0x465166ff));
+
+        for (key, hue) in [
+            ("tokyo_night", 0xe0af68ff),
+            (AMBER_DARK_THEME_KEY, 0xe3a64bff),
+        ] {
+            let theme = AppTheme::from_key(key).expect("bundled theme should load");
+            assert_eq!(
+                theme.colors.notice.background,
+                with_alpha(gpui::rgba(hue), 0.13),
+                "{key}"
+            );
+            assert_eq!(
+                theme.colors.notice.border,
+                with_alpha(gpui::rgba(hue), 0.30),
+                "{key}"
+            );
+        }
+        let sunset = AppTheme::from_key("sunset_veil").expect("Sunset Veil should load");
+        assert_eq!(sunset.colors.notice.background, gpui::rgba(0xfcf3e8ff));
+        assert_eq!(sunset.colors.notice.border, gpui::rgba(0x956f24ff));
+    }
+
+    /// The notice sits on the pane's content background; its tint is a wash
+    /// over that, so text is measured against the two composited.
+    #[test]
+    fn bundled_theme_notice_text_is_readable_on_its_background() {
+        for key in [
+            DEFAULT_DARK_THEME_KEY,
+            DEFAULT_LIGHT_THEME_KEY,
+            "tokyo_night",
+            AMBER_DARK_THEME_KEY,
+            "sunset_veil",
+        ] {
+            let theme = AppTheme::from_key(key).expect("bundled theme should load");
+            let notice = theme.colors.notice;
+            let background = composite_over(content_header_bg(theme), notice.background);
+            println!(
+                "{key}: title {:.2}, secondary {:.2}",
+                contrast_ratio(notice.foreground, background),
+                contrast_ratio(notice.secondary, background)
+            );
+            assert_min_contrast(key, "notice.foreground", notice.foreground, background, 7.0);
+            assert_min_contrast(key, "notice.secondary", notice.secondary, background, 4.5);
+        }
+    }
+
+    #[test]
+    fn custom_themes_use_their_own_notice_colors_and_inherit_a_missing_group() {
+        use serde_json::json;
+
+        let mut fixture = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
+        let theme = &mut fixture["themes"][0];
+        theme["key"] = json!("notice_fixture");
+        theme["name"] = json!("Notice Fixture");
+        theme["colors"]["notice"] = json!({
+            "background": { "hex": "#336699ff", "alpha": 0.20 },
+            "border": "#336699ff",
+            "foreground": "#ffffffff",
+            "secondary": "#ccddeeff"
+        });
+        let custom = AppTheme::from_json_str(
+            &serde_json::to_string(&fixture).expect("fixture should serialize"),
+        )
+        .expect("a theme with notice colors should load");
+        assert_eq!(
+            custom.colors.notice.background,
+            with_alpha(gpui::rgba(0x336699ff), 0.20)
+        );
+        assert_eq!(custom.colors.notice.border, gpui::rgba(0x336699ff));
+        assert_eq!(custom.colors.notice.foreground, gpui::rgba(0xffffffff));
+        assert_eq!(custom.colors.notice.secondary, gpui::rgba(0xccddeeff));
+
+        // A theme written before the group existed still loads.
+        fixture["themes"][0]["colors"]
+            .as_object_mut()
+            .expect("colors should be an object")
+            .remove("notice");
+        let older = AppTheme::from_json_str(
+            &serde_json::to_string(&fixture).expect("fixture should serialize"),
+        )
+        .expect("a theme without notice colors should still load");
+        assert_eq!(older.colors.notice, AppTheme::gitcomet_dark().colors.notice);
+    }
+
+    #[test]
     fn bundled_light_themes_match_the_dark_theme_radii() {
         let dark_radii = AppTheme::gitcomet_dark().radii;
 
@@ -3673,6 +3805,9 @@ mod tests {
                     || name.ends_with("tests.rs")
                     || name == "theme.rs"
                     || name == "smoke_tests.rs"
+                    // TextInput's constructor supplies a default until set_theme is called.
+                    // Match path components before formatting platform-specific diagnostics.
+                    || path.ends_with(std::path::Path::new("kit/text_input/editing.rs"))
                 {
                     continue;
                 }
@@ -3691,7 +3826,6 @@ mod tests {
 
         let mut offenders = Vec::new();
         walk(std::path::Path::new("src"), &mut offenders);
-        offenders.retain(|site| !site.contains("kit/text_input/editing.rs"));
 
         assert!(
             offenders.is_empty(),

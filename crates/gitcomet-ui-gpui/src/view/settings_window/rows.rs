@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 /// The settings window's scale, carrying the appearance so anything sized
 /// through it follows the UI zoom and the density selection.
@@ -40,8 +42,6 @@ impl SettingsWindowView {
             theme.colors.accent.foreground,
             if theme.is_dark { 0.16 } else { 0.10 },
         );
-        let hover_bg = theme.hover_overlay();
-        let active_bg = theme.active_overlay();
 
         div()
             .id(id)
@@ -54,25 +54,10 @@ impl SettingsWindowView {
             .gap_2()
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
-            .bg(if selected {
-                selected_bg
-            } else {
-                gpui::rgba(0x00000000)
-            })
-            .hover(move |s| {
-                if selected {
-                    s.bg(selected_bg)
-                } else {
-                    s.bg(hover_bg)
-                }
-            })
-            .active(move |s| {
-                if selected {
-                    s.bg(selected_bg)
-                } else {
-                    s.bg(active_bg)
-                }
-            })
+            .control_interaction(
+                InteractionStyle::new(theme),
+                InteractionState::default().selected(selected, selected_bg),
+            )
             .child(
                 div()
                     .w(ui_scale.px(16.0))
@@ -87,7 +72,7 @@ impl SettingsWindowView {
                         d.child(svg_icon(
                             "icons/check.svg",
                             theme.colors.accent.foreground,
-                            px(12.0),
+                            ui_scale.px(12.0),
                         ))
                     }),
             )
@@ -154,8 +139,6 @@ impl SettingsWindowView {
             theme.colors.accent.foreground,
             if theme.is_dark { 0.16 } else { 0.10 },
         );
-        let hover_bg = theme.hover_overlay();
-        let active_bg = theme.active_overlay();
 
         div()
             .id(id)
@@ -169,25 +152,10 @@ impl SettingsWindowView {
             .gap_2()
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
-            .bg(if selected {
-                selected_bg
-            } else {
-                gpui::rgba(0x00000000)
-            })
-            .hover(move |s| {
-                if selected {
-                    s.bg(selected_bg)
-                } else {
-                    s.bg(hover_bg)
-                }
-            })
-            .active(move |s| {
-                if selected {
-                    s.bg(selected_bg)
-                } else {
-                    s.bg(active_bg)
-                }
-            })
+            .control_interaction(
+                InteractionStyle::new(theme),
+                InteractionState::default().selected(selected, selected_bg),
+            )
             .child(
                 div()
                     .w(ui_scale.px(16.0))
@@ -198,7 +166,7 @@ impl SettingsWindowView {
                         d.child(svg_icon(
                             "icons/check.svg",
                             theme.colors.accent.foreground,
-                            px(12.0),
+                            ui_scale.px(12.0),
                         ))
                     }),
             )
@@ -343,8 +311,7 @@ impl SettingsWindowView {
             .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
-            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
@@ -386,7 +353,7 @@ impl SettingsWindowView {
                             "icons/arrow_right.svg"
                         },
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        self.row_scale(theme).px(12.0),
                     ))),
             )
     }
@@ -416,8 +383,7 @@ impl SettingsWindowView {
             .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
-            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
@@ -560,8 +526,7 @@ impl SettingsWindowView {
             .border_b_1()
             .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
@@ -583,7 +548,7 @@ impl SettingsWindowView {
                     .child(div().flex_shrink_0().child(svg_icon(
                         "icons/open_external.svg",
                         theme.colors.accent.foreground,
-                        px(13.0),
+                        self.row_scale(theme).px(13.0),
                     ))),
             )
     }
@@ -630,7 +595,7 @@ impl SettingsWindowView {
                             .child(svg_icon(
                                 "icons/warning.svg",
                                 theme.colors.status.warning.foreground,
-                                px(13.0),
+                                self.row_scale(theme).px(13.0),
                             ))
                             .child(div().flex_1().min_w(px(0.0)).child(name)),
                     )
@@ -654,6 +619,11 @@ impl SettingsWindowView {
             gpui::Rgba,
             SharedString,
         ) = match self.runtime_info.git.compatibility {
+            GitCompatibility::Checking => (
+                "icons/info.svg",
+                theme.colors.foreground.secondary,
+                "Checking...".into(),
+            ),
             GitCompatibility::Supported => (
                 "icons/check.svg",
                 theme.colors.status.success.foreground,
@@ -676,65 +646,141 @@ impl SettingsWindowView {
             ),
         };
 
+        self.runtime_tool_row(
+            "settings_window_git_runtime",
+            "Git",
+            None,
+            Some((git_icon_path, git_icon_color)),
+            self.runtime_info.git.version_display.clone(),
+            (git_status_text, git_icon_color),
+            theme,
+        )
+    }
+
+    pub(super) fn signing_tool_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        info: &SigningToolInfo,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        let (icon, status_color, status_text) = match info.status {
+            SigningToolStatus::Found => (
+                Some("icons/check.svg"),
+                theme.colors.status.success.foreground,
+                "Found",
+            ),
+            SigningToolStatus::NotFound => (
+                Some("icons/warning.svg"),
+                theme.colors.status.warning.foreground,
+                "Not found",
+            ),
+            SigningToolStatus::Unknown => (
+                Some("icons/warning.svg"),
+                theme.colors.foreground.secondary,
+                "Unknown",
+            ),
+            SigningToolStatus::NotChecked => {
+                (None, theme.colors.foreground.secondary, "Not checked")
+            }
+            SigningToolStatus::Detecting => (None, theme.colors.foreground.secondary, "Detecting…"),
+        };
+
+        self.runtime_tool_row(
+            id,
+            label,
+            Some(description),
+            icon.map(|icon| (icon, status_color)),
+            info.version_display.clone(),
+            (status_text.into(), status_color),
+            theme,
+        )
+    }
+
+    /// One detected executable, stacked so narrow windows never squeeze it: the
+    /// program name and its status, then the detected version, then why GitComet
+    /// needs the program.
+    fn runtime_tool_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: Option<&'static str>,
+        icon: Option<(&'static str, gpui::Rgba)>,
+        version_display: SharedString,
+        (status_text, status_color): (SharedString, gpui::Rgba),
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
         div()
-            .id("settings_window_git_runtime")
-            .debug_selector(|| "settings_window_git_runtime".to_string())
+            .id(id)
+            .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
             .pt_1()
             .pb_3()
             .flex()
-            .items_center()
-            .gap_2()
+            .flex_col()
+            .gap_1()
             .overflow_hidden()
             .child(
                 div()
-                    .debug_selector(|| "settings_window_git_runtime_label".to_string())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child("Detected runtime"),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "settings_window_git_runtime_value".to_string())
+                    .w_full()
                     .min_w(px(0.0))
                     .flex()
                     .items_center()
-                    .justify_end()
                     .gap_2()
-                    .overflow_hidden()
-                    .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
                     .child(
                         div()
+                            .debug_selector(move || format!("{id}_label"))
+                            .flex_1()
                             .min_w(px(0.0))
                             .text_size(theme.ui_text(14.0))
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
-                            .child(self.runtime_info.git.version_display.clone()),
+                            .child(label),
                     )
                     .child(
                         div()
-                            .min_w(px(0.0))
-                            .text_size(theme.ui_text(12.0))
-                            .text_color(git_icon_color)
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
+                            .debug_selector(move || format!("{id}_status"))
                             .flex_shrink_0()
-                            .child(git_status_text),
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .when_some(icon, |this, (path, color)| {
+                                this.child(svg_icon(path, color, self.row_scale(theme).px(14.0)))
+                            })
+                            .child(
+                                div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(status_color)
+                                    .whitespace_nowrap()
+                                    .child(status_text),
+                            ),
                     ),
             )
+            .when(!version_display.is_empty(), |this| {
+                this.child(
+                    div()
+                        .debug_selector(move || format!("{id}_value"))
+                        .w_full()
+                        .min_w(px(0.0))
+                        .text_size(theme.ui_text(14.0))
+                        .font_family(UI_MONOSPACE_FONT_FAMILY)
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(version_display),
+                )
+            })
+            .when_some(description, |this, description| {
+                this.child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(description),
+                )
+            })
     }
 
     pub(super) fn overflow_probe_content(&self, theme: AppTheme) -> Stateful<gpui::Div> {
@@ -777,7 +823,14 @@ impl SettingsWindowView {
                             .into(),
                         theme,
                     ))
-                    .child(self.git_runtime_row(theme)),
+                    .child(self.git_runtime_row(theme))
+                    .child(self.signing_tool_row(
+                        "settings_window_gpg_runtime",
+                        "GPG",
+                        GPG_DESCRIPTION,
+                        &gpg_info(self.runtime_info.signing_tools.as_ref()),
+                        theme,
+                    )),
             )
     }
 
@@ -800,7 +853,7 @@ impl SettingsWindowView {
             .flex()
             .items_center()
             .rounded(px(theme.radii.row))
-            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(
                 div()
                     .flex()
@@ -879,9 +932,13 @@ impl SettingsWindowView {
                     this.ui_font_family == family,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_ui_font_family(family.clone(), cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_ui_font_family(family.clone(), cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -905,9 +962,13 @@ impl SettingsWindowView {
                     this.theme_mode == mode,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                    this.set_theme_mode(mode.clone(), window, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                        this.set_theme_mode(mode.clone(), window, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -935,9 +996,13 @@ impl SettingsWindowView {
                     this.editor_font_family == family,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_editor_font_family(family.clone(), cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_editor_font_family(family.clone(), cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -973,19 +1038,31 @@ impl SettingsWindowView {
                 );
                 match option.kind {
                     crate::external_editor::ExternalEditorOptionKind::None => row
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                            this.set_external_editor_setting(None, cx);
-                        }))
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                this.set_external_editor_setting(None, cx);
+                            }),
+                        )
                         .into_any_element(),
                     crate::external_editor::ExternalEditorOptionKind::Detected(setting) => row
-                        .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                            this.set_external_editor_setting(Some(setting.clone()), cx);
-                        }))
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                                this.set_external_editor_setting(Some(setting.clone()), cx);
+                            }),
+                        )
                         .into_any_element(),
                     crate::external_editor::ExternalEditorOptionKind::Custom => row
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                            this.select_custom_external_editor(cx);
-                        }))
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                this.select_custom_external_editor(cx);
+                            }),
+                        )
                         .into_any_element(),
                 }
             })
@@ -1019,9 +1096,13 @@ impl SettingsWindowView {
                     this.date_time_format == format,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_date_time_format(format, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_date_time_format(format, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1049,9 +1130,13 @@ impl SettingsWindowView {
                     this.timezone == timezone,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_timezone(timezone, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_timezone(timezone, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1074,9 +1159,13 @@ impl SettingsWindowView {
                     this.change_tracking_view == option,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_change_tracking_view(option, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_change_tracking_view(option, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1099,9 +1188,13 @@ impl SettingsWindowView {
                     this.file_list_layout == option,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_file_list_layout(option, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_file_list_layout(option, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1124,9 +1217,13 @@ impl SettingsWindowView {
                     this.diff_scroll_sync == option,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_diff_scroll_sync(option, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_diff_scroll_sync(option, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1149,9 +1246,13 @@ impl SettingsWindowView {
                     this.diff_view_mode == option,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_diff_view_mode(option, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_diff_view_mode(option, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1174,9 +1275,13 @@ impl SettingsWindowView {
                     this.diff_content_mode == option,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_diff_content_mode(option, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_diff_content_mode(option, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1199,9 +1304,13 @@ impl SettingsWindowView {
                     this.remote_markdown_image_policy == option,
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.set_remote_markdown_image_policy(option, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_remote_markdown_image_policy(option, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1224,9 +1333,13 @@ impl SettingsWindowView {
                     this.remote_url_policy.allows(protocol),
                     theme,
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_remote_protocol(protocol, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_remote_protocol(protocol, cx);
+                    }),
+                )
                 .into_any_element()
             })
             .collect()
@@ -1301,17 +1414,16 @@ impl SettingsWindowView {
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
-            .when(selected, |d| {
-                d.bg(theme.colors.interaction.pressed_background)
-            })
-            .when(!selected, |d| {
-                d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
-            })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .child(svg_icon(category.icon(), icon_color, px(15.0))),
+            .control_interaction(
+                InteractionStyle::new(theme),
+                InteractionState::default()
+                    .selected(selected, theme.colors.interaction.pressed_background),
             )
+            .child(div().flex_shrink_0().child(svg_icon(
+                category.icon(),
+                icon_color,
+                self.row_scale(theme).px(15.0),
+            )))
             .child(
                 div()
                     .flex_1()
@@ -1324,9 +1436,13 @@ impl SettingsWindowView {
                     .overflow_hidden()
                     .child(category.label()),
             )
-            .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                this.select_category(category, cx);
-            }))
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.select_category(category, cx);
+                }),
+            )
     }
 
     pub(super) fn render_settings_nav(

@@ -31,7 +31,7 @@ fn assert_popover_open(view: &gpui::Entity<GitCometView>, app: &gpui::App, expec
 
 #[gpui::test]
 fn force_push_confirm_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -50,7 +50,7 @@ fn force_push_confirm_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn stash_prompt_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -65,7 +65,7 @@ fn stash_prompt_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn reset_prompt_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -90,7 +90,7 @@ fn reset_prompt_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn force_push_confirm_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -114,7 +114,7 @@ fn force_push_confirm_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn stash_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -134,7 +134,7 @@ fn stash_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn reset_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -162,7 +162,7 @@ fn reset_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn pull_reconcile_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -186,7 +186,7 @@ fn pull_reconcile_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn terminal_shutdown_confirm_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -213,7 +213,7 @@ fn terminal_shutdown_confirm_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn discard_changes_confirm_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -241,7 +241,7 @@ fn discard_changes_confirm_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn submodule_change_pointer_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -301,7 +301,7 @@ fn seed_untracked(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.popover_host.update(cx, |host, _cx| {
@@ -325,7 +325,7 @@ fn gitignore_pattern_text(view: &gpui::Entity<GitCometView>, app: &gpui::App) ->
 
 #[gpui::test]
 fn add_to_gitignore_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -353,7 +353,7 @@ fn add_to_gitignore_prompt_escape_closes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn add_to_gitignore_prompt_prefills_the_anchored_file_pattern(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -383,7 +383,7 @@ fn add_to_gitignore_prompt_prefills_the_anchored_file_pattern(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn add_to_gitignore_prompt_scope_switch_rewrites_the_pattern(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -425,7 +425,7 @@ fn add_to_gitignore_prompt_scope_switch_rewrites_the_pattern(cx: &mut gpui::Test
 
 #[gpui::test]
 fn add_to_gitignore_prompt_submits_the_hand_edited_pattern(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, mut cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {

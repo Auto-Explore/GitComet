@@ -36,6 +36,7 @@ pub(crate) struct ConflictResolverJoinTarget {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TerminalMenuContext {
     pub(crate) has_session: bool,
+    pub(crate) has_buffer: bool,
     pub(crate) has_selection: bool,
     pub(crate) connected: bool,
 }
@@ -74,6 +75,14 @@ impl AutosquashMode {
             AutosquashMode::ToBottom => "To Bottom Commit",
         }
     }
+}
+
+/// The version of the repository a local markdown link opens.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum LocalFileLinkSource {
+    Version(gitcomet_core::domain::FileSource),
+    /// The version before this commit: a link on the old side of its diff.
+    ParentOf(CommitId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -175,6 +184,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    RevertCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     MergeCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -252,6 +265,7 @@ pub(crate) enum PopoverKind {
     UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
     TerminalMenu {
         repo_id: RepoId,
+        session_seq: u64,
         context: TerminalMenuContext,
     },
     DiffActionMenu,
@@ -267,6 +281,19 @@ pub(crate) enum PopoverKind {
         /// Exact remote image URL represented by a linked image, but only
         /// while Ask mode is waiting for approval. Ordinary text links and
         /// images under either other policy leave this empty.
+        load_remote_image_url: Option<SharedString>,
+    },
+    /// "Open in GitComet" for a link in the rendered markdown preview whose
+    /// destination is a file inside this repository.
+    LocalFileLinkMenu {
+        repo_id: RepoId,
+        source: LocalFileLinkSource,
+        /// Repo-relative, with `.`/`..` folded.
+        path: std::path::PathBuf,
+        /// The working tree has no such file; the entry is shown greyed out.
+        missing: bool,
+        /// Same Ask-mode carrier as `WebLinkMenu`: a linked badge can only be
+        /// approved through its link menu.
         load_remote_image_url: Option<SharedString>,
     },
     /// Actions for a commit id clicked in a commit message or a SHA field.
@@ -428,6 +455,8 @@ pub(crate) enum RepoPopoverKind {
     Submodule(SubmodulePopoverKind),
 }
 
+/// `OpenInBrowserMenu` picks which remote's web page to open when several
+/// remotes have one; its rows are rebuilt from the remotes on every render.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RemotePopoverKind {
     AddPrompt,
@@ -435,6 +464,7 @@ pub(crate) enum RemotePopoverKind {
     RemoveConfirm { name: String },
     Menu { name: String },
     DeleteBranchConfirm { remote: String, branch: String },
+    OpenInBrowserMenu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

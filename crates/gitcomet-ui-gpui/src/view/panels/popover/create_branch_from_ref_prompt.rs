@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 fn checkout_toggle(
     theme: AppTheme,
@@ -103,7 +104,6 @@ pub(super) fn panel(
                         .empty_text("No matches")
                         .max_height(scaled_px(branch_picker::REF_PICKER_LIST_MAX_HEIGHT_PX))
                         .selected_index(this.branch_picker_selected_index)
-                        .select_on_mouse_down()
                         .render(
                             theme,
                             ui_scale_percent,
@@ -152,10 +152,14 @@ pub(super) fn panel(
                 &this.create_branch_from_ref_checkout_focus_handle,
                 cx,
             )
-            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                this.create_branch_checkout_enabled = !this.create_branch_checkout_enabled;
-                cx.notify();
-            })),
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                    this.create_branch_checkout_enabled = !this.create_branch_checkout_enabled;
+                    cx.notify();
+                }),
+            ),
         )
         .child(super::popover_rule(theme))
         .child(

@@ -1,10 +1,12 @@
 mod details;
-mod history;
+pub(in crate::view) mod history;
 pub(in crate::view) mod main;
 mod reflog;
 mod sidebar;
 
-pub(super) use details::{DetailsPaneInit, DetailsPaneView};
+pub(super) use details::{
+    ComparisonCardCache, ComparisonOrderCache, DetailsPaneInit, DetailsPaneView,
+};
 pub(super) use history::HistoryView;
 #[allow(unused_imports)]
 pub(in crate::view) use history::{

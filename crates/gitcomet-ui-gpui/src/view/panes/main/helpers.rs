@@ -2882,6 +2882,86 @@ pub(in crate::view) struct CollapsedDiffProjectionIdentity {
     pub(in crate::view) file_content_signature: Option<u64>,
 }
 
+/// The `ensure_diff_visible_indices` cache key: changes whenever the visible
+/// rows are laid out afresh.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffVisibleLayoutKey {
+    pub(in crate::view) len: usize,
+    pub(in crate::view) view: DiffViewMode,
+    pub(in crate::view) is_file_view: bool,
+    pub(in crate::view) projection_rev: u64,
+}
+
+/// Which sides of a diff a row, or a whole block, changes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct DiffChangeSides {
+    pub(in crate::view) removed: bool,
+    pub(in crate::view) added: bool,
+}
+
+impl DiffChangeSides {
+    pub(in crate::view) fn union(self, other: Self) -> Self {
+        Self {
+            removed: self.removed || other.removed,
+            added: self.added || other.added,
+        }
+    }
+}
+
+/// The change block F2/F3 last landed on, for the accent bar and outline
+/// that mark it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffFocusedChangeBlock {
+    /// Visual row navigation selected; the marks hide once the selection moves.
+    pub(in crate::view) anchor: usize,
+    /// Source-visible rows, so word-wrap continuations are covered too.
+    pub(in crate::view) rows: std::ops::Range<usize>,
+    /// Split views outline the old column only if the block removes something
+    /// and the new column only if it adds something.
+    pub(in crate::view) sides: DiffChangeSides,
+    pub(in crate::view) layout: DiffVisibleLayoutKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum DiffChangeSide {
+    Removed,
+    Added,
+}
+
+/// How one visual row paints its part of the focused block's marks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FocusedChangeBlockRow {
+    /// First and last visual rows close the outline.
+    pub(in crate::view) top: bool,
+    pub(in crate::view) bottom: bool,
+    /// What this row itself changes; inline rows outline in their own colour.
+    pub(in crate::view) row_sides: DiffChangeSides,
+    pub(in crate::view) block_sides: DiffChangeSides,
+}
+
+impl FocusedChangeBlockRow {
+    /// Inline rows outline in their own colour; a `\ No newline` marker row,
+    /// which changes nothing itself, borrows the block's.
+    pub(in crate::view) fn inline_outline(self) -> DiffChangeSide {
+        if self.row_sides.removed {
+            DiffChangeSide::Removed
+        } else if self.row_sides.added || !self.block_sides.removed {
+            DiffChangeSide::Added
+        } else {
+            DiffChangeSide::Removed
+        }
+    }
+
+    /// A split column is outlined only if the block changes that side.
+    pub(in crate::view) fn column_outline(self, old_side: bool) -> Option<DiffChangeSide> {
+        if old_side {
+            self.block_sides.removed.then_some(DiffChangeSide::Removed)
+        } else {
+            self.block_sides.added.then_some(DiffChangeSide::Added)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffVisibleRow {
     HunkHeader {
@@ -3112,10 +3192,7 @@ pub(crate) struct MainPaneView {
     /// stale range.
     pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
-    pub(in crate::view) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
-    pub(in crate::view) approved_remote_markdown_image_urls: Arc<FxHashSet<SharedString>>,
-    pub(super) remote_markdown_image_approval_revision: u64,
-    pub(super) remote_markdown_image_summary_cache: RefCell<RemoteMarkdownImageSummaryCache>,
+    pub(in crate::view) remote_markdown_images: RemoteMarkdownImages,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
@@ -3130,7 +3207,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_cache_rev: u64,
     pub(in crate::view) diff_cache_content_signature: Option<u64>,
     pub(in crate::view) diff_cache_target: Option<DiffTarget>,
-    pub(in crate::view) diff_cache: Vec<AnnotatedDiffLine>,
+    pub(in crate::view) diff_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) diff_row_provider: Option<Arc<super::diff_cache::PagedPatchDiffRows>>,
     pub(in crate::view) diff_split_row_provider:
         Option<Arc<super::diff_cache::PagedPatchSplitRows>>,
@@ -3142,7 +3219,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_visual_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_hide_unified_header_for_src_ix: Vec<bool>,
     pub(in crate::view) diff_header_display_cache: FxHashMap<usize, SharedString>,
-    pub(in crate::view) diff_split_cache: Vec<PatchSplitRow>,
+    pub(in crate::view) diff_split_cache: Arc<[PatchSplitRow]>,
     pub(in crate::view) diff_split_cache_len: usize,
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
     pub(in crate::view) diff_autoscroll_pending: bool,
@@ -3150,14 +3227,14 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) submodule_summary_cache:
         Option<super::submodule_summary::SubmoduleSummaryCache>,
     pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,
-    pub(in crate::view) diff_visible_indices: Vec<usize>,
+    pub(in crate::view) diff_visible_indices: Arc<[usize]>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
-    pub(in crate::view) diff_wrap_visible_rows: Vec<DiffWrapVisualRow>,
+    pub(in crate::view) diff_wrap_visible_rows: Arc<[DiffWrapVisualRow]>,
     pub(in crate::view) diff_wrap_visible_cache_key: Option<DiffWrapVisibleCacheKey>,
     pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
     pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: FxHashMap<usize, usize>,
     pub(in crate::view) collapsed_diff_reveals: FxHashMap<usize, CollapsedDiffReveal>,
-    pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
+    pub(in crate::view) collapsed_diff_visible_rows: Arc<[CollapsedDiffVisibleRow]>,
     pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
     pub(in crate::view) collapsed_diff_header_display_cache: FxHashMap<usize, SharedString>,
     pub(in crate::view) collapsed_diff_projection_identity: Option<CollapsedDiffProjectionIdentity>,
@@ -3179,6 +3256,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
+    pub(in crate::view) diff_focused_change_block: Option<DiffFocusedChangeBlock>,
     pub(in crate::view) diff_text_selecting: bool,
     pub(in crate::view) diff_text_anchor: Option<DiffTextPos>,
     pub(in crate::view) diff_text_head: Option<DiffTextPos>,
@@ -3240,6 +3318,19 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_search_match_ix: Option<usize>,
     pub(in crate::view) diff_search_debounce_seq: u64,
     pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
+    pub(in crate::view) diff_search_worker_running: bool,
+    /// `diff_search_debounce_seq` the running worker may publish under.
+    pub(in crate::view) diff_search_worker_seq: u64,
+    pub(in crate::view) diff_search_pending_finalize: super::diff_search::DiffSearchFinalizeMode,
+    pub(in crate::view) diff_search_cancellation:
+        Option<gitcomet_core::services::CancellationToken>,
+    pub(in crate::view) diff_search_document: Option<(
+        super::diff_search::SearchDocumentKey,
+        Arc<super::diff_search::SearchDocument>,
+    )>,
+    pub(in crate::view) diff_search_pending_navigation: isize,
+    pub(in crate::view) diff_search_probe_action: u64,
+    pub(in crate::view) diff_search_probe_render: u64,
     pub(in crate::view) diff_search_scroll: ScrollHandle,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
@@ -3252,7 +3343,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_cache_error: Option<String>,
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
-    pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
+    pub(in crate::view) file_diff_cache_rows: Arc<[FileDiffRow]>,
     pub(in crate::view) file_diff_row_provider: Option<Arc<super::diff_cache::PagedFileDiffRows>>,
     /// Text read back from a source-backed side for a click, kept alive.
     ///
@@ -3271,6 +3362,11 @@ pub(crate) struct MainPaneView {
     /// The value identifies the syntax generation that owns the marker, so a
     /// superseded worker cannot remove a newer generation's marker.
     pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
+    /// Test-only switch for the eager source-backed prepare. Off, a source-backed
+    /// side gets a document only when clicked, which is what the click-path tests
+    /// are there to cover and what they would otherwise stop exercising.
+    #[cfg(test)]
+    pub(in crate::view) eager_source_backed_syntax_prepare: bool,
     /// Test-only mutation point after a click worker has parsed but before its
     /// result is returned to the UI thread.
     #[cfg(test)]
@@ -3304,7 +3400,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
     pub(in crate::view) file_diff_new_line_to_inline_row: Arc<[Option<usize>]>,
-    pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
+    pub(in crate::view) file_diff_inline_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,
     pub(in crate::view) file_diff_inline_text: SharedString,
@@ -3327,18 +3423,13 @@ pub(crate) struct MainPaneView {
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
 
-    pub(in crate::view) file_markdown_preview_cache_repo_id: Option<RepoId>,
-    pub(in crate::view) file_markdown_preview_cache_rev: u64,
-    pub(in crate::view) file_markdown_preview_cache_content_signature: Option<u64>,
-    pub(in crate::view) file_markdown_preview_cache_target: Option<DiffTarget>,
-    pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
-    pub(in crate::view) file_markdown_preview_seq: u64,
-    pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
-    pub(in crate::view) markdown_preview_wrap: MarkdownPreviewWrapCache,
-    /// Row the quick-search cursor wants revealed in the flowing markdown
-    /// preview, shared with the renderer that measures it. See
-    /// [`rows::MarkdownPreviewRevealRequest`].
-    pub(in crate::view) markdown_preview_reveal: rows::MarkdownPreviewRevealRequest,
+    pub(in crate::view) diff_markdown: DiffMarkdownPreview,
+    pub(in crate::view) markdown_interaction: MarkdownPreviewInteraction,
+    /// Frames drawn, which is how often the preview surface re-reads the disk.
+    pub(in crate::view) main_pane_surface_frame: u64,
+    /// The preview surface this frame, once resolved; see
+    /// [`MainPaneView::main_pane_surface`].
+    pub(in crate::view) main_pane_surface_memo: RefCell<Option<MainPaneSurfaceMemo>>,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
@@ -3371,23 +3462,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_search_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) worktree_preview_content_rev: u64,
-    pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
-    pub(in crate::view) worktree_markdown_preview_source_rev: u64,
-    pub(in crate::view) worktree_markdown_preview: LoadableMarkdownDoc,
-    /// Sizes read from the headers of the pictures the rendered preview draws,
-    /// so a picture that has not decoded yet can still hold its box open.
-    pub(in crate::view) worktree_markdown_preview_picture_sizes: rows::MarkdownPreviewPictureSizes,
-    /// Where each sideways-scrolling block of the rendered preview is scrolled
-    /// to, so its scrollbar has something to read.
-    pub(in crate::view) worktree_markdown_preview_block_scrolls: rows::MarkdownDocumentBlockScrolls,
-    /// Block grouping of the document the rendered preview last drew, so it is
-    /// not re-derived on every frame.
-    pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,
-    /// Pictures in the rendered preview that are still decoding and already
-    /// have someone waiting to repaint the pane when they finish.
-    pub(in crate::view) worktree_markdown_preview_image_waits: FxHashSet<gpui::Resource>,
-    pub(in crate::view) worktree_markdown_preview_seq: u64,
-    pub(in crate::view) worktree_markdown_preview_inflight: Option<u64>,
+    pub(in crate::view) worktree_markdown: WorktreeMarkdownPreview,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
@@ -3395,6 +3470,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_segments_cache:
         FxHashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
+    /// What the read-only preview was read from. See `super::file_disk`.
+    pub(in crate::view) worktree_preview_disk: DiskIdentity,
+    /// Scroll offset to restore after a reload that must not jump to the top.
+    pub(in crate::view) worktree_preview_restore_scroll_offset: Option<gpui::Point<Pixels>>,
 
     /// The editable working-tree buffer. See `super::file_editor`.
     pub(in crate::view) file_editor_input: Entity<components::TextInput>,
@@ -3414,10 +3493,10 @@ pub(crate) struct MainPaneView {
     >,
     pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_editor_loading: bool,
-    /// Repo status revision the buffer was last read at. A clean buffer re-reads
-    /// when this moves, so an external write to the open file is picked up
-    /// rather than silently overwritten by the next save.
-    pub(in crate::view) file_editor_loaded_status_rev: u64,
+    /// Generation of the last disk read, so a superseded read is dropped.
+    pub(in crate::view) file_editor_reread_seq: u64,
+    /// What the buffer was read from (or last wrote). See `super::file_disk`.
+    pub(in crate::view) file_editor_disk: DiskIdentity,
     pub(in crate::view) file_editor_error: Option<SharedString>,
     pub(in crate::view) file_editor_dirty: bool,
     /// The topmost 0-based line an unsaved edit has touched, or `None` while the
@@ -3434,6 +3513,16 @@ pub(crate) struct MainPaneView {
     /// Fingerprint of the text last known to be on disk. `None` before the
     /// first read lands, which reads as "everything is unsaved".
     pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,
+    /// "File changed on disk", for the surface it names. See `super::file_disk`.
+    pub(in crate::view) file_disk_notice: Option<FileDiskNotice>,
+    /// Generation of the last disk check, so a superseded check is dropped.
+    pub(in crate::view) file_disk_check_seq: u64,
+    /// Why the check in flight was started, if one is.
+    pub(in crate::view) file_disk_check_in_flight: Option<DiskCheckCause>,
+    /// The surface on screen and the repo revisions it was last read or
+    /// checked at. `None` until a read lands, so bumps that predate the read
+    /// never fire a check.
+    pub(in crate::view) file_disk_seen: Option<FileDiskSeen>,
     /// Unsaved buffers the user navigated away from, keyed by path. This is what
     /// makes leaving a file and coming back non-destructive with auto-save off.
     /// Keyed by repo *and* path: two repo tabs can hold the same relative path,

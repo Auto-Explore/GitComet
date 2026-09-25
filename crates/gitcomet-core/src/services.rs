@@ -12,6 +12,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    parent: Option<Arc<CancellationToken>>,
 }
 
 impl CancellationToken {
@@ -25,6 +26,17 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
+    }
+
+    /// Also stop when the repository closes without cancelling other requests
+    /// when this request is superseded.
+    pub fn with_parent(mut self, parent: CancellationToken) -> Self {
+        self.parent = Some(Arc::new(parent));
+        self
     }
 
     pub fn check_cancelled(&self) -> Result<()> {
@@ -288,7 +300,21 @@ pub enum SequencerState {
     None,
     RebaseOrApply,
     CherryPick,
+    /// A revert stopped at a conflict or a failed commit step, or a revert
+    /// sequence still pending.
+    Revert,
 }
+
+/// Marker a revert puts in its command output when git applied nothing because
+/// the branch no longer has the reverted changes, so no commit was created.
+pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
+
+/// Command label of a Continue that skipped a revert its resolution left empty.
+pub const REVERT_SKIP_COMMAND: &str = "git revert --skip";
+
+/// Marker an abort puts in its output when git cleared a leftover sequence but
+/// refused to rewind HEAD, so the summary cannot claim the previous state back.
+pub const REVERT_ABORT_KEPT_HEAD_SENTINEL: &str = "GITCOMET_REVERT_ABORT_KEPT_HEAD";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
@@ -394,6 +420,60 @@ pub enum SafePushAfterCommitDecision {
 
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
+
+    /// Distinct author names across the complete, unfiltered history scope.
+    /// Called on demand, independently of the visible commit metadata cache.
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        let mut authors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = None;
+        loop {
+            cancellation.check_cancelled()?;
+            let page =
+                self.log_history_mode_page_cancellable(mode, 256, cursor.as_ref(), cancellation)?;
+            for commit in &page.commits {
+                if seen.insert(commit.author.clone()) {
+                    authors.push(commit.author.clone());
+                }
+            }
+            cursor = page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(authors.into())
+    }
+
+    /// Optional indexed access to history. `None` keeps older backends on the
+    /// paged reader. Construction is background work; range reads never walk
+    /// from the branch tip to the requested offset.
+    fn build_history_index(
+        &self,
+        _mode: HistoryMode,
+        _author: Option<&str>,
+        cancellation: &CancellationToken,
+        _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
+    ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
+        cancellation.check_cancelled()?;
+        Ok(None)
+    }
+
+    fn read_history_range(
+        &self,
+        _index: &crate::history_index::HistoryIndexHandle,
+        _range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::history_index::HistoryRange> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Backend(
+            "indexed history is unavailable".into(),
+        )))
+    }
 
     /// Read or refresh a history snapshot. Backends without snapshot support
     /// conservatively rebuild and never claim an unchanged result.
@@ -596,13 +676,20 @@ pub trait GitRepository: Send + Sync {
             "signature verification is not implemented for this backend",
         )))
     }
+    /// Like [`Self::verify_commit_signatures`], restricted to signatures in
+    /// `formats`: other formats get no badge and should cost no verifier run.
     fn verify_commit_signatures_cancellable(
         &self,
         ids: &[CommitId],
+        formats: crate::domain::SignatureFormats,
         cancellation: &CancellationToken,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
         cancellation.check_cancelled()?;
-        let result = self.verify_commit_signatures(ids)?;
+        if formats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut result = self.verify_commit_signatures(ids)?;
+        result.retain(|(_, signature)| formats.contains(signature.format));
         cancellation.check_cancelled()?;
         Ok(result)
     }
@@ -636,8 +723,9 @@ pub trait GitRepository: Send + Sync {
     /// Added/removed line counts for every uncommitted change, both lanes.
     ///
     /// Separate from `status`, which decides most entries from stat data alone
-    /// and never reads content. Counting reads both sides of every changed
-    /// file, so keeping them apart leaves status latency untouched.
+    /// when possible; stale stat data can require content reads and clean
+    /// filters. Counting reads both sides of changed files. Callers that have
+    /// just loaded status should reuse it through the supplied-status method.
     fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
         Err(Error::new(ErrorKind::Unsupported(
             "uncommitted line stats are not implemented for this backend",
@@ -951,7 +1039,23 @@ pub trait GitRepository: Send + Sync {
             "git cherry-pick is not implemented for this backend",
         )))
     }
-    fn revert(&self, id: &CommitId) -> Result<()>;
+    /// The message git left for the next commit (MERGE_MSG), if any. Unlike
+    /// [`Self::merge_commit_message`] this does not require a merge.
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// Reverts a single commit. `commit: false` only stages the inverse;
+    /// `mainline` follows [`Self::cherry_pick_with_output`].
+    fn revert_with_output(
+        &self,
+        _id: &CommitId,
+        _commit: bool,
+        _mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git revert is not implemented for this backend",
+        )))
+    }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
@@ -1731,8 +1835,30 @@ pub trait WorktreeIgnoreMatcher: Send {
     fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool>;
 }
 
+/// Filesystem inputs for monitoring one repository, including linked worktrees.
+/// Paths may name files which do not exist yet (for example `info/exclude`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryWatchInfo {
+    pub git_dirs: Vec<PathBuf>,
+    /// Additional private cache directories, including the LFS-owned folders
+    /// in configured storage. These can be absent until the first filter run.
+    pub cache_dirs: Vec<PathBuf>,
+    pub ignore_inputs: Vec<PathBuf>,
+    /// Initialized checkouts that can supply ignore matchers. Administrative
+    /// repositories retained after submodule deinit belong only in `git_dirs`.
+    /// Includes indexed gitlinks even when they have no `.gitmodules` entry.
+    pub worktrees: Vec<PathBuf>,
+    /// Discovery hit a filesystem error or its bounded administrative walk.
+    pub discovery_incomplete: bool,
+}
+
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    /// Resolve metadata and ignore/configuration sources without running status or filters.
+    fn repository_watch_info(&self, _workdir: &Path) -> Result<Option<RepositoryWatchInfo>> {
+        Ok(None)
+    }
 
     /// Build a worktree ignore matcher when the backend supports one.
     ///
@@ -1852,6 +1978,7 @@ mod tests {
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
+        assert_unsupported(repo.revert_with_output(&commit, true, None));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());
@@ -2042,10 +2169,6 @@ mod tests {
         }
 
         fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn revert(&self, _id: &CommitId) -> super::Result<()> {
             unsupported()
         }
 

@@ -12,6 +12,7 @@ use gitcomet_core::services::{
     BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
     SubmoduleTrustTarget,
 };
+use gitcomet_core::signing_tools::SigningToolsState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -61,7 +62,7 @@ impl Default for GitLogSettings {
         Self {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
-            verify_commit_signatures: true,
+            verify_commit_signatures: false,
         }
     }
 }
@@ -120,6 +121,9 @@ pub struct RepoLoadsInFlight {
     /// request superseded can be told apart from the current one.
     active_log: Option<(LogLoadSeq, PendingLogLoad)>,
     last_log_seq: LogLoadSeq,
+    line_stats_generation: LineStatsGeneration,
+    active_line_stats: Option<LineStatsGeneration>,
+    line_stats_requested: bool,
 }
 
 /// Identifies one dispatched log walk. Handed out by
@@ -131,6 +135,9 @@ pub struct RepoLoadsInFlight {
 /// first walk's reply would then be taken for the second's — clearing the
 /// bookkeeping while the walk it belongs to is still running.
 pub type LogLoadSeq = u64;
+
+/// Advances on invalidation, even when the set of changed paths is unchanged.
+pub type LineStatsGeneration = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingLogLoad {
@@ -163,8 +170,10 @@ impl RepoLoadsInFlight {
     /// worktree walk, far costlier than the other loads.
     pub const FILE_BROWSER: u32 = 1 << 18;
     /// Also outside `PRIMARY_REFRESH_FLAGS`: counting reads both sides of every
-    /// changed file, which the status walk avoids. Kept separate so status
+    /// changed file, which a stat-only status walk avoids. Kept separate so status
     /// latency is unchanged and the numbers arrive after the list.
+    /// Managed by `invalidate_line_stats`/`start_line_stats`/`finish_line_stats`,
+    /// not generic `request`/`finish`: replays need a fresh status snapshot.
     pub const UNCOMMITTED_LINE_STATS: u32 = 1 << 19;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
@@ -187,6 +196,41 @@ impl RepoLoadsInFlight {
         self.pending = 0;
         self.pending_log = None;
         self.active_log = None;
+        self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
+        self.active_line_stats = None;
+        self.line_stats_requested = false;
+    }
+
+    pub(crate) fn invalidate_line_stats(&mut self) {
+        self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
+        self.line_stats_requested = true;
+    }
+
+    /// Called only after both status lanes, including their replays, settle.
+    pub(crate) fn start_line_stats(&mut self, status_ready: bool) -> Option<LineStatsGeneration> {
+        if self.is_in_flight(Self::WORKTREE_STATUS | Self::STAGED_STATUS)
+            || self.active_line_stats.is_some()
+            || !self.line_stats_requested
+        {
+            return None;
+        }
+        self.line_stats_requested = false;
+        if !status_ready {
+            return None;
+        }
+        self.in_flight |= Self::UNCOMMITTED_LINE_STATS;
+        self.active_line_stats = Some(self.line_stats_generation);
+        Some(self.line_stats_generation)
+    }
+
+    /// Only the matching job may release the lane; invalidated results are discarded.
+    pub(crate) fn finish_line_stats(&mut self, generation: LineStatsGeneration) -> bool {
+        if self.active_line_stats != Some(generation) {
+            return false;
+        }
+        self.active_line_stats = None;
+        self.in_flight &= !Self::UNCOMMITTED_LINE_STATS;
+        generation == self.line_stats_generation
     }
 
     /// Starts the common primary-refresh batch immediately when no work is already queued or
@@ -688,12 +732,40 @@ pub struct AppState {
     /// trust dialog (or a silent proceed) appears.
     pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
+    /// The signature verifiers Git can run. Formats without one are not verified.
+    pub signing_tools: SigningToolsState,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
     pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+}
+
+impl AppState {
+    /// Deterministic fixture: tests opt into an available runtime without spawning Git.
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+    pub fn test_default() -> Self {
+        Self {
+            git_runtime: GitRuntimeState {
+                preference: gitcomet_core::process::GitExecutablePreference::SystemPath,
+                availability: gitcomet_core::process::GitExecutableAvailability::Available {
+                    version_output: "git version 2.55.0 (test)".into(),
+                },
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The signature formats to verify: none when the preference is off,
+    /// otherwise those whose verifier was not found missing.
+    pub fn signature_verification_formats(&self) -> SignatureFormats {
+        if self.git_log_settings.verify_commit_signatures {
+            self.signing_tools.usable_formats()
+        } else {
+            SignatureFormats::NONE
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -994,6 +1066,8 @@ pub struct PendingCommitRetry {
 
 #[derive(Clone, Debug)]
 pub struct HistoryState {
+    pub indexed: crate::indexed_history::IndexedHistoryState,
+    pub authors: crate::history_authors::HistoryAuthorsState,
     pub history_scope: LogScope,
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
@@ -1032,12 +1106,17 @@ pub struct HistoryState {
     pub commit_signatures_rev: u64,
     /// Invalidates batches started before a refresh or preference change.
     pub commit_signatures_epoch: u64,
-    /// Includes queued, running, and completed no-badge commits for this epoch.
+    /// Bounded memo of started attempts, including completed no-badge results.
     pub(crate) commit_signatures_requested: Shared<FxHashSet<CommitId>>,
+    pub(crate) commit_signatures_attempt_order: Shared<VecDeque<CommitId>>,
+    pub(crate) commit_signatures_visible: Shared<[CommitId]>,
     pub(crate) commit_signatures_queue: VecDeque<Shared<[CommitId]>>,
     pub(crate) commit_signatures_in_flight: bool,
+    pub(crate) commit_signatures_batch: u64,
     pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
+    selected_ids: Arc<FxHashSet<CommitId>>,
+    squash_cache: Option<Arc<HistorySquashCache>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -1078,6 +1157,19 @@ pub struct HistoryState {
     /// Carries no `_rev` counterpart because no pane fingerprints it: the
     /// dialog is its own entity and repaints itself when this changes.
     pub commit_lookup: CommitLookup,
+    /// Parents for the open cherry-pick/revert confirmation; see
+    /// [`CommitLookupPurpose`].
+    pub mainline_lookup: CommitLookup,
+}
+
+/// Which dialog a commit lookup answers. They resolve different references at
+/// the same time, so each owns its slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitLookupPurpose {
+    /// The Reveal Commit dialog's preview row.
+    RevealDialog,
+    /// The parent list the cherry-pick/revert confirmations pick a mainline from.
+    MainlineParents,
 }
 
 /// A resolved-or-failed answer to "what commit does this reference name?".
@@ -1103,9 +1195,36 @@ impl Default for CommitLookup {
     }
 }
 
+#[derive(Clone, Debug)]
+struct HistorySquashCache {
+    key: (usize, u64, u64, u64, Option<CommitId>, usize),
+    // Pin identities used by the cache key across asynchronous snapshots.
+    _selection: Arc<Vec<CommitId>>,
+    _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+    plan: Option<gitcomet_core::squash::SquashPlan>,
+}
+
+impl HistoryState {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn signature_targets_for_test(&self) -> &Shared<[CommitId]> {
+        &self.commit_signatures_visible
+    }
+
+    pub fn selection_contains(&self, id: &CommitId) -> bool {
+        if self.selected_ids.len() == self.multi_selection.commits.len() {
+            self.selected_ids.contains(id)
+        } else {
+            self.multi_selection.contains(id)
+        }
+    }
+}
+
 impl Default for HistoryState {
     fn default() -> Self {
         Self {
+            indexed: Default::default(),
+            authors: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
             log: Loadable::NotLoaded,
@@ -1129,10 +1248,15 @@ impl Default for HistoryState {
             commit_signatures_rev: 0,
             commit_signatures_epoch: 0,
             commit_signatures_requested: Shared::default(),
+            commit_signatures_attempt_order: Shared::default(),
+            commit_signatures_visible: Shared::default(),
             commit_signatures_queue: VecDeque::new(),
             commit_signatures_in_flight: false,
+            commit_signatures_batch: 0,
             commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
+            selected_ids: Arc::new(FxHashSet::default()),
+            squash_cache: None,
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -1145,6 +1269,7 @@ impl Default for HistoryState {
             squash_preview_rev: 0,
             squash_preview_pending: None,
             commit_lookup: CommitLookup::default(),
+            mainline_lookup: CommitLookup::default(),
         }
     }
 }
@@ -1156,7 +1281,7 @@ impl Default for HistoryState {
 /// resolution hint trusted only while the log revision is unchanged.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommitMultiSelection {
-    pub commits: Vec<CommitId>,
+    pub commits: Arc<Vec<CommitId>>,
     pub anchor: Option<CommitId>,
     pub anchor_index: Option<usize>,
     pub anchor_log_rev: Option<u64>,
@@ -1596,10 +1721,16 @@ pub struct RepoState {
     /// exists instead of selecting the dropped tab's neighbour.
     external_drop_previous_active_repo: Option<RepoId>,
     pub loads_in_flight: RepoLoadsInFlight,
+    /// Fetches and prunes as well as pulls.
     pub pull_in_flight: u32,
+    /// The pulls among `pull_in_flight`: those also merge into the checkout.
+    pub worktree_pull_in_flight: u32,
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
     pub local_actions_in_flight: u32,
+    /// Commands that write sequencer state or move HEAD. Continue and Abort
+    /// wait for these alone, so a merge tool cannot lock them out.
+    pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
 
     pub open: Loadable<()>,
@@ -1659,6 +1790,10 @@ pub struct RepoState {
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
     pub merge_message_rev: u64,
+    /// Commit message git prepared for the next commit (a staged revert), and
+    /// a rev so the commit box can apply it exactly once.
+    pub suggested_commit_message: Option<String>,
+    pub suggested_commit_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
     /// Uncommitted-change counts for the *other* linked worktrees, so the
@@ -1685,6 +1820,14 @@ pub struct RepoState {
 
     pub open_rev: u64,
     pub ops_rev: u64,
+    /// Bumped when the watcher (or the window-focus full refresh) reports a
+    /// working-tree write. The view stats the open file when this moves; the
+    /// watcher itself carries no paths.
+    pub worktree_change_rev: u64,
+    /// Bumped when a GitComet-run git command that may have rewritten
+    /// worktree files completes. Not `ops_rev`: that one also moves when a
+    /// command *starts*, which would spend the signal before the disk changed.
+    pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
 
     pub feedback: RepoFeedbackState,
@@ -1712,9 +1855,11 @@ impl RepoState {
             external_drop_previous_active_repo: None,
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
+            worktree_pull_in_flight: 0,
             push_in_flight: 0,
             worktrees_in_flight: 0,
             local_actions_in_flight: 0,
+            sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
@@ -1761,6 +1906,8 @@ impl RepoState {
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
             merge_message_rev: 0,
+            suggested_commit_message: None,
+            suggested_commit_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
             worktree_dirty: Loadable::NotLoaded,
@@ -1778,6 +1925,8 @@ impl RepoState {
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
+            worktree_change_rev: 0,
+            local_worktree_write_rev: 0,
             last_active_at: None,
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
@@ -2329,7 +2478,9 @@ impl RepoState {
         if self.history_state.history_scope == scope {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
+        self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
 
@@ -2337,6 +2488,7 @@ impl RepoState {
         if self.history_state.history_author_filter == author {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
         self.bump_log_revs();
     }
@@ -2347,8 +2499,19 @@ impl RepoState {
 
     /// Start a new Reveal Commit lookup, returning the request id the reply has
     /// to carry to be accepted.
-    pub(crate) fn begin_commit_lookup(&mut self, reference: CommitId) -> u64 {
-        let lookup = &mut self.history_state.commit_lookup;
+    pub(crate) fn commit_lookup_mut(&mut self, purpose: CommitLookupPurpose) -> &mut CommitLookup {
+        match purpose {
+            CommitLookupPurpose::RevealDialog => &mut self.history_state.commit_lookup,
+            CommitLookupPurpose::MainlineParents => &mut self.history_state.mainline_lookup,
+        }
+    }
+
+    pub(crate) fn begin_commit_lookup(
+        &mut self,
+        purpose: CommitLookupPurpose,
+        reference: CommitId,
+    ) -> u64 {
+        let lookup = self.commit_lookup_mut(purpose);
         lookup.request = lookup.request.wrapping_add(1);
         lookup.reference = Some(reference);
         lookup.result = Loadable::Loading;
@@ -2356,11 +2519,17 @@ impl RepoState {
     }
 
     /// Record a lookup reply, ignoring one that a newer lookup has overtaken.
-    pub(crate) fn finish_commit_lookup(&mut self, request: u64, result: Loadable<Commit>) {
-        if self.history_state.commit_lookup.request != request {
+    pub(crate) fn finish_commit_lookup(
+        &mut self,
+        purpose: CommitLookupPurpose,
+        request: u64,
+        result: Loadable<Commit>,
+    ) {
+        let lookup = self.commit_lookup_mut(purpose);
+        if lookup.request != request {
             return;
         }
-        self.history_state.commit_lookup.result = result;
+        lookup.result = result;
     }
 
     /// Selecting a worktree row takes the details pane over, so the commit
@@ -2399,24 +2568,8 @@ impl RepoState {
             // relies on this. A range comparison is likewise a form of
             // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
+            self.history_state.selected_ids = Arc::new(FxHashSet::default());
             self.clear_range_comparison();
-        }
-        if let Some(previous) = &self.history_state.selected_commit
-            && Some(previous) != v.as_ref()
-            && self.history_state.commit_signatures.contains_key(previous)
-            && let Loadable::Ready(page) = &self.log
-            && !page.commits.iter().any(|commit| &commit.id == previous)
-        {
-            Arc::make_mut(&mut self.history_state.commit_signatures).remove(previous);
-            if self
-                .history_state
-                .commit_signatures_requested
-                .contains(previous)
-            {
-                Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(previous);
-            }
-            self.history_state.commit_signatures_rev =
-                self.history_state.commit_signatures_rev.wrapping_add(1);
         }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
@@ -2485,9 +2638,86 @@ impl RepoState {
         self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
+    fn history_squash_key(&self) -> (usize, u64, u64, u64, Option<CommitId>, usize) {
+        (
+            Arc::as_ptr(&self.history_state.multi_selection.commits) as usize,
+            self.log_rev,
+            self.head_branch_rev,
+            self.branches_rev,
+            self.detached_head_commit.clone(),
+            self.history_state
+                .indexed
+                .index
+                .as_ref()
+                .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+                .map_or(0, |index| Arc::as_ptr(index) as usize),
+        )
+    }
+
+    /// Called on the store worker before publication, once per selection/topology.
+    pub(crate) fn prepare_history_squash_plan(&mut self) {
+        if !self.history_state.multi_selection.is_multi() {
+            self.history_state.squash_cache = None;
+            return;
+        }
+        let key = self.history_squash_key();
+        if self
+            .history_state
+            .squash_cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let plan = self.compute_history_squash_plan();
+        self.history_state.squash_cache = Some(Arc::new(HistorySquashCache {
+            key,
+            _selection: self.history_state.multi_selection.commits.clone(),
+            _index: self.history_state.indexed.index.clone(),
+            plan,
+        }));
+    }
+
+    pub fn history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        if let Some(cache) = &self.history_state.squash_cache
+            && cache.key == self.history_squash_key()
+        {
+            return cache.plan.clone();
+        }
+        self.compute_history_squash_plan()
+    }
+
+    fn compute_history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        let head = self.head_commit_id()?;
+        if let Some(index) = self
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+        {
+            return gitcomet_core::squash::squash_eligibility_indexed(
+                index,
+                &self.history_state.multi_selection.commits,
+                &head,
+            );
+        }
+        let Loadable::Ready(page) = &self.log else {
+            return None;
+        };
+        gitcomet_core::squash::squash_eligibility(
+            &page.commits,
+            &self.history_state.multi_selection.commits,
+            &head,
+        )
+    }
+
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
         if self.history_state.multi_selection == v {
             return;
+        }
+        if !Arc::ptr_eq(&self.history_state.multi_selection.commits, &v.commits) {
+            self.history_state.selected_ids = Arc::new(v.commits.iter().cloned().collect());
         }
         self.history_state.multi_selection = v;
         self.history_state.selected_commit_rev =
@@ -2525,13 +2755,12 @@ impl RepoState {
         self.history_state.commit_signatures_cancellation.cancel();
         self.history_state.commit_signatures_cancellation = Default::default();
         self.history_state.commit_signatures_requested = Shared::default();
+        self.history_state.commit_signatures_attempt_order = Shared::default();
+        self.history_state.commit_signatures_visible = Shared::default();
         self.history_state.commit_signatures_queue.clear();
         self.history_state.commit_signatures_in_flight = false;
         self.history_state.commit_signatures_epoch =
             self.history_state.commit_signatures_epoch.wrapping_add(1);
-        if self.history_state.commit_signatures.is_empty() {
-            return;
-        }
         self.history_state.commit_signatures = Shared::default();
         self.history_state.commit_signatures_rev =
             self.history_state.commit_signatures_rev.wrapping_add(1);
@@ -2543,17 +2772,8 @@ impl RepoState {
         let updates: Vec<_> = verified
             .into_iter()
             .filter(|(id, signature)| {
-                let displayed = self.history_state.selected_commit.as_ref() == Some(id)
-                    || match &self.log {
-                        Loadable::Ready(page) => page.commits.iter().any(|commit| &commit.id == id),
-                        _ => true,
-                    };
-                // A discarded badge must be recoverable if this off-page commit
-                // is revealed again. Keep completed no-badge attempts memoized.
-                if !displayed && self.history_state.commit_signatures_requested.contains(id) {
-                    Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(id);
-                }
-                displayed && self.history_state.commit_signatures.get(id) != Some(signature)
+                self.history_state.commit_signatures_requested.contains(id)
+                    && self.history_state.commit_signatures.get(id) != Some(signature)
             })
             .collect();
         if updates.is_empty() {
@@ -2573,6 +2793,11 @@ impl RepoState {
         message: Loadable<Arc<str>>,
     ) {
         self.hover_commit_message = Some((commit_id, message));
+    }
+
+    pub(crate) fn set_suggested_commit_message(&mut self, message: Option<String>) {
+        self.suggested_commit_message = message;
+        self.suggested_commit_message_rev = self.suggested_commit_message_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_merge_commit_message(&mut self, v: Loadable<Option<String>>) {
@@ -2675,9 +2900,31 @@ impl RepoState {
         self.ops_rev = self.ops_rev.wrapping_add(1);
     }
 
+    pub(crate) fn bump_worktree_change_rev(&mut self) {
+        self.worktree_change_rev = self.worktree_change_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_local_worktree_write_rev(&mut self) {
+        self.local_worktree_write_rev = self.local_worktree_write_rev.wrapping_add(1);
+    }
+
+    /// A long-running GitComet git command that writes the checkout is still
+    /// going: merge/rebase/reset family, a pull, or a commit whose hooks may
+    /// rewrite files. Its watcher flush can arrive before it finishes. Not
+    /// fetch, push, staging or our own editor save — counting those would pass
+    /// off another program's edit as ours. Short commands (checkout, discard,
+    /// stash) finish before the debounced flush and need no entry here.
+    pub fn git_operation_in_flight(&self) -> bool {
+        self.sequencer_actions_in_flight > 0
+            || self.worktree_pull_in_flight > 0
+            || self.commit_in_flight > 0
+    }
+
     pub(crate) fn bump_load_epoch(&mut self) -> u64 {
         let previous = self.load_epoch;
         self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.history_state.indexed.cancel();
+        self.history_state.authors.cancellation.cancel();
         previous
     }
 }
@@ -3157,7 +3404,7 @@ mod tests {
 
     #[test]
     fn app_state_clone_shares_heavy_repo_fields_via_arc() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state.repos.push(RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -3558,7 +3805,11 @@ mod tests {
         repo.local_actions_in_flight = 1;
         assert!(repo.history_rewrite_busy());
 
-        for state in [SequencerState::CherryPick, SequencerState::RebaseOrApply] {
+        for state in [
+            SequencerState::CherryPick,
+            SequencerState::RebaseOrApply,
+            SequencerState::Revert,
+        ] {
             let mut repo = new_repo();
             repo.sequencer_state = Loadable::Ready(state);
             assert!(repo.history_rewrite_busy(), "sequencer {state:?}");
@@ -3804,6 +4055,28 @@ mod tests {
         assert_eq!(repo.ops_rev, before + 1);
         repo.bump_ops_rev();
         assert_eq!(repo.ops_rev, before + 2);
+    }
+
+    #[test]
+    fn git_operation_in_flight_counts_commands_that_can_write_the_worktree() {
+        let mut repo = new_repo();
+        assert!(!repo.git_operation_in_flight());
+        for set in [
+            |repo: &mut RepoState| repo.sequencer_actions_in_flight = 1,
+            |repo: &mut RepoState| repo.worktree_pull_in_flight = 1,
+            |repo: &mut RepoState| repo.commit_in_flight = 1,
+        ] {
+            let mut repo = new_repo();
+            set(&mut repo);
+            assert!(repo.git_operation_in_flight());
+        }
+        // A fetch, a push, staging, an editor save: none writes the checkout
+        // behind the user's back.
+        repo.pull_in_flight = 1;
+        repo.push_in_flight = 1;
+        repo.worktrees_in_flight = 1;
+        repo.local_actions_in_flight = 1;
+        assert!(!repo.git_operation_in_flight());
     }
 
     // --- Equality-guard tests: setters that skip rev bump on no-change ---

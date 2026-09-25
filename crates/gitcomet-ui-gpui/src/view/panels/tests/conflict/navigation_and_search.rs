@@ -55,7 +55,7 @@ fn build_multi_conflict_sides() -> (String, String, String, String) {
 /// brings the two panes onto the same block.
 #[gpui::test]
 fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -253,7 +253,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
 /// autoscroll the whole coupled group to the bottom of the file.
 #[gpui::test]
 fn conflict_resolver_materialized_output_parks_caret_at_the_start(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -377,7 +377,7 @@ fn seed_unresolved_conflict_state(
 /// both survive that, so the sync drags one onto the other and the loser jumps.
 #[gpui::test]
 fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -511,7 +511,7 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
 /// at all: it points at the wrong row.
 #[gpui::test]
 fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -802,7 +802,7 @@ fn assert_conflict_highlight_ranges_are_bounded(
 /// source columns actually paint with.
 #[gpui::test]
 fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -902,7 +902,7 @@ fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui:
 
 #[gpui::test]
 fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1187,7 +1187,7 @@ pub(super) fn resolved_output_placeholder_protected_ranges_for_test(
 fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1288,7 +1288,7 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
 /// that is what this pins.
 #[gpui::test]
 fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1375,7 +1375,7 @@ fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAp
 /// too, simply by moving.
 #[gpui::test]
 fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1548,7 +1548,7 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
 /// wants the one remaining decision back on screen.
 #[gpui::test]
 fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1701,7 +1701,7 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
 /// right to fire on it, and the reset is the user overriding that.
 #[gpui::test]
 fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1787,7 +1787,7 @@ fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2027,6 +2027,203 @@ fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver ui-scale fixture");
 }
 
+#[gpui::test]
+fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext) {
+    use crate::view::conflict_resolver::ThreeWayVisibleItem;
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = tempfile::tempdir().expect("conflict fixture directory");
+    let path = Path::new("context.txt");
+    let prefix: String = (0..80)
+        .map(|ix| {
+            if [10, 40, 70].contains(&ix) {
+                format!("needle context {ix}\n")
+            } else {
+                format!("context {ix}\n")
+            }
+        })
+        .collect();
+    let current = format!("{prefix}<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n");
+    std::fs::write(workdir.path().join(path), &current).expect("write conflict fixture");
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(198),
+        workdir.path(),
+        path,
+        &format!("{prefix}base\n"),
+        &format!("{prefix}ours\n"),
+        &format!("{prefix}theirs\n"),
+        &current,
+    );
+    draw_and_drain_test_window(cx);
+    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            assert_eq!(pane.conflict_resolver.path.as_deref(), Some(path));
+            pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+            if pane.conflict_resolver.collapse_context {
+                pane.conflict_resolver_toggle_collapse_context(cx);
+            }
+            pane.diff_search_active = true;
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let assert_matches = |cx: &mut gpui::VisualTestContext, expected_lines: &[usize]| {
+        cx.update(|_, app| {
+            let pane = main_pane.read(app);
+            assert!(!pane.diff_search_worker_running);
+            assert!(pane.diff_search_pending_previous_query.is_none());
+            let expected: Vec<_> = expected_lines
+                .iter()
+                .map(|&line| {
+                    pane.conflict_resolver
+                        .visible_index_for_aligned_row(line)
+                        .expect("matching context line is visible")
+                })
+                .collect();
+            assert_eq!(pane.diff_search_matches, expected);
+        });
+    };
+    let search = |cx: &mut gpui::VisualTestContext, query: &'static str, expected: &[usize]| {
+        cx.update(|_, app| {
+            main_pane.update(app, |pane, cx| {
+                let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                pane.diff_search_schedule_query_recompute(previous, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert_matches(cx, expected);
+    };
+
+    // Warm the snapshot before folding. Query edits must use the new projection.
+    search(cx, "needle", &[10, 40, 70]);
+    let fold_id = cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_toggle_collapse_context(cx);
+            match pane.conflict_resolver.three_way_visible_item(0) {
+                Some(ThreeWayVisibleItem::CollapsedContext { fold_id, .. }) => fold_id,
+                other => panic!("expected the leading context fold, got {other:?}"),
+            }
+        })
+    });
+    search(cx, "needle context", &[]);
+
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_reveal_context_fold(fold_id, true, cx);
+        });
+    });
+    search(cx, "NEEDLE", &[10]);
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_reveal_context_fold(fold_id, false, cx);
+        });
+    });
+    search(cx, "needle context", &[10, 70]);
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_expand_context_fold(fold_id, cx);
+        });
+    });
+    search(cx, "needle", &[10, 40, 70]);
+
+    // A worker already using the expanded snapshot must also discard its
+    // result and retry if the context folds before it can publish.
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            let previous = std::mem::replace(&mut pane.diff_search_query, "need".into());
+            pane.diff_search_schedule_query_recompute(previous, cx);
+            assert!(pane.diff_search_worker_running);
+            pane.conflict_resolver_toggle_collapse_context(cx);
+            pane.conflict_resolver_toggle_collapse_context(cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_matches(cx, &[]);
+}
+
+/// "Open content" on a conflicted file renders the file preview, not the
+/// resolver. The background search checked the conflict first, so typing
+/// searched resolver rows while the synchronous scan and scrolling used
+/// preview lines.
+#[gpui::test]
+fn conflict_content_preview_background_search_uses_preview_rows(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(199);
+    let workdir = tempfile::tempdir().expect("conflict fixture directory");
+    let path = Path::new("content.txt");
+    let current = "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nneedle\nb\nneedle\n";
+    std::fs::write(workdir.path().join(path), current).expect("write conflict fixture");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir.path());
+            set_test_conflict_status(
+                &mut repo,
+                path.to_path_buf(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let (base, ours, theirs) = (
+                "a\nneedle\nb\nneedle\n",
+                "a\nours\nneedle\nb\nneedle\n",
+                "a\ntheirs\nneedle\nb\nneedle\n",
+            );
+            set_test_conflict_file(&mut repo, path.to_path_buf(), base, ours, theirs, current);
+            repo.conflict_state.conflict_session =
+                Some(ConflictSession::from_stage_inputs_with_current(
+                    path.to_path_buf(),
+                    gitcomet_core::domain::FileConflictKind::BothModified,
+                    ConflictPayload::Text(base.into()),
+                    ConflictPayload::Text(ours.into()),
+                    ConflictPayload::Text(theirs.into()),
+                    Some(ConflictPayload::Text(current.into())),
+                ));
+            repo.diff_state.content_preview = true;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        let pane = main_pane.read(app);
+        assert!(pane.is_file_preview_active());
+        assert!(pane.active_conflict_target().is_some());
+        assert!(pane.worktree_preview_line_count().is_some());
+    });
+
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.diff_search_active = true;
+            let previous = std::mem::replace(&mut pane.diff_search_query, "needle".into());
+            pane.diff_search_schedule_query_recompute(previous, cx);
+        });
+    });
+    cx.run_until_parked();
+    let (background, synchronous) = cx.update(|_, app| {
+        main_pane.update(app, |pane, _| {
+            assert!(!pane.diff_search_worker_running);
+            let background = pane.diff_search_matches.clone();
+            pane.diff_search_recompute_matches();
+            (background, pane.diff_search_matches.clone())
+        })
+    });
+    assert_eq!(synchronous, [6, 8], "preview lines holding the query");
+    assert_eq!(
+        background, synchronous,
+        "the worker searched another surface"
+    );
+}
+
 /// Ctrl+F in the merge tool must bring the hit into view — in the input
 /// columns *and* in the resolved output.
 ///
@@ -2040,7 +2237,7 @@ fn assert_conflict_search_reveals_match(
     repo_id: gitcomet_state::model::RepoId,
     fixture_name: &str,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2234,7 +2431,7 @@ fn conflict_resolver_two_way_search_reveals_match_in_columns_and_output(
 /// instead of being left behind on the row it stepped off.
 #[gpui::test]
 fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2396,7 +2593,7 @@ fn assert_conflict_search_scrolls_sideways(
     fixture_name: &str,
     reveal_whitespace: bool,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

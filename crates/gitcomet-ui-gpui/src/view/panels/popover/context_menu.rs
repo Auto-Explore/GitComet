@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::ControlInteractionExt as _;
 
 mod branch;
 mod branch_group;
@@ -23,6 +24,7 @@ mod file_browser_folder;
 pub(super) mod file_history_commit;
 mod history_branch_filter;
 mod history_refs;
+mod local_file_link;
 mod mergetool_settings;
 mod pinned_section;
 mod previous_commit_messages;
@@ -30,6 +32,7 @@ mod pull;
 mod push;
 mod reflog_entry;
 mod remote;
+mod remote_web_picker;
 mod repo_picker_row;
 mod repo_tab;
 mod stash;
@@ -458,15 +461,38 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+            } => Some(remote_web_picker::model(self, *repo_id)),
             PopoverKind::WebLinkMenu {
                 url,
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_image_policy
+                    self.main_pane.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(web_link::model(url, load_remote_image_url))
+            }
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing,
+                load_remote_image_url,
+            } => {
+                let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
+                    self.main_pane.read(cx).remote_markdown_images.policy
+                        == RemoteMarkdownImagePolicy::AskBeforeLoading
+                });
+                Some(local_file_link::model(
+                    *repo_id,
+                    source,
+                    path,
+                    *missing,
+                    load_remote_image_url,
+                ))
             }
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
@@ -638,9 +664,11 @@ impl PopoverHost {
             PopoverKind::InteractiveRebaseAutosquashMenu => {
                 Some(interactive_rebase_autosquash_menu_model())
             }
-            PopoverKind::TerminalMenu { repo_id, context } => {
-                Some(terminal::model(*repo_id, *context, cx))
-            }
+            PopoverKind::TerminalMenu {
+                repo_id,
+                session_seq,
+                context,
+            } => Some(terminal::model(*repo_id, *session_seq, *context, cx)),
             _ => None,
         }
     }
@@ -1063,8 +1091,14 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::RevertCommit { repo_id, commit_id } => {
-                self.store
-                    .dispatch(Msg::RevertCommit { repo_id, commit_id });
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::RevertCommitConfirm { repo_id, commit_id },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
             }
             ContextMenuAction::SquashSelectedCommits { repo_id } => {
                 // PrepareSquash and the eventual SquashCommits are both
@@ -1218,45 +1252,26 @@ impl PopoverHost {
                 }
                 if used_selection {
                     self.clear_status_multi_selection(repo_id, cx);
-                    self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::StagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area,
-                        },
-                    });
-                    self.store.dispatch(Msg::StagePath { repo_id, path });
                 }
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    DiffArea::Unstaged,
+                    paths,
+                );
             }
             ContextMenuAction::UnstageSelectionOrPath {
                 repo_id,
                 area,
                 path,
             } => {
-                let (paths, used_selection) =
-                    self.take_status_paths_for_action(repo_id, area, &path, cx);
-                if used_selection {
-                    self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::UnstagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area,
-                        },
-                    });
-                    self.store.dispatch(Msg::UnstagePath { repo_id, path });
-                }
+                let (paths, _) = self.take_status_paths_for_action(repo_id, area, &path, cx);
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    DiffArea::Staged,
+                    paths,
+                );
             }
             ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
                 repo_id,
@@ -1323,7 +1338,6 @@ impl PopoverHost {
                     pane.status_multi_selection.remove(&repo_id);
                     cx.notify();
                 });
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 for path in paths {
                     self.store.dispatch(Msg::CheckoutConflictSide {
                         repo_id,
@@ -1658,31 +1672,44 @@ impl PopoverHost {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
                 });
             }
-            ContextMenuAction::TerminalCopy { repo_id } => {
+            ContextMenuAction::TerminalCommand {
+                repo_id,
+                session_seq,
+                command,
+            } => {
                 window.activate_window();
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.copy_terminal_selection_for_repo(repo_id, window, cx);
-                });
+                let dispatched = self
+                    .root_view
+                    .update(cx, |root, cx| {
+                        root.dispatch_terminal_command(repo_id, session_seq, command, window, cx)
+                    })
+                    .unwrap_or(false);
+                if !dispatched {
+                    self.close_popover(cx);
+                    return;
+                }
             }
-            ContextMenuAction::TerminalPaste { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.paste_terminal_clipboard_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalSelectAll { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.select_all_terminal_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalClear { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.clear_terminal_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalOpenExternal { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.open_external_terminal_from_menu(repo_id, window, cx);
-                });
+            ContextMenuAction::TerminalOpenExternal {
+                repo_id,
+                session_seq,
+            } => {
+                let dispatched = self
+                    .root_view
+                    .update(cx, |root, cx| {
+                        if root
+                            .terminal_viewport_for_session(repo_id, session_seq)
+                            .is_none()
+                        {
+                            return false;
+                        }
+                        root.open_external_terminal_from_menu(repo_id, window, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !dispatched {
+                    self.close_popover(cx);
+                    return;
+                }
             }
             ContextMenuAction::ApplyIndexPatch {
                 repo_id,
@@ -2077,7 +2104,6 @@ impl PopoverHost {
         };
 
         if paths.len() > 1 {
-            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             self.store
                 .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
             return;
@@ -2087,38 +2113,6 @@ impl PopoverHost {
             return;
         };
 
-        let is_added_file = self
-            .state
-            .repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .and_then(|repo| {
-                repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())
-                    .or_else(|| repo.status_entry_for_path(DiffArea::Staged, path.as_path()))
-                    .map(|status| status.kind)
-            })
-            .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
-
-        if is_added_file {
-            let path_is_selected = self
-                .active_repo()
-                .filter(|r| r.id == repo_id)
-                .and_then(|r| r.diff_state.diff_target.as_ref())
-                .is_some_and(|target| {
-                    matches!(target, DiffTarget::WorkingTree { path: selected, .. } if *selected == path)
-                });
-            if path_is_selected {
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            }
-        } else {
-            self.store.dispatch(Msg::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path.clone(),
-                    area: DiffArea::Unstaged,
-                },
-            });
-        }
         self.store
             .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
     }
@@ -2407,8 +2401,7 @@ impl PopoverHost {
                         let tooltip_host_for_move = tooltip_host.clone();
                         let tooltip_text_for_move = tooltip_text.clone();
                         let tooltip_host_for_hover = tooltip_host.clone();
-                        let activate_on_left_release = model_for_mouse.clone();
-                        let activate_on_right_release = model_for_mouse.clone();
+                        let activate_on_release = model_for_mouse.clone();
                         let icon_slot = match icon {
                             Some(icon) => components::ContextMenuIconSlot::Icon(icon),
                             None if reserve_icon_column => {
@@ -2453,32 +2446,17 @@ impl PopoverHost {
                                 });
                             }
                         }))
-                        .when(!disabled, |row| {
-                            row.on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_left_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Right,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_right_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                        })
+                        .on_menu_activate(
+                            disabled,
+                            cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                this.context_menu_activate_model_entry(
+                                    &activate_on_release,
+                                    ix,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
                         .into_any_element()
                     }
                 }

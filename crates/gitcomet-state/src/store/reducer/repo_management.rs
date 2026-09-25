@@ -146,6 +146,15 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     repo_state.loads_in_flight.clear();
+    // A dropped reply would otherwise leave a dialog waiting on it forever.
+    for lookup in [
+        &mut repo_state.history_state.commit_lookup,
+        &mut repo_state.history_state.mainline_lookup,
+    ] {
+        if lookup.result.is_loading() {
+            lookup.result = Loadable::NotLoaded;
+        }
+    }
     // The cancelled walk's reply is dropped by the repo-load guard, so nothing
     // downstream will ever clear the count it left on screen.
     repo_state.set_log_scan_progress(None);
@@ -727,6 +736,7 @@ pub(super) fn close_repos(
         let keep = !close_ids.contains(&repo.id);
         if !keep {
             repo.history_state.commit_signatures_cancellation.cancel();
+            repo.history_state.authors.cancellation.cancel();
         }
         keep
     });
@@ -851,6 +861,12 @@ fn fill_set_active_repo_inline_impl(
     }
     if changed {
         append_cancel_repo_loads_effect_for_repo(state, previous_active, effects);
+    }
+    if changed && state.git_log_settings.verify_commit_signatures {
+        for repo in &mut state.repos {
+            repo.history_state.commit_signatures_queue.clear();
+            repo.history_state.commit_signatures_visible = Default::default();
+        }
     }
     state.active_repo = Some(repo_id);
     let persist_effect = (changed && persist_on_change)

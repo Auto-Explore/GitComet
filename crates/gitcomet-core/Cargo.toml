@@ -19,6 +19,7 @@ sha2 = { workspace = true }
 filetime = { workspace = true }
 jiff = { workspace = true }
 memchr = { workspace = true }
+process-wrap = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }

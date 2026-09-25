@@ -3,6 +3,8 @@
 //! Uses SSH signing rather than GPG: generating a throwaway ed25519 key is fast
 //! and hermetic, while a GPG keypair needs entropy and an agent.
 
+#[cfg(unix)]
+use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::domain::{CommitId, SignatureFormat, SignatureStatus};
 use gitcomet_core::services::{GitBackend, GitRepository};
 use gitcomet_git_gix::GixBackend;
@@ -385,7 +387,7 @@ fn log_show_signature_does_not_corrupt_the_batch_parse() {
 
     let repo = open(&fixture.repo);
     let results = repo
-        .verify_commit_signatures(&[signed.clone()])
+        .verify_commit_signatures(std::slice::from_ref(&signed))
         .expect("verify signatures");
 
     assert_eq!(
@@ -410,7 +412,7 @@ fn verification_forces_utf8_despite_log_output_encoding() {
         &["config", "i18n.logOutputEncoding", "UTF-16"],
     );
     let result = open(&fixture.repo)
-        .verify_commit_signatures(&[signed.clone()])
+        .verify_commit_signatures(std::slice::from_ref(&signed))
         .unwrap();
     assert_eq!(
         result.len(),
@@ -539,31 +541,60 @@ fn an_ssh_key_absent_from_allowed_signers_is_untrusted() {
     assert!(!result[0].1.status.is_verified());
 }
 
+/// A page is verified in `git log` batches of at most 16 commits, so a slow
+/// verifier cannot push the whole page past the per-process timeout. The
+/// verifier logs its parent (that batch's git) instead of sleeping: a timed-out
+/// single batch still recovers every verdict through the per-commit retry.
 #[cfg(unix)]
 #[test]
-fn slow_signature_batches_make_progress_in_bounded_chunks() {
+fn signature_verification_runs_in_bounded_batches() {
     if !ssh_signing_available() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_signing_repo(dir.path());
     trust_signatures(&fixture);
-    let ids: Vec<_> = (0..80)
+    let ids: Vec<_> = (0..33)
         .map(|ix| commit(&fixture.repo, &format!("signed-{ix}"), true))
         .collect();
-    let verifier = dir.path().join("slow-verifier");
-    write_program(&verifier, "#!/bin/sh\nsleep 0.08\nexec ssh-keygen \"$@\"\n");
+    let calls = dir.path().join("verify-calls");
+    let verifier = dir.path().join("counting-verifier");
+    write_program(
+        &verifier,
+        &format!(
+            "#!/bin/sh\n[ \"$2\" = verify ] && echo $PPID >> '{}'\nexec ssh-keygen \"$@\"\n",
+            calls.display()
+        ),
+    );
     run_git(
         &fixture.repo,
         &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
     );
     let result = open(&fixture.repo)
         .verify_commit_signatures(&ids)
-        .expect("bounded verification must make progress");
+        .expect("batched verification");
     assert_eq!(
         result.iter().map(|(id, _)| id).collect::<Vec<_>>(),
         ids.iter().collect::<Vec<_>>()
     );
+    assert!(
+        result
+            .iter()
+            .all(|(_, sig)| sig.status == SignatureStatus::Good)
+    );
+
+    // Batches run one after another, so each is one run of equal parent pids.
+    let mut batches: Vec<usize> = Vec::new();
+    let mut previous = None;
+    for pid in fs::read_to_string(&calls).unwrap().lines() {
+        match batches.last_mut() {
+            Some(count) if previous == Some(pid) => *count += 1,
+            _ => batches.push(1),
+        }
+        previous = Some(pid);
+    }
+    assert_eq!(batches.iter().sum::<usize>(), ids.len(), "{batches:?}");
+    assert!(batches.iter().all(|&count| count <= 16), "{batches:?}");
 }
 
 #[cfg(unix)]
@@ -590,8 +621,12 @@ fn cancellation_stops_a_running_signature_verifier() {
     let worker_cancellation = cancellation.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        tx.send(repo.verify_commit_signatures_cancellable(&[id], &worker_cancellation))
-            .unwrap();
+        tx.send(repo.verify_commit_signatures_cancellable(
+            &[id],
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &worker_cancellation,
+        ))
+        .unwrap();
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while !fixture.repo.join("verifier-started").exists() && std::time::Instant::now() < deadline {
@@ -611,4 +646,45 @@ fn cancellation_stops_a_running_signature_verifier() {
         gitcomet_core::error::ErrorKind::Cancelled
     ));
     worker.join().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_format_without_a_verifier_is_skipped_without_running_one() {
+    if !ssh_signing_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+    let id = commit(&fixture.repo, "signed.txt", true);
+    let verifier = dir.path().join("recording-verifier");
+    write_program(
+        &verifier,
+        "#!/bin/sh\ntouch verifier-ran\nexec ssh-keygen \"$@\"\n",
+    );
+    run_git(
+        &fixture.repo,
+        &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
+    );
+    let repo = open(&fixture.repo);
+    let ids = [id];
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+
+    let gpg_only = SignatureFormats::NONE.with(SignatureFormat::OpenPgp);
+    let skipped = repo
+        .verify_commit_signatures_cancellable(&ids, gpg_only, &cancellation)
+        .unwrap();
+    assert!(skipped.is_empty(), "got {skipped:?}");
+    assert!(
+        !fixture.repo.join("verifier-ran").exists(),
+        "an excluded format must not spawn its verifier"
+    );
+
+    let verified = repo
+        .verify_commit_signatures_cancellable(&ids, SignatureFormats::ALL, &cancellation)
+        .unwrap();
+    assert_eq!(verified.len(), 1, "got {verified:?}");
+    assert_eq!(verified[0].1.status, SignatureStatus::Good);
+    assert!(fixture.repo.join("verifier-ran").exists());
 }

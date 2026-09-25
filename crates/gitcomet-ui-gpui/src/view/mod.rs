@@ -15,7 +15,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::git_operation::GitOperationId;
-use gitcomet_core::process::refresh_git_runtime;
+use gitcomet_core::process::current_git_runtime;
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
@@ -48,6 +48,46 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
 
+/// An invoker travels with the surface it opens, so opening and highlighting
+/// are one operation. Root requests start a new workflow; host-local requests
+/// can continue the current one.
+#[derive(Clone)]
+pub(in crate::view) struct PopoverRequest {
+    kind: PopoverKind,
+    invoker: Option<SharedString>,
+    focus_return: Option<FocusHandle>,
+    new_source: bool,
+}
+
+impl From<PopoverKind> for PopoverRequest {
+    fn from(kind: PopoverKind) -> Self {
+        Self {
+            kind,
+            invoker: None,
+            focus_return: None,
+            new_source: false,
+        }
+    }
+}
+
+impl PopoverRequest {
+    pub(in crate::view) fn returning_focus_to(mut self, focus: FocusHandle) -> Self {
+        self.focus_return = Some(focus);
+        self
+    }
+}
+
+impl PopoverKind {
+    pub(in crate::view) fn invoked_by(self, invoker: SharedString) -> PopoverRequest {
+        PopoverRequest {
+            kind: self,
+            invoker: Some(invoker),
+            focus_return: None,
+            new_source: true,
+        }
+    }
+}
+
 const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 
 /// How long after requesting an interactive move/resize grab a deactivation is
@@ -55,7 +95,6 @@ const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 /// generous enough for a loaded system, short enough that a genuine alt-tab
 /// right after a drag is not mistaken for the grab.
 const WINDOW_GRAB_DEACTIVATE_GRACE: Duration = Duration::from_millis(1_500);
-
 /// Upper bound on how long a drag may hold the grab before the re-activation is
 /// no longer treated as its echo. Only a safety valve: arming already requires a
 /// fresh grab plus a deactivation within [`WINDOW_GRAB_DEACTIVATE_GRACE`].
@@ -90,6 +129,7 @@ actions!(
         CommandPaletteDismiss,
         ToggleRevealCommit,
         LocateFileInExplorer,
+        OpenRemoteInBrowser,
     ]
 );
 
@@ -180,7 +220,7 @@ pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
-mod diff_navigation;
+pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
@@ -220,6 +260,7 @@ pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
+mod status_actions;
 mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;
@@ -251,7 +292,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
-use preferences::{RemoteMarkdownImagePolicy, UiPreferences};
+use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
@@ -298,13 +339,14 @@ use panes::{
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
-use tooltip::GitCometTooltipExt;
+pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
 use color::{composite_over, with_alpha};
-use icons::{svg_icon, svg_spinner};
+pub(crate) use icons::svg_icon;
+use icons::svg_spinner;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;
@@ -316,7 +358,9 @@ const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
 const HISTORY_COL_BRANCH_MAX_PX: f32 = 320.0;
-const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
+/// One lane: the graph's left and right insets around column 0; every other lane
+/// pins onto it.
+const HISTORY_COL_GRAPH_MIN_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX + HISTORY_GRAPH_MARGIN_RIGHT_PX;
 const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
 const HISTORY_COL_AUTHOR_MAX_PX: f32 = 260.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
@@ -328,7 +372,12 @@ const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
 const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
-const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
+/// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px
+/// padding.
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 12.0;
+/// Inset from the graph cell's right edge to the right-most lane, wider than the
+/// left one so a 16px node keeps 8px clear of the message border.
+const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 16.0;
 /// Corner radius where a graph line turns between columns. Against a 16px column
 /// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
 /// per column crossed and 8px of straight vertical below the corner, so the turn
@@ -349,11 +398,9 @@ const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;
 /// Alpha of the hover branch badge. Faint by design -- it is an on-demand hint
 /// in a column that otherwise holds solid ref chips, and must not read as one.
 const HISTORY_BRANCH_BADGE_ALPHA: f32 = 0.70;
-/// Width of the lane-coloured border down the left edge of the message cell.
+/// Width of the lane-coloured border down the left edge of the message cell. It
+/// spans the full row height with square ends.
 const HISTORY_MESSAGE_BORDER_W_PX: f32 = 3.0;
-/// Vertical inset of that border, so consecutive rows read as separate borders
-/// rather than as one continuous stripe down the list.
-const HISTORY_MESSAGE_BORDER_INSET_Y_PX: f32 = 3.0;
 /// Gap between that border and the message text.
 const HISTORY_MESSAGE_BORDER_GAP_PX: f32 = 6.0;
 
@@ -718,6 +765,7 @@ pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FO
 
 mod gitcomet_view;
 mod gitcomet_view_render;
+mod runtime_probe;
 
 #[cfg(test)]
 mod tests;

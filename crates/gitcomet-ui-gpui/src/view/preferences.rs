@@ -156,8 +156,40 @@ impl Default for MergeToolPreferences {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum HistoryBranchNamesMode {
+    #[default]
+    SeparateColumn,
+    Inline,
+}
+
+impl HistoryBranchNamesMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::SeparateColumn => "separate_column",
+            Self::Inline => "inline",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "separate_column" => Some(Self::SeparateColumn),
+            "inline" => Some(Self::Inline),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::SeparateColumn => "Separate column",
+            Self::Inline => "Inline with commit message",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct HistoryPreferences {
+    pub(super) branch_names: HistoryBranchNamesMode,
     pub(super) show_graph: bool,
     pub(super) show_author: bool,
     pub(super) show_date: bool,
@@ -175,6 +207,7 @@ pub(super) struct HistoryPreferences {
 impl Default for HistoryPreferences {
     fn default() -> Self {
         Self {
+            branch_names: HistoryBranchNamesMode::default(),
             show_graph: true,
             show_author: true,
             show_date: true,
@@ -183,7 +216,7 @@ impl Default for HistoryPreferences {
             highlight_commit_chain: true,
             files_follow_selected_commit: true,
             show_tags: true,
-            verify_commit_signatures: true,
+            verify_commit_signatures: false,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
         }
@@ -330,6 +363,11 @@ impl UiPreferences {
                 view_three_way: session.mergetool_view_three_way.unwrap_or(true),
             },
             history: HistoryPreferences {
+                branch_names: session
+                    .history_branch_names
+                    .as_deref()
+                    .and_then(HistoryBranchNamesMode::from_key)
+                    .unwrap_or_default(),
                 show_graph: session.history_show_graph.unwrap_or(true),
                 show_author: session.history_show_author.unwrap_or(true),
                 show_date: session.history_show_date.unwrap_or(true),
@@ -340,7 +378,7 @@ impl UiPreferences {
                     .file_browser_follow_selected_commit
                     .unwrap_or(true),
                 show_tags: session.history_show_tags.unwrap_or(true),
-                verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(true),
+                verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(false),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
             },
@@ -364,6 +402,25 @@ impl UiPreferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_branch_names_restores_modes_and_defaults_unknown_values() {
+        for (raw, expected) in [
+            (None, HistoryBranchNamesMode::SeparateColumn),
+            (
+                Some("separate_column"),
+                HistoryBranchNamesMode::SeparateColumn,
+            ),
+            (Some("inline"), HistoryBranchNamesMode::Inline),
+            (Some("future_mode"), HistoryBranchNamesMode::SeparateColumn),
+        ] {
+            let preferences = UiPreferences::from_session(&session::UiSession {
+                history_branch_names: raw.map(str::to_owned),
+                ..Default::default()
+            });
+            assert_eq!(preferences.history.branch_names, expected);
+        }
+    }
 
     #[test]
     fn session_defaults_are_resolved_once() {

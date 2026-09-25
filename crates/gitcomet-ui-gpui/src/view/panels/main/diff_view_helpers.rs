@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 impl MainPaneView {
     /// The worktree chip for the diff currently on screen, when that diff comes
@@ -20,13 +21,14 @@ impl MainPaneView {
             *detached,
             &inline.submodule_repo_path,
         );
-        let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+
         let open_path = inline.submodule_repo_path.clone();
         // Scaled like the other two chips (the details pane's and the history
         // row's): an unscaled chip stops matching the title row it sits in.
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         Some(
             crate::view::rows::sidebar::worktree_origin_chip(
+                "diff_title_worktree_origin",
                 theme,
                 label,
                 ui_scale.px(10.0),
@@ -34,12 +36,6 @@ impl MainPaneView {
                 ui_scale.px(220.0),
                 ui_scale.px(6.0),
             )
-            .id("diff_title_worktree_origin")
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| {
-                s.border_color(palette.hover_border)
-                    .text_color(palette.hover_text)
-            })
             .gitcomet_tooltip(
                 theme,
                 format!(
@@ -48,14 +44,18 @@ impl MainPaneView {
                 )
                 .into(),
             )
-            .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                if !e.standard_click() {
-                    return;
-                }
-                cx.stop_propagation();
-                this.store.dispatch(Msg::OpenRepo(open_path.clone()));
-                cx.notify();
-            }))
+            .on_activate(
+                false,
+                controls::ControlActivation::Nested,
+                cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                    cx.notify();
+                }),
+            )
             .into_any_element(),
         )
     }
@@ -190,6 +190,7 @@ impl MainPaneView {
         let can_back = repo.navigation.view_history.can_back();
         let can_forward = repo.navigation.view_history.can_forward();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
         let (badge_label, path): (SharedString, std::path::PathBuf) =
             match self.rendered_diff_target()? {
@@ -210,6 +211,8 @@ impl MainPaneView {
                 _ => return None,
             };
 
+        let history_invoker: SharedString = "viewer_revision_badge".into();
+        let history_open = self.active_context_menu_invoker.as_ref() == Some(&history_invoker);
         // Monospace label so the badge keeps a constant width as the SHA changes.
         let badge = div()
             .id("viewer_revision_badge")
@@ -224,12 +227,14 @@ impl MainPaneView {
             .border_1()
             .border_color(theme.colors.stroke.default)
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+            .control_interaction(
+                controls::InteractionStyle::header(theme),
+                controls::InteractionState::default().open(history_open),
+            )
             .child(svg_icon(
                 "icons/history.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .child(
                 div()
@@ -238,24 +243,29 @@ impl MainPaneView {
                     .whitespace_nowrap()
                     .child(badge_label),
             )
-            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(
-                    PopoverKind::FileHistory {
-                        repo_id,
-                        path: path.clone(),
-                    },
-                    e.position(),
-                    window,
-                    cx,
-                );
-            }))
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    this.open_popover_at(
+                        (PopoverKind::FileHistory {
+                            repo_id,
+                            path: path.clone(),
+                        })
+                        .invoked_by(history_invoker.clone()),
+                        e.position(),
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .gitcomet_tooltip(theme, "Show file history".into());
 
         let back_btn = components::Button::new("viewer_nav_back", "")
             .start_slot(svg_icon(
                 "icons/arrow_left.svg",
                 theme.colors.foreground.primary,
-                px(14.0),
+                scaled_px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
             .disabled(!can_back)
@@ -269,7 +279,7 @@ impl MainPaneView {
             .start_slot(svg_icon(
                 "icons/arrow_right.svg",
                 theme.colors.foreground.primary,
-                px(14.0),
+                scaled_px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
             .disabled(!can_forward)
@@ -369,6 +379,7 @@ impl MainPaneView {
         let Some(repo_id) = repo_id else {
             return (None, None);
         };
+        let scaled_px = crate::ui_scale::scaler(crate::ui_scale::current(cx).percent);
 
         let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
         let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
@@ -420,7 +431,11 @@ impl MainPaneView {
                       delta: i8,
                       cx: &mut gpui::Context<Self>| {
             let btn = components::Button::new(id, "")
-                .start_slot(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
+                .start_slot(svg_icon(
+                    icon,
+                    theme.colors.foreground.primary,
+                    scaled_px(14.0),
+                ))
                 .style(components::ButtonStyle::Outlined);
             let btn = if borderless { btn.borderless() } else { btn };
             btn.on_click(theme, cx, move |this, _e, window, cx| {

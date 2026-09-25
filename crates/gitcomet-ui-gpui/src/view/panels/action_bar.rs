@@ -67,6 +67,46 @@ const BADGE_LABEL_MAX_CHARS: usize = 28;
 const CONDENSED_BADGE_LABEL_MAX_CHARS: usize = 16;
 const COMPACT_BADGE_LABEL_MAX_CHARS: usize = 10;
 
+/// Label and control ids for a paused rebase, apply, cherry-pick, or revert.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SequencerBanner {
+    label: &'static str,
+    abort_id: &'static str,
+    continue_id: &'static str,
+    continue_tooltip: &'static str,
+}
+
+fn sequencer_banner(state: gitcomet_core::services::SequencerState) -> Option<SequencerBanner> {
+    use gitcomet_core::services::SequencerState;
+    let (label, abort_id, continue_id, continue_tooltip) = match state {
+        SequencerState::None => return None,
+        SequencerState::RebaseOrApply => (
+            "APPLY/REBASE",
+            "abort_rebase_or_apply",
+            "continue_rebase_or_apply",
+            "Continue the in-progress rebase or apply",
+        ),
+        SequencerState::CherryPick => (
+            "CHERRY-PICKING",
+            "abort_cherry_pick",
+            "continue_cherry_pick",
+            "Continue the in-progress cherry-pick",
+        ),
+        SequencerState::Revert => (
+            "REVERTING",
+            "abort_revert",
+            "continue_revert",
+            "Continue the in-progress revert",
+        ),
+    };
+    Some(SequencerBanner {
+        label,
+        abort_id,
+        continue_id,
+        continue_tooltip,
+    })
+}
+
 fn truncate_badge_label_to(label: &str, max_chars: usize) -> SharedString {
     let mut chars = label.chars();
     let head: String = chars.by_ref().take(max_chars).collect();
@@ -278,11 +318,12 @@ impl ActionBarView {
 
     fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
         });
@@ -290,23 +331,14 @@ impl ActionBarView {
 
     fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
-    }
-
-    fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -380,10 +412,7 @@ impl Render for ActionBarView {
 
         // Workspace, branch and historical badges all light up while their own
         // picker is open, so they need the active invoker before any of them.
-        let menu_selected_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.26 } else { 0.20 },
-        );
+        let menu_selected_bg = components::control_open_background(theme);
         let active_invoker = self.active_context_menu_invoker.clone();
 
         // Keep the exit control visible throughout file browsing, including
@@ -405,12 +434,12 @@ impl Render for ActionBarView {
                     .text_color(purple)
                     .bg(with_alpha(purple, 0.12))
                     .hover_bg(with_alpha(purple, if theme.is_dark { 0.22 } else { 0.18 }))
-                    .selected(is_active)
+                    .open(is_active)
                     .selected_bg(with_alpha(purple, if theme.is_dark { 0.30 } else { 0.24 }))
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(invoker.clone(), cx);
                         this.open_popover_for_bounds(
-                            PopoverKind::BrowseHistoryMenu { repo_id },
+                            (PopoverKind::BrowseHistoryMenu { repo_id })
+                                .invoked_by(invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -421,36 +450,19 @@ impl Render for ActionBarView {
             });
 
         let is_merging = self.active_repo().is_some_and(merge_in_progress);
-        let sequencer_state = self
+        let sequencer_banner = self
             .active_repo()
             .map(active_sequencer_state)
-            .unwrap_or_default();
-        let is_cherry_pick_in_progress =
-            sequencer_state == gitcomet_core::services::SequencerState::CherryPick;
-        let is_rebase_or_apply_in_progress =
-            sequencer_state == gitcomet_core::services::SequencerState::RebaseOrApply;
-        let sequencer_label = if is_cherry_pick_in_progress {
-            "CHERRY-PICKING"
-        } else {
-            "APPLY/REBASE"
-        };
-        let sequencer_abort_id = if is_cherry_pick_in_progress {
-            "abort_cherry_pick"
-        } else {
-            "abort_rebase_or_apply"
-        };
-        let sequencer_continue_id = if is_cherry_pick_in_progress {
-            "continue_cherry_pick"
-        } else {
-            "continue_rebase_or_apply"
-        };
-        let sequencer_continue_tooltip = if is_cherry_pick_in_progress {
-            "Continue the in-progress cherry-pick"
-        } else {
-            "Continue the in-progress rebase or apply"
-        };
+            .and_then(sequencer_banner);
         let rebase_has_unstaged_conflicts =
             self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
+        // A revert shows REVERT_HEAD while its commit step still runs; the
+        // reducer also refuses Continue/Abort until it finishes. A merge tool
+        // or submodule clone does not count.
+        let sequencer_step_busy = self
+            .active_repo()
+            .is_some_and(|r| r.sequencer_actions_in_flight > 0);
+        const SEQUENCER_BUSY_TOOLTIP: &str = "Wait for the running Git operation to finish";
 
         let (pull_count, push_count) = self
             .active_repo()
@@ -567,12 +579,12 @@ impl Render for ActionBarView {
             components::Button::new("workspace_badge", label.clone())
                 .start_slot(icon("icons/git_worktree.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
-                .selected(is_active)
+                .open(is_active)
                 .selected_bg(menu_selected_bg)
                 .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                    this.activate_context_menu_invoker(invoker.clone(), cx);
                     this.open_popover_for_bounds(
-                        PopoverKind::worktree(repo_id, WorktreePopoverKind::BadgePicker),
+                        (PopoverKind::worktree(repo_id, WorktreePopoverKind::BadgePicker))
+                            .invoked_by(invoker.clone()),
                         bounds,
                         window,
                         cx,
@@ -607,14 +619,14 @@ impl Render for ActionBarView {
                 components::Button::new("branch_badge", label)
                     .start_slot(icon("icons/git_branch.svg", icon_primary))
                     .style(components::ButtonStyle::Subtle)
-                    .selected(is_active)
+                    .open(is_active)
                     .selected_bg(menu_selected_bg)
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(invoker.clone(), cx);
                         this.open_popover_for_bounds(
-                            PopoverKind::BranchPicker {
+                            (PopoverKind::BranchPicker {
                                 purpose: BranchPickerPurpose::Checkout,
-                            },
+                            })
+                            .invoked_by(invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -658,15 +670,15 @@ impl Render for ActionBarView {
                     } else {
                         theme.colors.foreground.secondary
                     })
-                    .selected(is_active)
+                    .open(is_active)
                     .selected_bg(menu_selected_bg)
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(invoker.clone(), cx);
                         this.open_popover_for_bounds(
-                            PopoverKind::UpstreamPicker {
+                            (PopoverKind::UpstreamPicker {
                                 repo_id,
                                 branch: local_branch.clone(),
-                            },
+                            })
+                            .invoked_by(invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -694,7 +706,7 @@ impl Render for ActionBarView {
             icon_muted
         };
         let mut pull_main = components::Button::new("pull_main", "Pull")
-            .rounded_left()
+            .busy(pull_loading)
             .start_slot(if pull_loading {
                 spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
             } else {
@@ -719,50 +731,46 @@ impl Render for ActionBarView {
             icon_muted
         };
         let pull_menu = components::Button::new("pull_menu", "")
-            .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", pull_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
-            .selected(pull_picker_active)
+            .open(pull_picker_active)
             .selected_bg(menu_selected_bg);
 
         let pull = div()
             .id("pull")
             .debug_selector(|| "pull".to_string())
             .child(
-                components::SplitButton::new(
-                    pull_main
-                        .disabled(!pull_default_enabled || !pull_request_enabled)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let Some(repo) = this.active_repo() else {
-                                return;
-                            };
-                            let repo_id = repo.id;
-                            match pull_request(repo) {
-                                PullRequest::Pull => this.store.dispatch(Msg::Pull {
-                                    repo_id,
-                                    mode: PullMode::Default,
-                                }),
-                                PullRequest::NoRemotes => this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Cannot pull: no remotes configured".to_string(),
-                                    cx,
-                                ),
-                                PullRequest::NotReady => {}
-                            }
-                        }),
-                    pull_menu.on_click_with_bounds(
-                        theme,
-                        cx,
-                        move |this, _e, bounds, window, cx| {
-                            this.activate_context_menu_invoker(pull_picker_invoker.clone(), cx);
-                            this.open_popover_for_bounds(
-                                PopoverKind::PullPicker,
-                                bounds,
-                                window,
+                components::SplitButton::action_menu(
+                    pull_main.disabled(!pull_default_enabled || !pull_request_enabled),
+                    pull_menu,
+                    theme,
+                    cx,
+                    |this, _e, _w, cx| {
+                        let Some(repo) = this.active_repo() else {
+                            return;
+                        };
+                        let repo_id = repo.id;
+                        match pull_request(repo) {
+                            PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                                repo_id,
+                                mode: PullMode::Default,
+                            }),
+                            PullRequest::NoRemotes => this.push_toast(
+                                components::ToastKind::Error,
+                                "Cannot pull: no remotes configured".to_string(),
                                 cx,
-                            );
-                        },
-                    ),
+                            ),
+                            PullRequest::NotReady => {}
+                        }
+                    },
+                    move |this, _e, bounds, window, cx| {
+                        this.open_popover_for_bounds(
+                            PopoverKind::PullPicker.invoked_by(pull_picker_invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    },
                 )
                 .style(components::SplitButtonStyle::Borderless)
                 .render(theme, ui_scale_percent),
@@ -805,7 +813,7 @@ impl Render for ActionBarView {
                 .gitcomet_tooltip(theme, terminal_tooltip),
         );
         let mut push_main = components::Button::new("push_main", "Push")
-            .rounded_left()
+            .busy(push_loading)
             .start_slot(if push_loading {
                 spinner(("push_spinner", active_repo_key), push_color).into_any_element()
             } else {
@@ -830,61 +838,55 @@ impl Render for ActionBarView {
             icon_muted
         };
         let push_menu = components::Button::new("push_menu", "")
-            .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", push_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
-            .selected(push_picker_active)
+            .open(push_picker_active)
             .selected_bg(menu_selected_bg);
 
         let push = div()
             .id("push")
             .debug_selector(|| "push".to_string())
             .child(
-                components::SplitButton::new(
-                    push_main.disabled(!push_request_ready).on_click(
-                        theme,
-                        cx,
-                        |this, e, window, cx| {
-                            let Some(repo) = this.active_repo() else {
-                                return;
-                            };
-                            let repo_id = repo.id;
-                            match push_request(repo) {
-                                PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
-                                PushRequest::SetUpstream { remote } => this.open_popover_at(
-                                    PopoverKind::PushSetUpstreamPrompt {
-                                        repo_id,
-                                        remote,
-                                        configure_only_for: None,
-                                    },
-                                    e.position(),
-                                    window,
-                                    cx,
-                                ),
-                                PushRequest::NoRemotes => {
-                                    this.push_toast(
-                                        components::ToastKind::Error,
-                                        "Cannot push: no remotes configured".to_string(),
-                                        cx,
-                                    );
-                                }
-                                PushRequest::NotReady => {}
-                            }
-                        },
-                    ),
-                    push_menu.on_click_with_bounds(
-                        theme,
-                        cx,
-                        move |this, _e, bounds, window, cx| {
-                            this.activate_context_menu_invoker(push_picker_invoker.clone(), cx);
-                            this.open_popover_for_bounds(
-                                PopoverKind::PushPicker,
-                                bounds,
+                components::SplitButton::action_menu(
+                    push_main.disabled(!push_request_ready),
+                    push_menu,
+                    theme,
+                    cx,
+                    |this, e, window, cx| {
+                        let Some(repo) = this.active_repo() else {
+                            return;
+                        };
+                        let repo_id = repo.id;
+                        match push_request(repo) {
+                            PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
+                            PushRequest::SetUpstream { remote } => this.open_popover_at(
+                                PopoverKind::PushSetUpstreamPrompt {
+                                    repo_id,
+                                    remote,
+                                    configure_only_for: None,
+                                },
+                                e.position(),
                                 window,
                                 cx,
-                            );
-                        },
-                    ),
+                            ),
+                            PushRequest::NoRemotes => {
+                                this.push_toast(
+                                    components::ToastKind::Error,
+                                    "Cannot push: no remotes configured".to_string(),
+                                    cx,
+                                );
+                            }
+                            PushRequest::NotReady => {}
+                        }
+                    },
+                    move |this, _e, bounds, window, cx| {
+                        this.open_popover_for_bounds(
+                            PopoverKind::PushPicker.invoked_by(push_picker_invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    },
                 )
                 .style(components::SplitButtonStyle::Borderless)
                 .render(theme, ui_scale_percent),
@@ -903,12 +905,16 @@ impl Render for ActionBarView {
             components::Button::new("stash", action_label("Stash"))
                 .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
                 .style(components::ButtonStyle::Subtle)
-                .selected(stash_prompt_active)
+                .open(stash_prompt_active)
                 .selected_bg(menu_selected_bg)
                 .disabled(!can_stash)
                 .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                    this.activate_context_menu_invoker(stash_prompt_invoker.clone(), cx);
-                    this.open_popover_for_bounds(PopoverKind::StashPrompt, bounds, window, cx);
+                    this.open_popover_for_bounds(
+                        PopoverKind::StashPrompt.invoked_by(stash_prompt_invoker.clone()),
+                        bounds,
+                        window,
+                        cx,
+                    );
                 })
                 .gitcomet_tooltip(
                     theme,
@@ -929,10 +935,9 @@ impl Render for ActionBarView {
             components::Button::new("create_branch", action_label("Branch"))
                 .start_slot(icon("icons/git_branch.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
-                .selected(create_branch_active)
+                .open(create_branch_active)
                 .selected_bg(menu_selected_bg)
                 .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                    this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
                     if let Some(repo_id) = this.state.active_repo {
                         let target = this
                             .active_repo()
@@ -945,12 +950,13 @@ impl Render for ActionBarView {
                             })
                             .unwrap_or_else(|| "HEAD".to_string());
                         this.open_popover_for_bounds(
-                            PopoverKind::CreateBranchFromRefPrompt {
+                            (PopoverKind::CreateBranchFromRefPrompt {
                                 repo_id,
                                 target,
                                 source_selectable: true,
                                 name_prefix: String::new(),
-                            },
+                            })
+                            .invoked_by(create_branch_invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -1030,64 +1036,65 @@ impl Render for ActionBarView {
                                 ),
                         )
                     })
-                    .when(
-                        !is_merging
-                            && (is_rebase_or_apply_in_progress || is_cherry_pick_in_progress),
-                        |d| {
-                            d.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_size(theme.ui_text(12.0))
-                                            .text_color(theme.colors.status.warning.foreground)
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(sequencer_label),
-                                    )
-                                    .child(
-                                        components::Button::new(sequencer_abort_id, "Abort")
-                                            .style(components::ButtonStyle::Danger)
-                                            .on_click(
+                    .when_some(sequencer_banner.filter(|_| !is_merging), |d, banner| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.status.warning.foreground)
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(banner.label),
+                                )
+                                .child(
+                                    components::Button::new(banner.abort_id, "Abort")
+                                        .style(components::ButtonStyle::Danger)
+                                        .disabled(sequencer_step_busy)
+                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.open_popover_at(
+                                                    PopoverKind::MergeAbortConfirm { repo_id },
+                                                    e.position(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        })
+                                        .when(sequencer_step_busy, |button| {
+                                            button.gitcomet_tooltip(
                                                 theme,
-                                                cx,
-                                                |this, e: &ClickEvent, window, cx| {
-                                                    if let Some(repo_id) = this.active_repo_id() {
-                                                        this.open_popover_at(
-                                                            PopoverKind::MergeAbortConfirm {
-                                                                repo_id,
-                                                            },
-                                                            e.position(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                },
-                                            ),
-                                    )
-                                    .child(
-                                        components::Button::new(sequencer_continue_id, "Continue")
-                                            .style(components::ButtonStyle::Outlined)
-                                            .disabled(rebase_has_unstaged_conflicts)
-                                            .on_click(theme, cx, |this, _e, _w, _cx| {
-                                                if let Some(repo_id) = this.active_repo_id() {
-                                                    this.store
-                                                        .dispatch(Msg::RebaseContinue { repo_id });
-                                                }
-                                            })
-                                            .gitcomet_tooltip(
-                                                theme,
-                                                if rebase_has_unstaged_conflicts {
-                                                    "Resolve all conflicts before continuing".into()
-                                                } else {
-                                                    sequencer_continue_tooltip.into()
-                                                },
-                                            ),
-                                    ),
-                            )
-                        },
-                    ),
+                                                SEQUENCER_BUSY_TOOLTIP.into(),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    components::Button::new(banner.continue_id, "Continue")
+                                        .style(components::ButtonStyle::Outlined)
+                                        .disabled(
+                                            rebase_has_unstaged_conflicts || sequencer_step_busy,
+                                        )
+                                        .on_click(theme, cx, |this, _e, _w, _cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.store
+                                                    .dispatch(Msg::RebaseContinue { repo_id });
+                                            }
+                                        })
+                                        .gitcomet_tooltip(
+                                            theme,
+                                            if sequencer_step_busy {
+                                                SEQUENCER_BUSY_TOOLTIP.into()
+                                            } else if rebase_has_unstaged_conflicts {
+                                                "Resolve all conflicts before continuing".into()
+                                            } else {
+                                                banner.continue_tooltip.into()
+                                            },
+                                        ),
+                                ),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1109,6 +1116,39 @@ mod tests {
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::domain::Upstream;
     use std::path::PathBuf;
+
+    #[test]
+    fn sequencer_banner_names_each_paused_operation() {
+        use gitcomet_core::services::SequencerState;
+
+        assert_eq!(sequencer_banner(SequencerState::None), None);
+        for (state, label, abort_id, continue_id) in [
+            (
+                SequencerState::RebaseOrApply,
+                "APPLY/REBASE",
+                "abort_rebase_or_apply",
+                "continue_rebase_or_apply",
+            ),
+            (
+                SequencerState::CherryPick,
+                "CHERRY-PICKING",
+                "abort_cherry_pick",
+                "continue_cherry_pick",
+            ),
+            (
+                SequencerState::Revert,
+                "REVERTING",
+                "abort_revert",
+                "continue_revert",
+            ),
+        ] {
+            let banner = sequencer_banner(state).expect("paused operation has a banner");
+            assert_eq!(
+                (banner.label, banner.abort_id, banner.continue_id),
+                (label, abort_id, continue_id)
+            );
+        }
+    }
 
     #[test]
     fn file_browsing_badge_stays_available_on_the_working_tree_until_exit() {
@@ -1269,7 +1309,7 @@ mod tests {
         let repo_id = RepoId(1);
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,
@@ -1297,7 +1337,7 @@ mod tests {
         let repo_id = RepoId(1);
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,

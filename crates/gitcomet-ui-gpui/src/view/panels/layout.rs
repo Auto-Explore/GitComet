@@ -1,7 +1,14 @@
 use super::*;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::view::panes::{ComparisonCardCache, ComparisonOrderCache};
 use crate::view::rows::CommitCard;
 use gpui::{AnyElement, Div, Stateful};
 use rustc_hash::FxHashSet;
+
+#[cfg(test)]
+#[path = "layout_indexed_tests.rs"]
+mod indexed_tests;
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
@@ -209,8 +216,11 @@ fn commit_details_signature_badge(
         .border_color(badge.palette.border)
         .bg(badge.palette.background)
         .child(
-            svg_icon(badge.icon, badge.palette.foreground, px(12.0))
+            gpui::svg()
+                .path(badge.icon)
                 .size(theme.ui_text(12.0))
+                .flex_shrink_0()
+                .text_color(badge.palette.foreground)
                 .debug_selector(|| "commit_details_signature_icon".to_string()),
         )
         .child(
@@ -607,11 +617,12 @@ impl DetailsPaneView {
             }
             DiffArea::Staged => {
                 self.clear_status_multi_selection(repo_id);
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                self.store.dispatch(Msg::UnstagePaths {
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
                     repo_id,
-                    paths: paths.into(),
-                });
+                    DiffArea::Staged,
+                    paths,
+                );
                 cx.notify();
             }
         }
@@ -1061,10 +1072,16 @@ impl DetailsPaneView {
             });
     }
 
-    /// Selected commits resolved against the loaded log page, in log order
-    /// (youngest first). Ids missing from the page are skipped.
-    fn multi_selected_commits_in_log_order(repo: &RepoState) -> Vec<Commit> {
+    /// Selected IDs in displayed history order, independent of the bounded
+    /// metadata cache. Missing metadata must not shrink the selection's cards.
+    fn multi_selected_commit_ids_in_log_order(repo: &RepoState) -> Vec<CommitId> {
         let selection = &repo.history_state.multi_selection;
+        let indexed = &repo.history_state.indexed;
+        if let Some(index) = indexed.displayed_index.as_ref().or(indexed.index.as_ref()) {
+            let mut selected = selection.commits.as_ref().clone();
+            selected.sort_by_cached_key(|id| index.position(id.as_ref()).unwrap_or(usize::MAX));
+            return selected;
+        }
         let Loadable::Ready(page) = &repo.log else {
             return Vec::new();
         };
@@ -1076,7 +1093,7 @@ impl DetailsPaneView {
         page.commits
             .iter()
             .filter(|commit| selected.contains(&commit.id))
-            .cloned()
+            .map(|commit| commit.id.clone())
             .collect()
     }
 
@@ -1086,65 +1103,216 @@ impl DetailsPaneView {
     /// diff). A single leftover selection — every plain history click leaves one
     /// — describes an unrelated commit, so the mark + compare, branch/tag and
     /// working-tree flows derive their endpoints from the range itself, looking
-    /// each SHA up in the loaded log so its summary/author/time can be shown.
+    /// each SHA up in indexed ranges or the bootstrap page for its metadata.
     /// Ordered newest first (tip before base) to match the log. The working tree
     /// has no commit of its own, so a compare-against-working-tree range yields
     /// a single card.
-    fn range_comparison_commits(repo: &RepoState) -> Vec<Commit> {
+    fn range_comparison_commit_ids(repo: &RepoState) -> Vec<CommitId> {
         if repo.history_state.multi_selection.is_multi() {
-            let multi = Self::multi_selected_commits_in_log_order(repo);
-            if !multi.is_empty() {
-                return multi;
-            }
+            return Self::multi_selected_commit_ids_in_log_order(repo);
         }
         let Some(range) = repo.history_state.range_selection.as_ref() else {
             return Vec::new();
         };
-        let Loadable::Ready(page) = &repo.log else {
-            return Vec::new();
-        };
-        let find = |id: &CommitId| page.commits.iter().find(|c| &c.id == id).cloned();
-        let mut commits = Vec::new();
-        if let Some(to) = range.to.as_ref().and_then(&find) {
-            commits.push(to);
-        }
-        if let Some(from) = find(&range.from) {
-            commits.push(from);
-        }
-        commits
+        range
+            .to
+            .iter()
+            .chain(std::iter::once(&range.from))
+            .filter(|id| id.as_ref() != gitcomet_core::domain::EMPTY_TREE_ID)
+            .cloned()
+            .collect()
     }
 
-    /// [`Self::range_comparison_commits`] memoized on everything it reads:
-    /// the log page, the selection and the range, with each card's static
-    /// strings prepared once (they were re-formatted per card per frame).
-    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
-        use std::hash::{Hash as _, Hasher as _};
-        let key = {
-            let mut hasher = rustc_hash::FxHasher::default();
-            repo.id.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
-            repo.history_state.selected_commit_rev.hash(&mut hasher);
-            match repo.history_state.range_selection.as_ref() {
-                Some(range) => {
-                    range.from.as_ref().hash(&mut hasher);
-                    range.to.as_ref().map(|id| id.as_ref()).hash(&mut hasher);
-                }
-                None => 0u8.hash(&mut hasher),
-            }
-            hasher.finish()
+    fn comparison_commits<'a>(repo: &'a RepoState, ids: &[CommitId]) -> Vec<Option<&'a Commit>> {
+        let indexed = &repo.history_state.indexed;
+        let page = match &repo.log {
+            Loadable::Ready(page) => Some(page),
+            _ => repo.history_state.retained_log_while_loading.as_ref(),
         };
-        if let Some((cached_key, commits)) = self.range_comparison_commits_cache.borrow().as_ref()
-            && *cached_key == key
-        {
-            return std::rc::Rc::clone(commits);
-        }
-        let commits: std::rc::Rc<[CommitCard]> = Self::range_comparison_commits(repo)
+        // Hash the fallback page once, including for legacy histories where it
+        // may contain thousands of commits. Never scan it per selected ID.
+        let bootstrap: FxHashMap<_, _> = page
             .into_iter()
-            .map(CommitCard::new)
+            .flat_map(|page| &page.commits)
+            .map(|commit| (&commit.id, commit))
             .collect();
-        *self.range_comparison_commits_cache.borrow_mut() =
-            Some((key, std::rc::Rc::clone(&commits)));
-        commits
+        // Resolve by immutable ID against the cache's own index: during handoff
+        // its row numbers can differ from those of the displayed presentation.
+        ids.iter()
+            .map(|id| {
+                indexed
+                    .range_index
+                    .as_ref()
+                    .and_then(|index| indexed.commit(&index.snapshot, index.position(id.as_ref())?))
+                    .or_else(|| bootstrap.get(id).copied())
+            })
+            .collect()
+    }
+
+    fn comparison_order_key(repo: &RepoState) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut key = rustc_hash::FxHasher::default();
+        repo.id.hash(&mut key);
+        repo.log_rev.hash(&mut key);
+        if !repo.history_state.multi_selection.is_multi()
+            && let Some(range) = &repo.history_state.range_selection
+        {
+            range.from.hash(&mut key);
+            range.to.hash(&mut key);
+        }
+        (Arc::as_ptr(&repo.history_state.multi_selection.commits) as usize).hash(&mut key);
+        repo.history_state
+            .indexed
+            .displayed_index
+            .as_ref()
+            .or(repo.history_state.indexed.index.as_ref())
+            .map(|index| Arc::as_ptr(index) as usize)
+            .hash(&mut key);
+        key.finish()
+    }
+
+    fn ensure_comparison_order(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let key = Self::comparison_order_key(repo);
+        if self
+            .comparison_order
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+            || self.comparison_order_pending == Some(key)
+        {
+            return;
+        }
+        // Small endpoint comparisons are ready in their first frame. Large
+        // selections are sorted on the executor and published by generation.
+        if Self::comparison_count(repo) <= 256 {
+            let ordered = Arc::new(Self::range_comparison_commit_ids(repo));
+            self.comparison_order = Some(Self::comparison_order_cache(repo, key, ordered));
+            self.comparison_order_pending = None;
+            return;
+        }
+        let source = Self::comparison_order_cache(repo, key, Arc::new(Vec::new()));
+        let repo = repo.clone();
+        self.comparison_order_pending = Some(key);
+        cx.spawn(async move |view, cx| {
+            let ordered = cx
+                .background_executor()
+                .spawn(async move { Arc::new(Self::range_comparison_commit_ids(&repo)) })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                if this.comparison_order_pending != Some(key) {
+                    return;
+                }
+                this.comparison_order_pending = None;
+                if this
+                    .active_repo()
+                    .is_some_and(|repo| Self::comparison_order_key(repo) == key)
+                {
+                    this.comparison_order = Some(ComparisonOrderCache {
+                        ids: ordered,
+                        ..source
+                    });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn comparison_order_cache(
+        repo: &RepoState,
+        key: u64,
+        ids: Arc<Vec<CommitId>>,
+    ) -> ComparisonOrderCache {
+        ComparisonOrderCache {
+            key,
+            ids,
+            _selection: repo.history_state.multi_selection.commits.clone(),
+            _index: repo
+                .history_state
+                .indexed
+                .displayed_index
+                .as_ref()
+                .or(repo.history_state.indexed.index.as_ref())
+                .cloned(),
+        }
+    }
+
+    fn comparison_count(repo: &RepoState) -> usize {
+        if repo.history_state.multi_selection.is_multi() {
+            repo.history_state.multi_selection.commits.len()
+        } else {
+            Self::range_comparison_commit_ids(repo).len()
+        }
+    }
+
+    #[cfg(test)]
+    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
+        let ids = Self::range_comparison_commit_ids(repo);
+        self.comparison_cards(repo, &ids, 0)
+    }
+
+    /// Only the visible IDs and the blocks supplying their metadata invalidate cards.
+    fn comparison_cards(
+        &self,
+        repo: &RepoState,
+        ids: &[CommitId],
+        start: usize,
+    ) -> std::rc::Rc<[CommitCard]> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        repo.id.hash(&mut hasher);
+        repo.log_rev.hash(&mut hasher);
+        start.hash(&mut hasher);
+        ids.hash(&mut hasher);
+        let indexed = &repo.history_state.indexed;
+        let mut blocks =
+            smallvec::SmallVec::<[Arc<gitcomet_core::history_index::HistoryRange>; 4]>::new();
+        for id in ids {
+            let block = indexed
+                .range_index
+                .as_ref()
+                .and_then(|index| index.position(id.as_ref()))
+                .map(|raw| {
+                    raw / gitcomet_core::history_index::HISTORY_BLOCK_SIZE
+                        * gitcomet_core::history_index::HISTORY_BLOCK_SIZE
+                });
+            let block = block.and_then(|block| indexed.ranges.get(&block));
+            block
+                .map(|range| Arc::as_ptr(range) as usize)
+                .hash(&mut hasher);
+            if let Some(block) = block
+                && !blocks.iter().any(|old| Arc::ptr_eq(old, block))
+            {
+                blocks.push(block.clone());
+            }
+        }
+        let key = hasher.finish();
+        if let Some(cache) = &*self.range_comparison_commits_cache.borrow()
+            && cache.key == key
+        {
+            return cache.cards.clone();
+        }
+        let cards: std::rc::Rc<[CommitCard]> = ids
+            .iter()
+            .zip(Self::comparison_commits(repo, ids))
+            .map(|(id, commit)| {
+                gitcomet_core::history_perf::record(
+                    gitcomet_core::history_perf::Work::ComparisonCard,
+                );
+                commit.map_or_else(
+                    || CommitCard::unloaded(id),
+                    |commit| CommitCard::new(commit.clone()),
+                )
+            })
+            .collect();
+        *self.range_comparison_commits_cache.borrow_mut() = Some(ComparisonCardCache {
+            key,
+            cards: cards.clone(),
+            _blocks: blocks.into_vec(),
+        });
+        cards
     }
 
     /// One selected/compared-commit preview card: avatar, summary, an author +
@@ -1164,12 +1332,17 @@ impl DetailsPaneView {
         let short_sha = card.short_sha.clone();
         let summary = card.summary.clone();
         let author = card.author.clone();
-        let when: SharedString = format!(
-            "{} · {}",
-            author,
-            crate::view::date_time::format_relative_time(card.unix_secs, now)
-        )
-        .into();
+        let when: SharedString = card
+            .unix_secs
+            .map(|unix_secs| {
+                format!(
+                    "{} · {}",
+                    author,
+                    crate::view::date_time::format_relative_time(unix_secs, now)
+                )
+            })
+            .unwrap_or_default()
+            .into();
 
         div()
             .id(("commit_multi_row", ix))
@@ -1185,7 +1358,9 @@ impl DetailsPaneView {
             .when(show_border, |row| {
                 row.border_b_1().border_color(theme.colors.stroke.default)
             })
-            .child(components::author_avatar(theme, ui_scale, author.as_ref()))
+            .when(card.unix_secs.is_some(), |row| {
+                row.child(components::author_avatar(theme, ui_scale, author.as_ref()))
+            })
             .child(
                 div()
                     .flex_1()
@@ -1219,7 +1394,7 @@ impl DetailsPaneView {
     }
 
     /// Rows for both the comparison view's endpoint cards and the plain
-    /// multi-selection list. `range_comparison_commits` already resolves to the
+    /// multi-selection list. `range_comparison_commit_ids` already resolves to the
     /// multi-selection when that is what is being compared, so one renderer
     /// serves both and the two views cannot drift apart.
     pub(in super::super) fn render_multi_commit_rows(
@@ -1228,15 +1403,26 @@ impl DetailsPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _ = cx;
+        this.ensure_comparison_order(cx);
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let cards = this.range_comparison_commits_shared(repo);
-        let last_ix = cards.len().saturating_sub(1);
+        let key = Self::comparison_order_key(repo);
+        let Some(order) = this
+            .comparison_order
+            .as_ref()
+            .filter(|cache| cache.key == key)
+        else {
+            return Vec::new();
+        };
+        let ordered = &order.ids;
+        let start = range.start.min(ordered.len());
+        let end = range.end.min(ordered.len());
+        let cards = this.comparison_cards(repo, &ordered[start..end], start);
+        let last_ix = ordered.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
         range
-            .filter_map(|ix| cards.get(ix).map(|card| (ix, card)))
+            .filter_map(|ix| cards.get(ix - start).map(|card| (ix, card)))
             .map(|(ix, card)| this.commit_card_element(ix, card, now, ix != last_ix))
             .collect()
     }
@@ -1328,7 +1514,7 @@ impl DetailsPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1417,8 +1603,9 @@ impl DetailsPaneView {
             .child(div().flex_1().min_w(px(0.0)))
             .child({
                 let open_path = worktree_path.clone();
-                let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+
                 crate::view::rows::sidebar::worktree_origin_chip(
+                    "worktree_uncommitted_origin",
                     theme,
                     chip_label,
                     ui_scale.px(10.0),
@@ -1426,34 +1613,32 @@ impl DetailsPaneView {
                     ui_scale.px(220.0),
                     ui_scale.px(6.0),
                 )
-                .id("worktree_uncommitted_origin")
                 .debug_selector(|| "worktree_uncommitted_open".to_string())
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| {
-                    s.border_color(palette.hover_border)
-                        .text_color(palette.hover_text)
-                })
                 .gitcomet_tooltip(
                     theme,
                     format!("Open this worktree in a tab\n{}", worktree_path.display()).into(),
                 )
                 // A chip is a control of its own: a right or middle click must not
                 // open a repo tab, and a left click must not reach the row behind it.
-                .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                    if !e.standard_click() {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
-                    cx.notify();
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Nested,
+                    cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        if !e.standard_click() {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                        cx.notify();
+                    }),
+                )
             })
             .child(
                 components::Button::new("worktree_uncommitted_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
@@ -1637,7 +1822,7 @@ impl DetailsPaneView {
             let Some(range) = repo.history_state.range_selection.clone() else {
                 return div().into_any_element();
             };
-            let card_count = self.range_comparison_commits_shared(repo).len();
+            let card_count = Self::comparison_count(repo);
             // Only a genuine multi-selection is a "merged diff of N commits";
             // every other flow compares two named points, however many of them
             // happen to resolve to a card.
@@ -1677,7 +1862,7 @@ impl DetailsPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1894,7 +2079,7 @@ impl DetailsPaneView {
             ("commit_details_message_scroll_surface", repo_id.0),
             ("commit_details_message_scrollbar", repo_id.0),
             self.commit_scroll.clone(),
-            px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX),
+            self.ui_scale().px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX),
         )
         .container_id(("commit_details_message_container", repo_id.0))
         .debug_selector("commit_details_message_scroll_surface")
@@ -1955,7 +2140,7 @@ impl DetailsPaneView {
             } else {
                 theme.colors.interaction.selected_indicator
             };
-            let mut tab = div()
+            let tab = div()
                 .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
                 .debug_selector(move || format!("{id_prefix}_filter_tab_{ix}"))
                 .flex()
@@ -1979,9 +2164,15 @@ impl DetailsPaneView {
                 } else {
                     theme.colors.foreground.secondary
                 })
-                .when(selected, |tab| {
-                    tab.bg(theme.colors.interaction.selected_background)
-                })
+                .tab_index(0)
+                .control_interaction(
+                    InteractionStyle::new(theme)
+                        .selection_outline(false)
+                        .disabled_opacity(0.5),
+                    InteractionState::default()
+                        .selected(selected, theme.colors.interaction.selected_background)
+                        .disabled(disabled),
+                )
                 .child(svg_icon(
                     filter.icon(),
                     icon_color,
@@ -1990,32 +2181,15 @@ impl DetailsPaneView {
                 .child(display_label)
                 .gitcomet_tooltip(theme, tooltip.into());
 
-            if disabled {
-                tab = tab.opacity(0.5).cursor(CursorStyle::Arrow);
-            } else {
-                let hover_bg = theme.hover_overlay();
-                let active_bg = theme.active_overlay();
-                tab = tab
-                    .tab_index(0)
-                    .cursor(CursorStyle::PointingHand)
-                    .when(!selected, |tab| {
-                        tab.hover(move |style| style.bg(hover_bg))
-                            .active(move |style| style.bg(active_bg))
-                    })
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
-                        if event.standard_click() {
-                            this.set_file_list_filter(list, filter, cx);
-                        }
-                    }))
-                    .on_key_down(cx.listener(
-                        move |this, event: &gpui::KeyDownEvent, _window, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                cx.stop_propagation();
-                                this.set_file_list_filter(list, filter, cx);
-                            }
-                        },
-                    ));
-            }
+            let tab = tab.on_activate(
+                disabled,
+                components::ControlActivation::Action,
+                cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                    if event.standard_click() {
+                        this.set_file_list_filter(list, filter, cx);
+                    }
+                }),
+            );
 
             tabs = tabs.child(tab);
         }
@@ -2227,9 +2401,7 @@ impl DetailsPaneView {
         let multi_count = self
             .active_repo()
             .filter(|repo| repo.history_state.multi_selection.is_multi())
-            .map(Self::multi_selected_commits_in_log_order)
-            .filter(|commits| commits.len() > 1)
-            .map(|commits| commits.len());
+            .map(|repo| repo.history_state.multi_selection.commits.len());
         if let (Some(repo_id), Some(count)) = (active_repo_id, multi_count) {
             return self.multi_commit_details_view(repo_id, count, cx);
         }
@@ -2258,11 +2430,14 @@ impl DetailsPaneView {
                 )
                 .child(
                     components::Button::new("commit_details_close", "")
-                        .start_slot(svg_icon(
-                            "icons/generic_close.svg",
-                            theme.colors.foreground.secondary,
-                            px(12.0),
-                        ))
+                        .start_slot(
+                            svg_icon(
+                                "icons/generic_close.svg",
+                                theme.colors.foreground.secondary,
+                                ui_scale.px(12.0),
+                            )
+                            .debug_selector(|| "commit_details_close_icon".to_string()),
+                        )
                         .style(components::ButtonStyle::Transparent)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             // The commit details and diff views are independent
@@ -2627,7 +2802,8 @@ impl DetailsPaneView {
             })
             .unwrap_or(0);
 
-        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
+        let spinner =
+            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, ui_scale.px(14.0));
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
         let icon_muted = with_alpha(
@@ -2758,11 +2934,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .debug_selector(|| "stage_selected_button".to_string())
@@ -2827,13 +3004,15 @@ impl DetailsPaneView {
                 return;
             }
             this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: untracked_paths_for_stage_all.clone(),
-            });
+                DiffArea::Unstaged,
+                untracked_paths_for_stage_all.clone(),
+            );
             cx.notify();
         })
+        .debug_selector(|| "stage_all_untracked_button".to_string())
         .gitcomet_tooltip(theme, "Stage all untracked files".into());
 
         let stage_selected_untracked = components::Button::new(
@@ -2867,11 +3046,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .gitcomet_tooltip(
@@ -2942,6 +3122,7 @@ impl DetailsPaneView {
                 cx,
             );
         })
+        .debug_selector(|| "stage_all_split_unstaged_button".to_string())
         .gitcomet_tooltip(theme, "Stage all unstaged changes".into());
 
         let stage_selected_split_unstaged = components::Button::new(
@@ -2975,11 +3156,12 @@ impl DetailsPaneView {
             if selection.from_explicit_selection {
                 this.clear_status_multi_selection(repo_id);
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Unstaged,
+                paths,
+            );
             cx.notify();
         })
         .gitcomet_tooltip(
@@ -3037,13 +3219,15 @@ impl DetailsPaneView {
                 return;
             };
             this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: Default::default(),
-            });
+                DiffArea::Staged,
+                gitcomet_state::msg::RepoPathList::default(),
+            );
             cx.notify();
         })
+        .debug_selector(|| "unstage_all_button".to_string())
         .gitcomet_tooltip(theme, "Unstage all changes".into());
 
         let unstage_selected = components::Button::new(
@@ -3062,13 +3246,15 @@ impl DetailsPaneView {
             if paths.is_empty() {
                 return;
             }
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths {
+            crate::view::status_actions::stage_or_unstage_paths(
+                &this.store,
                 repo_id,
-                paths: paths.into(),
-            });
+                DiffArea::Staged,
+                paths,
+            );
             cx.notify();
         })
+        .debug_selector(|| "unstage_selected_button".to_string())
         .gitcomet_tooltip(
             theme,
             format!(
@@ -3292,18 +3478,11 @@ impl DetailsPaneView {
                         CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
                     ))
                     .rounded(px(theme.radii.row))
-                    .when(change_tracking_active, |d| {
-                        d.bg(theme.colors.interaction.pressed_background)
-                    })
-                    .hover(move |s| {
-                        if change_tracking_active {
-                            s.bg(theme.colors.interaction.pressed_background)
-                        } else {
-                            s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
-                        }
-                    })
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .cursor(CursorStyle::PointingHand)
+                    .tab_index(0)
+                    .control_interaction(
+                        InteractionStyle::header(theme),
+                        InteractionState::default().open(change_tracking_active),
+                    )
                     .child(
                         div()
                             .text_size(theme.ui_text(14.0))
@@ -3312,17 +3491,24 @@ impl DetailsPaneView {
                             .whitespace_nowrap()
                             .child(label),
                     )
-                    .child(svg_icon("icons/chevron_down.svg", icon_muted, px(12.0)))
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        this.activate_context_menu_invoker(change_tracking_invoker.clone(), cx);
-                        this.open_popover_at(
-                            PopoverKind::ChangeTrackingSettings,
-                            e.position(),
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    }))
+                    .child(
+                        svg_icon("icons/chevron_down.svg", icon_muted, ui_scale.px(12.0))
+                            .debug_selector(move || format!("{id}_chevron")),
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.open_popover_at(
+                                PopoverKind::ChangeTrackingSettings
+                                    .invoked_by(change_tracking_invoker.clone()),
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        }),
+                    )
                     .into_any_element()
             };
 
@@ -3831,6 +4017,7 @@ impl DetailsPaneView {
     pub(in super::super) fn commit_box(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let commit_in_flight = self
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
@@ -3842,8 +4029,8 @@ impl DetailsPaneView {
         );
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let icon_color = theme.colors.accent.foreground;
-        let icon = |path: &'static str| svg_icon(path, icon_color, px(14.0));
-        let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, px(14.0));
+        let icon = |path: &'static str| svg_icon(path, icon_color, scaled_px(14.0));
+        let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, scaled_px(14.0));
         let commit_label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
             (false, false) => "Commit",
             (false, true) => "Commit changes and Push",
@@ -3868,10 +4055,7 @@ impl DetailsPaneView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == previous_messages_invoker.as_ref());
-        let menu_selected_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.26 } else { 0.20 },
-        );
+        let menu_selected_bg = components::control_open_background(theme);
         let menu_icon_color = if commit_options_active {
             theme.colors.accent.foreground
         } else {
@@ -3886,65 +4070,82 @@ impl DetailsPaneView {
             ("commit_message_scroll_surface", repo_key),
             ("commit_message_scrollbar", repo_key),
             self.commit_message_scroll.clone(),
-            px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
+            scaled_px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
         )
         .container_id(("commit_message_container", repo_key))
         .render(theme, self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
-            .rounded_left()
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key)).into_any_element()
             } else {
-                icon("icons/check.svg").into_any_element()
+                icon("icons/check.svg")
+                    .debug_selector(|| "commit_button_icon".to_string())
+                    .into_any_element()
             })
             .style(components::ButtonStyle::Subtle)
-            .disabled(!can_submit_commit)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this.submit_commit(cx);
-            })
-            .debug_selector(|| "commit_button".to_string())
-            .gitcomet_tooltip(theme, commit_tooltip.into());
+            .disabled(!can_submit_commit);
         let commit_menu = components::Button::new("commit_options", "")
-            .rounded_right()
-            .start_slot(svg_icon(
-                "icons/chevron_down.svg",
-                menu_icon_color,
-                px(14.0),
-            ))
+            .start_slot(
+                svg_icon("icons/chevron_down.svg", menu_icon_color, scaled_px(14.0))
+                    .debug_selector(|| "commit_options_icon".to_string()),
+            )
             .style(components::ButtonStyle::Subtle)
-            .selected(commit_options_active)
+            .open(commit_options_active)
             .selected_bg(menu_selected_bg)
-            .disabled(self.active_repo_id().is_none())
-            .on_click(theme, cx, move |this, e, window, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                this.activate_context_menu_invoker(commit_options_invoker.clone(), cx);
-                this.open_popover_at(
-                    PopoverKind::CommitOptionsMenu { repo_id },
-                    e.position(),
-                    window,
-                    cx,
-                );
-            })
-            .gitcomet_tooltip(theme, "Commit options".into());
+            .disabled(self.active_repo_id().is_none());
+        let commit = components::SplitButton::from_buttons(
+            commit_main,
+            commit_menu,
+            cx,
+            |button, cx| {
+                button
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let _ = this.submit_commit(cx);
+                    })
+                    .debug_selector(|| "commit_button".to_string())
+                    .gitcomet_tooltip(theme, commit_tooltip.into())
+            },
+            |button, cx| {
+                button
+                    .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                        let Some(repo_id) = this.active_repo_id() else {
+                            return;
+                        };
+                        this.open_popover_for_bounds(
+                            (PopoverKind::CommitOptionsMenu { repo_id })
+                                .invoked_by(commit_options_invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    })
+                    .gitcomet_tooltip(theme, "Commit options".into())
+            },
+        )
+        .style(components::SplitButtonStyle::Filled)
+        .render(theme, ui_scale_percent)
+        .debug_selector(|| "commit_split_button".to_string());
         let previous_messages_menu = components::Button::new("previous_commit_messages", "")
-            .start_slot(svg_icon(
-                "icons/history.svg",
-                previous_messages_icon_color,
-                px(14.0),
-            ))
+            .start_slot(
+                svg_icon(
+                    "icons/history.svg",
+                    previous_messages_icon_color,
+                    scaled_px(14.0),
+                )
+                .debug_selector(|| "previous_commit_messages_icon".to_string()),
+            )
             .style(components::ButtonStyle::Subtle)
-            .selected(previous_messages_active)
+            .open(previous_messages_active)
             .selected_bg(menu_selected_bg)
             .disabled(self.active_repo_id().is_none())
             .on_click(theme, cx, move |this, e, window, cx| {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
-                this.activate_context_menu_invoker(previous_messages_invoker.clone(), cx);
+
                 this.open_popover_at(
-                    PopoverKind::PreviousCommitMessagesMenu { repo_id },
+                    (PopoverKind::PreviousCommitMessagesMenu { repo_id })
+                        .invoked_by(previous_messages_invoker.clone()),
                     e.position(),
                     window,
                     cx,
@@ -3959,12 +4160,7 @@ impl DetailsPaneView {
                     .items_center()
                     .gap_2()
                     .child(previous_messages_menu)
-                    .child(
-                        components::SplitButton::new(commit_main, commit_menu)
-                            .style(components::SplitButtonStyle::Filled)
-                            .render(theme, ui_scale_percent)
-                            .debug_selector(|| "commit_split_button".to_string()),
-                    ),
+                    .child(commit),
             ),
         )
     }

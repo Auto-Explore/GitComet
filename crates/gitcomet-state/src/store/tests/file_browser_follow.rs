@@ -150,7 +150,7 @@ fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
             linked.as_os_str(),
         ],
     );
-    let (store, _) = AppStore::new(Arc::new(gitcomet_git_gix::GixBackend));
+    let (store, _) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
     for root in [&outer, &nested, &linked] {
         let file = root.join("document.txt");
         std::fs::write(&file, "contents").unwrap();
@@ -192,7 +192,7 @@ fn file_browser_loads(effects: &[Effect]) -> Vec<FileSource> {
 
 /// An open repo with active browsing and a loaded, partly expanded live tree.
 fn ready_state(sidebar_mode: SidebarMode) -> (Repos, AtomicU64, AppState, RepoId) {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,

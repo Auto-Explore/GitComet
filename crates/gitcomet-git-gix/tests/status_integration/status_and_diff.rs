@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn status_separates_staged_and_unstaged() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -39,9 +37,7 @@ fn status_separates_staged_and_unstaged() {
 
 #[test]
 fn repeated_status_on_same_repo_instance_reuses_staged_state_and_invalidates_on_index_change() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -97,9 +93,7 @@ fn repeated_status_on_same_repo_instance_reuses_staged_state_and_invalidates_on_
 
 #[test]
 fn status_does_not_rewrite_index_when_only_worktree_stat_is_stale() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -134,9 +128,7 @@ fn status_does_not_rewrite_index_when_only_worktree_stat_is_stale() {
 
 #[test]
 fn repeated_status_does_not_rewrite_index_when_cached_staged_state_is_reused() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -175,9 +167,7 @@ fn repeated_status_does_not_rewrite_index_when_cached_staged_state_is_reused() {
 
 #[test]
 fn repeated_status_on_same_repo_instance_invalidates_when_head_moves_without_index_change() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -218,9 +208,7 @@ fn repeated_status_on_same_repo_instance_invalidates_when_head_moves_without_ind
 
 #[test]
 fn status_lists_untracked_files_in_directories() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -250,9 +238,7 @@ fn status_lists_untracked_files_in_directories() {
 
 #[test]
 fn status_ignores_nested_target_directories_with_target_slash_pattern() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -297,9 +283,7 @@ fn status_ignores_nested_target_directories_with_target_slash_pattern() {
 
 #[test]
 fn diff_unified_works_for_staged_and_unstaged() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -341,9 +325,7 @@ fn diff_unified_works_for_staged_and_unstaged() {
 
 #[test]
 fn diff_working_tree_unstaged_ignores_crlf_only_line_ending_changes() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -385,9 +367,7 @@ fn diff_working_tree_unstaged_ignores_crlf_only_line_ending_changes() {
 
 #[test]
 fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -454,9 +434,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
 
 #[test]
 fn diff_file_text_unstaged_uses_git_normalized_worktree_content() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -528,9 +506,7 @@ fn diff_file_text_root_commit_has_no_parent_side() {
 
 #[test]
 fn diff_file_text_staged_add_and_delete_report_missing_sides() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -577,9 +553,7 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
 
 #[test]
 fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -618,9 +592,7 @@ fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
 
 #[test]
 fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -664,9 +636,7 @@ fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
 
 #[test]
 fn diff_preview_text_file_staged_deleted_file_returns_head_blob_path() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -705,9 +675,7 @@ fn diff_preview_text_file_staged_deleted_file_returns_head_blob_path() {
 
 #[test]
 fn diff_file_text_returns_none_for_directories() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -739,9 +707,7 @@ fn diff_file_text_returns_none_for_directories() {
 
 #[test]
 fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -814,9 +780,7 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
 
 #[test]
 fn diff_file_image_returns_none_for_directories() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -847,10 +811,65 @@ fn diff_file_image_returns_none_for_directories() {
 }
 
 #[test]
-fn gitlink_added_and_unstaged_modified_reports_expected_status_and_diff() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
+fn gitlink_supplement_handles_literal_paths_dirty_children_and_staged_removal() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let name = "child [literal] é";
+    let nested = repo.join(name);
+    std::fs::create_dir(&nested).unwrap();
+    for path in [repo, nested.as_path()] {
+        run_git(path, &["init", "-q"]);
+        run_git(path, &["config", "user.email", "you@example.com"]);
+        run_git(path, &["config", "user.name", "You"]);
+        run_git(path, &["config", "commit.gpgsign", "false"]);
     }
+    write(&nested, "file.txt", "base\n");
+    run_git(&nested, &["add", "."]);
+    run_git(&nested, &["commit", "-qm", "child"]);
+    // Retain .gitmodules through deletion so supplementation is also exercised
+    // when the removed gitlink no longer appears in the index.
+    write(
+        repo,
+        ".gitmodules",
+        &format!("[submodule \"child\"]\n path = {name}\n url = ../child\n"),
+    );
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-qm", "parent"]);
+    let opened = GixBackend.open(repo).unwrap();
+    assert!(opened.status().unwrap().unstaged.is_empty());
+    for file in ["file.txt", "untracked.txt"] {
+        write(&nested, file, "dirty\n");
+        let status = opened.status().unwrap();
+        assert!(
+            status
+                .unstaged
+                .iter()
+                .any(|entry| entry.path == Path::new(name))
+        );
+        assert!(
+            opened
+                .worktree_status()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.path == Path::new(name))
+        );
+        if file == "file.txt" {
+            run_git(&nested, &["checkout", "--", "file.txt"]);
+        }
+    }
+    run_git(repo, &["rm", "--cached", "--", name]);
+    for entries in [
+        opened.status().unwrap().staged.to_vec(),
+        opened.staged_status().unwrap(),
+    ] {
+        assert!(entries.iter().any(|entry| entry.path == Path::new(name) && entry.kind == FileStatusKind::Deleted));
+    }
+}
+
+#[test]
+fn gitlink_added_and_unstaged_modified_reports_expected_status_and_diff() {
+    let _ = ensure_isolated_git_test_env();
 
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -927,9 +946,7 @@ fn gitlink_added_and_unstaged_modified_reports_expected_status_and_diff() {
 
 #[test]
 fn committed_gitlink_unstaged_modified_reports_modified_status_and_diff() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
 
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -992,9 +1009,7 @@ fn committed_gitlink_unstaged_modified_reports_modified_status_and_diff() {
 
 #[test]
 fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
 
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -1056,9 +1071,7 @@ fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
 
 #[test]
 fn diff_file_commit_target_without_path_returns_none() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1088,9 +1101,7 @@ fn diff_file_commit_target_without_path_returns_none() {
 
 #[test]
 fn diff_unified_outside_repository_path_returns_structured_git_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let outside = dir.path().join("outside.txt");
@@ -1125,9 +1136,7 @@ fn diff_unified_outside_repository_path_returns_structured_git_error() {
 
 #[test]
 fn diff_parsed_outside_repository_path_returns_structured_git_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let outside = dir.path().join("outside.txt");
@@ -1162,9 +1171,7 @@ fn diff_parsed_outside_repository_path_returns_structured_git_error() {
 
 #[test]
 fn diff_parsed_merge_commit_uses_first_parent() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1223,9 +1230,7 @@ fn diff_parsed_merge_commit_uses_first_parent() {
 
 #[test]
 fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1291,9 +1296,7 @@ fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
 
 #[test]
 fn diff_parsed_commit_added_file_matches_git_show_output() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1353,9 +1356,7 @@ fn diff_parsed_commit_added_file_matches_git_show_output() {
 
 #[test]
 fn diff_parsed_commit_added_binary_file_falls_back_to_git_diff() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1390,9 +1391,7 @@ fn diff_parsed_commit_added_binary_file_falls_back_to_git_diff() {
 
 #[test]
 fn diff_parsed_commit_added_file_truncates_at_the_unified_line_limit() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1445,9 +1444,7 @@ fn diff_parsed_commit_added_file_truncates_at_the_unified_line_limit() {
 
 #[test]
 fn diff_parsed_commit_deleted_file_matches_git_show_output() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1512,9 +1509,7 @@ fn diff_parsed_commit_deleted_file_matches_git_show_output() {
 
 #[test]
 fn diff_working_tree_with_absolute_file_path_reads_current_file() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1559,9 +1554,7 @@ fn diff_working_tree_with_absolute_file_path_reads_current_file() {
 #[cfg(unix)]
 #[test]
 fn diff_working_tree_with_absolute_file_path_through_symlinked_repo_reads_current_file() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let repo_alias = dir.path().join("repo-alias");
@@ -1608,9 +1601,7 @@ fn diff_working_tree_with_absolute_file_path_through_symlinked_repo_reads_curren
 
 #[test]
 fn staged_diff_for_unmerged_conflict_prefers_ours_for_text_and_image() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1640,9 +1631,7 @@ fn staged_diff_for_unmerged_conflict_prefers_ours_for_text_and_image() {
 
 #[test]
 fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let outside = dir.path().join("outside.txt");
@@ -1691,9 +1680,7 @@ fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
 
 #[test]
 fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 

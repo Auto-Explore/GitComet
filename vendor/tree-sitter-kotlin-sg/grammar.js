@@ -265,7 +265,7 @@ module.exports = grammar({
     // Classes
     // ==========
 
-    class_declaration: $ => prec.right(choice(
+    class_declaration: $ => prec.dynamic(1, prec.right(choice(
       seq(
         optional($.modifiers),
         choice("class", seq(optional("fun"), "interface")),
@@ -286,7 +286,7 @@ module.exports = grammar({
         optional($.type_constraints),
         optional($.enum_class_body)
       )
-    )),
+    ))),
 
     primary_constructor: $ => seq(
       optional(seq(optional($.modifiers), $._primary_constructor_keyword)),
@@ -564,13 +564,13 @@ module.exports = grammar({
 
     parameter: $ => seq($.simple_identifier, ":", $._type),
 
-    object_declaration: $ => prec.right(seq(
+    object_declaration: $ => prec.dynamic(1, prec.right(seq(
       optional($.modifiers),
       "object",
       alias($.simple_identifier, $.type_identifier),
       optional(seq(":", $._delegation_specifiers)),
       optional($.class_body)
-    )),
+    ))),
 
     secondary_constructor: $ => seq(
       optional($.modifiers),

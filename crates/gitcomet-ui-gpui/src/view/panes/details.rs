@@ -42,6 +42,19 @@ pub(in super::super) struct WorktreeFileListInputs {
     pub(in super::super) entries: Arc<[gitcomet_state::model::InlineSubmoduleDiffEntry]>,
 }
 
+pub(in crate::view) struct ComparisonOrderCache {
+    pub key: u64,
+    pub ids: Arc<Vec<CommitId>>,
+    pub _selection: Arc<Vec<CommitId>>,
+    pub _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+}
+
+pub(in crate::view) struct ComparisonCardCache {
+    pub key: u64,
+    pub cards: std::rc::Rc<[crate::view::rows::CommitCard]>,
+    pub _blocks: Vec<Arc<gitcomet_core::history_index::HistoryRange>>,
+}
+
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
@@ -99,6 +112,9 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_push_after_enabled: bool,
     pending_commit_amend: Option<PendingCommitAmend>,
     pending_amend_prefill: Option<RepoId>,
+    /// Suggestion (repo and rev) already offered to the commit box, so git's
+    /// prepared message is applied once and never re-applied.
+    applied_commit_suggestion: Option<(RepoId, u64)>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
@@ -110,10 +126,12 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_delay_seq: u64,
 
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
-    /// `range_comparison_commits` memoized on the revs that feed it; it walked
+    /// Comparison cards memoized on the revs that feed them; they walked
     /// the whole log page and cloned every selected commit 2-3 times per frame.
     pub(in super::super) range_comparison_commits_cache:
-        std::cell::RefCell<Option<(u64, std::rc::Rc<[crate::view::rows::CommitCard]>)>>,
+        std::cell::RefCell<Option<ComparisonCardCache>>,
+    pub(in super::super) comparison_order: Option<ComparisonOrderCache>,
+    pub(in super::super) comparison_order_pending: Option<u64>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     commit_file_projection: std::cell::RefCell<
@@ -288,12 +306,15 @@ impl DetailsPaneView {
             repo.unstaged_line_stats_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.log_rev.hash(&mut hasher);
+            repo.history_state.indexed.rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.history_state.commit_signatures_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
+            repo.suggested_commit_message_rev.hash(&mut hasher);
             repo.recent_commit_messages_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
@@ -507,6 +528,7 @@ impl DetailsPaneView {
             commit_push_after_enabled,
             pending_commit_amend: None,
             pending_amend_prefill: None,
+            applied_commit_suggestion: None,
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
@@ -516,6 +538,8 @@ impl DetailsPaneView {
             commit_details_delay_seq: 0,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             range_comparison_commits_cache: std::cell::RefCell::new(None),
+            comparison_order: None,
+            comparison_order_pending: None,
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
@@ -614,11 +638,12 @@ impl DetailsPaneView {
             return;
         }
         self.clear_status_multi_selection(repo_id);
-        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-        self.store.dispatch(Msg::StagePaths {
+        crate::view::status_actions::stage_or_unstage_paths(
+            &self.store,
             repo_id,
-            paths: paths.into(),
-        });
+            DiffArea::Unstaged,
+            paths,
+        );
         cx.notify();
     }
 
@@ -2151,8 +2176,28 @@ impl DetailsPaneView {
         }
 
         self.apply_pending_amend_prefill(cx);
+        self.apply_suggested_commit_message(cx);
 
         self.update_commit_details_delay(cx);
+    }
+
+    /// Offers the message git prepared for the next commit (after a staged
+    /// revert) as the commit box's starting text, once and only when empty.
+    fn apply_suggested_commit_message(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let suggestion = (repo.id, repo.suggested_commit_message_rev);
+        if self.applied_commit_suggestion == Some(suggestion) {
+            return;
+        }
+        let message = repo.suggested_commit_message.clone();
+        self.applied_commit_suggestion = Some(suggestion);
+        if let Some(message) = message
+            && self.commit_message_is_empty(cx)
+        {
+            self.set_commit_message_programmatically(message, cx);
+        }
     }
 
     fn apply_pending_amend_prefill(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2267,11 +2312,12 @@ impl DetailsPaneView {
 
     pub(in super::super) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -2285,11 +2331,12 @@ impl DetailsPaneView {
 
     pub(in super::super) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -2298,16 +2345,6 @@ impl DetailsPaneView {
                     root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
                 });
             });
-        });
-    }
-
-    pub(in super::super) fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -2502,7 +2539,7 @@ mod tests {
                     push_after_commit: false,
                 },
             }),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert!(
@@ -2529,7 +2566,7 @@ mod tests {
         let state = AppState {
             repos: vec![repo],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert!(
@@ -2555,7 +2592,7 @@ mod tests {
         let state = AppState {
             repos: vec![repo_state(repo_id, "/tmp/repo")],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert!(
@@ -2577,7 +2614,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, inactive],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = DetailsPaneView::notify_fingerprint(&state);
@@ -2593,11 +2630,23 @@ mod tests {
     }
 
     #[test]
+    fn indexed_regression_details_fingerprint_tracks_comparison_metadata() {
+        let mut state = AppState {
+            active_repo: Some(RepoId(1)),
+            repos: vec![repo_state(RepoId(1), "/tmp/indexed-comparison")],
+            ..AppState::test_default()
+        };
+        let before = DetailsPaneView::notify_fingerprint(&state);
+        state.repos[0].history_state.indexed.rev += 1;
+        assert_ne!(before, DetailsPaneView::notify_fingerprint(&state));
+    }
+
+    #[test]
     fn notify_fingerprint_tracks_active_repo_relevant_revisions() {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = DetailsPaneView::notify_fingerprint(&state);
@@ -2623,10 +2672,11 @@ mod tests {
         assert_ne!(after_range_files, after_details);
 
         state.repos[0].merge_message_rev = 1;
-        assert_ne!(
-            DetailsPaneView::notify_fingerprint(&state),
-            after_range_files
-        );
+        let after_merge = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_merge, after_range_files);
+
+        state.repos[0].suggested_commit_message_rev = 1;
+        assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_merge);
     }
 
     #[test]
@@ -2634,7 +2684,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = DetailsPaneView::notify_fingerprint(&state);

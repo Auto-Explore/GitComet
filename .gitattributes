@@ -5,6 +5,7 @@
 *.lock      text eol=lf
 *.md        text eol=lf
 *.sh        text eol=lf
+scripts/profiling/valgrind_cdp text eol=lf
 *.py        text eol=lf
 *.json      text eol=lf
 *.jsonc     text eol=lf
@@ -14,6 +15,8 @@
 *.html      text eol=lf
 *.css       text eol=lf
 *.txt       text eol=lf
+# Unified diffs need a context-prefix space on otherwise empty lines.
+*.patch     text eol=lf whitespace=-blank-at-eol
 .gitignore  text eol=lf
 .gitattributes text eol=lf
 CONTRIBUTING.md text eol=lf

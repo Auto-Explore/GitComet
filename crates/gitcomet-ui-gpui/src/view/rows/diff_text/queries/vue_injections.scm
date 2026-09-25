@@ -13,13 +13,9 @@
 ;   - the `comment` and `pug` injections were dropped: GitComet has no such
 ;     languages, so they were dead patterns. Comments are already coloured by
 ;     the `(comment) @comment` rule in vue_highlights.scm.
-;   - the `<script type="importmap">` -> json rule was dropped. Json's grammar
-;     is gated behind `syntax-data` but tree-sitter-vue behind `syntax-web`, so
-;     under `--features syntax-web` alone the rule would resolve to no grammar
-;     and inject nothing. `cfg(test)` force-enables every grammar, so no test
-;     can catch that; not naming a cross-feature language is the only reliable
-;     guard. Every other language named here lives in `syntax-web` alongside
-;     Vue.
+;   - the `<script type="importmap">` -> json rule was dropped. It dated from
+;     when grammars sat behind per-bucket cargo features (gone now); nothing
+;     needs it back, so it stays out.
 ;   - the inline `<a style="…">` -> css rule was dropped. The CSS grammar parses
 ;     an attribute body as a stylesheet, so `style="color: red"` came out as a
 ;     type selector (`color` -> Tag, `red` -> Type) rather than a declaration.

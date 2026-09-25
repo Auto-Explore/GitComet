@@ -16,7 +16,7 @@ fn tooltip_is_retracted_after_row_removal(
     removal: Removal,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let page = Arc::new(log_page(
@@ -54,7 +54,7 @@ fn tooltip_is_retracted_after_row_removal(
     let state = Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     });
     set_history_view_state_for_tests(cx, &view, state.clone());
     ensure_history_cache_for_tests(cx, &view, state.clone());

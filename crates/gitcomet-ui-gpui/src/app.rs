@@ -5,12 +5,13 @@ use crate::view::{
     DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, LocateFileInExplorer, MainPaneView,
-    OpenActiveViewSearch, PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev,
-    PushUpstreamRemoteClose, PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect,
-    PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste,
-    TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
-    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
+    OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss, PopoverPromptTabNext,
+    PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
+    PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport,
+    TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange,
+    TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
+    TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette,
+    is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -710,6 +711,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &LocateFileInExplorer, cx| {
         cx.defer(locate_file_in_active_or_existing_normal_window);
     });
+    cx.on_action(|_: &OpenRemoteInBrowser, cx| {
+        cx.defer(open_remote_in_browser_in_active_window);
+    });
     cx.on_action(|_: &ShowReflog, cx| {
         cx.defer(|cx| {
             let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
@@ -797,7 +801,11 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
 
 fn install_global_diff_shortcut_fallback(cx: &mut App) {
     cx.observe_keystrokes(|event, window, cx| {
-        if !is_diff_shortcut_candidate(&event.keystroke)
+        // Observers also run after a bound action handled the keystroke (gpui
+        // passes that action here); acting again would run F3 twice and skip
+        // every other change block.
+        if event.action.is_some()
+            || !is_diff_shortcut_candidate(&event.keystroke)
             || event.context_stack.iter().any(|context| {
                 context.contains("TextInput")
                     || context.contains("Terminal")
@@ -886,6 +894,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
         KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
+        KeyBinding::new("secondary-k", OpenRemoteInBrowser, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
@@ -1008,6 +1017,10 @@ fn macos_app_menus_with_options(
         MenuItem::action(
             crate::menu_labels::OPEN_IN_FILE_EXPLORER,
             LocateFileInExplorer,
+        ),
+        MenuItem::action(
+            crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
+            OpenRemoteInBrowser,
         ),
         MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch),
         MenuItem::action(crate::menu_labels::CHECK_FOR_UPDATES, CheckForUpdates).disabled(
@@ -1882,6 +1895,27 @@ fn toggle_reveal_commit_in_active_window(cx: &mut App) {
     }
 }
 
+/// Open the front normal window's remote in the browser. With no normal window
+/// there is no repository, so the chord is a no-op.
+fn open_remote_in_browser_in_active_window(cx: &mut App) {
+    let Some(window) =
+        active_normal_gitcomet_window(cx).or_else(|| find_normal_gitcomet_window(cx))
+    else {
+        return;
+    };
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.open_remote_in_browser(window, cx);
+        });
+    });
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+}
+
 fn toggle_command_palette_in_active_existing_or_new_window(
     cx: &mut App,
     backend: Arc<dyn GitBackend>,
@@ -2300,7 +2334,7 @@ mod tests {
     #[gpui::test]
     fn manual_update_check_activates_its_feedback_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
         let main_window_id = cx.update(|window, app| {
@@ -2402,6 +2436,10 @@ mod tests {
                 (
                     crate::menu_labels::OPEN_IN_FILE_EXPLORER.to_string(),
                     LocateFileInExplorer.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::OPEN_REMOTE_IN_BROWSER.to_string(),
+                    OpenRemoteInBrowser.name().to_string(),
                 ),
                 (
                     crate::menu_labels::APPLY_PATCH.to_string(),
@@ -2593,6 +2631,7 @@ mod tests {
                 .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
                 .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
                 .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
+                .on_action(record_action_listener!(crate::view::OpenRemoteInBrowser))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenInCodeEditor))
@@ -2816,6 +2855,8 @@ mod tests {
                 crate::view::TextInputDiffNextSearchMatchOrChange.name(),
             ),
             ("secondary-shift-a", SwitchRepository.name()),
+            // No text-input binding (an Emacs kill-line, say) may shadow it.
+            ("secondary-k", crate::view::OpenRemoteInBrowser.name()),
         ];
 
         for (keystroke, expected_action) in cases {
@@ -3059,6 +3100,7 @@ mod tests {
                 "secondary-shift-l",
                 crate::view::LocateFileInExplorer.name(),
             ),
+            ("secondary-k", crate::view::OpenRemoteInBrowser.name()),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),
@@ -3185,7 +3227,7 @@ mod tests {
     fn settings_shortcut_opens_a_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -3208,7 +3250,7 @@ mod tests {
     fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3260,7 +3302,7 @@ mod tests {
     fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -3295,7 +3337,7 @@ mod tests {
     fn new_window_shortcuts_open_new_windows(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3326,7 +3368,7 @@ mod tests {
 
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3390,7 +3432,7 @@ mod tests {
     ) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3410,7 +3452,7 @@ mod tests {
     fn close_window_shortcut_closes_the_active_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3431,7 +3473,7 @@ mod tests {
     fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -3519,7 +3561,7 @@ mod tests {
     fn repository_picker_fallback_reuses_existing_normal_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3599,7 +3641,7 @@ mod tests {
     fn macos_clone_repository_action_opens_native_clone_prompt(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3625,7 +3667,7 @@ mod tests {
     fn macos_initialize_repository_action_requests_folder_picker(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3662,7 +3704,7 @@ mod tests {
 
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3678,7 +3720,7 @@ mod tests {
                                 detail: "Git unavailable for menu routing test".to_string(),
                             },
                         },
-                        ..AppState::default()
+                        ..AppState::test_default()
                     }),
                     cx,
                 );
@@ -3731,7 +3773,7 @@ mod tests {
     fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3780,7 +3822,7 @@ mod tests {
     ) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3806,7 +3848,7 @@ mod tests {
     ) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

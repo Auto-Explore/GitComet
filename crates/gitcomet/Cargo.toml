@@ -28,8 +28,9 @@ gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 log = { workspace = true }
-mimalloc = { workspace = true }
+process-wrap = { workspace = true }
 rustc-hash = { workspace = true }
+rustfs-mimalloc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true, optional = true }
@@ -38,7 +39,11 @@ tempfile = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = { workspace = true }
 
+[dev-dependencies]
+gitcomet-core = { workspace = true, features = ["test-support"] }
+
 [target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
 signal-hook = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -2,6 +2,70 @@ use super::super::*;
 use super::support::*;
 
 #[gpui::test]
+fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
+    use crate::test_support::{painted_control_quads as paint, refresh_and_draw};
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            let state = Arc::clone(&view.state);
+            crate::view::test_support::push_test_state(view, state, cx);
+            view.terminal_preferences.action_bar_terminal_target =
+                ActionBarTerminalTarget::Embedded;
+            view.sync_action_bar_terminal_target(cx);
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    let closed = paint(cx, "terminal");
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
+            view.sync_terminal_indicator_views(cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_ne!(
+        paint(cx, "terminal"),
+        closed,
+        "an open embedded terminal must highlight its toggle"
+    );
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.terminal_preferences.action_bar_terminal_target =
+                ActionBarTerminalTarget::External;
+            view.sync_action_bar_terminal_target(cx);
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_eq!(
+        paint(cx, "terminal"),
+        closed,
+        "the external terminal launcher is momentary"
+    );
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.terminal_preferences.action_bar_terminal_target =
+                ActionBarTerminalTarget::Embedded;
+            view.sync_action_bar_terminal_target(cx);
+            view.close_terminal_tab(repo_id, 0, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_eq!(
+        paint(cx, "terminal"),
+        closed,
+        "closing the last tab must clear the toggle"
+    );
+}
+
+#[gpui::test]
 fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);

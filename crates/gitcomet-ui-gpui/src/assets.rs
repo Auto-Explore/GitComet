@@ -28,12 +28,18 @@ impl GitCometAssets {
 
     fn list_static(dir: &str) -> Vec<SharedString> {
         match dir.trim_end_matches('/') {
-            "" => vec![
-                "gitcomet-window-icon.png".into(),
-                "gitcomet-512.png".into(),
-                "gitcomet_logo.svg".into(),
-                "icons".into(),
-            ],
+            // GPUI's AssetRegistry registers only list(""); it does not recurse
+            // into directory entries. Include every embedded file here.
+            "" => [
+                "gitcomet-window-icon.png",
+                "gitcomet-512.png",
+                "gitcomet_logo.svg",
+            ]
+            .into_iter()
+            .chain(ICON_ASSETS.iter().copied())
+            .chain(FILE_ICON_ASSETS.iter().copied())
+            .map(SharedString::from)
+            .collect(),
             "icons" => ICON_ASSETS
                 .iter()
                 .map(|path| SharedString::from(*path))
@@ -60,8 +66,80 @@ impl AssetSource for GitCometAssets {
 
 #[cfg(test)]
 mod tests {
-    use super::GitCometAssets;
-    use std::{collections::BTreeSet, path::Path};
+    use super::{FILE_ICON_ASSETS, GitCometAssets, ICON_ASSETS};
+    use gpui::{AssetRegistry, AssetSource, DevicePixels, SvgRenderer, SvgSize, size};
+    use std::{collections::BTreeSet, path::Path, sync::Arc};
+
+    fn expected_asset_paths() -> impl Iterator<Item = &'static str> {
+        [
+            "gitcomet-window-icon.png",
+            "gitcomet-512.png",
+            "gitcomet_logo.svg",
+        ]
+        .into_iter()
+        .chain(ICON_ASSETS.iter().copied())
+        .chain(FILE_ICON_ASSETS.iter().copied())
+    }
+
+    #[test]
+    fn root_listing_contains_every_asset_once() {
+        let listed = GitCometAssets.list("").expect("list root assets");
+        let paths: BTreeSet<&str> = listed.iter().map(|path| path.as_ref()).collect();
+
+        assert_eq!(paths.len(), listed.len(), "duplicate root asset paths");
+        assert_eq!(
+            paths,
+            expected_asset_paths().collect(),
+            "root listing must contain every file without directory placeholders"
+        );
+    }
+
+    #[test]
+    fn gpui_registry_preserves_every_asset() {
+        // Exercise the same conversion as Application::with_assets. Checking
+        // GitCometAssets::load alone misses paths omitted from the root listing.
+        let registry = AssetRegistry::from(GitCometAssets);
+        for path in expected_asset_paths() {
+            let expected = GitCometAssets
+                .load(path)
+                .expect("load embedded asset")
+                .unwrap_or_else(|| panic!("missing embedded asset: {path}"));
+            let actual = registry
+                .load(path)
+                .unwrap_or_else(|| panic!("GPUI registry cannot load {path}"));
+            assert!(!actual.is_empty(), "empty asset: {path}");
+            assert_eq!(actual, expected, "GPUI changed asset bytes: {path}");
+        }
+        for path in ["icons", "icons/file_icons", "icons/does-not-exist.svg"] {
+            assert!(registry.load(path).is_none(), "unexpected asset: {path}");
+        }
+    }
+
+    #[test]
+    fn registered_svgs_render_visible_pixels() {
+        let registry = Arc::new(AssetRegistry::from(GitCometAssets));
+        let renderer = SvgRenderer::new(Arc::clone(&registry));
+        for path in expected_asset_paths().filter(|path| path.ends_with(".svg")) {
+            let bytes = registry
+                .load(path)
+                .unwrap_or_else(|| panic!("GPUI registry cannot load {path}"));
+            let parsed = renderer
+                .parse_svg(&bytes)
+                .unwrap_or_else(|err| panic!("cannot parse {path}: {err}"));
+            for edge in [16, 32] {
+                let dimensions = size(DevicePixels(edge), DevicePixels(edge));
+                let image = renderer
+                    .render_parsed(&parsed, SvgSize::ExactSize(dimensions))
+                    .unwrap_or_else(|err| panic!("cannot render {path} at {edge}px: {err}"));
+                assert_eq!(image.size(0), dimensions, "incorrect size: {path}");
+                let pixels = image.as_bytes(0).expect("rendered SVG frame");
+                assert!(
+                    pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                    "{path} renders blank at {edge}px"
+                );
+            }
+        }
+    }
 
     #[test]
     fn icon_assets_directory_matches_registry() {

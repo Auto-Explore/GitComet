@@ -74,7 +74,7 @@ fn open_popover(
     kind: PopoverKind,
 ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let repo_id = repo.id;
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
@@ -782,4 +782,51 @@ fn upstream_picker_empty_search_requires_navigation_before_unlink(cx: &mut gpui:
             .popover_kind_for_tests()),
         None
     );
+}
+
+#[gpui::test]
+fn selecting_search_text_cannot_activate_unlink_on_release(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let repo_id = RepoId(1);
+    let (view, cx) = open_popover(
+        cx,
+        tracked_repo(repo_id),
+        PopoverKind::UpstreamPicker {
+            repo_id,
+            branch: "feature/current".to_string(),
+        },
+    );
+    let input = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .remote_picker_search_input
+            .clone()
+            .unwrap()
+    });
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("feature", cx)));
+    redraw(cx);
+    let start = cx.update(|_, app| input.read(app).hotspot_bounds(&(0..3)).unwrap().center());
+    let end = cx.debug_bounds("upstream_unlink").unwrap().center();
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_move(
+        end,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, gpui::Modifiers::default());
+    redraw(cx);
+    cx.update(|_, app| {
+        assert!(
+            view.read(app).popover_host.read(app).is_open(),
+            "a text selection must not unlink and dismiss the picker"
+        );
+        assert!(
+            view.read(app)
+                .state
+                .repos
+                .iter()
+                .all(|repo| repo.local_actions_in_flight == 0)
+        );
+    });
 }

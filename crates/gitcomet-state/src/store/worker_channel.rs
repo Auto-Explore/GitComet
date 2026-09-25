@@ -193,7 +193,7 @@ impl StoreWorkerSender {
             StoreWorkerSenderInner::MsgForTest(tx) => {
                 send_diagnostics::send_or_log(tx, msg, kind, context)
             }
-        }
+        };
     }
 
     pub(super) fn shutdown(&self) {

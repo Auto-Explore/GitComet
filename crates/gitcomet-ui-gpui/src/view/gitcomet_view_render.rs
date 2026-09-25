@@ -487,7 +487,7 @@ impl Render for GitCometView {
                 .start_slot(svg_icon(
                     "icons/generic_close.svg",
                     theme.colors.foreground.secondary,
-                    px(12.0),
+                    scaled_px(12.0),
                 ))
                 .style(components::ButtonStyle::Transparent)
                 .on_click(theme, cx, move |this, _e, _w, _cx| {
@@ -623,6 +623,10 @@ impl Render for GitCometView {
             }))
             .on_action(cx.listener(|this, _: &LocateFileInExplorer, _window, cx| {
                 this.locate_open_file_in_explorer(cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &OpenRemoteInBrowser, window, cx| {
+                this.open_remote_in_browser(window, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &CommandPaletteDismiss, window, cx| {

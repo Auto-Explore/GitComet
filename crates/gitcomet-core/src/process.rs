@@ -1,9 +1,13 @@
+mod probe;
+use crate::services::CancellationToken;
+pub(crate) use probe::probe_output;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(test)]
 use std::sync::Mutex;
 use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub enum GitExecutablePreference {
@@ -48,6 +52,7 @@ impl GitExecutablePreference {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GitExecutableAvailability {
+    Checking,
     Available { version_output: String },
     Unavailable { detail: String },
 }
@@ -77,21 +82,130 @@ impl GitRuntimeState {
             GitExecutableAvailability::Available { version_output } => {
                 Some(version_output.as_str())
             }
-            GitExecutableAvailability::Unavailable { .. } => None,
+            GitExecutableAvailability::Checking | GitExecutableAvailability::Unavailable { .. } => {
+                None
+            }
         }
     }
 
     pub fn unavailable_detail(&self) -> Option<&str> {
         match &self.availability {
-            GitExecutableAvailability::Available { .. } => None,
+            GitExecutableAvailability::Checking | GitExecutableAvailability::Available { .. } => {
+                None
+            }
             GitExecutableAvailability::Unavailable { detail } => Some(detail.as_str()),
         }
     }
 }
 
-fn git_runtime_slot() -> &'static RwLock<GitRuntimeState> {
-    static SLOT: OnceLock<RwLock<GitRuntimeState>> = OnceLock::new();
-    SLOT.get_or_init(|| RwLock::new(probe_git_runtime(GitExecutablePreference::SystemPath)))
+struct RuntimeSlot {
+    state: GitRuntimeState,
+    generation: u64,
+    probing: bool,
+    last_probe: Option<Instant>,
+    cancellation: CancellationToken,
+}
+
+impl RuntimeSlot {
+    fn new() -> Self {
+        Self {
+            state: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Checking,
+            },
+            generation: 0,
+            probing: false,
+            last_probe: None,
+            cancellation: CancellationToken::new(),
+        }
+    }
+}
+
+fn git_runtime_slot() -> &'static RwLock<RuntimeSlot> {
+    static SLOT: OnceLock<RwLock<RuntimeSlot>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new(RuntimeSlot::new()))
+}
+
+/// Select an executable without starting it. GUI callers probe asynchronously.
+pub fn select_git_executable_path(path: Option<PathBuf>) -> GitRuntimeState {
+    select_git_executable_preference(GitExecutablePreference::from_optional_path(path))
+}
+
+pub fn select_git_executable_preference(preference: GitExecutablePreference) -> GitRuntimeState {
+    let mut slot = git_runtime_slot()
+        .write()
+        .unwrap_or_else(|err| err.into_inner());
+    if slot.state.preference != preference {
+        slot.cancellation.cancel();
+        slot.cancellation = CancellationToken::new();
+        slot.generation = slot.generation.wrapping_add(1);
+        slot.probing = false;
+        slot.last_probe = None;
+        slot.state = GitRuntimeState {
+            preference,
+            availability: GitExecutableAvailability::Checking,
+        };
+    }
+    slot.state.clone()
+}
+
+/// Owned request with a frozen executable and generation. `run` belongs on a
+/// worker thread; dropping a request before running it releases the claim.
+pub struct GitRuntimeProbe {
+    preference: GitExecutablePreference,
+    generation: u64,
+    cancellation: CancellationToken,
+}
+
+/// Shared across windows: coalesce in-flight probes and rate-limit recovery.
+/// Healthy focus events do not probe. Diagnostics may explicitly force a check.
+pub fn begin_git_runtime_probe(force: bool) -> Option<GitRuntimeProbe> {
+    let mut slot = git_runtime_slot()
+        .write()
+        .unwrap_or_else(|err| err.into_inner());
+    if slot.probing
+        || (!force
+            && (slot.state.is_available()
+                || slot
+                    .last_probe
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(10))))
+    {
+        return None;
+    }
+    slot.probing = true;
+    slot.generation = slot.generation.wrapping_add(1);
+    slot.last_probe = Some(Instant::now());
+    Some(GitRuntimeProbe {
+        preference: slot.state.preference.clone(),
+        generation: slot.generation,
+        cancellation: slot.cancellation.clone(),
+    })
+}
+
+impl GitRuntimeProbe {
+    pub fn run(self) -> Option<GitRuntimeState> {
+        let next = probe_git_runtime(self.preference.clone(), &self.cancellation);
+        let mut slot = git_runtime_slot()
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        if self.cancellation.is_cancelled() || slot.generation != self.generation {
+            return None;
+        }
+        slot.state = next.clone();
+        slot.probing = false;
+        Some(next)
+    }
+}
+
+impl Drop for GitRuntimeProbe {
+    fn drop(&mut self) {
+        let mut slot = git_runtime_slot()
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        if slot.generation == self.generation {
+            slot.probing = false;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -109,26 +223,31 @@ pub fn background_command(program: impl AsRef<OsStr>) -> Command {
 }
 
 pub fn git_command() -> Command {
-    git_command_for_preference(&current_git_runtime().preference)
+    git_command_for_preference(&current_git_executable_preference())
 }
 
 pub fn current_git_runtime() -> GitRuntimeState {
     git_runtime_slot()
         .read()
         .unwrap_or_else(|err| err.into_inner())
+        .state
         .clone()
 }
 
 pub fn current_git_executable_preference() -> GitExecutablePreference {
-    current_git_runtime().preference
+    git_runtime_slot()
+        .read()
+        .unwrap_or_else(|err| err.into_inner())
+        .state
+        .preference
+        .clone()
 }
 
 pub fn install_git_executable_preference(preference: GitExecutablePreference) -> GitRuntimeState {
-    let next = probe_git_runtime(preference);
-    *git_runtime_slot()
-        .write()
-        .unwrap_or_else(|err| err.into_inner()) = next.clone();
-    next
+    select_git_executable_preference(preference);
+    begin_git_runtime_probe(true)
+        .and_then(GitRuntimeProbe::run)
+        .unwrap_or_else(current_git_runtime)
 }
 
 pub fn install_git_executable_path(path: Option<PathBuf>) -> GitRuntimeState {
@@ -170,7 +289,7 @@ pub fn normalize_git_executable_path(path: PathBuf) -> PathBuf {
     }
 }
 
-fn git_command_for_preference(preference: &GitExecutablePreference) -> Command {
+pub(crate) fn git_command_for_preference(preference: &GitExecutablePreference) -> Command {
     let mut command = background_command(preference.command_program());
     // Repository config must not enable `ext::`, which runs an arbitrary
     // command. Set in the one constructor so no call site can forget it.
@@ -195,7 +314,10 @@ fn prepend_command_path(command: &mut Command, path: &Path) {
     }
 }
 
-fn probe_git_runtime(preference: GitExecutablePreference) -> GitRuntimeState {
+fn probe_git_runtime(
+    preference: GitExecutablePreference,
+    cancellation: &CancellationToken,
+) -> GitRuntimeState {
     if matches!(
         &preference,
         GitExecutablePreference::Custom(path) if path.as_os_str().is_empty()
@@ -212,7 +334,7 @@ fn probe_git_runtime(preference: GitExecutablePreference) -> GitRuntimeState {
     let mut command = git_command_for_preference(&preference);
     command.arg("--version");
 
-    let availability = match command.output() {
+    let availability = match probe_output(command, Duration::from_secs(5), cancellation) {
         Ok(output) if output.status.success() => {
             let version_output = if !output.stdout.is_empty() {
                 bytes_to_text_preserving_utf8(&output.stdout)
@@ -349,9 +471,76 @@ mod tests {
 
     fn git_runtime_probe_count(probe_log: &Path) -> usize {
         fs::read_to_string(probe_log)
-            .unwrap_or_default()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "read probe log {}: {err}; runtime: {:?}",
+                    probe_log.display(),
+                    current_git_runtime()
+                )
+            })
             .lines()
             .count()
+    }
+
+    #[test]
+    fn selecting_and_reading_runtime_never_spawns_and_concurrent_requests_coalesce() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("probes");
+        let (_script_dir, script) = create_git_probe_script("git version test", "", 0, Some(&log));
+        select_git_executable_path(Some(script));
+        for _ in 0..100 {
+            assert_eq!(
+                GitRuntimeState::default().availability,
+                GitExecutableAvailability::Checking
+            );
+            let _ = git_command();
+        }
+        assert!(!log.exists());
+        let request = begin_git_runtime_probe(false).unwrap();
+        assert!(begin_git_runtime_probe(true).is_none());
+        assert!(!log.exists());
+        assert!(request.run().unwrap().is_available());
+        for _ in 0..100 {
+            assert!(begin_git_runtime_probe(false).is_none());
+        }
+        assert_eq!(git_runtime_probe_count(&log), 1);
+    }
+
+    #[test]
+    fn superseded_probe_cannot_overwrite_new_preference_or_release_its_claim() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let (_a, a) = create_git_probe_script("git version old", "", 0, None);
+        let (_b, b) = create_git_probe_script("git version new", "", 0, None);
+        select_git_executable_path(Some(a));
+        let old = begin_git_runtime_probe(false).unwrap();
+        select_git_executable_path(Some(b.clone()));
+        let new = begin_git_runtime_probe(false).unwrap();
+        assert!(old.run().is_none());
+        assert!(begin_git_runtime_probe(true).is_none());
+        assert_eq!(
+            current_git_executable_preference().custom_path(),
+            Some(b.as_path())
+        );
+        assert_eq!(new.run().unwrap().version_output(), Some("git version new"));
+    }
+
+    #[test]
+    fn unavailable_focus_recovery_is_throttled_but_diagnostics_can_recheck() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        select_git_executable_path(Some(PathBuf::new()));
+        assert!(
+            !begin_git_runtime_probe(false)
+                .unwrap()
+                .run()
+                .unwrap()
+                .is_available()
+        );
+        assert!(begin_git_runtime_probe(false).is_none());
+        assert!(begin_git_runtime_probe(true).is_some());
     }
 
     fn create_git_probe_script(
@@ -368,6 +557,35 @@ mod tests {
 
         write_git_probe_script(&script, stdout, stderr, exit_code, probe_log);
         (dir, script)
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script(script_path: &Path, script: &str) {
+        // A concurrent test can fork while fs::write holds the script open,
+        // inheriting the writable fd until exec even though it is CLOEXEC.
+        // Probing the script in that window fails with ETXTBSY. Write in a
+        // child instead so the test runner never owns that writable fd, and
+        // wait for the writer to exit before making the script executable.
+        // https://github.com/rust-lang/rust/issues/114554
+        let output = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "umask 077; printf '%s' \"$2\" > \"$1\"",
+                "write-git-fixture",
+            ])
+            .arg(script_path)
+            .arg(script)
+            .output()
+            .expect("run git fixture writer");
+        assert!(
+            output.status.success(),
+            "write git fixture {} failed ({}): {}",
+            script_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::set_permissions(script_path, fs::Permissions::from_mode(0o700))
+            .expect("set git fixture permissions");
     }
 
     #[cfg(unix)]
@@ -390,12 +608,7 @@ mod tests {
         }
         script.push_str(&format!("exit {exit_code}\n"));
 
-        fs::write(script_path, script).expect("write git probe script");
-        let mut permissions = fs::metadata(script_path)
-            .expect("git probe metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(script_path, permissions).expect("set git probe permissions");
+        write_executable_script(script_path, &script);
     }
 
     #[cfg(windows)]
@@ -673,13 +886,8 @@ mod tests {
         let git = dir.path().join("git");
         let gpg = dir.path().join("gpg");
 
-        fs::write(&git, "#!/bin/sh\ngpg --version\n").expect("write git script");
-        fs::write(&gpg, "#!/bin/sh\nprintf 'sibling gpg 1.0\\n'\n").expect("write gpg script");
-        for path in [&git, &gpg] {
-            let mut permissions = fs::metadata(path).expect("script metadata").permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(path, permissions).expect("set script permissions");
-        }
+        write_executable_script(&git, "#!/bin/sh\ngpg --version\n");
+        write_executable_script(&gpg, "#!/bin/sh\nprintf 'sibling gpg 1.0\\n'\n");
 
         let _restore =
             GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(git));

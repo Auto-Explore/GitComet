@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -68,20 +70,26 @@ impl Render for SettingsWindowView {
             .when(is_macos, |this| {
                 this.pl(chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET)
             })
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                if !chrome::should_handle_titlebar_double_click(e.click_count(), e.standard_click())
-                {
-                    return;
-                }
+            .on_activate(
+                false,
+                controls::ControlActivation::Composite,
+                cx.listener(|this, e: &ClickEvent, window, cx| {
+                    this.title_drag_state.clear();
+                    cx.notify();
+                    if !chrome::should_handle_titlebar_double_click(
+                        e.click_count(),
+                        e.standard_click(),
+                    ) {
+                        return;
+                    }
 
-                this.title_drag_state.clear();
-                cx.stop_propagation();
-                chrome::handle_titlebar_double_click(window);
-                cx.notify();
-            }))
-            .on_mouse_up(
+                    cx.stop_propagation();
+                    chrome::handle_titlebar_double_click(window);
+                }),
+            )
+            .on_pointer_click(
                 MouseButton::Right,
-                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
                     chrome::show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             )
@@ -130,10 +138,14 @@ impl Render for SettingsWindowView {
         .id("settings_window_min")
         .debug_selector(|| "settings_window_min".to_string())
         .window_control_area(WindowControlArea::Min)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            window.minimize_window();
-        }));
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                window.minimize_window();
+            }),
+        );
 
         let max_icon = if window.is_maximized() {
             "icons/generic_restore.svg"
@@ -149,11 +161,15 @@ impl Render for SettingsWindowView {
         .id("settings_window_max")
         .debug_selector(|| "settings_window_max".to_string())
         .window_control_area(WindowControlArea::Max)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::toggle_window_zoom(window);
-            cx.notify();
-        }));
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                crate::app::toggle_window_zoom(window);
+                cx.notify();
+            }),
+        );
 
         let close = chrome::titlebar_control_button(
             "settings_window_close_btn",
@@ -164,11 +180,15 @@ impl Render for SettingsWindowView {
         .id("settings_window_close_btn")
         .debug_selector(|| "settings_window_close".to_string())
         .window_control_area(WindowControlArea::Close)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
-            window.remove_window();
-        }));
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
+                window.remove_window();
+            }),
+        );
 
         let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
@@ -221,7 +241,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::Theme),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::Theme, cx);
                         }));
 
@@ -233,7 +253,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::DateFormat),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::DateFormat, cx);
                         }));
 
@@ -245,7 +265,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::UiScale),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::UiScale, cx);
                         }));
 
@@ -257,7 +277,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::UiFont),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::UiFont, cx);
                         }));
 
@@ -269,7 +289,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::EditorFont),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::EditorFont, cx);
                         }));
 
@@ -280,7 +300,7 @@ impl Render for SettingsWindowView {
                             self.use_font_ligatures,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_use_font_ligatures(!this.use_font_ligatures, cx);
                         }));
 
@@ -296,7 +316,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::ExternalCodeEditor, cx);
                         }));
 
@@ -308,7 +328,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::Timezone),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::Timezone, cx);
                         }));
 
@@ -320,7 +340,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_show_timezone(!this.show_timezone, cx);
                         }));
 
@@ -332,7 +352,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::TerminalExternal),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::TerminalExternal, cx);
                         }));
 
@@ -348,7 +368,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::TerminalActionBar, cx);
                         }));
 
@@ -361,7 +381,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::ChangeTracking, cx);
                         }));
 
@@ -374,7 +394,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::FileListLayout, cx);
                         }));
 
@@ -387,7 +407,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::Diff, cx);
                         }));
 
@@ -399,7 +419,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::DiffContentMode),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::DiffContentMode, cx);
                         }));
 
@@ -410,7 +430,7 @@ impl Render for SettingsWindowView {
                             self.diff_whitespace_mode == DiffWhitespaceMode::Show,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_diff_whitespace_mode(this.diff_whitespace_mode.toggled(), cx);
                         }));
 
@@ -421,7 +441,7 @@ impl Render for SettingsWindowView {
                             self.diff_reveal_whitespace_chars,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_diff_reveal_whitespace_chars(
                                 !this.diff_reveal_whitespace_chars,
                                 cx,
@@ -435,7 +455,7 @@ impl Render for SettingsWindowView {
                             self.diff_word_wrap,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_diff_word_wrap(!this.diff_word_wrap, cx);
                         }));
 
@@ -446,7 +466,7 @@ impl Render for SettingsWindowView {
                             self.diff_show_line_numbers,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_diff_show_line_numbers(!this.diff_show_line_numbers, cx);
                         }));
 
@@ -459,7 +479,7 @@ impl Render for SettingsWindowView {
                                 == Some(SettingsSection::AllowedRemoteProtocols),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::AllowedRemoteProtocols, cx);
                         }));
 
@@ -471,7 +491,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::RemoteMarkdownImages),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::RemoteMarkdownImages, cx);
                         }));
 
@@ -490,7 +510,7 @@ impl Render for SettingsWindowView {
                     if update_check_locked {
                         update_check_row = update_check_row.opacity(0.6).cursor(CursorStyle::Arrow);
                     } else {
-                        update_check_row = update_check_row.on_click(cx.listener(
+                        update_check_row = update_check_row.on_activate(false, controls::ControlActivation::Action, cx.listener(
                             |this, _e: &ClickEvent, _window, cx| {
                                 this.set_check_for_updates_on_startup(
                                     !this.check_for_updates_on_startup,
@@ -511,7 +531,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::GitLogDefaultMode),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::GitLogDefaultMode, cx);
                         }));
 
@@ -528,7 +548,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::GitLogColumns),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::GitLogColumns, cx);
                         }));
 
@@ -543,7 +563,7 @@ impl Render for SettingsWindowView {
                             self.history_highlight_commit_chain,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_history_highlight_commit_chain(
                                 !this.history_highlight_commit_chain,
                                 cx,
@@ -557,7 +577,7 @@ impl Render for SettingsWindowView {
                             self.files_follow_selected_commit,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_files_follow_selected_commit(
                                 !this.files_follow_selected_commit,
                                 cx,
@@ -571,7 +591,7 @@ impl Render for SettingsWindowView {
                             self.history_relative_dates,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_history_relative_dates(!this.history_relative_dates, cx);
                         }));
 
@@ -582,7 +602,7 @@ impl Render for SettingsWindowView {
                             self.history_verify_commit_signatures,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_verify_commit_signatures(
                                 !this.history_verify_commit_signatures,
                                 cx,
@@ -601,7 +621,7 @@ impl Render for SettingsWindowView {
                         } else {
                             no_separator
                         })
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_history_show_tags(!this.history_show_tags, cx);
                         }));
 
@@ -614,7 +634,7 @@ impl Render for SettingsWindowView {
                             theme,
                         )
                         .border_color(no_separator)
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             if this.history_show_tags {
                                 this.toggle_section(SettingsSection::GitLogTagFetch, cx);
                             }
@@ -675,7 +695,7 @@ impl Render for SettingsWindowView {
                                         self.custom_theme_folder_detail(),
                                         theme,
                                     )
-                                    .on_click(cx.listener(
+                                    .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                         |this, _e: &ClickEvent, _window, cx| {
                                             this.open_custom_theme_folder(cx);
                                         },
@@ -689,7 +709,7 @@ impl Render for SettingsWindowView {
                                         theme,
                                     )
                                     .border_color(no_separator)
-                                    .on_click(|_, _, cx| {
+                                    .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
                                         cx.open_url(THEMES_GUIDE_URL);
                                     }),
                                 ),
@@ -715,7 +735,7 @@ impl Render for SettingsWindowView {
                                     self.ui_scale_percent == percent,
                                     theme,
                                 )
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     move |this, _e: &ClickEvent, window, cx| {
                                         this.set_ui_scale_percent(percent, window, cx);
                                     },
@@ -1076,7 +1096,7 @@ impl Render for SettingsWindowView {
                                                 == ExternalTerminalMode::SystemDefault,
                                             theme,
                                         )
-                                        .on_click(cx.listener(
+                                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                             |this, _e: &ClickEvent, _window, cx| {
                                                 this.set_external_terminal_mode(
                                                     ExternalTerminalMode::SystemDefault,
@@ -1094,7 +1114,7 @@ impl Render for SettingsWindowView {
                                                 == ExternalTerminalMode::CustomProgram,
                                             theme,
                                         )
-                                        .on_click(cx.listener(
+                                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                             |this, _e: &ClickEvent, _window, cx| {
                                                 this.set_external_terminal_mode(
                                                     ExternalTerminalMode::CustomProgram,
@@ -1239,7 +1259,7 @@ impl Render for SettingsWindowView {
                                                 == ActionBarTerminalTarget::Embedded,
                                             theme,
                                         )
-                                        .on_click(cx.listener(
+                                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                             |this, _e: &ClickEvent, _window, cx| {
                                                 this.set_action_bar_terminal_target(
                                                     ActionBarTerminalTarget::Embedded,
@@ -1257,7 +1277,7 @@ impl Render for SettingsWindowView {
                                                 == ActionBarTerminalTarget::External,
                                             theme,
                                         )
-                                        .on_click(cx.listener(
+                                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                             |this, _e: &ClickEvent, _window, cx| {
                                                 this.set_action_bar_terminal_target(
                                                     ActionBarTerminalTarget::External,
@@ -1530,7 +1550,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::DiffViewMode),
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::DiffViewMode, cx);
                         }));
 
@@ -1626,7 +1646,7 @@ impl Render for SettingsWindowView {
                                 theme,
                             )
                             .border_color(no_separator)
-                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                                 this.set_auto_save_file_edits(!this.auto_save_file_edits, cx);
                             })),
                         );
@@ -1650,7 +1670,7 @@ impl Render for SettingsWindowView {
                                     self.default_history_mode == mode,
                                     theme,
                                 )
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     move |this, _e: &ClickEvent, _window, cx| {
                                         this.set_default_history_mode(mode, cx);
                                     },
@@ -1671,6 +1691,36 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    git_log_card = git_log_card.child(
+                        self.summary_row(
+                            "settings_window_git_log_branch_names",
+                            "Branch names",
+                            self.history_branch_names.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::GitLogBranchNames),
+                            theme,
+                        ).on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::GitLogBranchNames, cx);
+                        })),
+                    );
+                    if self.expanded_section == Some(SettingsSection::GitLogBranchNames) {
+                        let mut options = self.detail_container(
+                            "settings_window_git_log_branch_names_container", theme,
+                        );
+                        for (mode, id) in [
+                            (HistoryBranchNamesMode::SeparateColumn, "settings_window_git_log_branch_names_separate"),
+                            (HistoryBranchNamesMode::Inline, "settings_window_git_log_branch_names_inline"),
+                        ] {
+                            options = options.child(
+                                self.option_row(id, mode.settings_label(), None,
+                                    self.history_branch_names == mode, theme)
+                                    .on_activate(false, controls::ControlActivation::Action, cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_branch_names(mode, cx);
+                                    })),
+                            );
+                        }
+                        git_log_card = git_log_card.child(options);
+                    }
+
                     git_log_card = git_log_card.child(history_columns_row);
 
                     if self.expanded_section == Some(SettingsSection::GitLogColumns) {
@@ -1686,7 +1736,7 @@ impl Render for SettingsWindowView {
                                     self.history_show_graph,
                                     theme,
                                 )
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     |this, _e: &ClickEvent, _window, cx| {
                                         this.set_history_column_preferences(
                                             !this.history_show_graph,
@@ -1705,7 +1755,7 @@ impl Render for SettingsWindowView {
                                     self.history_show_author,
                                     theme,
                                 )
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     |this, _e: &ClickEvent, _window, cx| {
                                         this.set_history_column_preferences(
                                             this.history_show_graph,
@@ -1724,7 +1774,7 @@ impl Render for SettingsWindowView {
                                     self.history_show_date,
                                     theme,
                                 )
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     |this, _e: &ClickEvent, _window, cx| {
                                         this.set_history_column_preferences(
                                             this.history_show_graph,
@@ -1743,7 +1793,7 @@ impl Render for SettingsWindowView {
                                     self.history_show_sha,
                                     theme,
                                 )
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     |this, _e: &ClickEvent, _window, cx| {
                                         this.set_history_column_preferences(
                                             this.history_show_graph,
@@ -1771,7 +1821,7 @@ impl Render for SettingsWindowView {
                                     theme,
                                 )
                                 .border_color(no_separator)
-                                .on_click(cx.listener(
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                     |this, _e: &ClickEvent, _window, cx| {
                                         this.update_main_windows(cx, |view, _window, cx| {
                                             view.reset_history_column_widths(cx);
@@ -1809,7 +1859,7 @@ impl Render for SettingsWindowView {
                                             == GitLogTagFetchMode::OnRepositoryActivation,
                                         theme,
                                     )
-                                    .on_click(cx.listener(
+                                    .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                         |this, _e: &ClickEvent, _window, cx| {
                                             this.set_history_tag_fetch_mode(
                                                 GitLogTagFetchMode::OnRepositoryActivation,
@@ -1829,7 +1879,7 @@ impl Render for SettingsWindowView {
                                         self.history_tag_fetch_mode == GitLogTagFetchMode::Disabled,
                                         theme,
                                     )
-                                    .on_click(cx.listener(
+                                    .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                         |this, _e: &ClickEvent, _window, cx| {
                                             this.set_history_tag_fetch_mode(
                                                 GitLogTagFetchMode::Disabled,
@@ -1852,7 +1902,7 @@ impl Render for SettingsWindowView {
                                 theme,
                             )
                             .border_color(no_separator)
-                            .on_click(cx.listener(
+                            .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
                                     this.set_prune_deleted_remote_branches_on_fetch(
                                         !this.prune_deleted_remote_branches_on_fetch,
@@ -1885,7 +1935,7 @@ impl Render for SettingsWindowView {
                                 self.default_tag_type == DefaultTagType::Lightweight,
                                 theme,
                             )
-                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                                 this.set_default_tag_type(DefaultTagType::Lightweight, cx);
                             })),
                         )
@@ -1901,7 +1951,7 @@ impl Render for SettingsWindowView {
                                 theme,
                             )
                             .border_color(no_separator)
-                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                                 this.set_default_tag_type(DefaultTagType::Annotated, cx);
                             })),
                         );
@@ -1917,7 +1967,7 @@ impl Render for SettingsWindowView {
                             self.git_executable_mode == GitExecutableMode::SystemPath,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_git_executable_mode(GitExecutableMode::SystemPath, cx);
                         }));
 
@@ -1932,12 +1982,12 @@ impl Render for SettingsWindowView {
                         self.git_executable_mode == GitExecutableMode::Custom,
                         theme,
                     )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                         this.set_git_executable_mode(GitExecutableMode::Custom, cx);
                     }));
 
                     let mut git_executable_card = self
-                        .card("settings_window_git_executable", "Git executable", theme)
+                        .card("settings_window_git_executable", "Executables", theme)
                         .child(
                             div()
                                 .id("settings_window_git_executable_scope_note")
@@ -1948,7 +1998,12 @@ impl Render for SettingsWindowView {
                                 .child(git_executable_scope_note()),
                         )
                         .child(system_git_row)
-                        .child(custom_git_row);
+                        .child(custom_git_row)
+                        .child(components::Button::new("settings_window_recheck_executables", "Recheck")
+                            .style(components::ButtonStyle::Outlined)
+                            .on_click(theme, cx, |_this, _e, _window, cx| {
+                                super::super::runtime_probe::request(cx, true);
+                            }));
 
                     if self.git_executable_mode == GitExecutableMode::Custom {
                         let browse_button = components::Button::new(
@@ -2054,6 +2109,50 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    let signing_tools = self.runtime_info.signing_tools.as_ref();
+                    for (row_id, detail_id, label, description, info) in [
+                        (
+                            "settings_window_gpg_runtime",
+                            "settings_window_gpg_runtime_detail",
+                            "GPG",
+                            GPG_DESCRIPTION,
+                            gpg_info(signing_tools),
+                        ),
+                        (
+                            "settings_window_ssh_keygen_runtime",
+                            "settings_window_ssh_keygen_runtime_detail",
+                            "ssh-keygen",
+                            SSH_KEYGEN_DESCRIPTION,
+                            ssh_keygen_info(signing_tools),
+                        ),
+                    ] {
+                        git_executable_card = git_executable_card
+                            .child(self.signing_tool_row(row_id, label, description, &info, theme));
+                        if let Some(detail) = info.detail {
+                            git_executable_card = git_executable_card.child(
+                                div()
+                                    .id(detail_id)
+                                    .px_2()
+                                    .pb_1()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(detail),
+                            );
+                        }
+                    }
+
+                    git_executable_card = git_executable_card.child(
+                        self.link_row(
+                            "settings_window_signature_guide",
+                            "Signature verification guide",
+                            "docs/commit-signatures.md".into(),
+                            theme,
+                        )
+                        .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
+                            cx.open_url(SIGNATURE_GUIDE_URL);
+                        }),
+                    );
+
                     let environment_card = self
                         .card("settings_window_environment", "Environment", theme)
                         .child(self.info_row(
@@ -2078,7 +2177,7 @@ impl Render for SettingsWindowView {
                                 "docs/themes.md".into(),
                                 theme,
                             )
-                            .on_click(|_, _, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
                                 cx.open_url(THEMES_GUIDE_URL);
                             }),
                         )
@@ -2089,7 +2188,7 @@ impl Render for SettingsWindowView {
                                 "Auto-Explore/GitComet".into(),
                                 theme,
                             )
-                            .on_click(|_, _, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
                                 cx.open_url(GITHUB_URL);
                             }),
                         )
@@ -2100,7 +2199,7 @@ impl Render for SettingsWindowView {
                                 LICENSE_NAME.into(),
                                 theme,
                             )
-                            .on_click(|_, _, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
                                 cx.open_url(LICENSE_URL);
                             }),
                         )
@@ -2111,7 +2210,7 @@ impl Render for SettingsWindowView {
                                 "gitcomet.dev".into(),
                                 theme,
                             )
-                            .on_click(|_, _, cx| {
+                            .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
                                 cx.open_url(EDITIONS_URL);
                             }),
                         )
@@ -2123,7 +2222,7 @@ impl Render for SettingsWindowView {
                                 theme,
                             )
                             .border_color(no_separator)
-                            .on_click(cx.listener(
+                            .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
                                     this.show_open_source_licenses(cx);
                                 },
@@ -2240,12 +2339,11 @@ impl Render for SettingsWindowView {
                                 .py_1()
                                 .rounded(px(theme.radii.row))
                                 .cursor(CursorStyle::PointingHand)
-                                .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                                .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+                                .control_interaction(controls::InteractionStyle::new(theme), controls::InteractionState::default())
                                 .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.accent.foreground)
                                 .child("< Settings")
-                                .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
                                     this.show_root(cx);
                                 })),
                         )

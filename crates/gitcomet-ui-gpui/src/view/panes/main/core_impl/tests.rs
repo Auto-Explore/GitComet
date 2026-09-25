@@ -8,7 +8,7 @@ fn notify_fingerprint_tracks_cherry_pick_message_readiness() {
     use gitcomet_state::model::{InteractiveCherryPickSetup, RepoState};
     use std::path::PathBuf;
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.active_repo = Some(RepoId(1));
     state.repos.push(RepoState::new_opening(
         RepoId(1),
@@ -44,7 +44,7 @@ fn notify_fingerprint_tracks_cherry_pick_message_readiness() {
 #[test]
 fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
     let repo_id = RepoId(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.active_repo = Some(repo_id);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -72,6 +72,50 @@ fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
         }
         assert_eq!(after, MainPaneView::notify_fingerprint_for(&state));
     }
+}
+
+#[test]
+fn notify_fingerprint_tracks_disk_revs_only_for_working_tree_targets() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    ));
+
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: "a.rs".into(),
+        area: DiffArea::Unstaged,
+    });
+    let before = MainPaneView::notify_fingerprint_for(&state);
+    state.repos[0].worktree_change_rev += 1;
+    let after_worktree = MainPaneView::notify_fingerprint_for(&state);
+    assert_ne!(
+        before, after_worktree,
+        "a worktree change must reach the pane"
+    );
+    state.repos[0].local_worktree_write_rev += 1;
+    let after_local = MainPaneView::notify_fingerprint_for(&state);
+    assert_ne!(
+        after_worktree, after_local,
+        "a finished git command must reach the pane"
+    );
+
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId(std::sync::Arc::from("abc")),
+        path: Some("a.rs".into()),
+    });
+    let commit_before = MainPaneView::notify_fingerprint_for(&state);
+    state.repos[0].worktree_change_rev += 1;
+    state.repos[0].local_worktree_write_rev += 1;
+    assert_eq!(
+        commit_before,
+        MainPaneView::notify_fingerprint_for(&state),
+        "a commit's file does not live on disk; nothing to check"
+    );
 }
 
 #[test]

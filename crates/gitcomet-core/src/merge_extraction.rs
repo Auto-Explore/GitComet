@@ -567,8 +567,6 @@ mod tests {
         GitExecutablePreference, current_git_executable_preference,
         install_git_executable_preference, lock_git_runtime_test,
     };
-    #[cfg(windows)]
-    use std::sync::OnceLock;
 
     // Keep merge-extraction tests isolated from process::tests, which mutate
     // the shared git executable preference under this same mutex.
@@ -593,48 +591,6 @@ mod tests {
         fn drop(&mut self) {
             let _ = install_git_executable_preference(self.original.clone());
         }
-    }
-
-    #[cfg(windows)]
-    fn is_git_shell_startup_failure(text: &str) -> bool {
-        text.contains("sh.exe: *** fatal error -")
-            && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-    }
-
-    #[cfg(windows)]
-    fn git_shell_available_for_octopus_merge_tests() -> bool {
-        static AVAILABLE: OnceLock<bool> = OnceLock::new();
-        *AVAILABLE.get_or_init(|| {
-            let output = match Command::new("git")
-                .args(["mergetool", "--tool-help"])
-                .output()
-            {
-                Ok(output) => output,
-                Err(_) => return true,
-            };
-            if output.status.success() {
-                return true;
-            }
-            let text = format!(
-                "{}{}",
-                bytes_to_text_preserving_utf8(&output.stdout),
-                bytes_to_text_preserving_utf8(&output.stderr)
-            );
-            !is_git_shell_startup_failure(&text)
-        })
-    }
-
-    fn require_git_shell_for_octopus_merge_tests() -> bool {
-        #[cfg(windows)]
-        {
-            if !git_shell_available_for_octopus_merge_tests() {
-                eprintln!(
-                    "skipping octopus merge extraction test: Git-for-Windows shell startup failed in this environment"
-                );
-                return false;
-            }
-        }
-        true
     }
 
     fn run_git(repo: &Path, args: &[&str]) {
@@ -820,9 +776,6 @@ mod tests {
     #[test]
     fn discovers_merge_commits_after_recent_octopus_merges() {
         let _git_runtime = SystemGitRuntimeGuard::new();
-        if !require_git_shell_for_octopus_merge_tests() {
-            return;
-        }
         let tmp = tempfile::tempdir().expect("create temp dir");
         let repo = tmp.path();
 

@@ -1,5 +1,17 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    // Web links a Ctrl/Cmd+click followed, in order.
+    static OPENED_WEB_LINKS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Web links followed since the last call, which clears them.
+#[cfg(test)]
+pub(in crate::view) fn take_opened_web_links_for_tests() -> Vec<String> {
+    OPENED_WEB_LINKS.with(|links| links.take())
+}
+
 #[derive(Clone, Copy)]
 enum DiffTextOffsetBias {
     Start,
@@ -99,6 +111,7 @@ impl MainPaneView {
     pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
         self.clear_diff_text_selection();
     }
 
@@ -113,6 +126,56 @@ impl MainPaneView {
         hitbox: DiffTextHitbox,
     ) {
         self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
+    }
+
+    /// Register one table cell of a row. The row's entry collects its cells,
+    /// and its bounds grow to span them, so row-level lookups see one row.
+    pub(in crate::view) fn add_diff_text_cell_hitbox(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        row_len: usize,
+        cell: DiffTextHitbox,
+    ) {
+        let row = self
+            .diff_text_hitboxes
+            .entry((visible_ix, region))
+            .or_insert_with(|| DiffTextHitbox {
+                bounds: cell.bounds,
+                layout_key: 0,
+                source_visible_ix: cell.source_visible_ix,
+                text_start_offset: 0,
+                text_len: row_len,
+                offset_map: None,
+                painted_text: SharedString::default(),
+                streamed_ascii_monospace_cell_width: None,
+                wrapped: None,
+                cells: Vec::new(),
+            });
+        row.bounds = row.bounds.union(&cell.bounds);
+        row.cells.push(cell);
+    }
+
+    /// The cell of a table row a point belongs to: the one it is in, else the
+    /// nearest, by the same line-first distance a drag uses between rows.
+    fn diff_text_cell_for_position(
+        hitbox: &DiffTextHitbox,
+        position: Point<Pixels>,
+    ) -> Option<&DiffTextHitbox> {
+        let distance = |bounds: &Bounds<Pixels>| {
+            let dy = (bounds.top() - position.y)
+                .max(position.y - bounds.bottom())
+                .max(px(0.0));
+            let dx = (bounds.left() - position.x)
+                .max(position.x - bounds.right())
+                .max(px(0.0));
+            (dy, dx)
+        };
+        hitbox.cells.iter().min_by(|a, b| {
+            distance(&a.bounds)
+                .partial_cmp(&distance(&b.bounds))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 
     /// Register a painted non-text block as a logical target for an active
@@ -237,6 +300,10 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
     ) -> Option<DiffTextHit> {
+        if !hitbox.cells.is_empty() {
+            let cell = Self::diff_text_cell_for_position(hitbox, position)?;
+            return self.diff_text_hit_in_hitbox(cell, region, position);
+        }
         if let Some(wrapped) = &hitbox.wrapped {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
@@ -314,6 +381,13 @@ impl MainPaneView {
         hitbox: &DiffTextHitbox,
         range: Range<usize>,
     ) -> Option<Bounds<Pixels>> {
+        if !hitbox.cells.is_empty() {
+            let cell = hitbox.cells.iter().find(|cell| {
+                (cell.text_start_offset..=cell.text_start_offset + cell.text_len)
+                    .contains(&range.start)
+            })?;
+            return self.diff_text_bounds_in_hitbox(cell, range);
+        }
         let local = |offset: usize| {
             offset
                 .saturating_sub(hitbox.text_start_offset)
@@ -468,8 +542,8 @@ impl MainPaneView {
             return false;
         };
         // A wrapped row has no off-screen right edge to chase; it already broke
-        // the line to fit the pane.
-        if hitbox.wrapped.is_some() {
+        // the line to fit the pane. Table cells wrap too.
+        if hitbox.wrapped.is_some() || !hitbox.cells.is_empty() {
             return true;
         }
 
@@ -713,6 +787,7 @@ impl MainPaneView {
     }
 
     /// Byte offset in the text a row painted, for a point inside that row.
+    #[cfg(test)]
     pub(in crate::view) fn diff_text_offset_for_position(
         &self,
         visible_ix: usize,
@@ -721,6 +796,19 @@ impl MainPaneView {
     ) -> Option<usize> {
         self.diff_text_pos_from_hitbox(visible_ix, region, position)
             .map(|pos| pos.offset)
+    }
+
+    /// As above, but `None` beside or past the painted text, where the hit is
+    /// only the nearest edge.
+    pub(in crate::view) fn diff_text_offset_on_text(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<usize> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        let hit = self.diff_text_hit_in_hitbox(hitbox, region, position)?;
+        (!hit.past_painted_text).then_some(hit.pos.offset)
     }
 
     pub(in super::super::super) fn diff_text_visual_source_range_for_region(
@@ -872,8 +960,9 @@ impl MainPaneView {
         self.set_diff_text_selection(anchor, head, 1);
     }
 
-    /// Open the link menu when a plain click lands on a web link in the
-    /// rendered markdown preview, and report whether it did.
+    /// Open the link menu when a plain click lands on a link in the rendered
+    /// markdown preview, and report whether it did. With `follow` (Ctrl/Cmd
+    /// held) the link opens straight away instead.
     ///
     /// A double or triple click is still a text selection — only a single
     /// click follows the link, so selecting the words of a link keeps working.
@@ -883,43 +972,45 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
         click_count: usize,
+        follow: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         if click_count > 1 || self.diff_text_has_selection() {
             return false;
         }
-        let Some((url, span)) = self.markdown_preview_link_span_at(visible_ix, region, position)
+        let Some((destination, span)) =
+            self.markdown_preview_link_span_at(visible_ix, region, position)
         else {
             return false;
         };
 
+        // A row can contain several links: pairing the row alone is not enough.
+        if self.markdown_preview_link_span_at(visible_ix, region, window.mouse_position())
+            != Some((destination.clone(), span.clone()))
+        {
+            return false;
+        }
+        // An in-document anchor scrolls; it has no menu.
+        if self.scroll_markdown_preview_to_anchor(region, &destination, cx) {
+            return true;
+        }
+        // A link the preview cannot open is a click on plain words.
+        let Some(kind) =
+            self.markdown_preview_link_popover_kind(region, visible_ix, &destination, None)
+        else {
+            return false;
+        };
+        if follow && self.follow_markdown_preview_link(&kind, cx) {
+            return true;
+        }
         // Anchor on the link's own box, so the menu opens flush under the words
         // it describes rather than under the row that happens to hold them.
         let anchor = self
             .diff_text_hitboxes
             .get(&(visible_ix, region))
             .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span));
-        match anchor {
-            Some(bounds) => self.open_popover_for_bounds(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url: None,
-                },
-                bounds,
-                window,
-                cx,
-            ),
-            None => self.open_popover_at(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url: None,
-                },
-                position,
-                window,
-                cx,
-            ),
-        }
+        self.open_markdown_preview_link_popover(kind, anchor, position, window, cx);
         true
     }
 
@@ -928,35 +1019,115 @@ impl MainPaneView {
     ///
     /// The picture's own box is what the menu wants to hang off; the click
     /// point stands in for the frames where it has not been painted yet.
+    /// With `follow` (Ctrl/Cmd held) the link opens straight away instead.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::view) fn open_markdown_preview_link_menu(
         &mut self,
-        url: SharedString,
+        region: DiffTextRegion,
+        row_ix: usize,
+        destination: SharedString,
         load_remote_image_url: Option<SharedString>,
+        anchor_bounds: Option<Bounds<Pixels>>,
+        position: Point<Pixels>,
+        follow: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match self.markdown_preview_link_popover_kind(
+            region,
+            row_ix,
+            &destination,
+            load_remote_image_url.clone(),
+        ) {
+            Some(kind) if follow && self.follow_markdown_preview_link(&kind, cx) => {}
+            Some(kind) => {
+                self.open_markdown_preview_link_popover(kind, anchor_bounds, position, window, cx)
+            }
+            // An anchor, or a link that cannot open, has no menu to carry Load
+            // image: a click on a blocked picture approves it, and once shown
+            // the picture follows its anchor.
+            None => match load_remote_image_url {
+                Some(image_url) => self.approve_remote_markdown_image(image_url, cx),
+                None => {
+                    self.scroll_markdown_preview_to_anchor(region, &destination, cx);
+                }
+            },
+        }
+    }
+
+    fn open_markdown_preview_link_popover(
+        &mut self,
+        kind: PopoverKind,
         anchor_bounds: Option<Bounds<Pixels>>,
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match anchor_bounds {
-            Some(bounds) => self.open_popover_for_bounds(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url,
-                },
-                bounds,
-                window,
-                cx,
-            ),
-            None => self.open_popover_at(
-                PopoverKind::WebLinkMenu {
-                    url,
-                    load_remote_image_url,
-                },
-                position,
-                window,
-                cx,
-            ),
+            Some(bounds) => self.open_popover_for_bounds(kind, bounds, window, cx),
+            None => self.open_popover_at(kind, position, window, cx),
         }
+    }
+
+    /// Run what a link menu's main entry would, and report whether it did.
+    /// A missing file has nothing to open, so its menu still explains why.
+    fn follow_markdown_preview_link(
+        &mut self,
+        kind: &PopoverKind,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        use crate::view::LocalFileLinkSource;
+
+        match kind {
+            PopoverKind::WebLinkMenu { url, .. } => {
+                self.open_markdown_preview_web_link(url.clone(), cx);
+            }
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing: false,
+                ..
+            } => self.store.dispatch(match source {
+                LocalFileLinkSource::Version(source) => Msg::OpenFileContent {
+                    repo_id: *repo_id,
+                    source: source.clone(),
+                    path: path.clone(),
+                },
+                LocalFileLinkSource::ParentOf(commit_id) => Msg::OpenFileAtCommitParent {
+                    repo_id: *repo_id,
+                    commit_id: commit_id.clone(),
+                    path: path.clone(),
+                },
+            }),
+            _ => return false,
+        }
+        true
+    }
+
+    fn open_markdown_preview_web_link(&mut self, url: SharedString, cx: &mut gpui::Context<Self>) {
+        // Tests record the link rather than start a browser.
+        #[cfg(test)]
+        {
+            let _ = cx;
+            OPENED_WEB_LINKS.with(|links| links.borrow_mut().push(url.to_string()));
+        }
+        #[cfg(not(test))]
+        crate::view::platform_open::spawn_launch(
+            cx,
+            move || crate::view::platform_open::open_url_blocking(&url),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.push_toast(
+                            crate::view::components::ToastKind::Error,
+                            format!("Failed to open link: {err}"),
+                            cx,
+                        );
+                    });
+                }
+            },
+        );
     }
 
     pub(in super::super::super) fn handle_diff_text_mouse_down(
@@ -1986,18 +2157,23 @@ impl MainPaneView {
             return self.markdown_preview_row_text_len(visible_ix, region);
         }
 
+        // Below a wrapped line the row position runs ahead of the line number.
+        let source_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+
         if self.is_file_preview_active() {
             if region != DiffTextRegion::Inline {
                 return 0;
             }
             return self
-                .worktree_preview_line_raw_text(visible_ix)
+                .worktree_preview_line_raw_text(source_ix)
                 .map(|line| file_diff_display_len(&line))
                 .unwrap_or(0);
         }
 
         if self.is_collapsed_diff_projection_active() {
-            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+            let Some(row) = self.collapsed_visible_row(source_ix) else {
                 return 0;
             };
             match row {
@@ -2064,7 +2240,7 @@ impl MainPaneView {
             }
         }
 
-        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_ix) else {
             return 0;
         };
 
@@ -2232,7 +2408,16 @@ impl MainPaneView {
             return;
         }
 
-        self.append_diff_text_source_region_slice(out, visible_ix, region, range, expanded_tabs);
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        self.append_diff_text_source_region_slice(
+            out,
+            source_visible_ix,
+            region,
+            range,
+            expanded_tabs,
+        );
     }
 
     fn append_diff_text_source_region_slice(
@@ -2248,8 +2433,13 @@ impl MainPaneView {
         }
 
         if self.is_markdown_preview_active() {
+            // Preview selections are in raw row coordinates: a tab is one byte
+            // there (and separates table cells), not the spaces it paints as.
             let text = self.markdown_preview_row_text(source_visible_ix, region);
-            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            let end = range.end.min(text.len());
+            if let Some(slice) = text.get(range.start.min(end)..end) {
+                out.push_str(slice);
+            }
             return;
         }
 
@@ -2387,16 +2577,17 @@ impl MainPaneView {
         // the text with a line of its own.
         let mut rows_written = 0usize;
         // A picture is one line of the document however many rows it was given,
-        // and every one of them carries its description. The row the selection
-        // starts on always contributes, so a selection that begins inside a
-        // picture still describes it once.
-        let repeats_a_picture = |this: &Self, source_visible_ix: usize, region| {
+        // and every one of them carries its description; a diff's alignment
+        // padding is no line at all. The row the selection starts on always
+        // contributes, so a selection that begins inside a picture still
+        // describes it once.
+        let copies_nothing = |this: &Self, source_visible_ix: usize, region| {
             source_visible_ix != start.source_visible_ix
-                && this.markdown_preview_row_repeats_a_picture(source_visible_ix, region)
+                && this.markdown_preview_row_copies_nothing(source_visible_ix, region)
         };
         for source_visible_ix in start.source_visible_ix..=end.source_visible_ix {
             if force_inline || self.diff_view == DiffViewMode::Inline {
-                if repeats_a_picture(self, source_visible_ix, DiffTextRegion::Inline) {
+                if copies_nothing(self, source_visible_ix, DiffTextRegion::Inline) {
                     continue;
                 }
                 let line_len = self
@@ -2430,7 +2621,7 @@ impl MainPaneView {
             .then_some(start.region);
 
             if let Some(region) = split_region {
-                if repeats_a_picture(self, source_visible_ix, region) {
+                if copies_nothing(self, source_visible_ix, region) {
                     continue;
                 }
                 let line_len = self.diff_text_full_line_len_for_region(source_visible_ix, region);
@@ -2451,6 +2642,11 @@ impl MainPaneView {
                     &mut expanded_tabs,
                 );
             } else {
+                if copies_nothing(self, source_visible_ix, DiffTextRegion::SplitLeft)
+                    && copies_nothing(self, source_visible_ix, DiffTextRegion::SplitRight)
+                {
+                    continue;
+                }
                 let left_full_len = self.diff_text_full_line_len_for_region(
                     source_visible_ix,
                     DiffTextRegion::SplitLeft,
@@ -2894,9 +3090,8 @@ impl MainPaneView {
                 (0, None, 0, None, None)
             };
 
-        self.activate_context_menu_invoker("diff_editor_menu".into(), cx);
         self.open_popover_at(
-            PopoverKind::DiffEditorMenu {
+            (PopoverKind::DiffEditorMenu {
                 repo_id,
                 area,
                 path,
@@ -2907,7 +3102,8 @@ impl MainPaneView {
                 lines_count,
                 copy_text,
                 copy_target,
-            },
+            })
+            .invoked_by("diff_editor_menu".into()),
             anchor,
             window,
             cx,

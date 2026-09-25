@@ -1,284 +1,287 @@
 name: Cross-Platform Tests
 
 on:
-  push:
-    branches: ["main", "dev"]
-  pull_request:
-    branches: ["main", "dev"]
+  workflow_call:
+    inputs:
+      watcher-stress:
+        type: boolean
+        default: false
+      cold-cache:
+        type: boolean
+        default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: string
+        default: serial
+      execution-samples:
+        description: Uninstrumented repetitions for runtime measurement (1 is normal CI)
+        type: number
+        default: 1
+      nextest-threads:
+        description: Optional positive nextest concurrency (serial schedule only)
+        type: string
+        default: ''
+      nextest-profile:
+        description: Optional limit for concurrent Git-heavy tests
+        type: string
+        default: ci
+      ui-threads:
+        description: Optional positive UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      watcher-stress:
+        description: Repeat native watcher synchronization and lifecycle tests ten times
+        type: boolean
+        default: false
+      cold-cache:
+        description: Bypass dependency caches
+        type: boolean
+        default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: choice
+        options: [serial, balanced]
+        default: serial
+      execution-samples:
+        description: Uninstrumented repetitions for runtime measurement (1 is normal CI)
+        type: number
+        default: 1
+      nextest-threads:
+        description: Optional positive nextest concurrency (serial schedule only)
+        type: string
+        default: ''
+      nextest-profile:
+        description: Optional limit for concurrent Git-heavy tests
+        type: choice
+        options: [ci, ci-git-limited]
+        default: ci
+      ui-threads:
+        description: Optional positive UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: cross-platform-tests-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
-  APP_FEATURES: --no-default-features --features gix
+  CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
+  CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
+  CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
+  CI_UI_THREADS: ${{ inputs.ui-threads || '' }}
+  CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
+  GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
 jobs:
-  fmt:
-    name: Rustfmt
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: stable
-          components: rustfmt
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-  linux-ubuntu:
-    name: Linux Headless Suite (${{ matrix.name }})
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+  native:
+    name: Native Tests (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: x86_64-linux / ubuntu-22.04
-            target_platform: x86_64-linux
-            runs_on: ubuntu-22.04
-          - name: aarch64-linux / ubuntu-22.04-arm
-            target_platform: aarch64-linux
-            runs_on: ubuntu-22.04-arm
+          - name: ubuntu22-x64
+            runner: ubuntu-22.04
+            host: x86_64-unknown-linux-gnu
+          - name: ubuntu22-arm64
+            runner: ubuntu-22.04-arm
+            host: aarch64-unknown-linux-gnu
+          - name: macos15-arm64
+            runner: macos-15
+            host: aarch64-apple-darwin
+          - name: macos26-arm64
+            runner: macos-26
+            host: aarch64-apple-darwin
+          - name: macos15-x64
+            runner: macos-15-intel
+            host: x86_64-apple-darwin
+          - name: windows-x64
+            runner: windows-latest
+            host: x86_64-pc-windows-msvc
+          - name: windows-arm64
+            runner: windows-11-arm
+            host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Show Git version
-        run: git --version
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Run headless test suite
-        run: |
-          cargo test --workspace \
-            --exclude gitcomet-ui-gpui \
-            $APP_FEATURES \
-            --locked \
-            --verbose
-
-  linux-fedora:
-    name: Linux Headless Suite (Fedora container)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    container:
-      image: fedora:41
-    steps:
-      - name: Install build dependencies
-        run: |
-          dnf -y install \
-            bash \
-            curl \
-            findutils \
-            gcc \
-            gcc-c++ \
-            git \
-            make \
-            openssl-devel \
-            pkg-config \
-            tar \
-            which
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Show Git version
-        run: git --version
-      - name: Install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Run headless test suite
-        shell: bash
-        run: |
-          cargo test --workspace \
-            --exclude gitcomet-ui-gpui \
-            $APP_FEATURES \
-            --locked \
-            --verbose
-
-  linux-display-profiles:
-    name: Linux Display Profile (${{ matrix.profile.name }})
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        profile:
-          - name: x11-gnome
-            display: ":99"
-            wayland_display: ""
-            session_type: x11
-            desktop: GNOME
-          - name: wayland-gnome
-            display: ""
-            wayland_display: wayland-1
-            session_type: wayland
-            desktop: GNOME
-          - name: wayland-kde
-            display: ""
-            wayland_display: wayland-1
-            session_type: wayland
-            desktop: KDE
-    env:
-      DISPLAY: ${{ matrix.profile.display }}
-      WAYLAND_DISPLAY: ${{ matrix.profile.wayland_display }}
-      XDG_SESSION_TYPE: ${{ matrix.profile.session_type }}
-      XDG_CURRENT_DESKTOP: ${{ matrix.profile.desktop }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Show Git version
-        run: git --version
-      - name: Install Linux UI native dependencies
+      - name: Install Linux link dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libxcb1-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev
-      - name: Preflight Linux UI link dependencies
-        run: |
-          missing=0
-          for dep in xcb xkbcommon xkbcommon-x11; do
-            if ! pkg-config --exists "$dep"; then
-              echo "::error title=Missing Linux UI dependency::pkg-config could not find '$dep'. Install libxcb1-dev, libxkbcommon-dev, and libxkbcommon-x11-dev."
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "Linux display-profile job is missing required native UI link dependencies."
-            exit 1
-          fi
+          sudo apt-get install -y pkg-config git-lfs libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
           pkg-config --modversion xcb xkbcommon xkbcommon-x11
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Ensure macOS Git LFS
+        if: runner.os == 'macOS'
+        run: |
+          if ! git lfs version; then brew install git-lfs; fi
+      - uses: ./.github/actions/ci-setup
+        id: setup
         with:
-          toolchain: stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Print display profile
+          context: ${{ matrix.name }}-workspace-ci-test
+          cold-cache: ${{ inputs.cold-cache }}
+      - name: Verify host and test prerequisites
+        shell: bash
+        timeout-minutes: 2
+        env:
+          EXPECTED_HOST: ${{ matrix.host }}
         run: |
-          echo "DISPLAY=${DISPLAY:-<unset>}"
-          echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>}"
-          echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-<unset>}"
-          echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-<unset>}"
-      - name: Run display-selection integration tests
-        run: |
-          cargo test -p gitcomet $APP_FEATURES --test mergetool_git_integration gui_default --verbose
-          cargo test -p gitcomet $APP_FEATURES --test difftool_git_integration gui_default --verbose
-      - name: Run UI smoke test under selected profile
-        run: cargo test -p gitcomet-ui-gpui smoke_tests::smoke_view_renders_without_panicking -- --exact
-
-  macos-tests:
-    name: macOS Tests (${{ matrix.name }})
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_platform: aarch64-darwin
-            name: macbook-m1 / macos-15
-            runs_on: macos-15
-          - target_platform: aarch64-darwin
-            name: latest-macos / macos-26
-            runs_on: macos-26
-          - target_platform: x86_64-darwin
-            name: intel (macos-15-intel)
-            runs_on: macos-15-intel
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Show Git version
-        run: git --version
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Show host target
-        run: rustc -vV
-      - name: Assert Apple Silicon runner
-        if: matrix.target_platform == 'aarch64-darwin'
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "arm64"
-          rust_host="$(rustc -vV | sed -n 's/^host: //p')"
-          test "$rust_host" = "aarch64-apple-darwin"
-      - name: Run headless test suite
-        run: |
-          cargo test --workspace \
-            --exclude gitcomet-ui-gpui \
-            $APP_FEATURES \
-            --locked \
-            --verbose
-      - name: Gatekeeper and code-signing check (informational)
-        run: |
-          set -euo pipefail
-          cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
-          set --
-          if [[ -n "$cargo_config_output" ]]; then
-            while IFS= read -r arg; do
-              set -- "$@" "$arg"
-            done <<<"$cargo_config_output"
+          git --version
+          git lfs version
+          rustc -vV
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            git -c 'alias.gitcomet-ci-shell=!exit 0' gitcomet-ci-shell
+            sh -lc 'exit 0'
           fi
-          set -- "$@" -p gitcomet $APP_FEATURES --release --locked
-          cargo build "$@"
-          codesign --verify --verbose target/release/gitcomet || true
-          spctl --assess --type execute --verbose target/release/gitcomet || true
-
-  windows-tests:
-    name: Windows Tests (${{ matrix.target_platform }})
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_platform: x86_64-windows
-            runs_on: windows-latest
-          - target_platform: aarch64-windows
-            runs_on: windows-11-arm
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Show Git version
+          python3 -c 'import os, subprocess; version = subprocess.check_output(["rustc", "-vV"], text=True); assert "host: " + os.environ["EXPECTED_HOST"] in version, version'
+      - name: Verify Windows CI subprocess handling
+        if: runner.os == 'Windows'
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Compile and inventory workspace tests
+        run: python3 scripts/ci/run.py compile --context workspace
+      - name: Execute workspace tests
+        id: tests
+        shell: bash
+        run: |
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
+          if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
+            python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          else
+            python3 scripts/ci/runtime.py target/ci-reports/runtime --samples "$CI_EXECUTION_SAMPLES" --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          fi
+      - name: Stress native watcher synchronization
+        if: success() && inputs.watcher-stress
+        shell: bash
+        env:
+          GITCOMET_TEST_SYNC_TRACE: "1"
+        run: |
+          args=()
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--test-threads "$CI_NEXTEST_THREADS"); fi
+          python3 scripts/ci/run.py command --name watcher-stress -- \
+            cargo nextest run \
+            --binaries-metadata target/ci-reports/workspace/binaries.json \
+            --cargo-metadata target/ci-reports/workspace/cargo.json \
+            --profile ci-watch-stress --stress-count 10 --no-tests=fail "${args[@]}" \
+            -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::) | test(::selective::path_identities::)))'
+      - name: Workspace doctests
+        if: success() || (failure() && steps.tests.outcome == 'failure')
+        shell: bash
+        run: python3 scripts/ci/run.py doc --context workspace
+      # The workspace enables the UI's default features and runs its complete
+      # suite. Only the headless app needs a separate feature context for smoke.
+      - name: Compile Linux display-selection app context
+        if: success() && matrix.name == 'ubuntu22-x64'
+        shell: bash
+        run: |
+          python3 scripts/ci/run.py compile --context app
+      - name: All Linux display profiles
+        if: success() && matrix.name == 'ubuntu22-x64'
+        shell: bash
+        run: python3 scripts/ci/run.py display
+      - name: Compile original Windows CMD smoke context
+        if: success() && runner.os == 'Windows'
         shell: pwsh
-        run: git --version
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Show path behavior (PowerShell + Git Bash)
+        run: python3 scripts/ci/run.py compile --context app --test-target standalone_tool_mode_integration
+      - name: Standalone smoke test in CMD
+        if: success() && runner.os == 'Windows'
+        shell: cmd
+        run: python3 scripts/ci/run.py cmd-smoke
+      - name: Show path behavior (PowerShell and Git Bash)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Write-Host "PowerShell path: $pwd"
-          $bashPwd = bash -lc "pwd"
-          Write-Host "Git Bash path: $bashPwd"
-      - name: Run headless test suite (PowerShell)
-        shell: pwsh
-        run: |
-          cargo test --workspace `
-            --exclude gitcomet-ui-gpui `
-            --no-default-features `
-            --features gix `
-            --locked `
-            --verbose
-      - name: Run standalone smoke test in CMD
-        shell: cmd
-        run: cargo test -p gitcomet --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
-      - name: Show path behavior (CMD + Git Bash)
+          bash -lc "pwd"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Show path behavior (CMD and Git Bash)
+        if: runner.os == 'Windows'
         shell: cmd
         run: |
           echo CMD path: %CD%
-          for /f "delims=" %%i in ('bash -lc "pwd"') do set BASH_PWD=%%i
-          echo Git Bash path: %BASH_PWD%
+          bash -lc "pwd"
+      - name: Gatekeeper and code-signing check (informational)
+        if: success() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
+          args=()
+          if [[ -n "$cargo_config_output" ]]; then
+            while IFS= read -r arg; do args+=("$arg"); done <<<"$cargo_config_output"
+          fi
+          python3 scripts/ci/run.py command --name macos-release-signing-build -- cargo build "${args[@]}" -p gitcomet --no-default-features --features gix --release --locked
+          codesign --verify --verbose target/release/gitcomet || true
+          spctl --assess --type execute --verbose target/release/gitcomet || true
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: ${{ matrix.name }}
+          source-writer: ${{ matrix.name == 'ubuntu22-x64' || matrix.name == 'macos15-arm64' || matrix.name == 'windows-x64' }}
+          source-key: ${{ steps.setup.outputs.source-key }}
+          source-hit: ${{ steps.setup.outputs.source-hit }}
+          cache-key: ${{ steps.setup.outputs.cache-key }}
+          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+          cold-cache: ${{ inputs.cold-cache }}
+          # Ubuntu x64 and Windows also compile the headless app context.
+          # Keep the total active cache set below 8 GB.
+          budget-mib: ${{ matrix.name == 'ubuntu22-x64' && '1200' || (runner.os == 'Windows' && '800' || '700') }}
+
+  fedora:
+    name: Linux Headless Suite (Fedora container)
+    runs-on: ubuntu-22.04
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
+    container:
+      image: fedora:41
+    steps:
+      - name: Install native dependencies
+        run: |
+          dnf -y install bash curl findutils fontconfig-devel gcc gcc-c++ git git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
+          pkg-config --libs --cflags fontconfig
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/ci-setup
+        id: setup
+        with:
+          context: fedora41-x64-workspace-ci-test
+          cold-cache: ${{ inputs.cold-cache }}
+          python: "false"
+      - name: Verify test prerequisites
+        run: |
+          git --version
+          git lfs version
+      - name: Compile and inventory workspace tests
+        run: python3 scripts/ci/run.py compile --context workspace
+      - name: Execute workspace tests
+        id: tests
+        shell: bash
+        run: |
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
+          if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
+            python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          else
+            python3 scripts/ci/runtime.py target/ci-reports/runtime --samples "$CI_EXECUTION_SAMPLES" --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          fi
+      - name: Workspace doctests
+        if: success() || (failure() && steps.tests.outcome == 'failure')
+        run: python3 scripts/ci/run.py doc --context workspace
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: fedora41-x64
+          cache-key: ${{ steps.setup.outputs.cache-key }}
+          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+          cold-cache: ${{ inputs.cold-cache }}

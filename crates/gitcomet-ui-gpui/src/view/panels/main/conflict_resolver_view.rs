@@ -5,6 +5,7 @@
 //! previews.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 pub(super) use conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS;
 
@@ -2068,7 +2069,7 @@ impl MainPaneView {
                                                                     !self
                                                                         .conflict_resolved_output_is_streamed(),
                                                                     |d| {
-                                                                        d.on_mouse_down(
+                                                                        d.on_pointer_click(
                                                                             MouseButton::Right,
                                                                             cx.listener(
                                                                                 |this,
@@ -2399,8 +2400,10 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        self.ensure_conflict_markdown_preview_cache();
+        self.ensure_conflict_markdown_preview_cache(cx);
         self.sync_conflict_preview_scroll();
+        // One matcher for the three columns: each compiles a regex.
+        let query = self.markdown_preview_search_query();
 
         let scroll_for = |side: ThreeWayColumn| -> ScrollHandle {
             match side {
@@ -2414,11 +2417,14 @@ impl MainPaneView {
             .clone()
         };
 
-        let row_count = |side: ThreeWayColumn| -> usize {
-            match self.conflict_resolver.markdown_preview.document(side) {
+        // The shared scrollbar follows the column with the most to scroll;
+        // before the first layout, the longest document.
+        let extent = |side: ThreeWayColumn| -> (f32, usize) {
+            let rows = match self.conflict_resolver.markdown_preview.document(side) {
                 Loadable::Ready(doc) => doc.rows.len(),
                 _ => 0,
-            }
+            };
+            (f32::from(scroll_for(side).max_offset().y), rows)
         };
         let tallest = [
             ThreeWayColumn::Base,
@@ -2426,7 +2432,10 @@ impl MainPaneView {
             ThreeWayColumn::Theirs,
         ]
         .into_iter()
-        .max_by_key(|s| row_count(*s))
+        .max_by(|a, b| {
+            let (a, b) = (extent(*a), extent(*b));
+            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))
+        })
         .unwrap_or(ThreeWayColumn::Base);
         let vertical_handle = scroll_for(tallest);
         let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
@@ -2444,6 +2453,9 @@ impl MainPaneView {
             .relative()
             .flex_1()
             .min_h(px(0.0))
+            // A column, so the row of documents gets a height to scroll in.
+            .flex()
+            .flex_col()
             .w_full()
             .p_2()
             .bg(theme.colors.surface.canvas)
@@ -2458,16 +2470,19 @@ impl MainPaneView {
                     .child(self.render_conflict_markdown_preview_column(
                         theme,
                         ThreeWayColumn::Base,
+                        query.clone(),
                         cx,
                     ))
                     .child(self.render_conflict_markdown_preview_column(
                         theme,
                         ThreeWayColumn::Ours,
+                        query.clone(),
                         cx,
                     ))
                     .child(self.render_conflict_markdown_preview_column(
                         theme,
                         ThreeWayColumn::Theirs,
+                        query.clone(),
                         cx,
                     )),
             )
@@ -2488,15 +2503,15 @@ impl MainPaneView {
         &mut self,
         theme: AppTheme,
         side: ThreeWayColumn,
+        query: Option<rows::MarkdownPreviewQuery>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let (id, list_id, vscrollbar_id, hscrollbar_id, label, scroll) = match side {
+        let (id, list_id, vscrollbar_id, label, scroll) = match side {
             ThreeWayColumn::Base => (
                 "conflict_preview_base",
                 "conflict_preview_base_list",
                 "conflict_preview_base_scrollbar",
-                "conflict_preview_base_hscrollbar",
                 "Base (A)",
                 self.conflict_resolver_diff_scroll.clone(),
             ),
@@ -2504,7 +2519,6 @@ impl MainPaneView {
                 "conflict_preview_ours",
                 "conflict_preview_ours_list",
                 "conflict_preview_ours_scrollbar",
-                "conflict_preview_ours_hscrollbar",
                 "Local (B)",
                 self.conflict_preview_ours_scroll.clone(),
             ),
@@ -2512,7 +2526,6 @@ impl MainPaneView {
                 "conflict_preview_theirs",
                 "conflict_preview_theirs_list",
                 "conflict_preview_theirs_scrollbar",
-                "conflict_preview_theirs_hscrollbar",
                 "Remote (C)",
                 self.conflict_preview_theirs_scroll.clone(),
             ),
@@ -2532,22 +2545,44 @@ impl MainPaneView {
                 .into_any_element()
         };
 
-        // Macro to build the column list+scrollbar from a side-specific processor.
-        // Each side needs its own fn item type for `cx.processor()`.
-        macro_rules! mk_list {
-            ($document:expr, $processor:expr) => {{
-                let list = uniform_list(list_id, $document.rows.len(), cx.processor($processor))
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(&scroll)
-                    .with_horizontal_sizing_behavior(
-                        gpui::ListHorizontalSizingBehavior::Unconstrained,
-                    );
+        let body = match self.conflict_resolver.markdown_preview.document(side) {
+            Loadable::NotLoaded | Loadable::Loading => status("Processing preview…".into()),
+            Loadable::Error(error) => status(error.clone().into()),
+            Loadable::Ready(document) if document.rows.is_empty() => status("Empty file.".into()),
+            Loadable::Ready(document) => {
+                // The file preview's renderer, read-only: the columns are for
+                // comparing, and scroll in step through their shared handles.
+                let document = Arc::clone(document);
+                let column = self.conflict_resolver.markdown_preview.columns[side].clone();
+                let handle = scroll.0.borrow().base_handle.clone();
+                let context = rows::MarkdownDocumentContext {
+                    theme,
+                    ui_scale_percent,
+                    editor_font_family: crate::font_preferences::current_editor_font_family(cx)
+                        .into(),
+                    image_root: self.conflict_markdown_image_root(),
+                    remote_image_access: self.markdown_remote_image_access(Some(cx.entity())),
+                    picture_sizes: Default::default(),
+                    drawn_pictures: None,
+                    row_boxes: Default::default(),
+                    block_scrolls: column.block_scrolls,
+                    blocks: column.blocks,
+                    layout: column.layout,
+                    view: None,
+                    text_region: DiffTextRegion::Inline,
+                    change_bar_color: None,
+                    query,
+                    reveal: column.reveal,
+                    scroll: Some(handle.clone()),
+                    hovered_link: None,
+                    change_extents: None,
+                    tasks_editable: false,
+                };
                 let vertical_scrollbar_gutter = if vertical_sync_enabled {
                     px(0.0)
                 } else {
                     components::Scrollbar::visible_gutter(
-                        scroll.clone(),
+                        handle.clone(),
                         components::ScrollbarAxis::Vertical,
                     )
                 };
@@ -2557,41 +2592,22 @@ impl MainPaneView {
                     .min_h(px(0.0))
                     .child(
                         div()
-                            .h_full()
+                            .id(list_id)
+                            .size_full()
                             .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .track_scroll(&handle)
                             .pr(vertical_scrollbar_gutter)
-                            .child(list),
+                            .child(rows::render_markdown_document(&document, &context)),
                     )
                     .when(!vertical_sync_enabled, |d| {
                         d.child(
-                            components::Scrollbar::new(vscrollbar_id, scroll.clone())
+                            components::Scrollbar::new(vscrollbar_id, handle)
                                 .always_visible()
                                 .render(theme),
                         )
                     })
-                    .child(
-                        components::Scrollbar::horizontal(hscrollbar_id, scroll.clone())
-                            .always_visible()
-                            .render(theme),
-                    )
                     .into_any_element()
-            }};
-        }
-
-        let body = match (side, self.conflict_resolver.markdown_preview.document(side)) {
-            (_, Loadable::NotLoaded | Loadable::Loading) => status("Processing preview…".into()),
-            (_, Loadable::Error(error)) => status(error.clone().into()),
-            (_, Loadable::Ready(document)) if document.rows.is_empty() => {
-                status("Empty file.".into())
-            }
-            (ThreeWayColumn::Base, Loadable::Ready(doc)) => {
-                mk_list!(doc, Self::render_conflict_markdown_base_rows)
-            }
-            (ThreeWayColumn::Ours, Loadable::Ready(doc)) => {
-                mk_list!(doc, Self::render_conflict_markdown_ours_rows)
-            }
-            (ThreeWayColumn::Theirs, Loadable::Ready(doc)) => {
-                mk_list!(doc, Self::render_conflict_markdown_theirs_rows)
             }
         };
 
@@ -2621,6 +2637,8 @@ impl MainPaneView {
                 div()
                     .flex_1()
                     .min_h(px(0.0))
+                    .flex()
+                    .flex_col()
                     .bg(theme.colors.surface.canvas)
                     .child(body),
             )

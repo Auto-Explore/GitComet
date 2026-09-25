@@ -117,7 +117,7 @@ mod tests {
     fn state_with_repo_tabs(active_repo: RepoId, repo_count: u64) -> AppState {
         let mut state = AppState {
             active_repo: Some(active_repo),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         for ix in 1..=repo_count {
             state.repos.push(RepoState::new_opening(

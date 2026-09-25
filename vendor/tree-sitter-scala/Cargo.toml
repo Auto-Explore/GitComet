@@ -1,6 +1,21 @@
-# Vendored from the `tree-sitter-scala 0.26.2` crates.io release
-# (https://github.com/tree-sitter/tree-sitter-scala, MIT -- see LICENSE), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/tree-sitter/tree-sitter-scala at db390f312
+# (MIT -- see LICENSE), to regenerate `src/parser.c` with a larger small-state
+# threshold.
+#
+# A git rev rather than the 0.26.2 release, because the 19 grammar and scanner
+# fixes since it are unreleased. They are all valid Scala that used to ERROR:
+# seven indentation and Scala 2 gaps (enum `{` on the next line, `def f(x)` with
+# no result type, a trailing comma, an indented `throw`, `case class` in a case
+# body, `do {} while {}`, a multi-statement `while` body), polymorphic types,
+# constructor annotations, `implicit` before a parenthesized lambda parameter
+# list, a given with a self type, `*` as a type operator, a lone prefix operator
+# as a name, `v<1> = 10`, type parameters on the next line, and four scanner
+# line-continuation fixes. Across scala3's tests/pos, tests/run, compiler and
+# library -- 7,068 files -- files that fail to parse go from 53 to 16, with none
+# newly failing; scala 2.13's library and compiler stay 870/870 clean.
+#
+# Every count matches upstream's own parser.c (STATE_COUNT 18277, SYMBOL_COUNT
+# 458), and node-types.json is byte-identical.
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in

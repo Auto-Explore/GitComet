@@ -6,7 +6,7 @@ use crate::view::panes::main::DiffWrapVisualRow;
 fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -56,22 +56,22 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
         &view,
         "initial markdown preview cache build",
         |pane| {
-            pane.file_markdown_preview_inflight.is_none()
+            pane.diff_markdown.inflight.is_none()
                 && matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Ready(_)
                 )
         },
         |pane| {
             (
-                pane.file_markdown_preview_seq,
-                pane.file_markdown_preview_inflight,
-                pane.file_markdown_preview_cache_repo_id,
-                pane.file_markdown_preview_cache_rev,
-                pane.file_markdown_preview_cache_target.clone(),
-                pane.file_markdown_preview_cache_content_signature,
+                pane.diff_markdown.seq,
+                pane.diff_markdown.inflight,
+                pane.diff_markdown.cache_repo_id,
+                pane.diff_markdown.cache_rev,
+                pane.diff_markdown.cache_target.clone(),
+                pane.diff_markdown.cache_content_signature,
                 matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Ready(_)
                 ),
             )
@@ -79,7 +79,7 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
     );
 
     let baseline_seq =
-        cx.update(|_window, app| view.read(app).main_pane.read(app).file_markdown_preview_seq);
+        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_markdown.seq);
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
@@ -101,20 +101,20 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
         cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
             assert_eq!(
-                pane.file_markdown_preview_seq, baseline_seq,
+                pane.diff_markdown.seq, baseline_seq,
                 "identical markdown diff payload should not trigger preview rebuild when diff_file_rev changes"
             );
             assert!(
-                pane.file_markdown_preview_inflight.is_none(),
+                pane.diff_markdown.inflight.is_none(),
                 "markdown preview cache should remain ready with no background rebuild for identical payload refreshes"
             );
             assert_eq!(
-                pane.file_markdown_preview_cache_rev, rev,
+                pane.diff_markdown.cache_rev, rev,
                 "identical payload refresh should still advance the markdown cache rev marker"
             );
             assert!(
                 matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Ready(_)
                 ),
                 "markdown preview should remain ready across rev-only refreshes"
@@ -127,7 +127,7 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
 fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -194,14 +194,14 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
                     crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
                         .expect("worktree markdown diff preview should parse"),
                 ));
-                pane.file_markdown_preview_inflight = None;
+                pane.diff_markdown.inflight = None;
                 cx.notify();
             });
         });
@@ -248,7 +248,7 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 #[gpui::test]
 fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -294,17 +294,13 @@ fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppC
                 pane.diff_view = DiffViewMode::Split;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::MarkdownPreviewDiff {
-                        old,
-                        inline: new.clone(),
-                        new,
-                    },
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::MarkdownPreviewDiff::new(old, new.clone(), new),
                 ));
-                pane.file_markdown_preview_inflight = None;
+                pane.diff_markdown.inflight = None;
                 cx.notify();
             });
         });
@@ -335,7 +331,7 @@ fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppC
 fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -445,7 +441,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
     cx: &mut gpui::TestAppContext,
 ) {
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -495,13 +491,13 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
                 set_ready_worktree_preview(pane, abs_path.clone(), preview_lines, source.len(), cx);
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                pane.worktree_markdown.path = Some(abs_path.clone());
+                pane.worktree_markdown.source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
                     crate::view::markdown_preview::parse_markdown(source)
                         .expect("markdown preview should parse"),
                 ));
-                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_markdown.inflight = None;
                 cx.notify();
             });
         });
@@ -566,220 +562,11 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
 }
 
 #[gpui::test]
-fn split_markdown_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = gitcomet_state::model::RepoId(71);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_code_block_scrollbar",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/overflow.md");
-    let build_markdown = |label: &str, fill: char| {
-        let long_code = fill.to_string().repeat(160);
-        let mut out = String::from("# Guide\n");
-        for ix in 0..96 {
-            out.push_str(&format!(
-                "\n## Section {ix}\n\nParagraph {label} {ix}.\n\n```rust\nlet {label}_{ix} = \"{long_code}\";\n```\n"
-            ));
-        }
-        out
-    };
-    let old_text = build_markdown("old", 'L');
-    let new_text = build_markdown("new", 'R');
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(&workdir).expect("create markdown code block diff workdir");
-
-    seed_file_diff_state(
-        cx, &view, repo_id, &workdir, &file_rel, &old_text, &new_text,
-    );
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "markdown code block diff target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| {
-            format!(
-                "active_repo={:?} diff_target={:?}",
-                pane.active_repo().map(|repo| repo.id),
-                pane.active_repo()
-                    .and_then(|repo| repo.diff_state.diff_target.clone()),
-            )
-        },
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Split;
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::build_markdown_diff_preview(
-                        &old_text, &new_text,
-                    )
-                    .expect("markdown diff preview with overflowing code block should parse"),
-                ));
-                pane.file_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    draw_and_drain_test_window(cx);
-
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "split markdown preview scroll-sync matrix overflow",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| {
-            pane.is_markdown_preview_active()
-                && pane.diff_view == DiffViewMode::Split
-                && uniform_list_max_offset(&pane.diff_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.diff_split_right_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.diff_scroll).height > px(120.0)
-                && uniform_list_max_offset(&pane.diff_split_right_scroll).height > px(120.0)
-        },
-        |pane| {
-            format!(
-                "preview_active={} diff_view={:?} left_offset={:?} right_offset={:?} left_max={:?} right_max={:?}",
-                pane.is_markdown_preview_active(),
-                pane.diff_view,
-                uniform_list_offset(&pane.diff_scroll),
-                uniform_list_offset(&pane.diff_split_right_scroll),
-                uniform_list_max_offset(&pane.diff_scroll),
-                uniform_list_max_offset(&pane.diff_split_right_scroll),
-            )
-        },
-    );
-    assert!(
-        cx.debug_bounds("markdown_preview_code_block_hscrollbar")
-            .is_none(),
-        "expected overflowing markdown preview code blocks to rely on preview-level horizontal scrolling, not a local code-block scrollbar"
-    );
-
-    let reset_offsets = |cx: &mut gpui::VisualTestContext,
-                         view: &gpui::Entity<super::super::GitCometView>| {
-        cx.update(|_window, app| {
-            view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
-                    reset_uniform_list_offsets(&[&pane.diff_scroll, &pane.diff_split_right_scroll]);
-                    cx.notify();
-                });
-            });
-        });
-        draw_and_drain_test_window(cx);
-    };
-
-    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
-        set_diff_scroll_sync_for_test(cx, &view, mode);
-
-        for axis in ScrollSyncAxis::ALL {
-            let left_offset = axis.offset(px(72.0));
-            reset_offsets(cx, &view);
-            cx.update(|_window, app| {
-                view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(&pane.diff_scroll, left_offset);
-                        cx.notify();
-                    });
-                });
-            });
-            draw_and_drain_test_window(cx);
-
-            cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                let left = uniform_list_offset(&pane.diff_scroll);
-                let right = uniform_list_offset(&pane.diff_split_right_scroll);
-                let expected = if axis.includes(mode) {
-                    axis.component(left_offset)
-                } else {
-                    px(0.0)
-                };
-                assert_eq!(
-                    axis.component(left),
-                    axis.component(left_offset),
-                    "split markdown preview left pane should keep its {} offset in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(right),
-                    expected,
-                    "split markdown preview right pane should {} {} scrolling from the left pane in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
-                    axis.label(),
-                    mode,
-                );
-            });
-
-            let right_offset = axis.offset(px(96.0));
-            reset_offsets(cx, &view);
-            cx.update(|_window, app| {
-                view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(&pane.diff_split_right_scroll, right_offset);
-                        cx.notify();
-                    });
-                });
-            });
-            draw_and_drain_test_window(cx);
-
-            cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                let left = uniform_list_offset(&pane.diff_scroll);
-                let right = uniform_list_offset(&pane.diff_split_right_scroll);
-                let expected = if axis.includes(mode) {
-                    axis.component(right_offset)
-                } else {
-                    px(0.0)
-                };
-                assert_eq!(
-                    axis.component(right),
-                    axis.component(right_offset),
-                    "split markdown preview right pane should keep its {} offset in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(left),
-                    expected,
-                    "split markdown preview left pane should {} {} scrolling from the right pane in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
-                    axis.label(),
-                    mode,
-                );
-            });
-        }
-    }
-
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown code block diff workdir");
-}
-
-#[gpui::test]
 fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -807,11 +594,56 @@ fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
 }
 
 #[gpui::test]
+fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(74),
+        "markdown_task_checkboxes",
+        "- [ ] open\n- [x] done\n- plain\n",
+    );
+
+    let open_ix = fixture.row_ix("open");
+    let plain_ix = fixture.row_ix("plain");
+    let checkbox = cx
+        .debug_bounds(String::leak(format!("markdown_task_checkbox_{open_ix}")))
+        .expect("a task item draws a checkbox");
+    let text = cx
+        .debug_bounds(String::leak(format!("markdown_preview_text_box_{open_ix}")))
+        .expect("task text box");
+    assert!(
+        checkbox.right() <= text.left(),
+        "the box stands before the text; box={checkbox:?}, text={text:?}"
+    );
+    assert!(
+        cx.debug_bounds(String::leak(format!("markdown_task_checkbox_{plain_ix}")))
+            .is_none(),
+        "a plain item keeps its bullet"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.markdown_preview_tasks_editable(),
+            "an unstaged working-tree file is the file the click writes to"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -848,7 +680,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
 fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -999,12 +831,10 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
 }
 
 #[gpui::test]
-fn a_document_past_the_render_budget_falls_back_to_source(cx: &mut gpui::TestAppContext) {
-    // Unlike the size and parser caps, this one is recoverable: the document
-    // parsed, it is only too big to lay out at once. Leaving the reader on an
-    // empty pane with a message and a toggle to find would be worse than
-    // showing them the source.
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+fn a_document_as_long_as_the_parser_allows_renders_as_a_preview(cx: &mut gpui::TestAppContext) {
+    // A frame builds the blocks near the viewport whatever the document's
+    // length, so the preview's only limit is the parser's own.
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1016,7 +846,7 @@ fn a_document_past_the_render_budget_falls_back_to_source(cx: &mut gpui::TestApp
     ));
     let file_rel = std::path::PathBuf::from("huge.md");
     let abs_path = workdir.join(&file_rel);
-    let source = "---\n".repeat(crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS + 1);
+    let source = "---\n".repeat(crate::view::markdown_preview::MAX_PREVIEW_ROWS);
     assert!(source.len() < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -1059,67 +889,35 @@ fn a_document_past_the_render_budget_falls_back_to_source(cx: &mut gpui::TestApp
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
-            RenderedPreviewMode::Source,
-            "an over-budget document should put the reader on the source"
+            RenderedPreviewMode::Rendered,
+            "a long document stays a preview"
         );
-        let gitcomet_state::model::Loadable::Error(message) = &pane.worktree_markdown_preview
+        let gitcomet_state::model::Loadable::Ready(document) = &pane.worktree_markdown.document
         else {
             panic!(
-                "expected the preview to report why it refused, got {:?}",
-                pane.worktree_markdown_preview
+                "expected the preview, got {:?}",
+                pane.worktree_markdown.document
             );
         };
-        assert!(
-            message.contains("too large to render"),
-            "the message should name this limit, not the parser's: {message}"
+        assert_eq!(
+            document.rows.len(),
+            crate::view::markdown_preview::MAX_PREVIEW_ROWS
         );
     });
+    assert!(
+        cx.debug_bounds("markdown_preview_thematic_break_0")
+            .is_some(),
+        "its first rows are drawn"
+    );
 
     std::fs::remove_dir_all(&workdir).expect("cleanup render budget workdir");
-}
-
-#[gpui::test]
-fn the_renderer_refuses_a_document_past_its_budget(cx: &mut gpui::TestAppContext) {
-    // The builder's check is an early exit, not the only guard: a caller that
-    // hands the renderer an unbounded document still must not make the pane lay
-    // one out. Injecting the document directly is exactly that caller.
-    let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let source = "---\n".repeat(crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS + 1);
-    let fixture = RenderedPreviewFixture::open(
-        cx,
-        &view,
-        gitcomet_state::model::RepoId(88),
-        "markdown_renderer_budget",
-        &source,
-    );
-
-    assert!(
-        fixture.document.rows.len() > crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS,
-        "the fixture injects a document the builder would have refused"
-    );
-    assert!(
-        cx.debug_bounds("markdown_preview_text_box_0").is_none(),
-        "no row of an over-budget document may be laid out"
-    );
-    assert!(
-        cx.debug_bounds("worktree_markdown_preview_scroll_container")
-            .is_some(),
-        "the pane itself still renders, carrying the refusal"
-    );
-
-    fixture.cleanup();
 }
 
 #[gpui::test]
 fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1177,14 +975,14 @@ fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
         let pane = view.read(app).main_pane.read(app);
         assert!(pane.is_markdown_preview_active());
         assert!(
-            pane.worktree_markdown_preview_inflight.is_none(),
+            pane.worktree_markdown.inflight.is_none(),
             "oversized preview should fail synchronously without background parsing"
         );
-        let gitcomet_state::model::Loadable::Error(message) = &pane.worktree_markdown_preview
+        let gitcomet_state::model::Loadable::Error(message) = &pane.worktree_markdown.document
         else {
             panic!(
                 "expected oversize markdown file preview to show fallback error, got {:?}",
-                pane.worktree_markdown_preview
+                pane.worktree_markdown.document
             );
         };
         assert!(
@@ -1205,7 +1003,7 @@ fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
 fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1275,14 +1073,14 @@ fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
         let pane = view.read(app).main_pane.read(app);
         assert!(pane.is_markdown_preview_active());
         assert!(
-            pane.worktree_markdown_preview_inflight.is_none(),
+            pane.worktree_markdown.inflight.is_none(),
             "over-limit preview should fail synchronously when exact source length exceeds the markdown cap"
         );
-        let gitcomet_state::model::Loadable::Error(message) = &pane.worktree_markdown_preview
+        let gitcomet_state::model::Loadable::Error(message) = &pane.worktree_markdown.document
         else {
             panic!(
                 "expected exact-source-len markdown file preview to show fallback error, got {:?}",
-                pane.worktree_markdown_preview
+                pane.worktree_markdown.document
             );
         };
         assert!(
@@ -1305,7 +1103,7 @@ fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
 #[gpui::test]
 fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1371,10 +1169,10 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
                 pane.worktree_preview_content_rev = 9;
                 pane.worktree_preview_text = "preview".into();
                 pane.worktree_preview_line_starts = Arc::from(vec![0usize]);
-                pane.worktree_markdown_preview_path = Some(workdir.join(&preview_path));
-                pane.worktree_markdown_preview_source_rev = 9;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Loading;
-                pane.worktree_markdown_preview_inflight = Some(3);
+                pane.worktree_markdown.path = Some(workdir.join(&preview_path));
+                pane.worktree_markdown.source_rev = 9;
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Loading;
+                pane.worktree_markdown.inflight = Some(3);
                 cx.notify();
             });
         });
@@ -1391,13 +1189,13 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
                 && pane.worktree_preview_content_rev == 0
                 && pane.worktree_preview_text.is_empty()
                 && pane.worktree_preview_line_starts.is_empty()
-                && pane.worktree_markdown_preview_path.is_none()
-                && pane.worktree_markdown_preview_source_rev == 0
+                && pane.worktree_markdown.path.is_none()
+                && pane.worktree_markdown.source_rev == 0
                 && matches!(
-                    pane.worktree_markdown_preview,
+                    pane.worktree_markdown.document,
                     gitcomet_state::model::Loadable::NotLoaded
                 )
-                && pane.worktree_markdown_preview_inflight.is_none()
+                && pane.worktree_markdown.inflight.is_none()
         },
         |pane| {
             format!(
@@ -1406,11 +1204,11 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
                 pane.worktree_preview_content_rev,
                 pane.worktree_preview_text.len(),
                 pane.worktree_preview_line_starts.len(),
-                pane.worktree_markdown_preview_path,
-                pane.worktree_markdown_preview_source_rev,
-                pane.worktree_markdown_preview_inflight,
+                pane.worktree_markdown.path,
+                pane.worktree_markdown.source_rev,
+                pane.worktree_markdown.inflight,
                 matches!(
-                    pane.worktree_markdown_preview,
+                    pane.worktree_markdown.document,
                     gitcomet_state::model::Loadable::NotLoaded
                 ),
             )
@@ -1422,7 +1220,7 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
 fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1472,13 +1270,13 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
         let pane = view.read(app).main_pane.read(app);
         assert!(pane.is_markdown_preview_active());
         assert!(
-            pane.file_markdown_preview_inflight.is_none(),
+            pane.diff_markdown.inflight.is_none(),
             "oversized diff preview should fail synchronously without background parsing"
         );
-        let gitcomet_state::model::Loadable::Error(message) = &pane.file_markdown_preview else {
+        let gitcomet_state::model::Loadable::Error(message) = &pane.diff_markdown.preview else {
             panic!(
                 "expected oversize markdown diff preview to show fallback error, got {:?}",
-                pane.file_markdown_preview
+                pane.diff_markdown.preview
             );
         };
         assert!(
@@ -1496,7 +1294,7 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
 fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1543,30 +1341,30 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
         &view,
         "markdown diff preview row-limit fallback",
         |pane| {
-            pane.file_markdown_preview_inflight.is_none()
+            pane.diff_markdown.inflight.is_none()
                 && matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Error(_)
                 )
         },
         |pane| {
             (
-                pane.file_markdown_preview_seq,
-                pane.file_markdown_preview_inflight,
-                pane.file_markdown_preview_cache_repo_id,
-                pane.file_markdown_preview_cache_rev,
-                pane.file_markdown_preview_cache_target.clone(),
-                pane.file_markdown_preview_cache_content_signature,
+                pane.diff_markdown.seq,
+                pane.diff_markdown.inflight,
+                pane.diff_markdown.cache_repo_id,
+                pane.diff_markdown.cache_rev,
+                pane.diff_markdown.cache_target.clone(),
+                pane.diff_markdown.cache_content_signature,
                 matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Loading
                 ),
                 matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Ready(_)
                 ),
                 matches!(
-                    pane.file_markdown_preview,
+                    pane.diff_markdown.preview,
                     gitcomet_state::model::Loadable::Error(_)
                 ),
             )
@@ -1580,10 +1378,10 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
                 .get(RenderedPreviewKind::Markdown),
             RenderedPreviewMode::Rendered
         );
-        let gitcomet_state::model::Loadable::Error(message) = &pane.file_markdown_preview else {
+        let gitcomet_state::model::Loadable::Error(message) = &pane.diff_markdown.preview else {
             panic!(
                 "expected row-limit markdown diff preview to show fallback error, got {:?}",
-                pane.file_markdown_preview
+                pane.diff_markdown.preview
             );
         };
         assert!(
@@ -1597,11 +1395,120 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
     );
 }
 
+/// A diff each side of which the parser accepts, but whose inline form — the
+/// unchanged rows once, each changed row twice — holds more rows than one
+/// document may, so it is shown as source.
+fn inline_overflowing_markdown_diff() -> (String, String) {
+    let limit = crate::view::markdown_preview::MAX_PREVIEW_ROWS;
+    let shared: String = (0..limit / 2).map(|ix| format!("line {ix}\n\n")).collect();
+    let changed = |label: &str| -> String {
+        (0..=limit / 4)
+            .map(|ix| format!("{label} {ix}\n\n"))
+            .collect()
+    };
+    (
+        format!("{shared}{}", changed("old")),
+        format!("{shared}{}", changed("new")),
+    )
+}
+
+#[gpui::test]
+fn a_markdown_diff_too_big_to_lay_out_falls_back_to_the_text_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(97);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_diff_flow_limit",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("docs/row-limit.md");
+    let (old_text, new_text) = inline_overflowing_markdown_diff();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.clone()),
+                    Some(new_text.clone()),
+                ),
+            )));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                cx.notify();
+            });
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "markdown diff preview row-limit fallback",
+        |pane| {
+            pane.diff_markdown.inflight.is_none()
+                && matches!(
+                    pane.diff_markdown.preview,
+                    gitcomet_state::model::Loadable::Error(_)
+                )
+        },
+        |pane| {
+            (
+                pane.diff_markdown.seq,
+                pane.diff_markdown.inflight,
+                pane.diff_markdown.cache_repo_id,
+                pane.diff_markdown.cache_rev,
+                pane.diff_markdown.cache_target.clone(),
+                pane.diff_markdown.cache_content_signature,
+                matches!(
+                    pane.diff_markdown.preview,
+                    gitcomet_state::model::Loadable::Loading
+                ),
+                matches!(
+                    pane.diff_markdown.preview,
+                    gitcomet_state::model::Loadable::Ready(_)
+                ),
+                matches!(
+                    pane.diff_markdown.preview,
+                    gitcomet_state::model::Loadable::Error(_)
+                ),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        // Each side parsed, only the inline form outgrew the cap: the diff
+        // reads fine as text, so the pane goes there rather than to an error.
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Source
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1771,7 +1678,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
 fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1938,7 +1845,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 ) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1999,6 +1906,9 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                     gitcomet_core::conflict_session::ConflictRegionResolution::PickOurs;
             }
             repo.conflict_state.conflict_session = Some(session);
+            // The rendered preview parses once all three sides are loaded.
+            repo.conflict_state.conflict_file_load_mode =
+                gitcomet_state::model::ConflictFileLoadMode::Full;
 
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
@@ -2047,29 +1957,36 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "conflict markdown preview matrix overflow",
+        "conflict markdown preview columns drawn",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
+            let docs = &pane.conflict_resolver.markdown_preview.documents;
             pane.is_conflict_rendered_preview_active()
-                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
-                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
-                    > px(80.0)
+                && [&docs.base, &docs.ours, &docs.theirs]
+                    .iter()
+                    .all(|doc| matches!(doc, gitcomet_state::model::Loadable::Ready(_)))
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
-                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
-                    > px(120.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
+                    > px(80.0)
         },
         |pane| {
+            let docs = &pane.conflict_resolver.markdown_preview.documents;
             format!(
-                "preview_active={} base_offset={:?} ours_offset={:?} theirs_offset={:?} output_offset={:?} base_max={:?} ours_max={:?} theirs_max={:?} output_max={:?}",
+                "base_bounds={:?} ready={:?} preview_active={} base_max={:?} ours_max={:?} theirs_max={:?} output_max={:?}",
+                pane.conflict_resolver_diff_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .bounds(),
+                [&docs.base, &docs.ours, &docs.theirs].map(|doc| match doc {
+                    gitcomet_state::model::Loadable::Ready(doc) =>
+                        format!("rows={}", doc.rows.len()),
+                    gitcomet_state::model::Loadable::Error(e) => format!("error {e}"),
+                    _ => "pending".to_string(),
+                }),
                 pane.is_conflict_rendered_preview_active(),
-                uniform_list_offset(&pane.conflict_resolver_diff_scroll),
-                uniform_list_offset(&pane.conflict_preview_ours_scroll),
-                uniform_list_offset(&pane.conflict_preview_theirs_scroll),
-                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
                 uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_ours_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
@@ -2077,6 +1994,18 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
             )
         },
     );
+    // The long code lines scroll inside their own blocks, so no column has a
+    // sideways range for the output to drive.
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        for handle in [
+            &pane.conflict_resolver_diff_scroll,
+            &pane.conflict_preview_ours_scroll,
+            &pane.conflict_preview_theirs_scroll,
+        ] {
+            assert_eq!(uniform_list_max_offset(handle).width, px(0.0));
+        }
+    });
 
     let reset_offsets = |cx: &mut gpui::VisualTestContext,
                          view: &gpui::Entity<super::super::GitCometView>| {
@@ -2104,143 +2033,80 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
     for mode in ALL_DIFF_SCROLL_SYNC_MODES {
         set_diff_scroll_sync_for_test(cx, &view, mode);
 
-        for axis in ScrollSyncAxis::ALL {
-            let output_offset = axis.offset(px(72.0));
-            reset_offsets(cx, &view);
-            cx.update(|_window, app| {
-                view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
-                        set_scroll_handle_offset(
-                            &pane.conflict_resolved_output_editor_scroll,
-                            output_offset,
-                        );
-                        cx.notify();
-                    });
+        // Vertically the columns move together when the mode says so; the
+        // resolved output is a different document and stands on its own.
+        reset_offsets(cx, &view);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    set_uniform_list_offset(
+                        &pane.conflict_resolver_diff_scroll,
+                        point(px(0.0), px(-80.0)),
+                    );
+                    cx.notify();
                 });
             });
-            draw_and_drain_test_window(cx);
-
-            cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                // In markdown preview the columns render formatted content
-                // rather than the aligned row space, so a vertical
-                // correspondence with the output text is even less meaningful
-                // than in the code view, where it was already dropped. Only
-                // the horizontal axis stays coupled.
-                let expected = if axis.includes(mode)
-                    && matches!(axis, ScrollSyncAxis::Horizontal)
-                {
-                    axis.component(output_offset)
-                } else {
-                    px(0.0)
-                };
+        });
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            let expected = if ScrollSyncAxis::Vertical.includes(mode) {
+                px(-80.0)
+            } else {
+                px(0.0)
+            };
+            assert_eq!(
+                uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
+                px(-80.0)
+            );
+            for (label, handle) in [
+                ("ours", &pane.conflict_preview_ours_scroll),
+                ("theirs", &pane.conflict_preview_theirs_scroll),
+            ] {
                 assert_eq!(
-                    axis.component(scroll_handle_offset(
+                    uniform_list_offset(handle).y,
+                    expected,
+                    "the {label} column follows the base vertically in {mode:?} mode"
+                );
+            }
+            assert_eq!(
+                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).y,
+                px(0.0),
+                "the output does not follow the columns vertically in {mode:?} mode"
+            );
+        });
+
+        // Sideways the output scrolls on its own, and the columns, with
+        // nothing to scroll, must not pull it back.
+        reset_offsets(cx, &view);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    set_scroll_handle_offset(
                         &pane.conflict_resolved_output_editor_scroll,
-                    )),
-                    axis.component(output_offset),
-                    "conflict markdown output should keep its {} offset in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
-                    expected,
-                    "conflict markdown base preview should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) && matches!(axis, ScrollSyncAxis::Horizontal) {
-                        "sync"
-                    } else {
-                        "not sync"
-                    },
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
-                    expected,
-                    "conflict markdown ours preview should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
-                    expected,
-                    "conflict markdown theirs preview should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
-                    axis.label(),
-                    mode,
-                );
-            });
-
-            let base_offset = axis.offset(px(80.0));
-            reset_offsets(cx, &view);
-            cx.update(|_window, app| {
-                view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, base_offset);
-                        cx.notify();
-                    });
+                        point(px(-72.0), px(0.0)),
+                    );
+                    cx.notify();
                 });
             });
-            draw_and_drain_test_window(cx);
-
-            cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                let expected = if axis.includes(mode) {
-                    axis.component(base_offset)
-                } else {
-                    px(0.0)
-                };
-                // The columns share one row space and stay coupled on both
-                // axes; the resolved output is a separate document and follows
-                // only horizontally.
-                let output_expected = if axis.includes(mode)
-                    && matches!(axis, ScrollSyncAxis::Horizontal)
-                {
-                    axis.component(base_offset)
-                } else {
-                    px(0.0)
-                };
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
-                    axis.component(base_offset),
-                    "conflict markdown base preview should keep its {} offset in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
-                    expected,
-                    "conflict markdown ours preview should {} {} scrolling from the base preview in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
-                    expected,
-                    "conflict markdown theirs preview should {} {} scrolling from the base preview in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(scroll_handle_offset(
-                        &pane.conflict_resolved_output_editor_scroll,
-                    )),
-                    output_expected,
-                    "conflict markdown resolved output should {} {} scrolling from the base preview in {:?} mode",
-                    if axis.includes(mode) && matches!(axis, ScrollSyncAxis::Horizontal) {
-                        "sync"
-                    } else {
-                        "not sync"
-                    },
-                    axis.label(),
-                    mode,
-                );
-            });
-        }
+        });
+        draw_and_drain_test_window(cx);
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).x,
+                px(-72.0),
+                "the output keeps its sideways scroll in {mode:?} mode"
+            );
+            for handle in [
+                &pane.conflict_resolver_diff_scroll,
+                &pane.conflict_preview_ours_scroll,
+                &pane.conflict_preview_theirs_scroll,
+            ] {
+                assert_eq!(uniform_list_offset(handle).x, px(0.0));
+            }
+        });
     }
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict markdown matrix fixture");
@@ -2249,7 +2115,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 #[gpui::test]
 fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2338,11 +2204,11 @@ fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::
                 );
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview =
+                pane.worktree_markdown.path = Some(abs_path.clone());
+                pane.worktree_markdown.source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown.document =
                     gitcomet_state::model::Loadable::Ready(Arc::new(document));
-                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_markdown.inflight = None;
                 cx.notify();
             });
         });
@@ -2357,21 +2223,6 @@ fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::
         }
     };
     draw(cx);
-
-    // The single document lays out as flowing text, so it wraps by itself and
-    // never builds the visual-row plan the diff preview's fixed row grid needs.
-    assert_eq!(
-        cx.update(|_window, app| {
-            view.update(app, |this, cx| {
-                this.main_pane
-                    .read(cx)
-                    .markdown_preview_wrap
-                    .plan_len(MarkdownPreviewList::Worktree)
-            })
-        }),
-        None,
-        "the flowing preview must not build a wrap plan"
-    );
 
     let container_bounds = cx
         .debug_bounds("worktree_markdown_preview_scroll_container")
@@ -2402,7 +2253,7 @@ fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let pane = this.main_pane.read(cx);
-            let document = match &pane.worktree_markdown_preview {
+            let document = match &pane.worktree_markdown.document {
                 gitcomet_state::model::Loadable::Ready(document) => Arc::clone(document),
                 other => panic!("expected a ready preview document, got {other:?}"),
             };
@@ -2482,7 +2333,7 @@ impl RenderedPreviewFixture {
         let workdir = open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
         let document = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            match &pane.worktree_markdown_preview {
+            match &pane.worktree_markdown.document {
                 gitcomet_state::model::Loadable::Ready(document) => Arc::clone(document),
                 other => panic!("expected a ready preview, got {other:?}"),
             }
@@ -2579,13 +2430,13 @@ fn open_rendered_markdown_preview(
                 );
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                pane.worktree_markdown.path = Some(abs_path.clone());
+                pane.worktree_markdown.source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
                     crate::view::markdown_preview::parse_markdown(source)
                         .expect("preview fixture parses"),
                 ));
-                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_markdown.inflight = None;
                 cx.notify();
             });
         });
@@ -2608,7 +2459,7 @@ fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestApp
     // gate reading the wrong coordinate space would reject visible rows and
     // silently stop selection working in any scrolled preview.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2685,7 +2536,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
     // picture stopping propagation the click opens the menu *and* starts a
     // drag-selection behind it.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2746,9 +2597,68 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let source = "[![one](badge.svg)](https://example.com/badge)\n[![two](badge.svg)](https://example.com/other)\n";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8832),
+        "markdown_ctrl_click_badge",
+        source,
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/badge.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"20\"><rect width=\"80\" height=\"20\"/></svg>",
+    )
+    .expect("write the badge the link points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a picture");
+    let badge = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{source_byte}"
+        )))
+        .expect("the badge is drawn");
+    crate::view::panes::main::take_opened_web_links_for_tests();
+
+    simulate_modified_click(cx, badge.center(), 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+
+    assert_eq!(
+        crate::view::panes::main::take_opened_web_links_for_tests(),
+        vec!["https://example.com/badge".to_string()],
+        "Ctrl/Cmd+click follows the link the badge wraps"
+    );
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(popover.is_none(), "without a menu, got {popover:?}");
+        assert!(
+            !this.main_pane.read(app).diff_text_selecting,
+            "and without arming a selection"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2787,8 +2697,8 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
         )))
         .expect("Ask mode draws the linked image's Retry control");
 
-    // Mouse-down belongs to the enclosing link wrapper, so it opens a menu
-    // before the nested Retry control can receive a complete click.
+    // The linked image is one action: its completed click opens a menu with
+    // navigation and image approval; the retry icon is part of that action.
     simulate_counted_click(cx, retry.center(), 1);
     cx.run_until_parked();
     cx.update(|_window, app| {
@@ -2814,9 +2724,10 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
         .debug_bounds("context_menu_load_image")
         .expect("a linked blocked image menu offers Load image")
         .center();
-    cx.simulate_mouse_move(
+    cx.simulate_mouse_move(load_image, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
         load_image,
-        Some(gpui::MouseButton::Left),
+        gpui::MouseButton::Left,
         gpui::Modifiers::default(),
     );
     cx.simulate_event(gpui::MouseUpEvent {
@@ -2829,15 +2740,17 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         let main_pane = view.read(app).main_pane.read(app);
-        assert_eq!(main_pane.approved_remote_markdown_image_urls.len(), 1);
+        assert_eq!(main_pane.remote_markdown_images.approved_urls.len(), 1);
         assert!(
             main_pane
-                .approved_remote_markdown_image_urls
+                .remote_markdown_images
+                .approved_urls
                 .contains(first_image_url)
         );
         assert!(
             !main_pane
-                .approved_remote_markdown_image_urls
+                .remote_markdown_images
+                .approved_urls
                 .contains(second_image_url),
             "Load image must approve only the image represented by the menu"
         );
@@ -2872,7 +2785,7 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
     );
     cx.update(|_window, app| {
         let main_pane = view.read(app).main_pane.read(app);
-        assert!(main_pane.approved_remote_markdown_image_urls.is_empty());
+        assert!(main_pane.remote_markdown_images.approved_urls.is_empty());
         let popover = view
             .read(app)
             .popover_host
@@ -2897,7 +2810,7 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
     // the section break under it comes back as the blank line it looks like.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2948,7 +2861,7 @@ fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::Tes
     // and that list took the file's line count as its length — so the Word wrap
     // toggle had nothing to act on and a long line just ran off the pane.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3035,13 +2948,128 @@ fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn source_mode_selection_highlights_whole_lines_after_a_wrapped_paragraph(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Once a paragraph wraps, row positions run ahead of line numbers. A row
+    // that does not wrap must still be measured by its own line, or the
+    // highlight stops at another line's width and blank lines get none.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long = "wrap this sentence over several rows ".repeat(12);
+    let source = format!(
+        "{long}\n\n| Badge | Git code | Meaning |\n| --- | --- | --- |\n\
+         | **Verified** | `G` | Good signature from a trusted key. |\n\
+         | **Untrusted key** | `U` | See [Trust a GPG key](#trust-a-gpg-key). |\n\
+         \n| **Bad** | `B` | Mismatch. |\nTail."
+    );
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(85),
+        "markdown_source_wrapped_selection",
+        &source,
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
+                pane.diff_word_wrap = true;
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let lines: Vec<&str> = source.lines().collect();
+    let last_ix = lines.len() - 1;
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                assert!(
+                    pane.worktree_preview_wrap_active(),
+                    "the fixture must be wrapping"
+                );
+                // From the table header through the line before the last.
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    source_visible_ix: 2,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    source_visible_ix: last_ix,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.diff_text_selection_owner.adopt(window, cx);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let rows = pane
+            .worktree_preview_visible_len()
+            .expect("the list has rows");
+        assert!(rows > lines.len(), "the paragraph wraps over several rows");
+        for visible_ix in 0..rows {
+            let line_ix = pane
+                .diff_source_visible_ix_for_visible_ix(visible_ix)
+                .expect("every row maps to a line");
+            if !(2..last_ix).contains(&line_ix) {
+                continue;
+            }
+            // A blank line has nothing to highlight, with or without wrap.
+            let line_len = lines[line_ix].len();
+            assert_eq!(
+                pane.diff_text_local_selection_range(visible_ix, DiffTextRegion::Inline),
+                (line_len > 0).then_some(0..line_len),
+                "row {visible_ix} (line {line_ix}: {:?}) is selected end to end",
+                lines[line_ix]
+            );
+        }
+    });
+
+    // Select All ends at the end of the last line, whatever row it sits on.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.select_all_diff_text(window, cx);
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_text_head,
+            Some(DiffTextPos {
+                source_visible_ix: last_ix,
+                region: DiffTextRegion::Inline,
+                offset: lines[last_ix].len(),
+            }),
+            "Select All reaches the end of the file"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn source_mode_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::TestAppContext) {
     // The trap this repeats from the diff: the rows are painted in the editor
     // font, but the wrap width is worked out while the ambient UI font is still
     // current. Measuring the wrong face gives the wrong column count, and every
     // wrapped row lands short or runs past the pane.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3118,7 +3146,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
     // blank line the author wrote.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3188,7 +3216,7 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
     // has to say so or the reader cannot tell it happened.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3234,7 +3262,12 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
         .debug_bounds("context_menu_copy_link_address")
         .expect("the link menu offers copying the address")
         .center();
-    // Menu entries fire on release.
+    // Menu entries require their own completed click.
+    cx.simulate_mouse_down(
+        copy_entry,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     cx.simulate_mouse_move(
         copy_entry,
         Some(gpui::MouseButton::Left),
@@ -3267,30 +3300,15 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
     fixture.cleanup();
 }
 
-#[gpui::test]
-fn a_wide_table_scrolls_while_a_narrow_one_still_spans_the_pane(cx: &mut gpui::TestAppContext) {
-    // A table sizes to its content for the same reason a code block does, so a
-    // wide one has somewhere to scroll — but a narrow one must not shrink away
-    // from the pane it used to fill.
-    let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
+fn cell_box(cx: &mut gpui::VisualTestContext, row_ix: usize, column: usize) -> Bounds<Pixels> {
+    cx.debug_bounds(leaked_selector(format!(
+        "markdown_preview_cell_box_{row_ix}_{column}"
+    )))
+    .unwrap_or_else(|| panic!("cell {column} of row {row_ix} is drawn"))
+}
 
-    let wide_cell = "w".repeat(200);
-    let source = format!(
-        "| a | b |\n| --- | --- |\n| c | d |\n\n| {wide_cell} | {wide_cell} |\n| --- | --- |\n| e | f |\n"
-    );
-    let fixture = RenderedPreviewFixture::open(
-        cx,
-        &view,
-        gitcomet_state::model::RepoId(90),
-        "markdown_table_scroll",
-        &source,
-    );
-
-    let first_rows: Vec<usize> = fixture
+fn table_row_ixs(fixture: &RenderedPreviewFixture) -> Vec<usize> {
+    fixture
         .document
         .rows
         .iter()
@@ -3298,37 +3316,182 @@ fn a_wide_table_scrolls_while_a_narrow_one_still_spans_the_pane(cx: &mut gpui::T
         .filter(|(_, row)| {
             matches!(
                 row.kind,
-                crate::view::markdown_preview::MarkdownPreviewRowKind::TableRow { is_header: true }
+                crate::view::markdown_preview::MarkdownPreviewRowKind::TableRow { .. }
             )
         })
         .map(|(ix, _)| ix)
-        .collect();
-    assert_eq!(first_rows.len(), 2, "the fixture has two tables");
+        .collect()
+}
 
+#[gpui::test]
+fn a_table_is_a_grid_whose_long_cells_wrap_inside_the_pane(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long_note = "a note that goes on ".repeat(30);
+    let source = format!(
+        "| Name | Notes | Count |\n|:--|---|--:|\n| a | short | 1 |\n| bb | {long_note}| 22 |\n| ccc | x | 333 |\n"
+    );
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(91),
+        "markdown_table_grid",
+        &source,
+    );
+    let rows = table_row_ixs(&fixture);
+    assert_eq!(rows.len(), 4);
+    assert!(
+        cx.debug_bounds("markdown_preview_block_change_bar")
+            .is_none(),
+        "a file that is not being diffed has no change bars"
+    );
+
+    // Every row's cells sit in the same columns.
+    for column in 0..3 {
+        let lefts: Vec<Pixels> = rows
+            .iter()
+            .map(|row| cell_box(cx, *row, column).left())
+            .collect();
+        assert!(
+            lefts.windows(2).all(|pair| pair[0] == pair[1]),
+            "column {column} lines up: {lefts:?}"
+        );
+    }
+    // The long cell wraps, so its row grows, and every cell of that row
+    // stretches with it; the table still fits the pane.
+    let short = cell_box(cx, rows[1], 1);
+    let long = cell_box(cx, rows[2], 1);
+    assert!(
+        long.size.height > short.size.height * 2.0,
+        "the long note wraps over several lines: {long:?} vs {short:?}"
+    );
+    assert_eq!(cell_box(cx, rows[2], 0).size.height, long.size.height);
     let container = cx
         .debug_bounds("worktree_markdown_preview_scroll_container")
         .expect("expected the preview container");
-    let narrow = cx
-        .debug_bounds(leaked_selector(format!(
-            "markdown_preview_row_box_{}",
-            first_rows[0]
-        )))
-        .expect("the narrow table's header row");
-    let wide = cx
-        .debug_bounds(leaked_selector(format!(
-            "markdown_preview_row_box_{}",
-            first_rows[1]
-        )))
-        .expect("the wide table's header row");
-
     assert!(
-        wide.size.width > container.size.width,
-        "the wide table must exceed the pane so it can scroll; \
-         table={wide:?} container={container:?}"
+        cell_box(cx, rows[2], 2).right() <= container.right(),
+        "a wrapped table fits the pane"
+    );
+
+    // `--:` puts the count against the right edge of its cell; `:--` keeps
+    // the name at the left.
+    let text_box = |cx: &mut gpui::VisualTestContext, row: usize, column: usize| {
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_text_box_{row}_{column}"
+        )))
+        .expect("cell text")
+    };
+    let pad = |cx: &mut gpui::VisualTestContext, row: usize, column: usize| {
+        (
+            text_box(cx, row, column).left() - cell_box(cx, row, column).left(),
+            cell_box(cx, row, column).right() - text_box(cx, row, column).right(),
+        )
+    };
+    let (name_left, name_right) = pad(cx, rows[1], 0);
+    assert!(name_left < name_right, "left-aligned `a` hugs the left");
+    let (count_left, count_right) = pad(cx, rows[1], 2);
+    assert!(count_left > count_right, "right-aligned `1` hugs the right");
+    assert_eq!(
+        text_box(cx, rows[1], 2).right(),
+        text_box(cx, rows[3], 2).right(),
+        "right-aligned values end at the same x"
+    );
+    let (header_left, header_right) = pad(cx, rows[0], 0);
+    assert!(
+        (header_left - header_right).abs() <= px(1.0),
+        "headers are centred"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_table_hugs_its_columns_and_a_long_word_breaks_inside_the_pane(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let wide_cell = "w".repeat(200);
+    let source = format!(
+        "| a | b |\n| --- | --- |\n| c | d |\n\n| {wide_cell} | x |\n| --- | --- |\n| e | f |\n"
+    );
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(92),
+        "markdown_table_scroll",
+        &source,
+    );
+    let rows = table_row_ixs(&fixture);
+    let container = cx
+        .debug_bounds("worktree_markdown_preview_scroll_container")
+        .expect("expected the preview container");
+
+    let narrow_right = cell_box(cx, rows[0], 1).right();
+    assert!(
+        narrow_right < container.left() + container.size.width / 2.0,
+        "a small table is as wide as its columns, not the pane"
+    );
+    let wide = cell_box(cx, rows[2], 0);
+    assert!(
+        wide.right() <= container.right(),
+        "a word longer than the pane breaks inside its cell rather than widening the page"
     );
     assert!(
-        narrow.size.width <= container.size.width,
-        "and the narrow one must not; table={narrow:?} container={container:?}"
+        wide.size.height > cell_box(cx, rows[0], 0).size.height,
+        "so the cell grows downwards"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn dragging_across_table_cells_copies_tab_separated_rows(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(93),
+        "markdown_table_copy",
+        "| Key | Value |\n| --- | --- |\n| one | first |\n| two | second |\n",
+    );
+    let rows = table_row_ixs(&fixture);
+    let start = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_text_box_{}_0",
+            rows[0]
+        )))
+        .expect("header key text");
+    let end = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_text_box_{}_1",
+            rows[2]
+        )))
+        .expect("last value text");
+    drag_preview_selection(
+        cx,
+        point(start.left() + px(1.0), start.center().y),
+        // Just past the last word, as a drag to the end of a cell ends.
+        point(end.right() + px(3.0), end.center().y),
+    );
+
+    assert_eq!(
+        copied_preview_selection(cx, &view).as_deref(),
+        Some("Key\tValue\none\tfirst\ntwo\tsecond"),
+        "cells copy as tab-separated values, one line per row"
     );
 
     fixture.cleanup();
@@ -3341,7 +3504,7 @@ fn a_code_block_wider_than_the_pane_gets_a_scrollbar(cx: &mut gpui::TestAppConte
     // horizontal wheel. The bar is drawn for every block, but only has a thumb
     // where there is somewhere to scroll to.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3388,7 +3551,8 @@ fn a_code_block_wider_than_the_pane_gets_a_scrollbar(cx: &mut gpui::TestAppConte
             .read(app)
             .main_pane
             .read(app)
-            .worktree_markdown_preview_block_scrolls
+            .worktree_markdown
+            .block_scrolls
             .clone();
         let narrow = scrolls
             .max_scroll_for_tests(first_rows[0])
@@ -3416,7 +3580,7 @@ fn a_code_block_does_not_swallow_the_page_scroll(cx: &mut gpui::TestAppContext) 
     // block that only scrolls sideways would take the page's scroll the moment
     // the pointer crossed it and the document would stop moving.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3507,7 +3671,7 @@ fn markdown_preview_code_blocks_scroll_independently(cx: &mut gpui::TestAppConte
     // clipped, and each block holds its own offset — which is what the per-block
     // element id is for. A shared id made them scroll as one.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3598,7 +3762,7 @@ fn markdown_preview_draws_an_inline_picture_beside_its_heading(cx: &mut gpui::Te
     // the kind of constraint that can collapse to zero without any parse-level
     // assertion noticing.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3655,7 +3819,7 @@ fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::Te
     // with text has to fit into the line rather than take a block of its own.
     // Its rows still have to draw.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3767,7 +3931,7 @@ fn markdown_preview_selection_highlights_every_line_of_a_wrapped_row(
     // every quad on the first visual line, or steps them by the wrong amount,
     // is invisible to every other assertion in this file.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3842,7 +4006,7 @@ fn markdown_preview_selection_paints_over_inline_code_backgrounds(cx: &mut gpui:
     // background after the selection quad, the selected part of the code span
     // looks unselected even though copy and selection geometry are correct.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3893,7 +4057,7 @@ fn a_partial_wrapped_selection_starts_and_ends_where_the_drag_did(cx: &mut gpui:
     // that starts and ends mid-line is where the first and last quads have to
     // be measured rather than assumed.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4006,7 +4170,7 @@ fn copied_preview_selection(
 fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4099,7 +4263,7 @@ fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpu
 fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4196,7 +4360,7 @@ fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui
 fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4282,6 +4446,21 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
         ),
         "the aligned new column should have the same spacer boundary"
     );
+    // The flowing split draws the gap before each band; the heading's band is
+    // the one whose gap separates it from the paragraph above.
+    let heading_band = preview
+        .bands
+        .iter()
+        .position(|band| band.rows.contains(&middle_ix))
+        .expect("the heading has a band");
+    let band_start = preview.bands[heading_band].rows.start;
+    let below_band_start = preview
+        .bands
+        .iter()
+        .find(|band| band.rows.contains(&below_ix))
+        .expect("the last paragraph has a band")
+        .rows
+        .start;
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create split Markdown gap workdir");
@@ -4307,12 +4486,12 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
                 pane.diff_view = DiffViewMode::Split;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview =
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview =
                     gitcomet_state::model::Loadable::Ready(Arc::new(preview));
-                pane.file_markdown_preview_inflight = None;
+                pane.diff_markdown.inflight = None;
                 cx.notify();
             });
             this.set_diff_word_wrap(false, cx);
@@ -4324,14 +4503,16 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     let left_gap = cx
         .debug_bounds(leaked_selector(format!(
-            "markdown_preview_gap_SplitLeft_{gap_ix}"
+            "markdown_preview_block_gap_{}",
+            heading_band * 2
         )))
-        .expect("interactive spacer in the old split column");
+        .expect("interactive gap in the old split column");
     let right_gap = cx
         .debug_bounds(leaked_selector(format!(
-            "markdown_preview_gap_SplitRight_{gap_ix}"
+            "markdown_preview_block_gap_{}",
+            heading_band * 2 + 1
         )))
-        .expect("interactive spacer in the new split column");
+        .expect("interactive gap in the new split column");
     assert!(
         left_gap.right() <= right_gap.left(),
         "each gap must remain inside its own split column: left={left_gap:?} right={right_gap:?}"
@@ -4341,7 +4522,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let boundary = DiffTextPos {
-            source_visible_ix: gap_ix,
+            source_visible_ix: band_start,
             region: DiffTextRegion::SplitRight,
             offset: 0,
         };
@@ -4353,7 +4534,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let boundary = DiffTextPos {
-            source_visible_ix: gap_ix,
+            source_visible_ix: band_start,
             region: DiffTextRegion::SplitLeft,
             offset: 0,
         };
@@ -4487,10 +4668,12 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     cx.simulate_click(before_list_bottom_padding, Modifiers::default());
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
+        // Below the paragraph is the gap before the list's band, which opens
+        // at the list: the same boundary, seen from the other side.
         let boundary = DiffTextPos {
-            source_visible_ix: before_list_ix,
+            source_visible_ix: list_ix,
             region: DiffTextRegion::SplitLeft,
-            offset: "Paragraph before list.".len(),
+            offset: 0,
         };
         assert_eq!(pane.diff_text_anchor, Some(boundary));
         assert_eq!(pane.diff_text_head, Some(boundary));
@@ -4514,10 +4697,11 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     cx.simulate_click(list_bottom_padding, Modifiers::default());
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
+        // As above: the gap below the list opens the next band.
         let boundary = DiffTextPos {
-            source_visible_ix: list_ix,
+            source_visible_ix: below_band_start,
             region: DiffTextRegion::SplitLeft,
-            offset: "shared item".len(),
+            offset: 0,
         };
         assert_eq!(pane.diff_text_anchor, Some(boundary));
         assert_eq!(pane.diff_text_head, Some(boundary));
@@ -4566,7 +4750,7 @@ fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppCon
     // reader was left with whatever they had already covered.
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4617,13 +4801,12 @@ fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppContext) {
-    // An image block occupies as many rows as it is tall, and every one of them
-    // carries the alt text so the row grid can describe a picture it cannot
-    // draw. Copying walks rows, so a selection that crossed a picture used to
-    // repeat its description once per row.
+    // A picture's row carries its alt text, which is what copying a selection
+    // across it writes: once. (It was cut into eight bands for a fixed-row
+    // renderer, and copy repeated the description per band.)
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4642,8 +4825,8 @@ fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppCo
             .iter()
             .filter(|row| row.text.as_ref() == "demo")
             .count()
-            > 1,
-        "the fixture needs a picture spread over several rows"
+            == 1,
+        "the picture is one row"
     );
 
     let above = cx
@@ -4668,7 +4851,7 @@ fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppCo
     let copied = copied_preview_selection(cx, &view).expect("the drag should have selected text");
     assert_eq!(
         copied, "Above.\ndemo\nBelow.",
-        "a picture is one line of the document however many rows it occupies"
+        "a picture is one line of the document"
     );
 
     fixture.cleanup();
@@ -4683,7 +4866,7 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
     // remove it. The decode itself is too fast to catch mid-flight in a test,
     // so the skeleton is measured through its own unit test instead.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4730,7 +4913,7 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4793,15 +4976,17 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
     cx.update(|_window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
-            assert_eq!(pane.approved_remote_markdown_image_urls.len(), 1);
+            assert_eq!(pane.remote_markdown_images.approved_urls.len(), 1);
             assert!(
-                pane.approved_remote_markdown_image_urls
+                pane.remote_markdown_images
+                    .approved_urls
                     .contains("https://example.invalid/tracking.png"),
                 "clicking Retry should approve only that image's exact URL"
             );
             assert!(
                 !pane
-                    .approved_remote_markdown_image_urls
+                    .remote_markdown_images
+                    .approved_urls
                     .contains("https://example.invalid/other.png")
             );
             pane.set_remote_markdown_image_policy(
@@ -4809,7 +4994,7 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
                 cx,
             );
             assert!(
-                pane.approved_remote_markdown_image_urls.is_empty(),
+                pane.remote_markdown_images.approved_urls.is_empty(),
                 "changing policy should clear preview-scoped approvals"
             );
         });
@@ -4836,7 +5021,7 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
 
 #[gpui::test]
 fn markdown_image_access_snapshots_share_approved_url_storage(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4855,7 +5040,7 @@ fn markdown_image_access_snapshots_share_approved_url_storage(cx: &mut gpui::Tes
 #[gpui::test]
 fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4897,7 +5082,7 @@ fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui
 fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -4953,7 +5138,7 @@ fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestApp
 fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5011,7 +5196,7 @@ fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui:
 fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5120,7 +5305,7 @@ fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::Tes
 fn markdown_below_eof_resolves_after_a_trailing_thematic_break(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5199,7 +5384,7 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     // decode finished and holds an empty slot. The pane waits on its own
     // pictures instead of relying on that.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5225,7 +5410,7 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
-            !pane.worktree_markdown_preview_image_waits.is_empty(),
+            !pane.worktree_markdown.image_waits.is_empty(),
             "a picture that has not decoded yet needs something waiting to repaint the pane"
         );
     });
@@ -5235,7 +5420,7 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
-            pane.worktree_markdown_preview_image_waits.is_empty(),
+            pane.worktree_markdown.image_waits.is_empty(),
             "and the wait is released once the picture has been decided one way or the other"
         );
     });
@@ -5251,7 +5436,7 @@ fn markdown_preview_hit_testing_follows_a_row_onto_its_wrapped_lines(
     // two dimensions. Reading only the x offset along one shaped line put the
     // caret near the start of the row wherever the reader clicked low and left.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5302,7 +5487,7 @@ fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5346,139 +5531,218 @@ fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
     fixture.cleanup();
 }
 
-#[gpui::test]
-fn split_markdown_diff_word_wrap_keeps_both_columns_row_aligned(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = gitcomet_state::model::RepoId(76);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_split_word_wrap",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/split-wrap.md");
-    // One side has a paragraph far wider than the column, the other a short
-    // one at the same aligned row, so wrapping the columns independently
-    // would slide the left side out of step with the right.
-    let old_text = format!(
-        "# Guide\n\n{}\n\nshared tail\n",
-        "old side text that has to wrap several times ".repeat(20)
-    );
-    let new_text = "# Guide\n\nshort\n\nshared tail\n".to_string();
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(&workdir).expect("create markdown split wrap workdir");
-
-    seed_file_diff_state(
-        cx, &view, repo_id, &workdir, &file_rel, &old_text, &new_text,
-    );
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "markdown split wrap target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| {
-            format!(
-                "active_repo={:?} diff_target={:?}",
-                pane.active_repo().map(|repo| repo.id),
-                pane.active_repo()
-                    .and_then(|repo| repo.diff_state.diff_target.clone()),
-            )
-        },
-    );
-
+/// Show `old`/`new` as the rendered markdown diff in `mode`.
+fn open_rendered_markdown_diff_in(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    name: &str,
+    old_text: &str,
+    new_text: &str,
+    mode: DiffViewMode,
+) -> std::path::PathBuf {
+    let workdir = open_rendered_markdown_diff(cx, view, repo_id, name, old_text, new_text);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Split;
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::build_markdown_diff_preview(
-                        &old_text, &new_text,
-                    )
-                    .expect("markdown split diff preview should parse"),
-                ));
-                pane.file_markdown_preview_inflight = None;
+                pane.diff_view = mode;
                 cx.notify();
             });
-            this.set_diff_word_wrap(true, cx);
         });
     });
-
     for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
+        draw_and_drain_test_window(cx);
     }
+    workdir
+}
 
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let pane = this.main_pane.read(cx);
-            let old_len = pane
-                .markdown_preview_wrap
-                .plan_len(MarkdownPreviewList::Old)
-                .expect("old column wrap plan");
-            let new_len = pane
-                .markdown_preview_wrap
-                .plan_len(MarkdownPreviewList::New)
-                .expect("new column wrap plan");
-
-            assert_eq!(
-                old_len, new_len,
-                "split columns must render the same number of visual rows"
-            );
-
-            let old_plan = pane
-                .markdown_preview_wrap
-                .plan(MarkdownPreviewList::Old)
-                .expect("old plan");
-            let new_plan = pane
-                .markdown_preview_wrap
-                .plan(MarkdownPreviewList::New)
-                .expect("new plan");
-            let mut saw_wrapped_row = false;
-            for visual_ix in 0..old_len {
-                let old_visual = old_plan.get(visual_ix).expect("old visual row");
-                let new_visual = new_plan.get(visual_ix).expect("new visual row");
-                assert_eq!(
-                    (old_visual.row_ix, old_visual.wrap_ix),
-                    (new_visual.row_ix, new_visual.wrap_ix),
-                    "visual row {visual_ix} must show the same aligned source row on both sides"
-                );
-                saw_wrapped_row |= old_visual.is_continuation();
-            }
-            assert!(
-                saw_wrapped_row,
-                "fixture should wrap at least one row; old_len={old_len}"
-            );
-        });
-    });
-
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown split wrap workdir");
+fn row_ix_with_text(
+    doc: &crate::view::markdown_preview::MarkdownPreviewDocument,
+    text: &str,
+) -> usize {
+    doc.rows
+        .iter()
+        .position(|row| row.text.as_ref() == text)
+        .unwrap_or_else(|| panic!("no row reads {text:?}"))
 }
 
 #[gpui::test]
-fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui::TestAppContext) {
+fn split_markdown_diff_leaves_blank_space_so_both_sides_stay_lined_up(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
+
+    let long = "a replacement paragraph that is far longer than the one it replaces ".repeat(8);
+    let old_text = "Intro.\n\nShort.\n\n- one\n- two\n\nEnd.\n";
+    let new_text = format!(
+        "Intro.\n\n{}\n\n- one\n- two\n- three\n\nEnd.\n",
+        long.trim_end()
+    );
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(94),
+        "markdown_split_bands",
+        old_text,
+        &new_text,
+        DiffViewMode::Split,
+    );
+
+    let (old_end, new_end) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        (
+            row_ix_with_text(&preview.old, "End."),
+            row_ix_with_text(&preview.new, "End."),
+        )
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left = pane
+            .diff_text_hitbox_bounds_for_tests(old_end, DiffTextRegion::SplitLeft)
+            .expect("old End. is drawn");
+        let right = pane
+            .diff_text_hitbox_bounds_for_tests(new_end, DiffTextRegion::SplitRight)
+            .expect("new End. is drawn");
+        assert_eq!(
+            left.top(),
+            right.top(),
+            "the long paragraph and the extra list item are matched by blank space on the old side"
+        );
+        assert!(
+            left.right() <= right.left(),
+            "old on the left, new on the right"
+        );
+    });
+
+    assert!(
+        cx.debug_bounds("markdown_preview_block_change_bar")
+            .is_some(),
+        "the wholly replaced paragraph is marked down its side"
+    );
+
+    // One scroller carries both sides.
+    let document = cx
+        .debug_bounds("diff_markdown_preview_document")
+        .expect("the flowing diff scrolls as one document");
+    assert!(document.size.height > px(0.0));
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn markdown_diff_scrollbar_markers_sit_where_the_change_is_drawn(cx: &mut gpui::TestAppContext) {
+    // By row count the change is near the end: one long paragraph follows it.
+    // Drawn, that paragraph wraps into many lines, so the change is mid-way.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(400.0)));
+
+    let short: String = (0..20).map(|ix| format!("Line {ix}.\n\n")).collect();
+    let long = "a paragraph long enough to wrap over a great many lines ".repeat(60);
+    let old_text = format!("{short}Before.\n\n{long}\n");
+    let new_text = format!("{short}After.\n\n{long}\n");
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(96),
+        "markdown_diff_markers",
+        &old_text,
+        &new_text,
+        DiffViewMode::Split,
+    );
+
+    let markers = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview
+            else {
+                panic!("the preview is ready");
+            };
+            let preview = Arc::clone(preview);
+            let scroll = pane.diff_scroll.0.borrow().base_handle.clone();
+            pane.markdown_diff_scrollbar_markers(&preview, &scroll, window, cx)
+        })
+    });
+    assert!(!markers.is_empty(), "the change is marked");
+    assert!(
+        markers.iter().all(|marker| marker.start < 0.75),
+        "a row count would put it near the end; drawn, it is mid-way: {markers:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn inline_markdown_diff_shows_the_removed_version_before_the_added_one(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
+
+    let old_text = "Intro.\n\n| A | B |\n|---|---|\n| 1 | old |\n\nEnd.\n";
+    let new_text = "Intro.\n\n| A | B |\n|---|---|\n| 1 | new |\n\nEnd.\n";
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(95),
+        "markdown_inline_bands",
+        old_text,
+        new_text,
+        DiffViewMode::Inline,
+    );
+
+    let (removed, added) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        (
+            row_ix_with_text(&preview.inline, "1\told"),
+            row_ix_with_text(&preview.inline, "1\tnew"),
+        )
+    });
+    assert_eq!(
+        removed + 1,
+        added,
+        "the old row sits right above its replacement"
+    );
+    // Both rows are cells of one table grid, so they share its columns.
+    let removed_cell = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_box_{removed}_1"
+        )))
+        .expect("removed row drawn as table cells");
+    let added_cell = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_box_{added}_1"
+        )))
+        .expect("added row drawn as table cells");
+    assert_eq!(removed_cell.left(), added_cell.left());
+    assert!(removed_cell.bottom() <= added_cell.top() + px(1.0));
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn split_markdown_eof_ignores_trailing_alignment_padding(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5540,12 +5804,12 @@ fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui:
                 pane.diff_view = DiffViewMode::Split;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview =
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview =
                     gitcomet_state::model::Loadable::Ready(Arc::new(preview));
-                pane.file_markdown_preview_inflight = None;
+                pane.diff_markdown.inflight = None;
                 cx.notify();
             });
             this.set_diff_word_wrap(true, cx);
@@ -5555,21 +5819,9 @@ fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui:
         draw_and_drain_test_window(cx);
     }
 
-    let old_tail_visual_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let plan = pane
-            .markdown_preview_wrap
-            .plan(MarkdownPreviewList::Old)
-            .expect("old split wrap plan");
-        let visible_ix = plan.visual_ix_for_row(old_tail_row_ix);
-        assert!(
-            plan.rows[visible_ix + 1..]
-                .iter()
-                .all(|visual| visual.byte_range.is_empty()),
-            "everything after the old tail should be synthetic empty padding"
-        );
-        visible_ix
-    });
+    // The flowing split addresses document rows: the padding after the tail
+    // draws nothing, so the tail is the old side's last row.
+    let old_tail_visual_ix = old_tail_row_ix;
     let empty_space = cx
         .debug_bounds("diff_text_empty_space_SplitLeft")
         .expect("old split column below-EOF surface");
@@ -5609,7 +5861,7 @@ fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui:
 #[gpui::test]
 fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5673,11 +5925,11 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
                 );
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview =
+                pane.worktree_markdown.path = Some(abs_path.clone());
+                pane.worktree_markdown.source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown.document =
                     gitcomet_state::model::Loadable::Ready(Arc::new(document));
-                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_markdown.inflight = None;
                 cx.notify();
             });
             // A text diff viewed earlier with wrap on leaves its own visual-row
@@ -5741,7 +5993,7 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
 #[gpui::test]
 fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5820,12 +6072,1089 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
 }
 
 #[gpui::test]
+fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8827),
+        "markdown_ctrl_click_web_link",
+        "[the docs](https://example.com/docs)\n",
+    );
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+    crate::view::panes::main::take_opened_web_links_for_tests();
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+
+    assert_eq!(
+        crate::view::panes::main::take_opened_web_links_for_tests(),
+        vec!["https://example.com/docs".to_string()],
+        "Ctrl/Cmd+click opens the link in the browser"
+    );
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(popover.is_none(), "and skips the menu, got {popover:?}");
+        assert!(
+            !this.main_pane.read(app).diff_text_has_selection(),
+            "following the link is not a text selection"
+        );
+    });
+
+    // A plain click still asks first.
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    assert!(
+        crate::view::panes::main::take_opened_web_links_for_tests().is_empty(),
+        "a plain click opens nothing by itself"
+    );
+    let popover = popover_kind(cx, &view);
+    assert!(
+        matches!(popover, Some(PopoverKind::WebLinkMenu { .. })),
+        "a plain click opens the menu, got {popover:?}"
+    );
+
+    fixture.cleanup();
+}
+
+/// Click the single entry a local-file link menu offers, once the menu has
+/// been drawn.
+fn click_open_in_gitcomet(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let entry = cx
+        .debug_bounds("context_menu_open_in_gitcomet")
+        .expect("a local file link menu offers Open in GitComet")
+        .center();
+    cx.simulate_mouse_move(entry, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(entry, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: entry,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn clicking_a_local_markdown_link_offers_open_in_gitcomet(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(79),
+        "markdown_local_link_menu",
+        "[other](./other.md)\n",
+    );
+    // Written after `open`, which starts from an empty workdir.
+    std::fs::write(fixture.workdir.join("docs/other.md"), "# Other\n").expect("write link target");
+
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let popover = this.popover_host.read(cx).popover_kind_for_tests();
+            assert!(
+                matches!(
+                    popover,
+                    Some(PopoverKind::LocalFileLinkMenu {
+                        source: crate::view::LocalFileLinkSource::Version(
+                            gitcomet_core::domain::FileSource::WorkingDirectory
+                        ),
+                        ref path,
+                        missing: false,
+                        load_remote_image_url: None,
+                        ..
+                    }) if path == std::path::Path::new("docs/other.md")
+                ),
+                "a local link resolves against the document's directory, got {popover:?}"
+            );
+            assert!(
+                this.popover_host
+                    .read(cx)
+                    .popover_opened_from_diff_panel_for_tests(),
+                "a preview link is a diff-panel invoker, so its focus returns there"
+            );
+        });
+    });
+
+    click_open_in_gitcomet(cx);
+
+    // The entry dispatches to the store, whose worker reduces it off the gpui
+    // executor: poll the store rather than the pane, which the poller feeds in
+    // the running app.
+    let expected_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: std::path::PathBuf::from("docs/other.md"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let navigated = cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            let repo = snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == gitcomet_state::model::RepoId(79));
+            repo.map(|repo| {
+                (
+                    repo.diff_state.diff_target.clone(),
+                    repo.diff_state.content_preview,
+                )
+            })
+        });
+        if navigated == Some((Some(expected_target.clone()), true)) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Open in GitComet must open the linked file as a content preview, got {navigated:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "the menu closes once its entry runs, got {popover:?}"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // `..` climbs from `docs/` to the root, where nothing is written.
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(80),
+        "markdown_missing_local_link_menu",
+        "[gone](../missing.txt)\n",
+    );
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(
+            matches!(
+                popover,
+                Some(PopoverKind::LocalFileLinkMenu {
+                    ref path,
+                    missing: true,
+                    ..
+                }) if path == std::path::Path::new("missing.txt")
+            ),
+            "a dangling link still says where it points, got {popover:?}"
+        );
+    });
+
+    // A disabled entry has no activation: the menu stays and nothing moves.
+    click_open_in_gitcomet(cx);
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(
+            matches!(popover, Some(PopoverKind::LocalFileLinkMenu { .. })),
+            "a greyed-out entry does not close the menu, got {popover:?}"
+        );
+        let target = this
+            .main_pane
+            .read(app)
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.clone());
+        assert_eq!(
+            target,
+            Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: std::path::PathBuf::from("docs/preview.md"),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            }),
+            "nothing to open, so the pane stays on the document"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8828),
+        "markdown_ctrl_click_local_link",
+        "[other](./other.md)\n",
+    );
+    std::fs::write(fixture.workdir.join("docs/other.md"), "# Other\n").expect("write link target");
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    assert!(
+        popover.is_none(),
+        "Ctrl/Cmd+click skips the menu, got {popover:?}"
+    );
+
+    // As with the menu entry, the store's worker does the navigating.
+    let expected_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: std::path::PathBuf::from("docs/other.md"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let navigated = cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            let repo = snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == gitcomet_state::model::RepoId(8828));
+            repo.map(|repo| {
+                (
+                    repo.diff_state.diff_target.clone(),
+                    repo.diff_state.content_preview,
+                )
+            })
+        });
+        if navigated == Some((Some(expected_target.clone()), true)) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Ctrl/Cmd+click must open the linked file as a content preview, got {navigated:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn ctrl_clicking_a_link_to_a_missing_file_still_opens_the_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8829),
+        "markdown_ctrl_click_missing_local_link",
+        "[gone](../missing.txt)\n",
+    );
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+
+    // Nothing to open, so the greyed-out entry is left to say why.
+    let popover = popover_kind(cx, &view);
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::LocalFileLinkMenu { missing: true, .. })
+        ),
+        "a dangling link falls back to its menu, got {popover:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_root_relative_link_resolves_from_the_repo_root(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(81),
+        "markdown_root_relative_link_menu",
+        "[root](/docs/other.md)\n",
+    );
+    std::fs::write(fixture.workdir.join("docs/other.md"), "# Other\n").expect("write link target");
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(
+            matches!(
+                popover,
+                Some(PopoverKind::LocalFileLinkMenu {
+                    ref path,
+                    missing: false,
+                    ..
+                }) if path == std::path::Path::new("docs/other.md")
+            ),
+            "a leading slash is repository-root-relative, got {popover:?}"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The worktree is not the tree the document came from: a file deleted
+    // since that commit is still there to read.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(82);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_commit_link",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
+    let commit_id = gitcomet_core::domain::CommitId("deadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path: Some(std::path::PathBuf::from("docs/preview.md")),
+            });
+            repo.diff_state.diff_state_rev = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let kind = pane.markdown_preview_link_popover_kind(
+            DiffTextRegion::Inline,
+            0,
+            &"./deleted.md".into(),
+            None,
+        );
+        assert!(
+            matches!(
+                kind,
+                Some(PopoverKind::LocalFileLinkMenu {
+                    source: crate::view::LocalFileLinkSource::Version(
+                        gitcomet_core::domain::FileSource::Commit(ref id)
+                    ),
+                    ref path,
+                    missing: false,
+                    ..
+                }) if *id == commit_id && path == std::path::Path::new("docs/deleted.md")
+            ),
+            "a commit's link opens from that commit, got {kind:?}"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn a_local_link_through_a_symlink_out_of_the_repo_is_inert(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(83),
+        "markdown_symlink_escape_link",
+        "[file](alias/secret.txt) [meta](meta/config)\n",
+    );
+    // Outside the fixture's workdir, which is the repository.
+    let outside = fixture.workdir.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("create outside dir");
+    std::fs::write(outside.join("secret.txt"), "secret").expect("write outside file");
+    std::fs::create_dir_all(fixture.workdir.join(".git")).expect("create .git");
+    std::fs::write(fixture.workdir.join(".git/config"), "[core]").expect("write config");
+    std::os::unix::fs::symlink(&outside, fixture.workdir.join("docs/alias")).expect("alias");
+    std::os::unix::fs::symlink(
+        fixture.workdir.join(".git"),
+        fixture.workdir.join("docs/meta"),
+    )
+    .expect("meta");
+
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected preview text bounds");
+    let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "a symlink must not carry a link out of the repository, got {popover:?}"
+        );
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.markdown_preview_link_popover_kind(
+                DiffTextRegion::Inline,
+                0,
+                &"meta/config".into(),
+                None
+            ),
+            None,
+            "a symlink must not carry a link into .git"
+        );
+    });
+
+    std::fs::remove_dir_all(&outside).expect("cleanup outside");
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_linked_blocked_image_whose_link_cannot_open_still_loads_on_click(
+    cx: &mut gpui::TestAppContext,
+) {
+    // `./` names no file, so there is no menu to carry Load image: the click
+    // must approve the picture directly, as it did before local links opened.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    let first_image_url = "https://images.example.invalid/one.svg";
+    let second_image_url = "https://images.example.invalid/two.svg";
+    let source = format!("[![one]({first_image_url})](./) [![two]({second_image_url})](../)\n");
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(84),
+        "markdown_inert_linked_remote_image",
+        &source,
+    );
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a linked picture");
+    let retry = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{source_byte}"
+        )))
+        .expect("Ask mode draws the linked image's Retry control");
+
+    simulate_counted_click(cx, retry.center(), 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "an inert link opens no menu, got {popover:?}"
+        );
+        let main_pane = this.main_pane.read(app);
+        assert!(
+            main_pane
+                .remote_markdown_images
+                .approved_urls
+                .contains(first_image_url),
+            "the click approves the picture it landed on"
+        );
+        assert!(
+            !main_pane
+                .remote_markdown_images
+                .approved_urls
+                .contains(second_image_url),
+            "and only that picture"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+/// A document whose table links to a heading far below the fold, with room
+/// below it for the heading to reach the top.
+fn anchor_link_fixture_source(heading: &str) -> String {
+    let filler: String = (0..200)
+        .map(|ix| format!("paragraph {ix:03}\n\n"))
+        .collect();
+    format!(
+        "| Badge | Meaning |\n| --- | --- |\n\
+         | **Untrusted key** | See [Trust a GPG key](#trust-a-gpg-key). |\n\n\
+         {filler}## {heading}\n\nThe heading's section.\n\n{filler}"
+    )
+}
+
+/// A point on the first link in rendered row `row_ix` of the worktree preview.
+fn point_on_link_in_row(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    row_ix: usize,
+) -> gpui::Point<Pixels> {
+    // A table row paints one text box per cell, each of which may wrap.
+    let boxes: Vec<Bounds<Pixels>> = std::iter::once(format!("markdown_preview_text_box_{row_ix}"))
+        .chain((0..32).map(|column| format!("markdown_preview_cell_text_box_{row_ix}_{column}")))
+        .filter_map(|selector| cx.debug_bounds(leaked_selector(selector)))
+        .collect();
+    assert!(!boxes.is_empty(), "row {row_ix} draws no text");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        for text_box in &boxes {
+            let mut y = text_box.top() + px(2.0);
+            while y < text_box.bottom() {
+                let mut x = text_box.left();
+                while x < text_box.right() {
+                    let position = point(x, y);
+                    if pane
+                        .markdown_preview_link_span_at(row_ix, DiffTextRegion::Inline, position)
+                        .is_some()
+                    {
+                        return position;
+                    }
+                    x += px(2.0);
+                }
+                y += px(4.0);
+            }
+        }
+        panic!("no link in row {row_ix}");
+    })
+}
+
+#[gpui::test]
+fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(86),
+        "markdown_anchor_link_scroll",
+        &anchor_link_fixture_source("Trust a GPG key"),
+    );
+    let link_row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| row.text.contains("Trust a GPG key"))
+        .expect("the table row with the link");
+    let heading_row = fixture.row_ix("Trust a GPG key");
+    let on_link = point_on_link_in_row(cx, &view, link_row);
+
+    // The click's frame is where the reveal runs. It moves the offset during
+    // prepaint, too late for that frame, so it has to ask for the next one or
+    // the scrollbar moves while the text stays put until the next input. Only
+    // frames the app itself asked for are drawn from here on.
+    // The click's frame is where the reveal runs. It moves the offset during
+    // prepaint, too late for that frame, so it has to ask for the next one or
+    // the scrollbar moves while the text stays put until the next input.
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _subscription = cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let notified = std::rc::Rc::clone(&notified);
+        app.observe(&main_pane, move |_, _| notified.set(notified.get() + 1))
+    });
+    cx.update(|window, app| {
+        window.simulate_next_frame(app);
+    });
+    assert!(
+        notified.get() > 0,
+        "the reveal must ask for a repaint after moving the scroll offset"
+    );
+    cx.run_until_parked();
+
+    let viewport = cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "an anchor opens no menu, got {popover:?}"
+        );
+        let pane = this.main_pane.read(app);
+        assert!(
+            !pane.diff_text_has_selection(),
+            "following the link is not a text selection"
+        );
+        assert_eq!(
+            pane.markdown_interaction.reveal.pending(),
+            None,
+            "the reveal is claimed once"
+        );
+        let scroll = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        assert!(
+            scroll.offset().y < px(0.0),
+            "the preview scrolls down to the heading"
+        );
+        scroll.bounds()
+    });
+    // The heading lands at the top of the viewport, as in a browser.
+    let heading = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{heading_row}"
+        )))
+        .expect("the heading is drawn once scrolled to");
+    assert!(
+        heading.top() >= viewport.top() - px(1.0) && heading.top() < viewport.top() + px(40.0),
+        "heading at {:?}, viewport from {:?}",
+        heading.top(),
+        viewport.top()
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8831),
+        "markdown_ctrl_click_anchor_link",
+        &anchor_link_fixture_source("Trust a GPG key"),
+    );
+    let link_row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| row.text.contains("Trust a GPG key"))
+        .expect("the table row with the link");
+    let on_link = point_on_link_in_row(cx, &view, link_row);
+
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        window.simulate_next_frame(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "an anchor opens no menu, got {popover:?}"
+        );
+        let pane = this.main_pane.read(app);
+        let scroll = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        assert!(
+            scroll.offset().y < px(0.0),
+            "Ctrl/Cmd+click scrolls to the heading like a plain click"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn an_anchor_link_without_a_heading_is_plain_text(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(87),
+        "markdown_anchor_link_missing",
+        &anchor_link_fixture_source("Something else"),
+    );
+    let link_row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| row.text.contains("Trust a GPG key"))
+        .expect("the table row with the link");
+    let on_link = point_on_link_in_row(cx, &view, link_row);
+
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let popover = this.popover_host.read(app).popover_kind_for_tests();
+        assert!(popover.is_none(), "nothing to open, got {popover:?}");
+        let pane = this.main_pane.read(app);
+        assert_eq!(pane.markdown_interaction.reveal.pending(), None);
+        assert_eq!(
+            pane.worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y,
+            px(0.0),
+            "nothing to scroll to"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+/// Seed a working-tree markdown diff and show it rendered, inline.
+fn open_rendered_markdown_diff(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    name: &str,
+    old_text: &str,
+    new_text: &str,
+) -> std::path::PathBuf {
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
+    let file_rel = std::path::PathBuf::from("docs/long.md");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+    seed_file_diff_state(cx, view, repo_id, &workdir, &file_rel, old_text, new_text);
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "rendered markdown diff target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| format!("repo={:?}", pane.active_repo().map(|repo| repo.id)),
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
+                        .expect("markdown diff preview should parse"),
+                ));
+                pane.diff_markdown.inflight = None;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    workdir
+}
+
+#[gpui::test]
+fn an_anchor_link_scrolls_the_rendered_markdown_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let old_text = anchor_link_fixture_source("Trust a GPG key");
+    let new_text = format!("{old_text}\nAn added line.\n");
+    let workdir = open_rendered_markdown_diff(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(88),
+        "markdown_diff_anchor_scroll",
+        &old_text,
+        &new_text,
+    );
+
+    let followed = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_uniform_list_offsets(&[&pane.diff_scroll]);
+                assert!(
+                    !pane.scroll_markdown_preview_to_anchor(
+                        DiffTextRegion::Inline,
+                        "#no-such-heading",
+                        cx
+                    ),
+                    "an unknown anchor is not followed"
+                );
+                pane.scroll_markdown_preview_to_anchor(
+                    DiffTextRegion::Inline,
+                    "#trust-a-gpg-key",
+                    cx,
+                )
+            })
+        })
+    });
+    assert!(followed, "the heading is in the diff preview");
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            uniform_list_offset(&pane.diff_scroll).y < px(0.0),
+            "the rendered diff scrolls to the heading, offset stayed at {:?}",
+            uniform_list_offset(&pane.diff_scroll),
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+fn hovered_link(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<crate::view::rows::MarkdownPreviewHoveredLink> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .markdown_interaction
+            .hovered_link
+            .clone()
+    })
+}
+
+fn move_mouse(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, held: bool) {
+    cx.simulate_mouse_move(
+        position,
+        held.then_some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn hovering_a_link_underlines_it_and_shows_the_pointer(cx: &mut gpui::TestAppContext) {
+    use crate::view::rows::MarkdownPreviewHoveredLink;
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(89),
+        "markdown_link_hover",
+        "Plain words then [a **bold** link](https://example.com)\n",
+    );
+    let text = fixture.document.rows[0].text.clone();
+    let link_start = text.find("a bold link").expect("link text");
+    let link_end = link_start + "a bold link".len();
+    let text_box = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("the row's text box");
+    let on_plain = point(text_box.left() + px(4.0), text_box.center().y);
+    let on_link = point_on_link_in_row(cx, &view, 0);
+    // The text box spans the pane; its far end is past the painted text.
+    let past_text = point(text_box.right() - px(4.0), text_box.center().y);
+
+    move_mouse(cx, on_link, false);
+    let hovered = hovered_link(cx, &view).expect("the pointer is on the link");
+    assert_eq!(
+        (hovered.row_ix, hovered.byte_range.clone()),
+        (0, link_start..link_end),
+        "the whole link is hovered, across its bold run"
+    );
+    assert_eq!(
+        MarkdownPreviewHoveredLink::cursor(Some(&hovered), DiffTextRegion::Inline, 0),
+        gpui::CursorStyle::PointingHand
+    );
+    assert_eq!(
+        MarkdownPreviewHoveredLink::cursor(Some(&hovered), DiffTextRegion::Inline, 1),
+        gpui::CursorStyle::IBeam,
+        "only the row under the pointer shows the hand"
+    );
+
+    move_mouse(cx, on_plain, false);
+    assert_eq!(hovered_link(cx, &view), None, "plain words are not a link");
+
+    move_mouse(cx, past_text, false);
+    assert_eq!(
+        hovered_link(cx, &view),
+        None,
+        "beside a line that ends in a link is not on it"
+    );
+    simulate_counted_click(cx, past_text, 1);
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(
+            popover.is_none(),
+            "a click beside the link does not open it, got {popover:?}"
+        );
+    });
+
+    // A drag across a link is a selection, not a hover.
+    move_mouse(cx, on_link, true);
+    assert_eq!(hovered_link(cx, &view), None);
+
+    // Leaving the row drops the hover.
+    move_mouse(cx, on_link, false);
+    assert!(hovered_link(cx, &view).is_some());
+    move_mouse(cx, point(px(1.0), px(1.0)), false);
+    assert_eq!(
+        hovered_link(cx, &view),
+        None,
+        "the pointer left the preview"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn hovering_a_link_in_the_rendered_diff_tracks_it(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let old_text = "# Title\n\nSee [the guide](https://example.com/guide) here.\n";
+    let new_text = format!("{old_text}\nAdded.\n");
+    let workdir = open_rendered_markdown_diff(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(90),
+        "markdown_diff_link_hover",
+        old_text,
+        &new_text,
+    );
+    let link_row = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        preview
+            .inline
+            .rows
+            .iter()
+            .position(|row| row.text.contains("the guide"))
+            .expect("the row with the link")
+    });
+    let on_link = point_on_link_in_row(cx, &view, link_row);
+
+    move_mouse(cx, on_link, false);
+    let hovered = hovered_link(cx, &view).expect("the pointer is on the link");
+    assert_eq!(hovered.region, DiffTextRegion::Inline);
+    assert_eq!(hovered.row_ix, link_row);
+    move_mouse(cx, point(px(1.0), px(1.0)), false);
+    assert_eq!(hovered_link(cx, &view), None);
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
 fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::TestAppContext) {
     // The selection highlight is painted inside the text box, so the box must
     // be the glyph box. Padding applied to the box itself shifted the highlight
     // left of the text and cut it short at the end of the line.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5890,7 +7219,7 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
 fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5999,7 +7328,7 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
             pane.worktree_preview_scroll.0.borrow().base_handle.offset(),
         );
         assert_eq!(
-            pane.markdown_preview_reveal.pending(),
+            pane.markdown_interaction.reveal.pending(),
             None,
             "the reveal should be claimed once so it stops fighting later scrolling"
         );
@@ -6008,12 +7337,11 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
     std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview scroll fixture");
 }
 
-/// The rendered markdown *diff* is the other in-place search surface. It is a
-/// `uniform_list`, so the reveal is the ordinary scroll-to-row — but the match
-/// list has to be built from the rendered rows and mapped through the wrap plan.
+/// The rendered markdown *diff* is the other in-place search surface. It flows
+/// like the file preview, so the match is revealed once its row is laid out.
 #[gpui::test]
 fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -6064,16 +7392,16 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
-                pane.file_markdown_preview_cache_rev = 1;
-                pane.file_markdown_preview_cache_target = Some(target.clone());
-                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
                     crate::view::markdown_preview::build_markdown_diff_preview(
                         &old_text, &new_text,
                     )
                     .expect("markdown diff preview should parse"),
                 ));
-                pane.file_markdown_preview_inflight = None;
+                pane.diff_markdown.inflight = None;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 pane.diff_view = DiffViewMode::Inline;
@@ -6131,7 +7459,7 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
 fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -6246,7 +7574,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
 /// instead of quietly scanning a view that is not there.
 #[gpui::test]
 fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -6301,7 +7629,7 @@ fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestA
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Loading;
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Loading;
                 pane.diff_search_active = true;
                 pane.diff_search_query = "needle".into();
                 pane.diff_search_input
@@ -6331,4 +7659,2227 @@ fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestA
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup pending markdown fixture");
+}
+
+// ── Review findings: rendered markdown diff interactions ─────────────────
+
+/// A point on a link in row `row_ix` of `region`, probed across its hitbox.
+fn point_on_link_in_region(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    row_ix: usize,
+    region: DiffTextRegion,
+) -> gpui::Point<Pixels> {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let bounds = pane
+            .diff_text_hitbox_bounds_for_tests(row_ix, region)
+            .unwrap_or_else(|| panic!("row {row_ix} of {region:?} is drawn"));
+        let mut y = bounds.top() + px(2.0);
+        while y < bounds.bottom() {
+            let mut x = bounds.left();
+            while x < bounds.right() {
+                let position = point(x, y);
+                if pane
+                    .markdown_preview_link_span_at(row_ix, region, position)
+                    .is_some()
+                {
+                    return position;
+                }
+                x += px(2.0);
+            }
+            y += px(4.0);
+        }
+        panic!("no link in row {row_ix} of {region:?}")
+    })
+}
+
+/// A point on the link in one table cell of the worktree preview.
+fn point_on_link_in_cell(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    row_ix: usize,
+    column: usize,
+) -> gpui::Point<Pixels> {
+    let text_box = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_text_box_{row_ix}_{column}"
+        )))
+        .unwrap_or_else(|| panic!("cell {column} of row {row_ix} draws text"));
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let y = text_box.center().y;
+        let mut x = text_box.left();
+        while x < text_box.right() {
+            let position = point(x, y);
+            if pane
+                .markdown_preview_link_span_at(row_ix, DiffTextRegion::Inline, position)
+                .is_some()
+            {
+                return position;
+            }
+            x += px(1.0);
+        }
+        panic!("no link in cell {column} of row {row_ix}")
+    })
+}
+
+fn popover_kind(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<PopoverKind> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    })
+}
+
+fn close_popover(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.update(app, |host, cx| host.close_popover(cx));
+    });
+    draw_and_drain_test_window(cx);
+}
+
+fn diff_scroll_offset_y(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Pixels {
+    cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y
+    })
+}
+
+#[gpui::test]
+fn split_markdown_diff_new_side_rows_take_clicks_and_context_menus(cx: &mut gpui::TestAppContext) {
+    // Both columns of a band render the same row indices, so every element id
+    // under them has to be told apart by its column or the two sides share one
+    // element's click state.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
+
+    let old_text = "Shared [the docs](https://example.com/docs) paragraph.\n\nOld ending.\n";
+    let new_text = "Shared [the docs](https://example.com/docs) paragraph.\n\nNew ending.\n";
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(960),
+        "markdown_split_new_side_clicks",
+        old_text,
+        new_text,
+        DiffViewMode::Split,
+    );
+    let row = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        let row = row_ix_with_text(&preview.new, "Shared the docs paragraph.");
+        assert_eq!(
+            row_ix_with_text(&preview.old, "Shared the docs paragraph."),
+            row,
+            "the unchanged row sits at one index on both sides"
+        );
+        row
+    });
+
+    let on_link = point_on_link_in_region(cx, &view, row, DiffTextRegion::SplitRight);
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu { ref url, .. }) if url.as_ref() == "https://example.com/docs"
+        ),
+        "a link on the new side opens its menu, got {popover:?}"
+    );
+    close_popover(cx, &view);
+
+    let text = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_text_hitbox_bounds_for_tests(row, DiffTextRegion::SplitRight)
+            .expect("the new row is drawn")
+    });
+    let on_words = point(text.left() + px(4.0), text.center().y);
+    cx.simulate_mouse_move(on_words, None, Modifiers::default());
+    cx.simulate_mouse_down(on_words, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(on_words, MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone()),
+        Some("diff_editor_menu".into()),
+        "a right-click on the new side opens the diff context menu"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn inline_markdown_diff_keeps_table_rows_whole_when_a_column_is_added(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
+
+    let old_text = "| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n";
+    let new_text = "| A | B | C | D |\n|---|---|---|---|\n| 1 | 2 | 3 | x |\n| 4 | 5 | 6 | y |\n";
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(961),
+        "markdown_inline_table_column_added",
+        old_text,
+        new_text,
+        DiffViewMode::Inline,
+    );
+    let rows: Vec<(usize, usize)> = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        preview
+            .inline
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, row)| row.table.as_ref().map(|table| (ix, table.cells.len())))
+            .collect()
+    });
+    assert!(rows.len() >= 6, "old and new rows are both drawn: {rows:?}");
+
+    for (row_ix, cells) in rows {
+        let first = cell_box(cx, row_ix, 0);
+        for column in 1..cells {
+            let cell = cell_box(cx, row_ix, column);
+            assert_eq!(
+                cell.top(),
+                first.top(),
+                "cell {column} of row {row_ix} left its row: first={first:?} cell={cell:?}"
+            );
+            assert!(
+                cell.left() >= first.right() - px(1.0),
+                "cell {column} of row {row_ix} sits right of the first cell"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn a_blocked_image_linked_to_an_anchor_still_loads_on_click(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    let image_url = "https://images.example.invalid/badge.svg";
+    // Text beside the picture keeps it inline; alone on a line it is a block.
+    let source =
+        format!("[![badge]({image_url})](#install) Install guide\n\n## Install\n\nSteps.\n");
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(962),
+        "markdown_anchor_linked_blocked_image",
+        &source,
+    );
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a linked picture");
+    let load = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{source_byte}"
+        )))
+        .expect("Ask mode draws the linked image's load control");
+
+    simulate_counted_click(cx, load.center(), 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .remote_markdown_images
+                .approved_urls
+                .contains(image_url),
+            "an anchor has no menu to carry Load image, so the click loads the picture"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1400.0), px(600.0)));
+
+    let filler: String = (0..80).map(|ix| format!("paragraph {ix:03}\n\n")).collect();
+    // Filler below the heading too, so it has room to reach the top.
+    let old_text = format!("Intro.\n\n{filler}End.\n\n{filler}");
+    let new_text = format!(
+        "Intro.\n\n[![setup](missing.png)](#setup) How to begin\n\n{filler}## Setup\n\nSteps.\n\nEnd.\n\n{filler}"
+    );
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(963),
+        "markdown_split_new_side_image_anchor",
+        &old_text,
+        &new_text,
+        DiffViewMode::Split,
+    );
+    let (source_byte, heading_row) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        (
+            *picture_offsets(&preview.new)
+                .first()
+                .expect("the new side carries the picture"),
+            row_ix_with_text(&preview.new, "Setup"),
+        )
+    });
+    // The first-change autoscroll has run; start from the top so only the
+    // click can move the view.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+                pane.markdown_interaction.reveal.clear();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let image = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{source_byte}"
+        )))
+        .expect("the linked picture is drawn on the new side");
+
+    // The picture can be wider than its column; its left edge is on it.
+    simulate_counted_click(cx, point(image.left() + px(6.0), image.center().y), 1);
+    cx.run_until_parked();
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+
+    let (viewport, heading) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.diff_scroll.0.borrow().base_handle.bounds(),
+            pane.diff_text_hitbox_bounds_for_tests(heading_row, DiffTextRegion::SplitRight),
+        )
+    });
+    let heading = heading.expect("the #setup heading is drawn once scrolled to");
+    assert!(
+        heading.top() >= viewport.top() - px(1.0) && heading.top() < viewport.top() + px(60.0),
+        "the new side's heading lands at the top: heading={heading:?} viewport={viewport:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn change_navigation_reaches_an_added_picture_or_rule(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(500.0)));
+
+    let filler: String = (0..80).map(|ix| format!("paragraph {ix:03}\n\n")).collect();
+    for (ix, (added, mode)) in [
+        ("![pic](missing.png)", DiffViewMode::Inline),
+        ("---", DiffViewMode::Inline),
+        ("![pic](missing.png)", DiffViewMode::Split),
+        ("---", DiffViewMode::Split),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let old_text = format!("Intro.\n\n{filler}End.\n");
+        let new_text = format!("Intro.\n\n{filler}{added}\n\nEnd.\n");
+        let workdir = open_rendered_markdown_diff_in(
+            cx,
+            &view,
+            // A repo id names one workdir, so each fixture gets its own.
+            gitcomet_state::model::RepoId(970 + ix as u64),
+            &format!("markdown_nav_to_non_text_block_{ix}"),
+            &old_text,
+            &new_text,
+            mode,
+        );
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(point(px(0.0), px(0.0)));
+                    pane.markdown_interaction.reveal.clear();
+                    let entries = pane.diff_nav_entries();
+                    let first = *entries.first().expect("the addition is a change");
+                    pane.scroll_diff_to_item_strict(first, gpui::ScrollStrategy::Center);
+                    cx.notify();
+                });
+            });
+        });
+        for _ in 0..3 {
+            draw_and_drain_test_window(cx);
+        }
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.markdown_interaction.reveal.pending(),
+                None,
+                "{added:?} in {mode:?}: the reveal is claimed"
+            );
+        });
+        assert!(
+            diff_scroll_offset_y(cx, &view) < px(0.0),
+            "{added:?} in {mode:?}: the change is below the fold, so revealing it scrolls"
+        );
+        std::fs::remove_dir_all(&workdir).expect("cleanup");
+    }
+}
+
+#[gpui::test]
+fn the_budget_fallback_to_source_ends_with_the_file_that_needed_it(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(965);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_budget_fallback_scope",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+    let huge = std::path::PathBuf::from("docs/huge.md");
+    let small = std::path::PathBuf::from("docs/small.md");
+    let (huge_old, huge_new) = inline_overflowing_markdown_diff();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                cx.notify();
+            });
+        });
+    });
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &huge, &huge_old, &huge_new);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the huge diff falls back to source",
+        |pane| {
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown)
+                == RenderedPreviewMode::Source
+        },
+        |pane| {
+            (
+                pane.diff_markdown.inflight,
+                matches!(
+                    pane.diff_markdown.preview,
+                    gitcomet_state::model::Loadable::Error(_)
+                ),
+            )
+        },
+    );
+
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &small, "# one\n", "# two\n");
+    let small_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: small.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the small diff is shown",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(small_target.clone())
+        },
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+        },
+    );
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "the reader chose Rendered; only the huge file had to be shown as source"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(966);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_commit_old_side_link",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
+    let commit_id = gitcomet_core::domain::CommitId("c0ffee".into());
+    let path = std::path::PathBuf::from("docs/a.md");
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(path.clone()),
+    };
+    let old_text = "See [old](old.md) here.\n\nBefore.\n";
+    let new_text = "See [old](old.md) here.\n\nAfter.\n";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.to_string()),
+                    Some(new_text.to_string()),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
+                        .expect("markdown diff preview should parse"),
+                ));
+                pane.diff_markdown.inflight = None;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.diff_view = DiffViewMode::Split;
+                cx.notify();
+            });
+        });
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    let row = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.is_markdown_preview_active(), "the commit diff renders");
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        row_ix_with_text(&preview.old, "See old here.")
+    });
+
+    let on_link = point_on_link_in_region(cx, &view, row, DiffTextRegion::SplitLeft);
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    let Some(PopoverKind::LocalFileLinkMenu { source, path, .. }) = popover else {
+        panic!("a local link opens its menu, got {popover:?}");
+    };
+    assert_eq!(path, std::path::PathBuf::from("docs/old.md"));
+    assert_eq!(
+        source,
+        crate::view::LocalFileLinkSource::ParentOf(commit_id.clone()),
+        "the old side shows the file before the commit, so its links open there too"
+    );
+    close_popover(cx, &view);
+
+    // The new side is the commit itself.
+    let on_link = point_on_link_in_region(cx, &view, row, DiffTextRegion::SplitRight);
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::LocalFileLinkMenu {
+                source: crate::view::LocalFileLinkSource::Version(
+                    gitcomet_core::domain::FileSource::Commit(ref id)
+                ),
+                ..
+            }) if *id == commit_id
+        ),
+        "the new side's links open at the commit, got {popover:?}"
+    );
+    close_popover(cx, &view);
+
+    // Ctrl/Cmd+click opens the parent version the menu would have offered.
+    let on_link = point_on_link_in_region(cx, &view, row, DiffTextRegion::SplitLeft);
+    simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    assert!(
+        popover.is_none(),
+        "Ctrl/Cmd+click on the old side skips the menu, got {popover:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn split_markdown_diff_of_an_added_file_says_the_old_side_is_empty(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(967),
+        "markdown_split_added_file_empty_side",
+        "",
+        "# Added\n\nNew words.\n",
+        DiffViewMode::Split,
+    );
+    let empty = cx
+        .debug_bounds("markdown_diff_empty_side_SplitLeft")
+        .expect("the empty old column says so");
+    let added = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_text_hitbox_bounds_for_tests(0, DiffTextRegion::SplitRight)
+            .expect("the added heading is drawn")
+    });
+    assert!(
+        empty.right() <= added.left(),
+        "the notice sits in the old column"
+    );
+    assert!(
+        cx.debug_bounds("markdown_diff_empty_side_SplitRight")
+            .is_none(),
+        "the new column has content"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn hovering_a_link_that_cannot_open_shows_no_pointer(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    for (ix, source) in [
+        "[the next page](?page=2)\n",
+        "[a section](#no-such-heading)\n",
+        "[up and out](../../../outside.md)\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let fixture = RenderedPreviewFixture::open(
+            cx,
+            &view,
+            gitcomet_state::model::RepoId(968),
+            &format!("markdown_inert_link_hover_{ix}"),
+            source,
+        );
+        let on_link = point_on_link_in_row(cx, &view, 0);
+        move_mouse(cx, on_link, false);
+        assert_eq!(
+            hovered_link(cx, &view),
+            None,
+            "{source:?}: a click does nothing here, so the hover must not promise one"
+        );
+        move_mouse(cx, point(px(1.0), px(1.0)), false);
+        fixture.cleanup();
+    }
+}
+
+#[gpui::test]
+fn moving_between_links_in_one_table_row_keeps_the_new_hover(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(969),
+        "markdown_table_link_hover_hop",
+        "| First | Second |\n| --- | --- |\n| [one](https://example.com/one) | [two](https://example.com/two) |\n",
+    );
+    let row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| row.text.contains("one"))
+        .expect("the body row");
+    let two_start = fixture.document.rows[row]
+        .text
+        .find("two")
+        .expect("second link text");
+    let on_one = point_on_link_in_cell(cx, &view, row, 0);
+    let on_two = point_on_link_in_cell(cx, &view, row, 1);
+
+    move_mouse(cx, on_one, false);
+    assert!(hovered_link(cx, &view).is_some(), "on the first link");
+    move_mouse(cx, on_two, false);
+    let hovered = hovered_link(cx, &view).expect("the pointer is on the second link");
+    assert_eq!(
+        hovered.byte_range,
+        two_start..two_start + "two".len(),
+        "leaving the first cell must not clear the link the second one claimed"
+    );
+
+    fixture.cleanup();
+}
+
+// ── Known rendering bugs: regression tests written before the fixes ──────
+
+fn draw_frames(cx: &mut gpui::VisualTestContext, frames: usize) {
+    for _ in 0..frames {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn inline_code_keeps_the_surrounding_prose_in_the_body_font(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8801),
+        "markdown_inline_code_font",
+        "Run `cargo test` before pushing.\n",
+    );
+    let row_ix = fixture.row_ix("Run cargo test before pushing.");
+    let editor_family: SharedString =
+        cx.update(|_window, app| crate::font_preferences::current_editor_font_family(app).into());
+
+    crate::view::rows::begin_markdown_flow_font_capture_for_tests();
+    draw_frames(cx, 1);
+    let runs = crate::view::rows::markdown_flow_fonts_for_tests(row_ix);
+    let family_at = |offset: usize| {
+        runs.iter()
+            .find(|(range, _)| range.contains(&offset))
+            .map(|(_, family)| family.clone())
+            .unwrap_or_else(|| panic!("no run covers byte {offset}: {runs:?}"))
+    };
+
+    // "Run " is prose, "cargo test" (bytes 4..14) is the code span.
+    assert_ne!(
+        family_at(0),
+        editor_family,
+        "prose around inline code must keep the body font, not the editor font: {runs:?}"
+    );
+    assert_eq!(
+        family_at(5),
+        editor_family,
+        "the code span itself is set in the editor font: {runs:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn switching_between_dark_themes_restyles_an_open_markdown_preview(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let set_pane_theme = |cx: &mut gpui::VisualTestContext, theme: AppTheme| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane
+                    .update(cx, |pane, cx| pane.set_theme(theme, cx));
+            });
+        });
+    };
+    let source = "A [link](https://example.com) and `code`.\n";
+
+    set_pane_theme(cx, AppTheme::gitcomet_dark());
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8802),
+        "markdown_theme_switch",
+        source,
+    );
+    // The first frames styled every row under GitComet Dark.
+    let amber = AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY).expect("Amber Dark");
+    set_pane_theme(cx, amber);
+    draw_frames(cx, 2);
+
+    let (shown, fresh) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(document) = &pane.worktree_markdown.document
+        else {
+            panic!("expected a ready preview");
+        };
+        let shown = crate::view::rows::markdown_preview_styled_row_with_query(
+            pane.theme,
+            &document.rows[0],
+            0,
+            None,
+            None,
+        )
+        .highlights
+        .clone();
+        let fresh_document =
+            crate::view::markdown_preview::parse_markdown(source).expect("fixture parses");
+        let fresh = crate::view::rows::markdown_preview_styled_row_with_query(
+            amber,
+            &fresh_document.rows[0],
+            0,
+            None,
+            None,
+        )
+        .highlights
+        .clone();
+        (shown, fresh)
+    });
+    assert_eq!(
+        shown, fresh,
+        "after a theme switch the open preview keeps the previous theme's link and code colours"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn code_block_inside_a_list_item_is_indented_with_its_item(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    // Loose on purpose: a tight item currently loses its text (see the parser
+    // test `tight_list_item_keeps_its_text_before_a_fenced_code_block`).
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8803),
+        "markdown_code_in_list_indent",
+        "1. Install:\n\n   ```sh\n   cargo install foo\n   ```\n",
+    );
+    let item_ix = fixture.row_ix("Install:");
+    let code_ix = fixture.row_ix("cargo install foo");
+
+    let item_text = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{item_ix}"
+        )))
+        .expect("item text box");
+    let code_shell = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_shell_{code_ix}"
+        )))
+        .expect("code block shell");
+    assert!(
+        code_shell.left() + px(1.0) >= item_text.left(),
+        "a code block inside a list item starts at the document margin instead of under its \
+         item's text: code={code_shell:?} item={item_text:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn footnote_definition_shows_its_label(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8804),
+        "markdown_footnote_label",
+        "- item\n\nText[^1].\n\n[^1]: Note body.\n",
+    );
+    let item_ix = fixture.row_ix("item");
+    let note_ix = fixture.row_ix("Note body.");
+
+    // Control: a list item's marker slot carries the selector.
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_marker_{item_ix}"
+        )))
+        .is_some(),
+        "the list marker slot must be addressable"
+    );
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_marker_{note_ix}"
+        )))
+        .is_some(),
+        "a footnote definition renders without its `[^1]:` label"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn image_paths_resolve_within_the_repository_like_links(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    // docs/preview.md referring to pictures beside it, one level up, and by a
+    // repository-root path, as GitHub resolves all three.
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8805),
+        "markdown_image_paths",
+        "![here](assets/here.png)\n\n![up](../assets/up.png)\n\n![root](/assets/root.png)\n",
+    );
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    for rel in ["docs/assets/here.png", "assets/up.png", "assets/root.png"] {
+        let path = fixture.workdir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("asset dir");
+        std::fs::write(&path, PNG_1X1).expect("write asset");
+    }
+    draw_frames(cx, 3);
+
+    let pictures: Vec<usize> = fixture
+        .document
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::Image
+            )
+        })
+        .map(|(ix, _)| ix)
+        .collect();
+    assert_eq!(pictures.len(), 3, "three block pictures");
+    let resolved: Vec<bool> = pictures
+        .iter()
+        .map(|ix| {
+            cx.debug_bounds(leaked_selector(format!(
+                "markdown_preview_block_image_{ix}"
+            )))
+            .is_some()
+        })
+        .collect();
+    assert!(
+        resolved[0],
+        "control: a picture beside the document resolves"
+    );
+    assert_eq!(
+        resolved,
+        vec![true, true, true],
+        "`../` and `/`-rooted pictures inside the repository show as \"Image unavailable\""
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn searching_a_picture_description_finds_it_once(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8806),
+        "markdown_search_picture_once",
+        "![unique project logo](missing.png)\n\nBody text.\n",
+    );
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("secondary-f");
+    draw_frames(cx, 1);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "unique project logo".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("unique project logo", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    let matches = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_search_matches
+            .clone()
+    });
+    assert_eq!(
+        matches.len(),
+        1,
+        "one picture reports one match per band row it was sliced into: {matches:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn copying_across_alignment_padding_adds_no_blank_lines(cx: &mut gpui::TestAppContext) {
+    // The old side of this split diff is [a, Spacer, Spacer, b]; each spacer
+    // yields `Some(0..0)` from `diff_text_source_selection_range`, so
+    // `selected_diff_text_string` writes an empty line for it.
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8807),
+        "markdown_split_copy_padding",
+        "- a\n- b\n",
+        "- a\n- x\n- y\n- b\n",
+        DiffViewMode::Split,
+    );
+    let (a_ix, b_ix) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        (
+            row_ix_with_text(&preview.old, "a"),
+            row_ix_with_text(&preview.old, "b"),
+        )
+    });
+    let (from, to) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let a = pane
+            .diff_text_hitbox_bounds_for_tests(a_ix, DiffTextRegion::SplitLeft)
+            .expect("a is drawn");
+        let b = pane
+            .diff_text_hitbox_bounds_for_tests(b_ix, DiffTextRegion::SplitLeft)
+            .expect("b is drawn");
+        (
+            point(a.left(), a.center().y),
+            point(b.right(), b.center().y),
+        )
+    });
+    drag_preview_selection(cx, from, to);
+    let copied = copied_preview_selection(cx, &view).expect("the drag selected text");
+    assert_eq!(copied, "a\nb");
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8808),
+        "markdown_task_toggle_reload",
+        "- [ ] ship it\n",
+    );
+    let row_ix = fixture.row_ix("ship it");
+    let task = fixture.document.rows[row_ix].task.expect("task row");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.toggle_markdown_preview_task(DiffTextRegion::Inline, task, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let still_the_old_document = matches!(
+            &pane.worktree_markdown.document,
+            gitcomet_state::model::Loadable::Ready(document)
+                if Arc::ptr_eq(document, &fixture.document)
+        );
+        assert!(
+            !still_the_old_document,
+            "after writing the toggle the preview keeps the pre-toggle document, so the box \
+             never flips and a second click reports the file as changed on disk"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open_with_status(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8809),
+        "markdown_task_deleted_file",
+        "- [ ] gone\n",
+        gitcomet_core::domain::FileStatusKind::Deleted,
+    );
+    // Deleted from the working tree: the preview shows the old text, but there
+    // is no file to write the toggle into.
+    std::fs::remove_file(fixture.workdir.join("docs/preview.md")).expect("delete the file");
+    draw_frames(cx, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.markdown_preview_tasks_editable(),
+            "a deleted file's checkboxes look clickable but every click fails to read the file"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+/// A CHANGELOG-shaped document: release headings, sections of list items with
+/// inline code and links, and a short code block per release.
+fn changelog_markdown(releases: usize) -> String {
+    let mut source = String::from("# Changelog\n\nAll notable changes to this project.\n\n");
+    for release in (0..releases).rev() {
+        source.push_str(&format!(
+            "## [1.{release}.0] - 2026-09-{:02}\n\n",
+            release % 28 + 1
+        ));
+        source.push_str("### Added\n\n");
+        for item in 0..4 {
+            source.push_str(&format!(
+                "- Support `option_{release}_{item}` in the [config loader](https://example.com/pr/{release}{item}) (#{release}{item})\n"
+            ));
+        }
+        source.push_str("\n### Fixed\n\n- A crash when `path` is empty\n\n");
+        source.push_str(&format!("```rust\nlet release = {release};\n```\n\n"));
+    }
+    source
+}
+
+#[gpui::test]
+#[ignore = "production GPUI draw benchmark for the flowing markdown preview"]
+fn markdown_preview_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+    let _visual_guard = lock_visual_test();
+    let releases: usize = std::env::var("GITCOMET_BENCH_MD_RELEASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(280);
+    let source = match std::env::var("GITCOMET_BENCH_MD_FILE") {
+        Ok(path) => std::fs::read_to_string(path).expect("read benchmark markdown"),
+        Err(_) => changelog_markdown(releases),
+    };
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8810),
+        "markdown_real_frame_benchmark",
+        &source,
+    );
+    let rows = fixture.document.rows.len();
+    let blocks = crate::view::markdown_preview::markdown_document_blocks(&fixture.document).len();
+    let Some(first_text) = cx.debug_bounds("markdown_preview_text_box_0") else {
+        eprintln!(
+            "markdown flowing preview rows={rows}: not drawn (past the parser's cap, \
+             the pane shows its notice instead)"
+        );
+        fixture.cleanup();
+        return;
+    };
+    let _cached_views = std::env::var_os("GITCOMET_BENCH_CACHED_VIEWS")
+        .map(|_| crate::view::enable_stable_cached_views_for_test());
+    for _ in 0..2 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+
+    const FRAMES: usize = 40;
+    let percentile = |samples: &mut Vec<f64>, p: usize| {
+        samples.sort_by(f64::total_cmp);
+        samples[(samples.len() - 1) * p / 100]
+    };
+
+    // A frame that rebuilds everything, as a tooltip, hover change, or any
+    // `window.refresh()` elsewhere in the window forces.
+    let mut rebuild_ms = Vec::new();
+    let mut rebuild_allocs = crate::perf_alloc::PerfAllocMetrics::default();
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        let (_, allocations) = crate::perf_alloc::measure_allocations(|| {
+            cx.update(|window, app| {
+                window.refresh();
+                let _ = window.draw(app);
+            })
+        });
+        rebuild_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        rebuild_allocs = rebuild_allocs.saturating_add(allocations);
+    }
+
+    // A wheel tick over the document and the frame it produces.
+    let mut wheel_ms = Vec::new();
+    for frame in 0..FRAMES {
+        let started = Instant::now();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: first_text.center(),
+            delta: gpui::ScrollDelta::Pixels(point(
+                px(0.0),
+                px(if frame % 2 == 0 { -3.25 } else { 3.25 }),
+            )),
+            ..Default::default()
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        wheel_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    // Pointer moves inside one paragraph: nothing changes on screen, so this
+    // is the cost of dispatching the event to every registered listener.
+    let mut move_us = Vec::new();
+    for step in 0..FRAMES {
+        let x = first_text.left() + px(2.0 + (step % 8) as f32);
+        let started = Instant::now();
+        cx.simulate_mouse_move(
+            point(x, first_text.center().y),
+            None,
+            gpui::Modifiers::none(),
+        );
+        move_us.push(started.elapsed().as_secs_f64() * 1e6);
+    }
+
+    eprintln!(
+        "markdown flowing preview rows={rows} blocks={blocks} profile={} \
+         rebuild_ms_p50={:.2} rebuild_ms_p95={:.2} allocs_per_rebuild={:.0} \
+         wheel_frame_ms_p50={:.2} wheel_frame_ms_p95={:.2} mouse_move_us_p50={:.1} mouse_move_us_p95={:.1}",
+        if cfg!(debug_assertions) {
+            "test"
+        } else {
+            "release"
+        },
+        percentile(&mut rebuild_ms, 50),
+        percentile(&mut rebuild_ms, 95),
+        rebuild_allocs.alloc_ops as f64 / FRAMES as f64,
+        percentile(&mut wheel_ms, 50),
+        percentile(&mut wheel_ms, 95),
+        percentile(&mut move_us, 50),
+        percentile(&mut move_us, 95),
+    );
+
+    fixture.cleanup();
+}
+
+// ── Frame-cost regression tests: counts, not timings, so they are stable ──
+
+#[gpui::test]
+fn a_frame_of_a_long_markdown_preview_builds_only_rows_near_the_viewport(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let source = (0..1_200)
+        .map(|ix| format!("Paragraph number {ix}.\n\n"))
+        .collect::<String>();
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8811),
+        "markdown_frame_rows_built",
+        &source,
+    );
+    assert_eq!(fixture.document.rows.len(), 1_200);
+
+    crate::view::rows::take_markdown_flow_texts_built_for_tests();
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let built = crate::view::rows::take_markdown_flow_texts_built_for_tests();
+    // The window shows a few dozen rows; a generous overscan is still far
+    // below the document.
+    assert!(
+        built <= 300,
+        "one frame built {built} row texts for a 1,200-row document; every row is laid out and \
+         painted on every frame, so frame cost grows with the document instead of the window"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_frame_of_the_markdown_preview_checks_the_preview_surface_a_bounded_number_of_times(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let source = (0..300)
+        .map(|ix| format!("Paragraph number {ix}.\n\n"))
+        .collect::<String>();
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8812),
+        "markdown_frame_surface_checks",
+        &source,
+    );
+
+    crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let checks = crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    // Each check stats the previewed file; paint used to make two per row.
+    assert!(
+        checks <= 8,
+        "one frame ran the file-preview surface check {checks} times, each with filesystem stats"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn redrawing_under_an_unchanged_search_does_not_rebuild_the_matcher(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8813),
+        "markdown_search_matcher_reuse",
+        "Alpha paragraph.\n\nBeta paragraph.\n",
+    );
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("secondary-f");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "paragraph".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("paragraph", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    draw_frames(cx, 1);
+
+    crate::view::panes::main::diff_search::take_search_matchers_built_for_tests();
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+    let built = crate::view::panes::main::diff_search::take_search_matchers_built_for_tests();
+    assert_eq!(
+        built, 0,
+        "each frame builds a new search matcher (a regex compile for regex queries) although \
+         the query did not change"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The inline diff shows a paragraph that changed in part twice, old copy
+    // first; both copies are marked modified, not removed and added.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(8814);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_inline_modified_old_link",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
+    let commit_id = gitcomet_core::domain::CommitId("c0ffee".into());
+    let path = std::path::PathBuf::from("docs/a.md");
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(path.clone()),
+    };
+    let old_text = "See [spec](spec.md) and\nthe old ending.\n";
+    let new_text = "See [spec](spec.md) and\nthe new ending.\n";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.to_string()),
+                    Some(new_text.to_string()),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_rev = 1;
+                pane.diff_markdown.cache_target = Some(target.clone());
+                pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
+                        .expect("markdown diff preview should parse"),
+                ));
+                pane.diff_markdown.inflight = None;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    let old_row = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        row_ix_with_text(&preview.inline, "See spec and the old ending.")
+    });
+
+    let on_link = point_on_link_in_region(cx, &view, old_row, DiffTextRegion::Inline);
+    simulate_counted_click(cx, on_link, 1);
+    cx.run_until_parked();
+    let popover = popover_kind(cx, &view);
+    let Some(PopoverKind::LocalFileLinkMenu { source, .. }) = popover else {
+        panic!("a local link opens its menu, got {popover:?}");
+    };
+    assert_eq!(
+        source,
+        crate::view::LocalFileLinkSource::ParentOf(commit_id.clone()),
+        "the old copy of a modified paragraph shows the file before the commit"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn a_reveal_of_a_row_only_the_new_side_draws_brings_that_row_into_view(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The old side pads the row the new side inserted, inside its own list.
+    // The padded side must not answer the reveal by centring its whole list.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(500.0)));
+
+    let items = |insert: bool| {
+        let mut text = String::new();
+        for ix in 0..60 {
+            text.push_str(&format!("- item {ix}\n"));
+            if insert && ix == 50 {
+                text.push_str("- inserted\n");
+            }
+        }
+        text
+    };
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8815),
+        "markdown_split_reveal_padding",
+        &items(false),
+        &items(true),
+        DiffViewMode::Split,
+    );
+    let row = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
+            panic!("the preview is ready");
+        };
+        let row = row_ix_with_text(&preview.new, "inserted");
+        assert!(
+            matches!(
+                preview.old.rows[row].kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::Spacer
+            ),
+            "the old side pads the inserted row"
+        );
+        row
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+                pane.markdown_interaction.reveal.request(row);
+                cx.notify();
+            });
+        });
+    });
+    draw_frames(cx, 3);
+
+    let (viewport, inserted) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.diff_scroll.0.borrow().base_handle.bounds(),
+            pane.diff_text_hitbox_bounds_for_tests(row, DiffTextRegion::SplitRight),
+        )
+    });
+    let inserted = inserted.expect("the inserted row is drawn");
+    assert!(
+        inserted.top() >= viewport.top() && inserted.bottom() <= viewport.bottom(),
+        "the inserted row is on screen: row={inserted:?} viewport={viewport:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup");
+}
+
+#[gpui::test]
+fn moving_over_a_link_that_goes_nowhere_checks_it_once(cx: &mut gpui::TestAppContext) {
+    // A link to no heading stays plain words; working that out slugs every
+    // heading (or, for a file link, stats the disk), so it is done once per
+    // link the pointer enters, not on every move across it.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8816),
+        "markdown_link_hover_dead_anchor",
+        "See [a heading that is not there](#no-such-heading) here\n",
+    );
+    let on_link = point_on_link_in_row(cx, &view, 0);
+    let text_box = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("the row's text box");
+
+    crate::view::panes::main::take_link_followability_checks_for_tests();
+    for step in 0..6 {
+        move_mouse(cx, point(on_link.x + px(step as f32), on_link.y), false);
+    }
+    assert_eq!(hovered_link(cx, &view), None, "the dead link stays plain");
+    assert_eq!(
+        crate::view::panes::main::take_link_followability_checks_for_tests(),
+        1,
+        "the link is checked when the pointer enters it"
+    );
+
+    // Leaving the link and coming back checks it again: the file or heading
+    // may have appeared meanwhile.
+    move_mouse(cx, point(text_box.left() + px(2.0), on_link.y), false);
+    move_mouse(cx, on_link, false);
+    assert_eq!(
+        crate::view::panes::main::take_link_followability_checks_for_tests(),
+        1,
+        "re-entering the link checks it once more"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn the_budget_fallback_to_source_ends_when_another_repo_shows_the_same_path(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Two repositories' `README.md` are equal diff targets; the switch between
+    // them is still a different file.
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let root = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_budget_fallback_repo_switch",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let (first, second) = (root.join("first"), root.join("second"));
+    std::fs::create_dir_all(&first).expect("create first workdir");
+    std::fs::create_dir_all(&second).expect("create second workdir");
+    let path = std::path::PathBuf::from("README.md");
+    let (huge_old, huge_new) = inline_overflowing_markdown_diff();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                cx.notify();
+            });
+        });
+    });
+    let first_id = gitcomet_state::model::RepoId(8817);
+    seed_file_diff_state(cx, &view, first_id, &first, &path, &huge_old, &huge_new);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the huge diff falls back to source",
+        |pane| {
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown)
+                == RenderedPreviewMode::Source
+        },
+        |pane| pane.diff_markdown.inflight,
+    );
+
+    let second_id = gitcomet_state::model::RepoId(8818);
+    seed_file_diff_state(cx, &view, second_id, &second, &path, "# one\n", "# two\n");
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the second repository is shown",
+        |pane| pane.active_repo().map(|repo| repo.id) == Some(second_id),
+        |pane| pane.active_repo().map(|repo| repo.id),
+    );
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "only the other repository's huge file had to be shown as source"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[gpui::test]
+fn split_markdown_diff_says_why_a_side_shows_nothing(cx: &mut gpui::TestAppContext) {
+    // A side missing from the change is not an empty file, and neither is one
+    // whose text renders nothing.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(8819);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_split_side_notices",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+    let path = std::path::PathBuf::from("docs/notes.md");
+    let cases = [
+        (
+            Some("# Gone\n\nOld words.\n"),
+            None,
+            DiffTextRegion::SplitRight,
+            "File deleted.",
+        ),
+        (
+            None,
+            Some("# Added\n\nNew words.\n"),
+            DiffTextRegion::SplitLeft,
+            "File added.",
+        ),
+        (
+            Some("# Was\n"),
+            Some("[spec]: https://example.com/spec\n"),
+            DiffTextRegion::SplitRight,
+            "Nothing to render.",
+        ),
+    ];
+    for (rev, (old, new, region, notice)) in (1u64..).zip(cases) {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    path.clone(),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                repo.diff_state.diff_file_rev = rev;
+                repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                    gitcomet_core::domain::FileDiffText::new(
+                        path.clone(),
+                        old.map(str::to_string),
+                        new.map(str::to_string),
+                    ),
+                )));
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.rendered_preview_modes
+                        .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                    pane.diff_view = DiffViewMode::Split;
+                    cx.notify();
+                });
+            });
+        });
+        wait_for_main_pane_condition(
+            cx,
+            &view,
+            "the diff preview is built",
+            |pane| {
+                pane.diff_markdown.inflight.is_none()
+                    && pane.diff_markdown.cache_rev == rev
+                    && matches!(
+                        pane.diff_markdown.preview,
+                        gitcomet_state::model::Loadable::Ready(_)
+                    )
+            },
+            |pane| (pane.diff_markdown.cache_rev, pane.diff_markdown.inflight),
+        );
+        draw_frames(cx, 2);
+        assert!(
+            cx.debug_bounds(leaked_selector(format!(
+                "markdown_diff_side_notice_{region:?}_{notice}"
+            )))
+            .is_some(),
+            "{region:?} says {notice:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn a_frame_of_a_picture_heavy_preview_checks_only_the_pictures_it_draws(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Each local picture is a stat. A frame draws the ones near the viewport;
+    // the rest of a long document's pictures are not its business.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let pictures = 300;
+    let source: String = (0..pictures)
+        .map(|ix| format!("Paragraph {ix} with ![badge {ix}](pics/badge{ix}.png) inline.\n\n"))
+        .collect();
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8820),
+        "markdown_picture_stats_per_frame",
+        &source,
+    );
+    draw_frames(cx, 3);
+
+    crate::view::rows::take_markdown_image_stats_for_tests();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |_pane, cx| cx.notify());
+        });
+        let _ = window.draw(app);
+    });
+    let stats = crate::view::rows::take_markdown_image_stats_for_tests();
+    assert!(
+        stats < pictures / 3,
+        "a redraw checks {stats} of {pictures} pictures on disk"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn opening_a_conflicted_markdown_preview_parses_off_the_render_path(cx: &mut gpui::TestAppContext) {
+    // Three sides of a large file take tens of milliseconds to parse. The frame
+    // that opens the preview shows them processing rather than stalling on it.
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(8821);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_preview_parse_off_render",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("conflict.md");
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create conflict workdir");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                "# Base\n",
+                "# Local\n",
+                "# Remote\n",
+                "<<<<<<< ours\n# Local\n=======\n# Remote\n>>>>>>> theirs\n",
+            );
+            // The preview parses only once all three sides are loaded in full.
+            repo.conflict_state.conflict_file_load_mode =
+                gitcomet_state::model::ConflictFileLoadMode::Full;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    let sides_ready = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let documents = &view
+                .read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolver
+                .markdown_preview
+                .documents;
+            [&documents.base, &documents.ours, &documents.theirs]
+                .map(|document| matches!(document, gitcomet_state::model::Loadable::Ready(_)))
+        })
+    };
+    assert_eq!(
+        sides_ready(cx),
+        [false; 3],
+        "the frame that opens the preview parses nothing"
+    );
+
+    cx.run_until_parked();
+    assert_eq!(sides_ready(cx), [true; 3], "the parse lands afterwards");
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup conflict fixture");
+}
+
+#[gpui::test]
+fn a_frame_of_the_markdown_preview_installs_pointer_listeners_once_per_document(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Rows and the gaps between blocks used to carry their own click targets,
+    // several closures each, rebuilt every frame. One set on the document
+    // resolves which row a press is over, so a longer document installs no
+    // more of them. The rest of the window installs the same number either way.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let mut frame = |repo_id: u64, name: &str, paragraphs: usize| {
+        let source: String = (0..paragraphs)
+            .map(|ix| format!("Paragraph {ix} with a [link](https://example.com/{ix}).\n\n"))
+            .collect();
+        let fixture = RenderedPreviewFixture::open(
+            cx,
+            &view,
+            gitcomet_state::model::RepoId(repo_id),
+            name,
+            &source,
+        );
+        draw_frames(cx, 3);
+        crate::kit::click::take_click_targets_installed_for_tests();
+        crate::view::rows::take_markdown_flow_texts_built_for_tests();
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |_pane, cx| cx.notify());
+            });
+            let _ = window.draw(app);
+        });
+        let rows = crate::view::rows::take_markdown_flow_texts_built_for_tests();
+        let targets = crate::kit::click::take_click_targets_installed_for_tests();
+        fixture.cleanup();
+        (rows, targets)
+    };
+    let (short_rows, short_targets) = frame(8822, "markdown_pointer_listeners_short", 2);
+    let (long_rows, long_targets) = frame(8823, "markdown_pointer_listeners_long", 300);
+    assert!(
+        long_rows > short_rows + 10,
+        "the long document draws more rows: {long_rows} vs {short_rows}"
+    );
+    assert_eq!(
+        long_targets, short_targets,
+        "{long_rows} rows install as many click targets as {short_rows}"
+    );
+}
+
+/// A conflicted `conflict.md` in the merge tool's rendered preview, parsed.
+fn open_conflict_markdown_preview(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    [base, ours, theirs]: [&str; 3],
+) {
+    let file_rel = std::path::PathBuf::from("conflict.md");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let merged = format!("<<<<<<< ours\n{ours}=======\n{theirs}>>>>>>> theirs\n");
+            set_test_conflict_file(&mut repo, file_rel.clone(), base, ours, theirs, &merged);
+            repo.conflict_state.conflict_file_load_mode =
+                gitcomet_state::model::ConflictFileLoadMode::Full;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_frames(cx, 1);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
+                cx.notify();
+            });
+        });
+    });
+    draw_frames(cx, 3);
+}
+
+#[gpui::test]
+fn the_merge_tool_preview_draws_tables_and_local_pictures_like_the_file_preview(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The merge tool drew markdown as fixed-height text rows: tables as padded
+    // text and, with nowhere to resolve them from, every local picture as
+    // "Image unavailable".
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1400.0), px(800.0)));
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_preview_flowing",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create conflict workdir");
+    std::fs::write(
+        workdir.join("logo.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\"/></svg>",
+    )
+    .expect("write the picture");
+
+    let ours = "# Local\n\n| Name | Value |\n|------|-------|\n| one | 1 |\n\n![logo](logo.svg)\n";
+    open_conflict_markdown_preview(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8824),
+        &workdir,
+        ["# Base\n", ours, "# Remote\n"],
+    );
+    let (table_row, picture_row) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let gitcomet_state::model::Loadable::Ready(document) =
+            &pane.conflict_resolver.markdown_preview.documents.ours
+        else {
+            panic!("the local side is parsed");
+        };
+        let row = |matches: &dyn Fn(&crate::view::markdown_preview::MarkdownPreviewRow) -> bool| {
+            document
+                .rows
+                .iter()
+                .position(matches)
+                .expect("the row is in the document")
+        };
+        (
+            row(&|row| row.text.contains("one")),
+            row(&|row| row.image.is_some()),
+        )
+    });
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_box_{table_row}_1"
+        )))
+        .is_some(),
+        "the table is a grid of cells"
+    );
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{picture_row}"
+        )))
+        .is_some(),
+        "the local picture resolves"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1400.0), px(800.0)));
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_preview_search_reveal",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create conflict workdir");
+
+    // One unique paragraph far below the fold of the Local column.
+    let mut ours: String = (0..300)
+        .map(|ix| format!("paragraph {ix:03}\n\n"))
+        .collect();
+    ours.push_str("the needle paragraph\n");
+    open_conflict_markdown_preview(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8825),
+        &workdir,
+        ["# Base\n", &ours, "# Remote\n"],
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Conflict)
+        );
+        assert_eq!(
+            uniform_list_offset(&pane.conflict_preview_ours_scroll).y,
+            px(0.0)
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = "needle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_matches.len(), 1);
+        assert!(
+            uniform_list_offset(&pane.conflict_preview_ours_scroll).y < px(0.0),
+            "the Local column scrolls down to the match"
+        );
+        assert_eq!(
+            pane.conflict_resolver
+                .markdown_preview
+                .columns
+                .ours
+                .reveal
+                .pending(),
+            None,
+            "the reveal is claimed once"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn a_conflicted_markdown_file_in_text_mode_is_not_a_markdown_preview(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The merge tool shows the conflict's text; the rendered markdown diff it
+    // replaces is stale. Search, the text hotkeys, and copy must see the text.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_text_mode_surface",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create conflict workdir");
+    open_conflict_markdown_preview(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(8826),
+        &workdir,
+        ["# Base\n", "# Local\n", "# Remote\n"],
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Text;
+                cx.notify();
+            });
+        });
+    });
+    draw_frames(cx, 2);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.is_conflict_resolver_active(),
+            "the merge tool is showing"
+        );
+        assert!(
+            !pane.is_markdown_preview_active(),
+            "the merge tool's text is not a rendered markdown preview"
+        );
+        assert_eq!(pane.markdown_search_surface(), None);
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
 }

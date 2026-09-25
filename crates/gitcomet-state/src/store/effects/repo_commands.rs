@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, send_or_log, short_commit_id, single_line_context,
-    spawn_with_repo,
+    GitOperationTask, RepoMap, message_subject, missing_repo_error, send_or_log, short_commit_id,
+    single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
 const GITIGNORE_FILE_NAME: &str = gitcomet_core::gitignore::FILE_NAME;
@@ -106,6 +106,9 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         },
         RepoCommandKind::CherryPick {
             commit_id, summary, ..
+        }
+        | RepoCommandKind::Revert {
+            commit_id, summary, ..
         } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
         RepoCommandKind::MergeAbort => "Current merge".to_string(),
         RepoCommandKind::CreateTag { name, target, .. } => format!("{name} at {target}"),
@@ -190,22 +193,41 @@ fn schedule_repo_command_with_context<F>(
 {
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
-        let result = {
-            let _scope = operation.attach();
-            run(repo)
-        };
-        let outcome = GitOperationTask::outcome(&result);
-        operation.finish(
-            outcome,
-            InternalMsg::RepoCommandFinished {
-                repo_id,
-                command,
-                result,
-            },
-        );
-    });
+    // The reducer counted the command in flight and only its completion
+    // releases that count, so a missing handle must still finish it.
+    let missing = command.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
+            let result = {
+                let _scope = operation.attach();
+                run(repo)
+            };
+            let outcome = GitOperationTask::outcome(&result);
+            operation.finish(
+                outcome,
+                InternalMsg::RepoCommandFinished {
+                    repo_id,
+                    command,
+                    result,
+                },
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepoCommandFinished {
+                    repo_id,
+                    command: missing,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 fn schedule_repo_command<F>(
@@ -1425,6 +1447,50 @@ pub(super) fn schedule_cherry_pick_commit(
     );
 }
 
+pub(super) fn schedule_revert_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_commit_id = commit_id.clone();
+    let suggestion_tx = msg_tx.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Revert {
+            commit_id: command_commit_id,
+            commit,
+            mainline,
+            summary,
+        },
+        move |repo| {
+            let output = run_with_git_auth(auth, || {
+                repo.revert_with_output(&commit_id, commit, mainline)
+            });
+            // A staged revert leaves git's message behind; offer it to the
+            // commit box the user now has to type in.
+            if !commit
+                && output.is_ok()
+                && let Ok(Some(message)) = repo.commit_message_template()
+            {
+                send_or_log(
+                    &suggestion_tx,
+                    Msg::Internal(InternalMsg::CommitMessageSuggested { repo_id, message }),
+                );
+            }
+            output
+        },
+    );
+}
+
 pub(super) fn schedule_merge_abort(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1705,7 +1771,9 @@ pub(super) fn schedule_launch_mergetool(
 
 #[cfg(test)]
 mod worktree_save_target_tests {
-    use super::{append_gitignore_patterns_in_workdir, resolve_worktree_save_target};
+    #[cfg(unix)]
+    use super::append_gitignore_patterns_in_workdir;
+    use super::resolve_worktree_save_target;
     use gitcomet_core::error::ErrorKind;
     use std::path::Path;
 

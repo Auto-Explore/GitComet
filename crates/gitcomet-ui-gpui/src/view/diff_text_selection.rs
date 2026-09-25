@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use rustc_hash::FxHasher;
 
 fn diff_text_empty_space_surface(
@@ -21,7 +22,7 @@ fn diff_text_empty_space_surface(
                 cx.notify();
             });
         })
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(MouseButton::Right, move |event, window, cx| {
             crate::press_gesture::claim_press(cx);
             cx.stop_propagation();
             let focus = right_view.read(cx).diff_panel_focus_handle.clone();
@@ -467,6 +468,7 @@ impl Element for DiffTextSelectionOverlay {
             painted_text: self.text.clone(),
             streamed_ascii_monospace_cell_width: None,
             wrapped: None,
+            cells: Vec::new(),
         };
 
         let visible_ix = self.visible_ix;

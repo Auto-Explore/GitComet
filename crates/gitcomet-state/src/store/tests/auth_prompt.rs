@@ -17,7 +17,7 @@ fn setup_open_repo(
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     repos.insert(repo_id, Arc::new(DummyRepo::new(workdir)));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -343,7 +343,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "https://example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/private-repo");
 
@@ -376,7 +376,7 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
 fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "git@github.com:private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/private-repo");
 
@@ -690,7 +690,7 @@ fn submit_auth_prompt_replays_clone_operation() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
     state.banner_error = Some(crate::model::BannerErrorState {
@@ -786,7 +786,7 @@ fn submit_auth_prompt_preserves_non_clone_banner_when_replaying_clone() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
     let banner_message = "Fetch failed".to_string();
@@ -865,7 +865,6 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
         effects.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: _,
             ..
         }]
     ));
@@ -1004,7 +1003,6 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         fetch_effects.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: _,
             ..
         }]
     ));
@@ -1143,8 +1141,65 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         }] if path == &PathBuf::from("vendor/lib")
     ));
 
+    // A revert is replayed whole with the staged auth: the backend resumes one
+    // stopped at its commit step, and a `--no-commit` fetch failure reruns.
+    for commit in [true, false] {
+        let revert_effects = replay_case(RepoCommandKind::Revert {
+            commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            commit,
+            mainline: Some(1),
+            summary: "revert me".to_string(),
+        });
+        assert!(
+            matches!(
+                revert_effects.as_slice(),
+                [Effect::RevertCommit {
+                    repo_id: RepoId(1),
+                    commit: replayed,
+                    mainline: Some(1),
+                    auth: Some(_),
+                    ..
+                }] if *replayed == commit
+            ),
+            "commit={commit}: {revert_effects:?}"
+        );
+    }
+
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());
+}
+
+#[test]
+fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let command = RepoCommandKind::Revert {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        commit: true,
+        mainline: None,
+        summary: "revert me".to_string(),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: command.clone(),
+            result: Err(auth_error(
+                "git commit --no-verify -F MERGE_MSG failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::RepoCommand { repo_id, command }
+    );
 }
 
 #[test]

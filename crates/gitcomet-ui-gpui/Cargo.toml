@@ -37,11 +37,12 @@ image = { workspace = true }
 jiff = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
-mimalloc = { workspace = true }
 palette = { workspace = true }
 pulldown-cmark = { workspace = true }
+unicode-normalization = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+rustfs-mimalloc = { workspace = true }
 resvg = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -155,7 +156,7 @@ raw-window-handle = { workspace = true }
 gitcomet-git-gix = { workspace = true }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.
-gitcomet-core = { workspace = true, features = ["test-support"] }
+gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 gitcomet-state = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }

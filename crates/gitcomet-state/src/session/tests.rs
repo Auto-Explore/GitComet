@@ -26,6 +26,88 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn signature_verification_requires_fresh_opt_in_and_survives_other_writers() {
+    let dir = unique_session_test_dir("signature-opt-in");
+    let path = dir.join("session.json");
+    for legacy in ["true", "false", "null"] {
+        fs::write(&path, format!(r#"{{"version":3,"open_repos":[],"active_repo":null,"history_verify_commit_signatures":{legacy}}}"#)).unwrap();
+        assert_eq!(
+            load_from_path(&path).history_verify_commit_signatures,
+            Some(false)
+        );
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: Some(1200),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from_path(&path).history_verify_commit_signatures,
+            Some(false)
+        );
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_verify_commit_signatures: Some(true),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_height: Some(800),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from_path(&path).history_verify_commit_signatures,
+            Some(true)
+        );
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["history_verify_commit_signatures_opt_in"], true);
+        assert_eq!(saved["history_verify_commit_signatures"], true);
+        assert_eq!(saved["version"], 3);
+    }
+}
+
+#[test]
+fn history_branch_names_survives_other_session_writers() {
+    let dir = unique_session_test_dir("history-branch-names");
+    let path = dir.join("session.json");
+    assert_eq!(load_from_path(&path).history_branch_names, None);
+    for mode in ["inline", "separate_column"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_branch_names: Some(mode.into()),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        // A later geometry/settings snapshot must not reset placement.
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph: Some(false),
+                window_width: Some(1200),
+                window_height: Some(800),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.history_branch_names.as_deref(), Some(mode));
+        assert_eq!(loaded.history_show_graph, Some(false));
+        assert_eq!(loaded.window_width, Some(1200));
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn assert_session_writer_waits_for_shared_lock(
     label: &str,
     persist: impl FnOnce(PathBuf) -> io::Result<()> + Send + 'static,
@@ -676,7 +758,7 @@ fn persist_from_state_and_load_from_path_round_trip() {
             ),
         ],
         active_repo: Some(RepoId(2)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     persist_from_state_to_path(&state, &path).expect("persist succeeds");
@@ -705,7 +787,7 @@ fn snapshot_repos_from_state_dedups_and_filters_inactive_selection() {
             ),
         ],
         active_repo: Some(RepoId(999)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let snapshot = snapshot_repos_from_state(&state);
@@ -731,7 +813,7 @@ fn snapshot_repos_from_state_dedups_and_filters_inactive_selection() {
             ),
         ],
         active_repo: Some(RepoId(2)),
-        ..Default::default()
+        ..AppState::test_default()
     };
     let snapshot = snapshot_repos_from_state(&state);
     assert_eq!(snapshot.active_repo_index, Some(1));
@@ -756,7 +838,7 @@ fn snapshot_repos_from_state_reuses_cached_open_repo_slice_for_same_repo_list() 
             ),
         ],
         active_repo: Some(RepoId(2)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -798,7 +880,7 @@ fn snapshot_excludes_provisional_drop_and_preserves_its_previous_active_tab() {
     let mut state = AppState {
         repos: vec![first, second, provisional],
         active_repo: Some(RepoId(3)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let pending = snapshot_repos_from_state(&state);
@@ -838,7 +920,7 @@ fn snapshot_repos_from_state_cache_keeps_dedup_index_for_duplicate_workdirs() {
             RepoState::new_opening(RepoId(2), RepoSpec { workdir: repo_a }),
         ],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -877,7 +959,7 @@ fn snapshot_repos_from_state_preserves_first_seen_order_for_repeated_workdirs() 
             ),
         ],
         active_repo: Some(RepoId(3)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let snapshot = snapshot_repos_from_state(&state);
@@ -913,7 +995,7 @@ fn snapshot_repos_from_state_cache_invalidates_when_repo_order_changes() {
             ),
         ],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);
@@ -948,7 +1030,7 @@ fn snapshot_repos_from_state_cache_invalidates_when_repo_spec_changes() {
             },
         )],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
 
     let first = snapshot_repos_from_state(&state);

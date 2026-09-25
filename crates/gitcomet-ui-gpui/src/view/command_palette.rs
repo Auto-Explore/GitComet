@@ -1,11 +1,12 @@
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, CursorStyle, Entity, FocusHandle, FontWeight, MouseButton, MouseDownEvent,
-    ScrollStrategy, SharedString, UniformListScrollHandle, WeakEntity, Window, div, px,
-    uniform_list,
+    AnyElement, Entity, FocusHandle, FontWeight, MouseButton, MouseDownEvent, ScrollStrategy,
+    SharedString, UniformListScrollHandle, WeakEntity, Window, div, px, uniform_list,
 };
 use palette::IntoColor;
 
@@ -35,11 +36,13 @@ pub(crate) enum Needs {
     Nothing,
     ExternalEditor,
     Merge,
-    /// A rebase, apply, or cherry-pick in progress.
+    /// A rebase, apply, cherry-pick, or revert in progress.
     Sequencer,
     /// A sequencer operation with every conflict resolved.
     SequencerResolved,
     PushWithTags(TagPushMode),
+    /// A remote whose URL points at a web page.
+    RemoteWebPage,
     MacOs,
     Linux,
 }
@@ -51,25 +54,42 @@ pub(crate) struct PaletteContext {
     pub(crate) external_editor: bool,
     pub(crate) merging: bool,
     pub(crate) sequencer: bool,
+    /// A sequencer command is running, so Continue/Abort would be refused.
+    pub(crate) sequencer_busy: bool,
     pub(crate) unresolved_conflicts: bool,
     /// Why each tag-push mode is unavailable, indexed by `TagPushMode::index`.
     /// Computed by the push menu's own logic so the two cannot disagree.
     pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
+    /// Why no remote can be opened in a browser, from `remote_web_request`.
+    pub(crate) remote_web_page_unavailable: Option<&'static str>,
 }
 
 /// Why a command with `needs` cannot run under `ctx`, or `None` when it can.
 pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&'static str> {
-    const NOT_SEQUENCING: &str = "Only available while a rebase or cherry-pick is in progress";
+    const NOT_SEQUENCING: &str =
+        "Only available while a rebase, cherry-pick, or revert is in progress";
+    // Same wording as the action bar's disabled Continue/Abort.
+    const SEQUENCER_BUSY: &str = "Wait for the running Git operation to finish";
     match needs {
         Needs::Nothing => None,
         Needs::ExternalEditor => {
             (!ctx.external_editor).then_some("Choose an external code editor in Settings first")
         }
         Needs::Merge => (!ctx.merging).then_some("Only available while a merge is in progress"),
-        Needs::Sequencer => (!ctx.sequencer).then_some(NOT_SEQUENCING),
+        Needs::Sequencer => {
+            if !ctx.sequencer {
+                Some(NOT_SEQUENCING)
+            } else if ctx.sequencer_busy {
+                Some(SEQUENCER_BUSY)
+            } else {
+                None
+            }
+        }
         Needs::SequencerResolved => {
             if !ctx.sequencer {
                 Some(NOT_SEQUENCING)
+            } else if ctx.sequencer_busy {
+                Some(SEQUENCER_BUSY)
             } else if ctx.unresolved_conflicts {
                 // Same wording as the action bar's Continue button.
                 Some("Resolve all conflicts before continuing")
@@ -78,6 +98,7 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
             }
         }
         Needs::PushWithTags(mode) => ctx.push_with_tags_unavailable[mode.index()],
+        Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
             .then_some("Only available on Linux"),
@@ -177,19 +198,19 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "continue-rebase",
-        label: "Continue Rebase or Cherry-Pick",
+        label: "Continue Rebase, Cherry-Pick, or Revert",
         shortcut: Shortcut::None,
         category: "Branch",
-        keywords: "continue resume rebase cherry pick apply am sequencer",
+        keywords: "continue resume rebase cherry pick revert apply am sequencer",
         requires_repo: true,
         needs: Needs::SequencerResolved,
     },
     CommandEntry {
         id: "abort-rebase",
-        label: "Abort Rebase or Cherry-Pick",
+        label: "Abort Rebase, Cherry-Pick, or Revert",
         shortcut: Shortcut::None,
         category: "Branch",
-        keywords: "abort cancel rebase cherry pick apply am sequencer",
+        keywords: "abort cancel rebase cherry pick revert apply am sequencer",
         requires_repo: true,
         needs: Needs::Sequencer,
     },
@@ -655,6 +676,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         keywords: "",
         requires_repo: true,
         needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "open-remote-in-browser",
+        label: crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
+        shortcut: Shortcut::Secondary("K"),
+        category: "Remotes",
+        keywords: "github gitlab bitbucket forge website url view page issues",
+        requires_repo: true,
+        needs: Needs::RemoteWebPage,
     },
     CommandEntry {
         id: "add-submodule",
@@ -1141,7 +1171,6 @@ impl CommandPaletteView {
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
         let row_height = scaled_px(36.0);
-        let hover_overlay = theme.hover_overlay();
         let selected_overlay = theme.active_overlay();
 
         range
@@ -1180,21 +1209,25 @@ impl CommandPaletteView {
                             .justify_between()
                             .gap(scaled_px(12.0))
                             .px(scaled_px(10.0))
-                            .rounded(px(theme.radii.row));
+                            .rounded(px(theme.radii.row))
+                            .control_interaction(
+                                controls::InteractionStyle::new(theme),
+                                controls::InteractionState::default()
+                                    .selected(selected, selected_overlay)
+                                    .disabled(unavailable.is_some()),
+                            );
                         let command_row = match unavailable {
-                            None => command_row
-                                .hover(move |style| style.bg(hover_overlay))
-                                .cursor(CursorStyle::PointingHand)
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                                        this.close_and_notify_root(
-                                            Some(command_id_for_click.clone()),
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ),
+                            None => command_row.on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                                    this.close_and_notify_root(
+                                        Some(command_id_for_click.clone()),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
                             Some(reason) => command_row
                                 .debug_selector(move || {
                                     format!("command_palette_disabled_{command_id}")
@@ -1261,7 +1294,6 @@ impl CommandPaletteView {
                         .when(selected, |row| {
                             row.rounded_tr(px(theme.radii.row))
                                 .rounded_br(px(theme.radii.row))
-                                .bg(selected_overlay)
                                 .child(
                                     div()
                                         .absolute()
@@ -1353,12 +1385,14 @@ impl Render for CommandPaletteView {
             )
             .child(list_body);
 
-        let scrim = components::modal_scrim(theme).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                this.close_and_notify_root(None, window, cx);
-            }),
-        );
+        let scrim = components::modal_scrim(theme)
+            .id("command_palette_scrim")
+            .on_pointer_click(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.close_and_notify_root(None, window, cx);
+                }),
+            );
 
         div()
             .absolute()
@@ -1423,6 +1457,30 @@ fn fuzzy_subsequence_match(label: &str, query: &str) -> Option<(i32, Vec<usize>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequencer_commands_are_unavailable_while_one_is_running() {
+        let ctx = PaletteContext {
+            has_active_repo: true,
+            sequencer: true,
+            sequencer_busy: true,
+            ..PaletteContext::default()
+        };
+
+        for needs in [Needs::Sequencer, Needs::SequencerResolved] {
+            assert_eq!(
+                unavailable_reason(needs, &ctx),
+                Some("Wait for the running Git operation to finish"),
+                "the action bar disables these; the palette must agree"
+            );
+        }
+
+        let idle = PaletteContext {
+            sequencer_busy: false,
+            ..ctx
+        };
+        assert_eq!(unavailable_reason(Needs::Sequencer, &idle), None);
+    }
 
     #[test]
     fn keyword_matches_find_commands_their_label_no_longer_spells_out() {
@@ -1676,6 +1734,61 @@ mod tests {
         assert!(
             filtered_commands(false, "go to").is_empty(),
             "there is nothing to go to without a repository"
+        );
+    }
+
+    #[test]
+    fn open_remote_in_browser_is_findable_by_forge_words() {
+        assert_eq!(
+            filtered_commands(true, "open remote")
+                .first()
+                .map(|command| command.id),
+            Some("open-remote-in-browser")
+        );
+        for query in ["browser", "github", "gitlab", "web"] {
+            assert!(
+                filtered_commands(true, query)
+                    .iter()
+                    .any(|command| command.id == "open-remote-in-browser"),
+                "{query:?} should find Open remote in web browser"
+            );
+        }
+        assert!(
+            !filtered_commands(false, "open remote")
+                .iter()
+                .any(|command| command.id == "open-remote-in-browser"),
+            "there is no remote without a repository"
+        );
+    }
+
+    #[test]
+    fn open_remote_in_browser_shows_the_chord_it_is_bound_to() {
+        let entry = COMMANDS
+            .iter()
+            .find(|command| command.id == "open-remote-in-browser")
+            .expect("the palette offers Open remote in web browser");
+        // `bind_app_keys` binds `secondary-k`; the label is kept in sync by hand.
+        assert_eq!(entry.shortcut, Shortcut::Secondary("K"));
+        let expected = if cfg!(target_os = "macos") {
+            "Cmd+K"
+        } else {
+            "Ctrl+K"
+        };
+        assert_eq!(entry.shortcut.label().as_deref(), Some(expected));
+        assert_eq!(entry.label, crate::menu_labels::OPEN_REMOTE_IN_BROWSER);
+        assert_eq!(entry.category, "Remotes");
+        assert!(entry.requires_repo);
+        assert_eq!(entry.needs, Needs::RemoteWebPage);
+    }
+
+    #[test]
+    fn remote_web_page_need_reports_its_context_reason() {
+        let mut ctx = PaletteContext::default();
+        assert_eq!(unavailable_reason(Needs::RemoteWebPage, &ctx), None);
+        ctx.remote_web_page_unavailable = Some("Add a remote first");
+        assert_eq!(
+            unavailable_reason(Needs::RemoteWebPage, &ctx),
+            Some("Add a remote first")
         );
     }
 

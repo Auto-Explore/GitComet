@@ -27,7 +27,7 @@ fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -80,7 +80,7 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -97,6 +97,7 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
                         text_fingerprint: 1,
                         saved_fingerprint: 2,
                         first_dirty_line: None,
+                        disk: Default::default(),
                     },
                     None,
                     cx,
@@ -127,7 +128,7 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -154,6 +155,7 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
                     text_fingerprint: 1,
                     saved_fingerprint: 2,
                     first_dirty_line: None,
+                    disk: Default::default(),
                 },
                 None,
                 cx,
@@ -175,7 +177,7 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
 #[gpui::test]
 fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -191,6 +193,7 @@ fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui:
                     text_fingerprint: 1,
                     saved_fingerprint: 2,
                     first_dirty_line: None,
+                    disk: Default::default(),
                 },
                 None,
                 cx,

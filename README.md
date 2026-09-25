@@ -219,6 +219,12 @@ Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional f
 
 KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional arguments), so GitComet can be a drop-in replacement.
 
+### Commit signature verification
+
+GitComet shows verification badges on signed commits. Git performs the check, using `gpg` for GPG and X.509 signatures and `ssh-keygen` for SSH signatures, so badges need those programs and the signers' public keys. **Settings → Executables** shows which programs GitComet found.
+
+To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers, see the [commit signature guide](docs/commit-signatures.md).
+
 ### Themes
 
 GitComet supports built-in themes and user-provided custom themes.

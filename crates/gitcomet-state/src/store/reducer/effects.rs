@@ -844,7 +844,7 @@ pub(super) fn select_commit_multi(
     commit_id: CommitId,
     mode: CommitSelectMode,
     clicked_index: Option<usize>,
-    visible_order: Option<Vec<CommitId>>,
+    mut visible_order: Option<Vec<CommitId>>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -860,7 +860,7 @@ pub(super) fn select_commit_multi(
         }
         CommitSelectMode::Toggle => {
             if let Some(ix) = sel.commits.iter().position(|c| *c == commit_id) {
-                sel.commits.remove(ix);
+                Arc::make_mut(&mut sel.commits).remove(ix);
                 let Some(focus) = sel.commits.last().cloned() else {
                     // Toggled the last commit away: clear the selection
                     // entirely (also dissolves the multi-selection).
@@ -870,7 +870,7 @@ pub(super) fn select_commit_multi(
                 };
                 focus
             } else {
-                sel.commits.push(commit_id.clone());
+                Arc::make_mut(&mut sel.commits).push(commit_id.clone());
                 sel.anchor = Some(commit_id.clone());
                 sel.anchor_index = clicked_index;
                 sel.anchor_log_rev = Some(log_rev);
@@ -905,7 +905,11 @@ pub(super) fn select_commit_multi(
                     } else {
                         (clicked_ix, anchor_ix)
                     };
-                    sel.commits = entries[a..=b].to_vec();
+                    sel.commits = Arc::new(if a == 0 && b + 1 == entries.len() {
+                        visible_order.take().unwrap()
+                    } else {
+                        entries[a..=b].to_vec()
+                    });
                     if sel.anchor.is_none() {
                         sel.anchor = Some(commit_id.clone());
                     }
@@ -940,7 +944,7 @@ pub(super) fn select_commit_multi(
             .flatten()
     };
 
-    match range_pair {
+    let mut effects = match range_pair {
         Some((from, to)) => {
             // Keep the focused commit selected (selection-derived UI stays
             // coherent) but don't load its details — the comparison view takes
@@ -972,7 +976,19 @@ pub(super) fn select_commit_multi(
             }
             effects
         }
+    };
+    if state.active_repo == Some(repo_id) && state.git_log_settings.verify_commit_signatures {
+        let formats = state.signature_verification_formats();
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            effects.extend(super::util::verify_commit_signatures_effect(
+                formats,
+                repo,
+                repo_id,
+                [],
+            ));
+        }
     }
+    effects
 }
 
 /// Emit a details load when the loaded commit details don't describe
@@ -1011,6 +1027,27 @@ fn merged_selection_range(
     repo_state: &RepoState,
     selected: &[CommitId],
 ) -> Option<(CommitId, CommitId)> {
+    let indexed = &repo_state.history_state.indexed;
+    if let Some(index) = indexed
+        .displayed_index
+        .as_ref()
+        .or(indexed.range_index.as_ref())
+    {
+        let positions: Option<Vec<usize>> = selected
+            .iter()
+            .map(|id| index.position(id.as_ref()))
+            .collect();
+        if let Some(positions) = positions {
+            let newest = *positions.iter().min()?;
+            let oldest = *positions.iter().max()?;
+            return Some((
+                index
+                    .parent_commit_id(oldest, 0)
+                    .unwrap_or_else(|| CommitId(EMPTY_TREE_ID.into())),
+                index.commit_id(newest)?,
+            ));
+        }
+    }
     let Loadable::Ready(page) = &repo_state.history_state.log else {
         return None;
     };
@@ -1241,8 +1278,7 @@ fn collapse_multi_selection_to(
     clicked_index: Option<usize>,
     log_rev: u64,
 ) {
-    sel.commits.clear();
-    sel.commits.push(commit_id.clone());
+    sel.commits = Arc::new(vec![commit_id.clone()]);
     sel.anchor = Some(commit_id);
     sel.anchor_index = clicked_index;
     sel.anchor_log_rev = Some(log_rev);
@@ -2402,13 +2438,9 @@ pub(super) fn status_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         match result {
             Ok(next) => {
-                let status_unchanged = matches!(
-                    &repo_state.status,
-                    Loadable::Ready(prev) if prev.as_ref() == &next
-                );
-                if !status_unchanged {
-                    repo_state.set_status(Loadable::Ready(Arc::new(next)));
-                }
+                // Also restore individual lanes after a partial-load error.
+                // The setter preserves revisions for unchanged payloads.
+                repo_state.set_status(Loadable::Ready(Arc::new(next)));
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
@@ -2465,21 +2497,25 @@ pub(super) fn worktree_status_loaded(
 pub(super) fn uncommitted_line_stats_loaded(
     state: &mut AppState,
     repo_id: RepoId,
+    generation: crate::model::LineStatsGeneration,
     result: std::result::Result<gitcomet_core::domain::UncommittedLineStats, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         // Previous numbers stand: a cosmetic column that re-fires on every fs
         // event should not raise a banner.
-        if let Ok(next) = result {
+        let current = repo_state.loads_in_flight.finish_line_stats(generation);
+        crate::store::repo_load_trace::trace!(
+            "line_stats_finish repo_id={:?} generation={} current={} success={}",
+            repo_id,
+            generation,
+            current,
+            result.is_ok()
+        );
+        if current && let Ok(next) = result {
             repo_state.set_uncommitted_line_stats(Loadable::Ready(std::sync::Arc::new(next)));
         }
-        finish_status_lane_replay(
-            repo_state,
-            RepoLoadsInFlight::UNCOMMITTED_LINE_STATS,
-            Effect::LoadUncommittedLineStats { repo_id },
-            &mut effects,
-        );
+        super::util::append_ready_line_stats_effect(repo_state, &mut effects);
     }
     effects
 }
@@ -2533,6 +2569,7 @@ fn finish_status_lane_replay(
     if repo_state.loads_in_flight.finish(flag) {
         effects.push(replay_effect);
     }
+    super::util::append_ready_line_stats_effect(repo_state, effects);
 }
 
 /// Clear conflict-file/session state when the tracked conflict path is no longer
@@ -2738,15 +2775,7 @@ pub(super) fn reflog_loaded(
 pub(super) fn squash_plan_for_repo(
     repo_state: &RepoState,
 ) -> Option<gitcomet_core::squash::SquashPlan> {
-    let Loadable::Ready(page) = &repo_state.log else {
-        return None;
-    };
-    let head = repo_state.head_commit_id()?;
-    gitcomet_core::squash::squash_eligibility(
-        &page.commits,
-        &repo_state.history_state.multi_selection.commits,
-        &head,
-    )
+    repo_state.history_squash_plan()
 }
 
 pub(super) fn prepare_squash(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -2920,14 +2949,16 @@ pub(super) fn resolve_commit_lookup(
     state: &mut AppState,
     repo_id: RepoId,
     reference: CommitId,
+    purpose: crate::model::CommitLookupPurpose,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    let request = repo_state.begin_commit_lookup(reference.clone());
+    let request = repo_state.begin_commit_lookup(purpose, reference.clone());
     vec![Effect::ResolveCommitLookup {
         repo_id,
         reference,
+        purpose,
         request,
     }]
 }
@@ -2937,20 +2968,21 @@ pub(super) fn commit_lookup_resolved(
     repo_id: RepoId,
     reference: CommitId,
     request: u64,
+    purpose: crate::model::CommitLookupPurpose,
     result: std::result::Result<Commit, Error>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
     // A reply for a reference the user has already typed past.
-    if repo_state.history_state.commit_lookup.reference.as_ref() != Some(&reference) {
+    if repo_state.commit_lookup_mut(purpose).reference.as_ref() != Some(&reference) {
         return Vec::new();
     }
     let value = match result {
         Ok(commit) => Loadable::Ready(commit),
         Err(e) => Loadable::Error(e.to_string()),
     };
-    repo_state.finish_commit_lookup(request, value);
+    repo_state.finish_commit_lookup(purpose, request, value);
     Vec::new()
 }
 
@@ -2960,7 +2992,11 @@ pub(super) fn commit_reveal_resolved(
     reference: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = if state.active_repo == Some(repo_id) {
+        state.signature_verification_formats()
+    } else {
+        gitcomet_core::domain::SignatureFormats::NONE
+    };
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -2988,7 +3024,7 @@ pub(super) fn commit_reveal_resolved(
     repo_state.set_reveal_target(Some(commit_id.clone()));
     repo_state.set_commit_details(Loadable::Ready(Arc::new(details)));
     let signature_effect = super::util::verify_commit_signatures_effect(
-        verify_signatures,
+        signature_formats,
         repo_state,
         repo_id,
         [commit_id.clone()],
@@ -3004,7 +3040,11 @@ pub(super) fn commit_details_loaded(
     commit_id: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = if state.active_repo == Some(repo_id) {
+        state.signature_verification_formats()
+    } else {
+        gitcomet_core::domain::SignatureFormats::NONE
+    };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
@@ -3024,7 +3064,7 @@ pub(super) fn commit_details_loaded(
         // The selected commit is usually a log row, but a reveal or a link menu
         // can select one the loaded page does not contain.
         let signature_effect = super::util::verify_commit_signatures_effect(
-            verify_signatures,
+            signature_formats,
             repo_state,
             repo_id,
             [commit_id.clone()],
@@ -3049,15 +3089,20 @@ pub(super) fn commit_signatures_verified(
     state: &mut AppState,
     repo_id: RepoId,
     epoch: u64,
+    batch: u64,
     result: std::result::Result<Vec<(CommitId, CommitSignature)>, Error>,
 ) -> Vec<Effect> {
-    if !state.git_log_settings.verify_commit_signatures {
+    let signature_formats = state.signature_verification_formats();
+    if signature_formats.is_empty() {
         return Vec::new();
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if repo_state.history_state.commit_signatures_epoch != epoch {
+    if repo_state.history_state.commit_signatures_epoch != epoch
+        || !repo_state.history_state.commit_signatures_in_flight
+        || repo_state.history_state.commit_signatures_batch != batch
+    {
         return Vec::new();
     }
     repo_state.history_state.commit_signatures_in_flight = false;
@@ -3066,7 +3111,10 @@ pub(super) fn commit_signatures_verified(
     if let Ok(verified) = result {
         repo_state.merge_commit_signatures(verified);
     }
-    super::util::verify_commit_signatures_effect(true, repo_state, repo_id, [])
+    if state.active_repo != Some(repo_id) {
+        return Vec::new();
+    }
+    super::util::verify_commit_signatures_effect(signature_formats, repo_state, repo_id, [])
         .into_iter()
         .collect()
 }

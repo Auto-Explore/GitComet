@@ -64,6 +64,7 @@ pub struct UiSession {
     pub mergetool_view_three_way: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    pub history_branch_names: Option<String>,
     pub history_show_graph: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
@@ -155,6 +156,7 @@ struct UiSessionFile {
     mergetool_view_three_way: Option<bool>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
+    history_branch_names: Option<String>,
     history_show_graph: Option<bool>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
@@ -165,6 +167,7 @@ struct UiSessionFile {
     terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
     history_verify_commit_signatures: Option<bool>,
+    history_verify_commit_signatures_opt_in: Option<bool>,
     history_relative_dates: Option<bool>,
     history_highlight_commit_chain: Option<bool>,
     file_browser_follow_selected_commit: Option<bool>,
@@ -285,6 +288,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         mergetool_view_three_way: file.mergetool_view_three_way,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
+        history_branch_names: file.history_branch_names,
         history_show_graph: file.history_show_graph,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
@@ -374,7 +378,7 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         .get("version")
         .and_then(|v| v.as_u64())
         .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
-    match version {
+    let mut file = match version {
         SESSION_FILE_VERSION_V1 => {
             let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
             Some(UiSessionFile {
@@ -394,7 +398,13 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
             .ok()
             .map(migrate_legacy_repo_fetch_prune_setting),
         _ => None,
-    }
+    }?;
+    let enabled = file
+        .history_verify_commit_signatures_opt_in
+        .unwrap_or(false);
+    file.history_verify_commit_signatures = Some(enabled);
+    file.history_verify_commit_signatures_opt_in = Some(enabled);
+    Some(file)
 }
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {

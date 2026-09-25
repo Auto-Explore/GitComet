@@ -68,8 +68,18 @@ pub(super) fn cherry_pick_commit(
 pub(super) fn revert_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
 ) -> Vec<Effect> {
-    vec![Effect::RevertCommit { repo_id, commit_id }]
+    vec![Effect::RevertCommit {
+        repo_id,
+        commit_id,
+        commit,
+        mainline,
+        summary,
+        auth: None,
+    }]
 }
 
 pub(super) fn create_branch(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
@@ -299,7 +309,10 @@ pub(super) fn safe_push_after_commit(
 }
 
 enum InFlightKind {
+    /// Fetch and prune: remote refs only.
     Pull,
+    /// A pull proper, which also merges into the checkout.
+    WorktreePull,
     Push,
 }
 
@@ -316,6 +329,11 @@ fn bump_in_flight(
         match kind {
             InFlightKind::Pull => {
                 repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
+            }
+            InFlightKind::WorktreePull => {
+                repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
+                repo_state.worktree_pull_in_flight =
+                    repo_state.worktree_pull_in_flight.saturating_add(1);
             }
             InFlightKind::Push => {
                 repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
@@ -363,7 +381,7 @@ pub(super) fn pull(
     repo_id: RepoId,
     mode: PullMode,
 ) -> Vec<Effect> {
-    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
+    bump_in_flight(repos, state, repo_id, InFlightKind::WorktreePull);
     vec![Effect::Pull {
         repo_id,
         mode,
@@ -379,7 +397,7 @@ pub(super) fn pull_branch(
     remote: String,
     branch: String,
 ) -> Vec<Effect> {
-    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
+    bump_in_flight(repos, state, repo_id, InFlightKind::WorktreePull);
     vec![Effect::PullBranch {
         repo_id,
         remote,
@@ -595,7 +613,7 @@ pub(super) fn squash_commits(
         repo_id,
         base: plan.oldest_parent,
         actual_head: plan.actual_head,
-        selected_ids: plan.ordered_ids,
+        selected_ids: Arc::unwrap_or_clone(plan.ordered_ids),
         reword_id: oldest,
         message,
         count,
@@ -895,6 +913,8 @@ fn commit_completion_finished(
     repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
     repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
     repo_state.bump_ops_rev();
+    // Hooks can rewrite files.
+    repo_state.bump_local_worktree_write_rev();
     match result {
         Ok(()) => {
             repo_state.feedback.last_error = None;
@@ -1007,6 +1027,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -1034,6 +1055,26 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     )
 }
 
+/// Mirror of `sequencer_effect_repo`: the commands whose effects are counted
+/// while they run. `sequencer_commands_release_their_count` pairs the two.
+pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::MergeRef { .. }
+            | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
+            | RepoCommandKind::InteractiveCherryPick { .. }
+            | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::MergeAbort
+    )
+}
+
 fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
     matches!(
         command,
@@ -1054,6 +1095,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1141,6 +1183,9 @@ pub(super) fn repo_command_finished(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if command.writes_worktree() {
+        repo_state.bump_local_worktree_write_rev();
+    }
 
     let mut extra_effects = Vec::new();
     if refresh_remote_branches && !matches!(repo_state.remote_branches, Loadable::Ready(_)) {
@@ -1152,10 +1197,14 @@ pub(super) fn repo_command_finished(
     match &command {
         RepoCommandKind::FetchAll
         | RepoCommandKind::PruneMergedBranches
-        | RepoCommandKind::PruneLocalTags
-        | RepoCommandKind::Pull { .. }
-        | RepoCommandKind::PullBranch { .. } => {
+        | RepoCommandKind::PruneLocalTags => {
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
+            repo_state.bump_ops_rev();
+        }
+        RepoCommandKind::Pull { .. } | RepoCommandKind::PullBranch { .. } => {
+            repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
+            repo_state.worktree_pull_in_flight =
+                repo_state.worktree_pull_in_flight.saturating_sub(1);
             repo_state.bump_ops_rev();
         }
         RepoCommandKind::PushWithTags { .. }
@@ -1183,6 +1232,11 @@ pub(super) fn repo_command_finished(
         }
         _ => {}
     }
+    if command_touches_sequencer_state(&command) {
+        repo_state.sequencer_actions_in_flight =
+            repo_state.sequencer_actions_in_flight.saturating_sub(1);
+        repo_state.bump_ops_rev();
+    }
 
     if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
         repo_state.submodule_add_in_flight = None;
@@ -1206,6 +1260,7 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::InteractiveRebase { .. }
                     | RepoCommandKind::InteractiveCherryPick { .. }
                     | RepoCommandKind::CherryPick { .. }
+                    | RepoCommandKind::Revert { .. }
                     | RepoCommandKind::MergeAbort
             ) {
                 repo_state.set_diff_target(None);

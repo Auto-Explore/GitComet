@@ -40,6 +40,13 @@ pub struct ScrollbarMarker {
 /// - GPUI `UniformListScrollHandle`
 /// - Alacritty terminal scroll model
 pub trait ScrollbarDriver: 'static {
+    /// Invalidate a custom viewport after an input gesture changes its driver.
+    fn interaction_changed(&self, _cx: &mut gpui::App) {}
+    /// Logical lists can describe their extent without converting millions of
+    /// rows to an imprecise `Pixels` coordinate. Both fractions are in [0, 1].
+    fn logical_metrics(&self, _axis: ScrollbarAxis) -> Option<(f64, f64)> {
+        None
+    }
     /// Maximum scroll extent in pixels for the given axis.
     fn max_offset(&self, axis: ScrollbarAxis) -> Pixels;
 
@@ -173,6 +180,7 @@ pub struct Scrollbar {
     axis: ScrollbarAxis,
     markers: Vec<ScrollbarMarker>,
     always_visible: bool,
+    max_thumb_length: Option<Pixels>,
     #[cfg(test)]
     debug_selector: Option<&'static str>,
 }
@@ -219,6 +227,7 @@ impl Scrollbar {
             axis: ScrollbarAxis::Vertical,
             markers: Vec::new(),
             always_visible: true,
+            max_thumb_length: None,
             #[cfg(test)]
             debug_selector: None,
         }
@@ -231,6 +240,7 @@ impl Scrollbar {
             axis: ScrollbarAxis::Horizontal,
             markers: Vec::new(),
             always_visible: true,
+            max_thumb_length: None,
             #[cfg(test)]
             debug_selector: None,
         }
@@ -243,6 +253,12 @@ impl Scrollbar {
 
     pub fn always_visible(mut self) -> Self {
         self.always_visible = true;
+        self
+    }
+
+    /// Cap a provisional thumb without changing the scroll range it controls.
+    pub fn max_thumb_length(mut self, length: Pixels) -> Self {
+        self.max_thumb_length = Some(length.max(px(24.0)));
         self
     }
 
@@ -265,6 +281,7 @@ impl Scrollbar {
         let markers = self.markers;
         let id = self.id.clone();
         let always_visible = self.always_visible;
+        let max_thumb_length = self.max_thumb_length;
 
         let prepaint_driver = driver.clone();
         let paint = canvas(
@@ -287,15 +304,35 @@ impl Scrollbar {
                 } else {
                     raw_offset.max(px(0.0)).min(max_offset)
                 };
+                if max_offset <= px(0.0) {
+                    return None;
+                }
 
-                let metrics = match axis {
-                    ScrollbarAxis::Vertical => {
-                        vertical_thumb_metrics(viewport_size, max_offset, scroll)?
-                    }
-                    ScrollbarAxis::Horizontal => {
-                        horizontal_thumb_metrics(viewport_size, max_offset, scroll)?
-                    }
-                };
+                let mut metrics =
+                    if let Some((position, visible)) = prepaint_driver.logical_metrics(axis) {
+                        let track = (viewport_size - margin * 2.0).max(px(0.0));
+                        let length = (track * visible.clamp(0.0, 1.0) as f32)
+                            .max(px(24.0))
+                            .min(track);
+                        ThumbMetrics {
+                            length,
+                            thickness: px(SCROLLBAR_THUMB_THICKNESS_PX),
+                            offset: margin + (track - length) * position.clamp(0.0, 1.0) as f32,
+                        }
+                    } else {
+                        match axis {
+                            ScrollbarAxis::Vertical => {
+                                vertical_thumb_metrics(viewport_size, max_offset, scroll)?
+                            }
+                            ScrollbarAxis::Horizontal => {
+                                horizontal_thumb_metrics(viewport_size, max_offset, scroll)?
+                            }
+                        }
+                    };
+
+                if let Some(limit) = max_thumb_length {
+                    metrics = capped_thumb_metrics(metrics, viewport_size, margin, limit);
+                }
 
                 let (track_bounds, thumb_bounds) = match axis {
                     ScrollbarAxis::Vertical => {
@@ -552,6 +589,7 @@ impl Scrollbar {
                             driver.set_axis_offset(axis, new_offset);
                         }
 
+                        driver.interaction_changed(cx);
                         window.refresh();
                         cx.stop_propagation();
                     }
@@ -597,6 +635,7 @@ impl Scrollbar {
                         if !always_visible {
                             interaction.update(cx, |state, _cx| state.showing = true);
                         }
+                        driver.interaction_changed(cx);
                         _window.refresh();
                         cx.stop_propagation();
                     }
@@ -614,6 +653,7 @@ impl Scrollbar {
                         }
                         driver.drag_ended(axis);
                         interaction.update(cx, |state, _cx| state.drag_offset = None);
+                        driver.interaction_changed(cx);
                         window.refresh();
                         cx.stop_propagation();
                     }
@@ -690,6 +730,24 @@ pub(crate) struct ThumbMetrics {
     pub(crate) offset: Pixels,
     pub(crate) length: Pixels,
     pub(crate) thickness: Pixels,
+}
+
+fn capped_thumb_metrics(
+    mut metrics: ThumbMetrics,
+    viewport: Pixels,
+    margin: Pixels,
+    limit: Pixels,
+) -> ThumbMetrics {
+    let track = (viewport - margin * 2.0).max(px(0.0));
+    let travel = (track - metrics.length).max(px(0.0));
+    let fraction = if travel > px(0.0) {
+        ((metrics.offset - margin) / travel).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    metrics.length = metrics.length.min(limit.max(px(24.0))).min(track);
+    metrics.offset = margin + (track - metrics.length) * fraction;
+    metrics
 }
 
 // ---------------------------------------------------------------------------
@@ -868,6 +926,38 @@ fn horizontal_thumb_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capped_history_thumb_preserves_drag_mapping_and_endpoints() {
+        let viewport = px(600.0);
+        let max_offset = px(200.0);
+        for fraction in [0.0, 0.25, 0.5, 1.0] {
+            let uncapped =
+                vertical_thumb_metrics(viewport, max_offset, max_offset * fraction).unwrap();
+            let capped = capped_thumb_metrics(uncapped, viewport, px(4.0), px(48.0));
+            assert_eq!(capped.length, px(48.0));
+            let track = Bounds::new(point(px(0.0), px(4.0)), size(px(16.0), px(592.0)));
+            let offset = compute_vertical_click_offset(
+                capped.offset + px(17.0),
+                track,
+                capped.length,
+                px(17.0),
+                max_offset,
+                -1,
+            );
+            assert!((f32::from(offset) + f32::from(max_offset) * fraction).abs() < 0.001);
+        }
+        let long = vertical_thumb_metrics(viewport, px(1_000_000.0), px(0.0)).unwrap();
+        assert_eq!(
+            capped_thumb_metrics(long, viewport, px(4.0), px(48.0)).length,
+            px(24.0)
+        );
+        let short_track = vertical_thumb_metrics(px(20.0), px(100.0), px(0.0)).unwrap();
+        assert_eq!(
+            capped_thumb_metrics(short_track, px(20.0), px(4.0), px(48.0)).length,
+            px(12.0)
+        );
+    }
 
     #[test]
     fn thumb_metrics_none_without_overflow() {

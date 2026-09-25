@@ -1983,7 +1983,7 @@ impl HistoryLoadMoreAppendFixture {
     }
 
     pub fn fresh_state(&self) -> AppState {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(
             self.repo_id,
             RepoSpec {
@@ -2169,7 +2169,7 @@ impl HistoryScopeSwitchFixture {
     }
 
     pub fn fresh_state(&self) -> AppState {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(
             self.repo_id,
             RepoSpec {

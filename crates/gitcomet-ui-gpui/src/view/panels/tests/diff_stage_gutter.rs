@@ -1,7 +1,8 @@
 use super::*;
 
-use super::shortcuts::{app_state_with_active_repo, apply_state, wait_until};
+use super::shortcuts::{app_state_with_active_repo, apply_state};
 use crate::view::rows::{DiffStageHover, DiffStageSlot};
+use crate::view::test_support::{drain_store_worker, repo_ops_rev};
 use gitcomet_core::domain::DiffLineKind;
 
 const STAGE_GUTTER_PATH: &str = "src/lib.rs";
@@ -93,7 +94,7 @@ fn open_stage_gutter_view(
     gpui::Entity<super::super::GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -504,6 +505,7 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     draw_and_drain_test_window(cx);
 
     let (_, cell) = stage_gutter_cell(cx, &view, "+new one", DiffStageSlot::Inline);
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, RepoId(70910));
     simulate_counted_click(cx, cell.center(), 1);
     draw_and_drain_test_window(cx);
 
@@ -513,17 +515,13 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
         "clicking the gutter button must not move the diff row selection"
     );
 
-    // The reducer marks a local action in flight as soon as it accepts the patch
+    // The reducer bumps the repo's ops revision as soon as it accepts the patch
     // message, which is as far as this backend-less harness can follow it.
-    wait_until(cx, "the store to accept the staging command", |cx| {
-        cx.update(|_window, app| {
-            let snapshot = view.read(app).store.snapshot();
-            snapshot
-                .repos
-                .first()
-                .is_some_and(|repo| repo.local_actions_in_flight > 0)
-        })
-    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, RepoId(70910)) > ops_rev_before,
+        "the store must accept the staging command"
+    );
 }
 
 #[gpui::test]
@@ -626,4 +624,258 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
         Some(sentinel),
         "a release that belongs to the gutter button must not select a row"
     );
+}
+
+#[gpui::test]
+fn stage_gutter_cancels_presses_released_on_another_button(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+            let (view, cx) = open_stage_gutter_view(cx, worktree_target(area), mode);
+            let slot = if mode == DiffViewMode::Inline {
+                DiffStageSlot::Inline
+            } else {
+                DiffStageSlot::SplitRight
+            };
+            let (_, first) = stage_gutter_cell(cx, &view, "+new one", slot);
+            let (_, second) = stage_gutter_cell(cx, &view, "+new two", slot);
+            // This backend can finish an action before the next snapshot. Check
+            // the persistent revision after draining the worker, so even a
+            // completed accidental action fails the cancellation assertions.
+            let repo_id = RepoId(70910);
+            drain_store_worker(&view, cx);
+            let ops_rev_before = repo_ops_rev(&view, cx, repo_id);
+            cx.simulate_mouse_down(first.center(), MouseButton::Left, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            drain_store_worker(&view, cx);
+            assert_eq!(
+                repo_ops_rev(&view, cx, repo_id),
+                ops_rev_before,
+                "pressing a gutter must not stage yet ({area:?}, {mode:?})"
+            );
+            cx.simulate_mouse_move(
+                second.center(),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            cx.simulate_mouse_up(second.center(), MouseButton::Left, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            drain_store_worker(&view, cx);
+            assert_eq!(
+                repo_ops_rev(&view, cx, repo_id),
+                ops_rev_before,
+                "releasing on another gutter must activate neither ({area:?}, {mode:?})"
+            );
+            simulate_counted_click(cx, second.center(), 1);
+            draw_and_drain_test_window(cx);
+            drain_store_worker(&view, cx);
+            assert!(
+                repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+                "a completed gutter click must dispatch an action ({area:?}, {mode:?})"
+            );
+        }
+    }
+}
+
+/// A window showing a generated `src/big.rs` diff of `lines` lines, every
+/// fifth one changed, drawn in `mode`.
+fn open_generated_diff_view(
+    cx: &mut gpui::TestAppContext,
+    repo_id: RepoId,
+    lines: usize,
+    mode: DiffViewMode,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &mut gpui::VisualTestContext,
+    std::path::PathBuf,
+) {
+    use std::fmt::Write as _;
+
+    let (mut old_text, mut new_text, mut body) = (String::new(), String::new(), String::new());
+    for ix in 0..lines {
+        let line = format!("let value_{ix} = compute(\"the quick brown fox\", {ix}, &state);");
+        let _ = writeln!(old_text, "{line}");
+        if ix % 5 == 0 {
+            let changed = format!("let value_{ix} = compute(\"the lazy dog\", {ix} + 1, &state);");
+            let _ = writeln!(new_text, "{changed}");
+            let _ = writeln!(body, "-{line}\n+{changed}");
+        } else {
+            let _ = writeln!(new_text, "{line}");
+            let _ = writeln!(body, " {line}");
+        }
+    }
+    let path = std::path::PathBuf::from("src/big.rs");
+    let target = worktree_target_at("src/big.rs", DiffArea::Unstaged);
+    let unified = format!(
+        "diff --git a/src/big.rs b/src/big.rs\n--- a/src/big.rs\n+++ b/src/big.rs\n\
+         @@ -1,{lines} +1,{lines} @@\n{body}"
+    );
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_generated_diff_{}",
+        std::process::id(),
+        repo_id.0
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let mut repo = opening_repo_state(repo_id, &workdir);
+    repo.open = Loadable::Ready(());
+    repo.head_branch = Loadable::Ready("main".into());
+    set_test_file_status(
+        &mut repo,
+        path.clone(),
+        gitcomet_core::domain::FileStatusKind::Modified,
+        DiffArea::Unstaged,
+    );
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff_state_rev = 1;
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff::from_unified(
+        target, &unified,
+    )));
+    repo.diff_state.diff_file_rev = 1;
+    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(
+        gitcomet_core::domain::FileDiffText::new(path, Some(old_text), Some(new_text)),
+    )));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = mode;
+            cx.notify();
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the file diff view to render its rows",
+        |pane| pane.is_file_diff_view_active() && pane.diff_visible_len() > 0,
+        |pane| pane.diff_visible_len(),
+    );
+    (view, cx, workdir)
+}
+
+/// Frame cost of a large text diff. Ignored: a measurement, not a check.
+///
+/// `GITCOMET_BENCH_DIFF_LINES` (3000) lines, every fifth one changed;
+/// `GITCOMET_BENCH_DIFF_SPLIT` set draws the split view. Run with
+/// `--ignored --nocapture` and one test thread for clean allocation counts.
+#[gpui::test]
+#[ignore]
+fn diff_view_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let lines: usize = std::env::var("GITCOMET_BENCH_DIFF_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3000);
+    let mode = if std::env::var_os("GITCOMET_BENCH_DIFF_SPLIT").is_some_and(|v| !v.is_empty()) {
+        DiffViewMode::Split
+    } else {
+        DiffViewMode::Inline
+    };
+    let (view, cx, workdir) = open_generated_diff_view(cx, RepoId(70930), lines, mode);
+    let _cached_views = std::env::var_os("GITCOMET_BENCH_CACHED_VIEWS")
+        .map(|_| crate::view::enable_stable_cached_views_for_test());
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+    let row = cx
+        .update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_text_hitbox_bounds_for_tests(
+                    10,
+                    if mode == DiffViewMode::Split {
+                        DiffTextRegion::SplitLeft
+                    } else {
+                        DiffTextRegion::Inline
+                    },
+                )
+        })
+        .expect("row 10 is drawn");
+
+    const FRAMES: usize = 40;
+    let percentile = |samples: &mut Vec<f64>, p: usize| {
+        samples.sort_by(f64::total_cmp);
+        samples[(samples.len() - 1) * p / 100]
+    };
+    let mut rebuild_ms = Vec::new();
+    let mut rebuild_allocs = crate::perf_alloc::PerfAllocMetrics::default();
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        let (_, allocations) = crate::perf_alloc::measure_allocations(|| {
+            cx.update(|window, app| {
+                window.refresh();
+                let _ = window.draw(app);
+            })
+        });
+        rebuild_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        rebuild_allocs = rebuild_allocs.saturating_add(allocations);
+    }
+    let mut move_us = Vec::new();
+    for step in 0..FRAMES {
+        let x = row.left() + px(4.0 + (step % 8) as f32);
+        let started = Instant::now();
+        cx.simulate_mouse_move(point(x, row.center().y), None, gpui::Modifiers::none());
+        move_us.push(started.elapsed().as_secs_f64() * 1e6);
+    }
+    eprintln!(
+        "diff view lines={lines} mode={mode:?} profile={} rebuild_ms_p50={:.2} \
+         rebuild_ms_p95={:.2} allocs_per_rebuild={:.0} mouse_move_us_p50={:.1} \
+         mouse_move_us_p95={:.1}",
+        if cfg!(debug_assertions) {
+            "test"
+        } else {
+            "release"
+        },
+        percentile(&mut rebuild_ms, 50),
+        percentile(&mut rebuild_ms, 95),
+        rebuild_allocs.alloc_ops as f64 / FRAMES as f64,
+        percentile(&mut move_us, 50),
+        percentile(&mut move_us, 95),
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn a_frame_of_a_text_diff_resolves_what_the_pane_shows_a_bounded_number_of_times(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Whether a preview covers the diff was asked per painted row, and each
+    // answer stats the file; a frame answers it once.
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70931), 400, DiffViewMode::Inline);
+    for _ in 0..2 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+
+    crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |_pane, cx| cx.notify());
+        });
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let checks = crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    assert!(
+        checks <= 2,
+        "a frame of a text diff checks the preview surface {checks} times"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
 }

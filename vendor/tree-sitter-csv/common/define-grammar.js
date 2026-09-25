@@ -29,19 +29,16 @@ module.exports = function defineGrammar(dialect, separator) {
         optional($.row),
       ),
 
-      row: $ => choice(
-        seq(repeat(separator), $.field, repeat(seq(repeat(separator), $.field)), repeat(separator)),
-        repeat1(separator),
-      ),
+      row: $ => seq($.field, repeat(seq(separator, $.field))),
       field: $ => choice($.text, $.number, $.float, $.boolean),
 
-      text: _ => token(choice(
-        new RegExp(`[^${separator}\\d\\s"][^${separator} \\n\\r"]+`),
-        seq('"', repeat(choice(/[^"]/, '""')), '"'),
-      )),
       number: _ => choice(/\d+/, /0[xX][0-9a-fA-F]+/),
       float: _ => choice(/\d*\.\d+/, /\d+\.\d*/),
       boolean: _ => choice('true', 'false'),
+      text: _ => token(choice(
+        new RegExp(`[^${separator}\\r\\n]*`),
+        seq('"', repeat(choice(/[^"]/, '""')), '"'),
+      )),
     },
   });
 };
