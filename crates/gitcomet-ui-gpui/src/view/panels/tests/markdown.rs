@@ -1186,7 +1186,7 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
         "markdown preview cache reset after diff target change",
         |pane| {
             pane.worktree_preview_path.is_none()
-                && pane.worktree_preview_content_rev == 0
+                && pane.worktree_preview_content_rev > 9
                 && pane.worktree_preview_text.is_empty()
                 && pane.worktree_preview_line_starts.is_empty()
                 && pane.worktree_markdown.path.is_none()
