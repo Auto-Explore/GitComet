@@ -1627,7 +1627,9 @@ fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
     }
 }
 
-fn wait_for_initial_worktrees_load_to_settle(
+/// Hand-fed `BranchesLoaded`/`WorktreesLoaded` must land after the backend's own
+/// replies, which have no generation guard and would overwrite them.
+fn wait_for_sidebar_loads_to_settle(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
     view: &gpui::Entity<crate::view::GitCometView>,
@@ -1637,21 +1639,26 @@ fn wait_for_initial_worktrees_load_to_settle(
     loop {
         sync_view_for_tests(cx, view);
 
-        let settled = store
-            .snapshot()
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .is_some_and(|repo| {
-                repo.sidebar_data_request.worktrees
-                    && !matches!(repo.worktrees, Loadable::Loading | Loadable::NotLoaded)
-            });
+        let state = store.snapshot();
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id);
+        let settled = repo.is_some_and(|repo| {
+            repo.sidebar_data_request.worktrees
+                && !matches!(repo.worktrees, Loadable::Loading | Loadable::NotLoaded)
+                && !matches!(repo.branches, Loadable::Loading | Loadable::NotLoaded)
+        });
         if settled {
             return;
         }
 
         if Instant::now() >= deadline {
-            panic!("timed out waiting for initial worktrees load to settle");
+            panic!(
+                "timed out waiting for branch and worktree loads to settle: {:?}",
+                repo.map(|repo| (
+                    repo.sidebar_data_request.worktrees,
+                    &repo.branches,
+                    &repo.worktrees
+                ))
+            );
         }
 
         cx.run_until_parked();
@@ -2286,7 +2293,7 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
         restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &_view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &_view, repo_id);
 
     let linked_repo = base.join("repo-feature");
     store_for_test.dispatch(Msg::Internal(
@@ -2347,7 +2354,7 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2444,7 +2451,7 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     let branch = "feature/super-long-worktree-branch-name-that-needs-truncation-to-fit-the-sidebar"
         .to_string();
@@ -2499,7 +2506,7 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -2594,7 +2601,7 @@ fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestApp
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2643,7 +2650,7 @@ fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContex
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2719,7 +2726,7 @@ fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppConte
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2800,7 +2807,7 @@ fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppCont
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2890,7 +2897,7 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::WorktreesLoaded {
@@ -2938,7 +2945,7 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2970,10 +2977,21 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
         "expected workspace badge to appear"
     );
 
+    let branches_rev = |store: &AppStore| {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.branches_rev)
+    };
+    let before_reload = branches_rev(&store_for_test);
     store_for_test.dispatch(Msg::ReloadRepo { repo_id });
-
-    sync_view_for_tests(cx, &view);
-    cx.run_until_parked();
+    // The pre-reload snapshot already looks settled.
+    wait_until("reload to reset branches", || {
+        branches_rev(&store_for_test) != before_reload
+    });
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -3022,7 +3040,7 @@ fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Tes
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
-    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+    wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {

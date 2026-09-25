@@ -132,8 +132,17 @@ fn replacing_repository_root_detaches_old_tree_and_watches_replacement() {
             before,
             "old native root remained attached"
         );
-        fs::write(root.join("source/nested/file.txt"), "new tree edit").unwrap();
-        monitor.refresh();
+        let edited = root.join("source/nested/file.txt");
+        assert!(
+            monitor
+                .expect_change(&edited, || fs::write(&edited, "new tree edit").unwrap())
+                .worktree
+        );
+        if cycle + 1 < replacements.len() {
+            // A late refresh from this edit must not stand in for the next
+            // replacement's refresh. The last cycle needs no settle.
+            monitor.settle();
+        }
     }
 }
 
@@ -143,15 +152,29 @@ fn repeated_atomic_file_replacement_keeps_later_in_place_edits_visible() {
     fs::create_dir(root.join("source")).unwrap();
     let file = root.join("source/file.txt");
     fs::write(&file, "initial").unwrap();
-    let monitor = RunningMonitor::start(&root);
+    // Replacements are awaited on per-cycle temporaries (`file` was just
+    // edited in place). The settle makes each edit `file`'s only touch.
+    let monitor = RunningMonitor::start_for_unique_path(&root);
     for cycle in 0..3 {
-        let replacement = root.join("source/replacement.tmp");
-        fs::write(&replacement, format!("replacement {cycle}")).unwrap();
-        fs::rename(&replacement, &file).unwrap();
-        monitor.refresh();
-        fs::write(&file, format!("in-place edit {cycle}")).unwrap();
-        monitor.refresh();
+        let replacement = root.join(format!("source/replacement-{cycle}.tmp"));
+        assert!(
+            monitor
+                .expect_change(&replacement, || {
+                    fs::write(&replacement, format!("replacement {cycle}")).unwrap();
+                    fs::rename(&replacement, &file).unwrap();
+                })
+                .worktree
+        );
+        monitor.settle();
+        assert!(
+            monitor
+                .expect_change(&file, || {
+                    fs::write(&file, format!("in-place edit {cycle}")).unwrap()
+                })
+                .worktree
+        );
     }
+    monitor.settle();
     assert_native_quiet(&monitor);
 }
 
@@ -175,22 +198,43 @@ fn moving_a_tree_across_an_ignore_boundary_updates_live_coverage() {
     fs::create_dir_all(root.join("ignored/package/nested")).unwrap();
     fs::write(root.join("ignored/package/nested/file.txt"), "before").unwrap();
     let monitor = RunningMonitor::start(&root);
-    fs::rename(root.join("ignored/package"), root.join("visible")).unwrap();
-    monitor.refresh();
-    fs::write(root.join("visible/nested/file.txt"), "now visible").unwrap();
-    monitor.refresh();
-    fs::rename(root.join("visible"), root.join("ignored/package")).unwrap();
-    monitor.refresh();
-    fs::write(
-        root.join("ignored/package/nested/file.txt"),
-        "ignored again",
-    )
-    .unwrap();
+    let package = root.join("ignored/package");
+    // Visible paths below are first touched by the step awaiting them; setup
+    // only ever spelled this tree under `ignored/`.
+    let visible = root.join("visible");
+    assert!(
+        monitor
+            .expect_change(&visible, || fs::rename(&package, &visible).unwrap())
+            .worktree
+    );
+    let file = visible.join("nested/file.txt");
+    assert!(
+        monitor
+            .expect_change(&file, || fs::write(&file, "now visible").unwrap())
+            .worktree
+    );
+    // Moving back only reports `visible`, which the first move touched.
+    monitor.settle();
+    assert!(
+        monitor
+            .expect_change(&visible, || fs::rename(&visible, &package).unwrap())
+            .worktree
+    );
+    monitor.settle();
+    fs::write(package.join("nested/file.txt"), "ignored again").unwrap();
     monitor.quiet();
-    fs::rename(root.join("ignored/package"), root.join("visible-again")).unwrap();
-    monitor.refresh();
-    fs::write(root.join("visible-again/nested/file.txt"), "visible again").unwrap();
-    monitor.refresh();
+    let visible = root.join("visible-again");
+    assert!(
+        monitor
+            .expect_change(&visible, || fs::rename(&package, &visible).unwrap())
+            .worktree
+    );
+    let file = visible.join("nested/file.txt");
+    assert!(
+        monitor
+            .expect_change(&file, || fs::write(&file, "visible again").unwrap())
+            .worktree
+    );
 }
 
 #[test]
@@ -215,13 +259,27 @@ fn recreated_external_policy_parent_is_revalidated_without_native_watches() {
         fs::write(&input, if ignored { "generated/\n" } else { "" }).unwrap();
         assert_native_quiet(&monitor);
         monitor.revalidate();
-        monitor.refresh();
-        fs::write(&file, format!("source edit {cycle}")).unwrap();
         if ignored {
-            monitor.quiet();
-        } else {
             monitor.refresh();
+            fs::write(&file, format!("source edit {cycle}")).unwrap();
+            monitor.quiet();
+            continue;
         }
+        // The refresh is sent after the rebuild restored coverage, and the
+        // native-quiet window above saw no late callback for `file`.
+        match monitor.rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(Msg::RepoExternallyChanged { .. }) => {}
+            other => panic!("expected revalidation refresh, got {other:?}"),
+        }
+        assert!(
+            monitor
+                .expect_change(&file, || {
+                    fs::write(&file, format!("source edit {cycle}")).unwrap()
+                })
+                .worktree
+        );
+        // The next cycle starts with a native-quiet assertion.
+        monitor.settle();
     }
 }
 

@@ -541,31 +541,60 @@ fn an_ssh_key_absent_from_allowed_signers_is_untrusted() {
     assert!(!result[0].1.status.is_verified());
 }
 
+/// A page is verified in `git log` batches of at most 16 commits, so a slow
+/// verifier cannot push the whole page past the per-process timeout. The
+/// verifier logs its parent (that batch's git) instead of sleeping: a timed-out
+/// single batch still recovers every verdict through the per-commit retry.
 #[cfg(unix)]
 #[test]
-fn slow_signature_batches_make_progress_in_bounded_chunks() {
+fn signature_verification_runs_in_bounded_batches() {
     if !ssh_signing_available() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_signing_repo(dir.path());
     trust_signatures(&fixture);
-    let ids: Vec<_> = (0..80)
+    let ids: Vec<_> = (0..33)
         .map(|ix| commit(&fixture.repo, &format!("signed-{ix}"), true))
         .collect();
-    let verifier = dir.path().join("slow-verifier");
-    write_program(&verifier, "#!/bin/sh\nsleep 0.08\nexec ssh-keygen \"$@\"\n");
+    let calls = dir.path().join("verify-calls");
+    let verifier = dir.path().join("counting-verifier");
+    write_program(
+        &verifier,
+        &format!(
+            "#!/bin/sh\n[ \"$2\" = verify ] && echo $PPID >> '{}'\nexec ssh-keygen \"$@\"\n",
+            calls.display()
+        ),
+    );
     run_git(
         &fixture.repo,
         &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
     );
     let result = open(&fixture.repo)
         .verify_commit_signatures(&ids)
-        .expect("bounded verification must make progress");
+        .expect("batched verification");
     assert_eq!(
         result.iter().map(|(id, _)| id).collect::<Vec<_>>(),
         ids.iter().collect::<Vec<_>>()
     );
+    assert!(
+        result
+            .iter()
+            .all(|(_, sig)| sig.status == SignatureStatus::Good)
+    );
+
+    // Batches run one after another, so each is one run of equal parent pids.
+    let mut batches: Vec<usize> = Vec::new();
+    let mut previous = None;
+    for pid in fs::read_to_string(&calls).unwrap().lines() {
+        match batches.last_mut() {
+            Some(count) if previous == Some(pid) => *count += 1,
+            _ => batches.push(1),
+        }
+        previous = Some(pid);
+    }
+    assert_eq!(batches.iter().sum::<usize>(), ids.len(), "{batches:?}");
+    assert!(batches.iter().all(|&count| count <= 16), "{batches:?}");
 }
 
 #[cfg(unix)]
