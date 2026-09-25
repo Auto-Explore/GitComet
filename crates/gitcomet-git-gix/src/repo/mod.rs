@@ -298,14 +298,16 @@ type RefMetadataCache =
 /// an object read per ref, so a page request whose fingerprint matches skips
 /// that entirely.
 /// Identity of a file as it sat on disk when we last read it. Inode and ctime
-/// (Unix only) detect replacements and edits that keep length and mtime, but
-/// rapid writes can share even the same ctime. Verification memos must exclude
+/// detect replacements and edits that keep
+/// length and mtime, but rapid writes can share even the same ctime.
+/// Verification memos must exclude
 /// racy stamps before recording them. `None` where those fields are unavailable,
 /// which disables the memo rather than weakening it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DiskFileStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
+    device: u64,
     inode: u64,
     ctime_nanos: i128,
 }
@@ -317,6 +319,7 @@ impl DiskFileStamp {
         metadata.is_file().then(|| Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
+            device: metadata.dev(),
             inode: metadata.ino(),
             ctime_nanos: i128::from(metadata.ctime()) * 1_000_000_000
                 + i128::from(metadata.ctime_nsec()),
@@ -325,12 +328,17 @@ impl DiskFileStamp {
 
     #[cfg(not(unix))]
     fn from_metadata(_metadata: &std::fs::Metadata) -> Option<Self> {
+        // Windows timestamps and USN records can be deferred/coalesced while
+        // writers remain open. Excluding writers would break editor saves.
+        // Verify content instead until a nonblocking identity is available.
         None
     }
 
     /// Stamp of the regular file at `path`; `None` for symlinks, non-files and
     /// platforms without the fields above.
     fn read(path: &Path) -> Option<Self> {
+        #[cfg(test)]
+        DISK_FILE_STATS.with(|stats| stats.set(stats.get() + 1));
         let metadata = std::fs::symlink_metadata(path).ok()?;
         Self::from_metadata(&metadata)
     }
@@ -355,8 +363,52 @@ impl DiskFileStamp {
     fn read_for_verification_memo(path: &Path) -> Option<Self> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
-        let now = std::time::SystemTime::now();
+        let now = racy_check_now();
         Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
+    }
+}
+
+fn racy_check_now() -> std::time::SystemTime {
+    let now = std::time::SystemTime::now();
+    #[cfg(test)]
+    let now = now + RACY_CLOCK_SKEW.with(std::cell::Cell::get);
+    now
+}
+
+// Tests cannot backdate ctime, so they move the racy-check clock forward instead.
+#[cfg(test)]
+thread_local! {
+    static RACY_CLOCK_SKEW: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static DISK_FILE_STATS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Stamp stats taken on this thread.
+#[cfg(test)]
+pub(crate) fn disk_file_stats_for_test() -> usize {
+    DISK_FILE_STATS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) struct RacyClockSkew(());
+
+#[cfg(test)]
+impl RacyClockSkew {
+    /// Makes every stamp taken on this thread look `skew` older until dropped.
+    pub(crate) fn set(skew: std::time::Duration) -> Self {
+        RACY_CLOCK_SKEW.with(|cell| cell.set(skew));
+        Self(())
+    }
+}
+
+#[cfg(test)]
+impl Drop for RacyClockSkew {
+    fn drop(&mut self) {
+        RACY_CLOCK_SKEW.with(|cell| cell.set(std::time::Duration::ZERO));
     }
 }
 
@@ -965,6 +1017,16 @@ impl GitRepository for GixRepo {
         self.diff_file_text_impl(target)
     }
 
+    fn diff_file_text_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        let result = self.diff_file_text_impl_cancellable(target, cancellation);
+        cancellation.check_cancelled()?;
+        result
+    }
+
     fn diff_preview_text_file(
         &self,
         target: &DiffTarget,
@@ -975,6 +1037,27 @@ impl GitRepository for GixRepo {
 
     fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         self.diff_file_image_impl(target)
+    }
+
+    fn diff_file_image_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        let result = self.diff_file_image_impl_cancellable(target, cancellation);
+        cancellation.check_cancelled()?;
+        result
+    }
+
+    fn diff_preview_text_file_cancellable(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<DiffPreviewTextFile>> {
+        let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
+        cancellation.check_cancelled()?;
+        result
     }
 
     fn conflict_file_stages(&self, path: &Path) -> Result<Option<ConflictFileStages>> {
@@ -1638,6 +1721,7 @@ mod tests {
         let stamp = DiskFileStamp {
             len: 15,
             modified: Some(now - Duration::from_secs(2)),
+            device: 1,
             inode: 1,
             ctime_nanos: 98_000_000_000,
         };

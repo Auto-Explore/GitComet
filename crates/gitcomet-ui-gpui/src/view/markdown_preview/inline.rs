@@ -17,7 +17,7 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 span_stack.push(MarkdownInlineStyle::Link);
-                link_stack.push(web_link_url(dest_url.as_ref()));
+                link_stack.push(offered_link_destination(dest_url.as_ref()));
             }
             Event::End(TagEnd::Link) => {
                 span_stack.pop();
@@ -86,11 +86,21 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
                     HtmlHandling::EndInlineStyle(style) => {
                         pop_matching_inline_style(&mut span_stack, style);
                     }
+                    HtmlHandling::StartLink(destination) => {
+                        span_stack.push(MarkdownInlineStyle::Link);
+                        link_stack.push(destination);
+                    }
+                    HtmlHandling::EndLink => {
+                        if !link_stack.is_empty() {
+                            pop_matching_inline_style(&mut span_stack, MarkdownInlineStyle::Link);
+                            link_stack.pop();
+                        }
+                    }
                     // An inline fragment (a `<summary>` label) has nowhere to
                     // put a block, so an image there keeps describing itself.
                     HtmlHandling::Images(images) => {
-                        for (_, _, alt) in images {
-                            text_buf.push_str(&alt);
+                        for image in images {
+                            text_buf.push_str(&image.alt);
                         }
                     }
                     HtmlHandling::AppendText(text) => {
@@ -108,93 +118,35 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
     normalize_whitespace_with_spans(&text_buf, &inline_spans)
 }
 
-pub(crate) fn push_row_with_context(
-    rows: &mut Vec<MarkdownPreviewRow>,
-    mut row: MarkdownPreviewRowInput<'_>,
-    footnote_context: Option<&mut MarkdownFootnoteContext>,
-    row_ctx: &mut MarkdownRowContext,
-) -> Option<()> {
-    let pending_images = std::mem::take(&mut row_ctx.pending_images);
-    let footnote_label = footnote_context.and_then(|ctx| {
-        if ctx.emitted_label {
-            None
-        } else {
-            ctx.emitted_label = true;
-            Some(ctx.label.clone())
-        }
-    });
-
-    let mut decoration = MarkdownPreviewRowDecoration {
-        footnote_label,
-        ..MarkdownPreviewRowDecoration::default()
-    };
-    if let Some(alert_ix) = row_ctx
-        .blockquote_stack
-        .iter()
-        .rposition(|ctx| ctx.alert_kind.is_some())
-    {
-        let ctx = &mut row_ctx.blockquote_stack[alert_ix];
-        decoration.alert_kind = ctx.alert_kind;
-        if !ctx.emitted_row {
-            ctx.emitted_row = true;
-            decoration.starts_alert = true;
-        }
-    }
-
-    // A picture alone in a plain paragraph reads as a block — it gets the width
-    // of the document and a band of rows to itself. Everywhere else it stays
-    // inline: sharing its line with text or other pictures keeps a row of
-    // badges on one line and a logo beside its heading, and a row that carries
-    // a bullet, a quote bar, or an indent has to keep drawing them, which a
-    // block row does not.
-    if let [only] = pending_images.as_slice()
-        && row.text.trim().is_empty()
-        && row.image.is_none()
-        && row.kind == MarkdownPreviewRowKind::Paragraph
-        && row.indent_level == 0
-        && row.blockquote_level == 0
-    {
-        return push_image_block_rows(rows, only, &row, decoration);
-    }
-
-    row.inline_images = Arc::from(pending_images);
-    push_row(rows, row, decoration)
-}
-
-/// Emit the band rows one block image occupies.
-///
-/// The preview paints into a uniform (fixed row height) list, so a picture that
-/// stands on its own covers several rows and each one draws its own band.
-pub(crate) fn push_image_block_rows(
+/// Emit the row a picture alone on its line becomes.
+pub(crate) fn push_image_block_row(
     rows: &mut Vec<MarkdownPreviewRow>,
     inline: &MarkdownInlineImage,
     row: &MarkdownPreviewRowInput<'_>,
     decoration: MarkdownPreviewRowDecoration,
 ) -> Option<()> {
-    let slice_count = inline.image.block_rows();
-    // The alert badge and the footnote label belong to the first band only; the
-    // rest continue the same picture, and only inherit its alert.
-    let continuation = MarkdownPreviewRowDecoration {
-        alert_kind: decoration.alert_kind,
-        ..MarkdownPreviewRowDecoration::default()
-    };
-    let mut decoration = Some(decoration);
-    for slice_ix in 0..slice_count {
-        push_row(
-            rows,
-            MarkdownPreviewRowInput::image(
-                slice_ix,
-                slice_count,
-                inline.alt.as_ref(),
-                Arc::clone(&inline.image),
-                row.source_line_range.clone(),
-                row.indent_level,
-                row.blockquote_level,
-            ),
-            decoration.take().unwrap_or_else(|| continuation.clone()),
-        )?;
-    }
-    Some(())
+    // A picture wrapped in a link stays a link: its description carries it.
+    let link = inline
+        .link_url
+        .clone()
+        .filter(|_| !inline.alt.is_empty())
+        .map(|url| MarkdownInlineSpan {
+            byte_range: 0..inline.alt.len(),
+            style: MarkdownInlineStyle::Link,
+            link_url: Some(url),
+        });
+    push_row(
+        rows,
+        MarkdownPreviewRowInput::image(
+            inline.alt.as_ref(),
+            link.as_slice(),
+            Arc::clone(&inline.image),
+            row.source_line_range.clone(),
+            row.indent_level,
+            row.blockquote_level,
+        ),
+        decoration,
+    )
 }
 
 pub(crate) fn push_row(
@@ -215,7 +167,17 @@ pub(crate) fn push_row(
     let (row_text, row_spans, inline_images) = if row.inline_images.is_empty() {
         (row_text, row_spans, row.inline_images)
     } else {
-        trim_around_inline_images(row_text, row_spans, &row.inline_images)
+        // Whitespace normalization can shorten the text past an offset.
+        let len = row_text.len();
+        let images = row
+            .inline_images
+            .iter()
+            .map(|inline| MarkdownInlineImage {
+                byte_offset: inline.byte_offset.min(len),
+                ..inline.clone()
+            })
+            .collect::<Vec<_>>();
+        trim_around_inline_images(row_text, row_spans, &images)
     };
     let spans = if row_spans.len() > MAX_INLINE_SPANS_PER_ROW {
         Arc::new(Vec::new())
@@ -228,7 +190,6 @@ pub(crate) fn push_row(
         text: SharedString::from(row_text),
         inline_spans: spans,
         code_language: row.code_language,
-        code_block_horizontal_scroll_hint: row.code_block_horizontal_scroll_hint,
         source_line_range: row.source_line_range,
         change_hint: MarkdownChangeHint::None,
         indent_level: row.indent_level,
@@ -239,7 +200,9 @@ pub(crate) fn push_row(
         image: row.image,
         inline_images,
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
-        measured_width_px: MarkdownPreviewRowWidthCache::default(),
+        table: None,
+        task: decoration.task,
+        continues_item: decoration.continues_item,
     });
 
     (rows.len() <= MAX_PREVIEW_ROWS).then_some(())
@@ -276,68 +239,4 @@ pub(crate) fn trim_around_inline_images(
         .collect::<Vec<_>>();
 
     (trimmed, spans, Arc::from(images))
-}
-
-/// Drop or shorten spans that reach past `len`, and keep the rest.
-pub(crate) fn clamp_inline_spans_to_len(spans: &mut Vec<MarkdownInlineSpan>, len: usize) {
-    spans.retain_mut(|span| {
-        span.byte_range.end = span.byte_range.end.min(len);
-        span.byte_range.start < span.byte_range.end
-    });
-}
-
-/// Emit unparseable content verbatim, one row per line.
-///
-/// This is the one row producer that does not go through
-/// `push_row_with_context`, because a fallback row inherits no footnote label
-/// and no alert. It still has to take the pending pictures, or they would be
-/// carried past it and land on an unrelated row.
-pub(crate) fn push_plain_fallback_rows(
-    rows: &mut Vec<MarkdownPreviewRow>,
-    text: &str,
-    start_byte: usize,
-    end_byte: usize,
-    line_starts: &[usize],
-    indent_level: u8,
-    blockquote_level: u8,
-    row_ctx: &mut MarkdownRowContext,
-) -> Option<()> {
-    let range = source_line_range(start_byte, end_byte, line_starts);
-    let segments = if text.is_empty() {
-        vec![""]
-    } else {
-        text.lines().collect::<Vec<_>>()
-    };
-    let end_line = range.end.saturating_sub(1);
-    let mut pending_images = std::mem::take(&mut row_ctx.pending_images);
-    let segment_count = segments.len();
-
-    for (ix, segment) in segments.into_iter().enumerate() {
-        let line_ix = (range.start + ix).min(end_line);
-        let mut row = MarkdownPreviewRowInput::plain(
-            MarkdownPreviewRowKind::PlainFallback,
-            segment,
-            &[],
-            line_ix..line_ix.saturating_add(1),
-            indent_level,
-            blockquote_level,
-        );
-        // Each picture goes on the line it was written on, which is what its
-        // source offset says. The last row sweeps up anything that did not
-        // resolve, so nothing is dropped.
-        let is_last = ix + 1 == segment_count;
-        let (mine, rest) = pending_images.into_iter().partition(|inline| {
-            is_last || source_line_for_byte(inline.source_byte, line_starts) == line_ix
-        });
-        pending_images = rest;
-        row.inline_images = Arc::from(mine);
-        push_row(rows, row, MarkdownPreviewRowDecoration::default())?;
-    }
-
-    Some(())
-}
-
-/// Zero-based source line containing `byte`.
-pub(crate) fn source_line_for_byte(byte: usize, line_starts: &[usize]) -> usize {
-    line_starts.partition_point(|start| *start <= byte).max(1) - 1
 }

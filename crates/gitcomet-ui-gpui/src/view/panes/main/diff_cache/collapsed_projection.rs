@@ -378,7 +378,7 @@ impl MainPaneView {
     }
 
     pub(super) fn rebuild_collapsed_diff_projection(&mut self) {
-        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_visible_rows = Arc::from([]);
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
 
@@ -410,6 +410,7 @@ impl MainPaneView {
             return;
         }
 
+        let mut visible_rows = Vec::new();
         for hunk_ix in 0..self.collapsed_diff_hunks.len() {
             let hunk = self.collapsed_diff_hunks[hunk_ix];
             let expansion_kind = self.collapsed_diff_expansion_kind(hunk_ix);
@@ -430,39 +431,34 @@ impl MainPaneView {
                 let bottom_start = gap_end.saturating_sub(hunk.reveal_up_lines.min(gap_len));
 
                 for row_ix in gap_start..top_end {
-                    self.collapsed_diff_visible_rows
-                        .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                    visible_rows.push(CollapsedDiffVisibleRow::FileRow { row_ix });
                 }
                 bottom_start.max(top_end)..gap_end
             };
 
             if !has_expansion_header {
                 for row_ix in up_revealed_rows.clone() {
-                    self.collapsed_diff_visible_rows
-                        .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                    visible_rows.push(CollapsedDiffVisibleRow::FileRow { row_ix });
                 }
             }
 
             self.collapsed_diff_hunk_visible_indices
-                .push(self.collapsed_diff_visible_rows.len());
+                .push(visible_rows.len());
             if has_expansion_header {
                 let hidden_rows =
                     self.collapsed_diff_hidden_rows_for_expansion_kind(hunk.src_ix, expansion_kind);
-                self.collapsed_diff_visible_rows
-                    .push(CollapsedDiffVisibleRow::HunkHeader {
-                        src_ix: hunk.src_ix,
-                        expansion_kind,
-                        display_src_ix: Some(hunk.src_ix),
-                        hidden_rows,
-                    });
+                visible_rows.push(CollapsedDiffVisibleRow::HunkHeader {
+                    src_ix: hunk.src_ix,
+                    expansion_kind,
+                    display_src_ix: Some(hunk.src_ix),
+                    hidden_rows,
+                });
                 for row_ix in up_revealed_rows {
-                    self.collapsed_diff_visible_rows
-                        .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                    visible_rows.push(CollapsedDiffVisibleRow::FileRow { row_ix });
                 }
             }
             for row_ix in hunk.base_row_start..hunk.base_row_end_exclusive {
-                self.collapsed_diff_visible_rows
-                    .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                visible_rows.push(CollapsedDiffVisibleRow::FileRow { row_ix });
             }
         }
 
@@ -476,21 +472,20 @@ impl MainPaneView {
                 )
                 .min(total_rows);
             for row_ix in last_hunk.base_row_end_exclusive..trailing_end {
-                self.collapsed_diff_visible_rows
-                    .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                visible_rows.push(CollapsedDiffVisibleRow::FileRow { row_ix });
             }
 
             let hidden_rows = self.collapsed_diff_hidden_down_rows(last_hunk.src_ix);
             if hidden_rows > 0 {
-                self.collapsed_diff_visible_rows
-                    .push(CollapsedDiffVisibleRow::HunkHeader {
-                        src_ix: last_hunk.src_ix,
-                        expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
-                        display_src_ix: None,
-                        hidden_rows,
-                    });
+                visible_rows.push(CollapsedDiffVisibleRow::HunkHeader {
+                    src_ix: last_hunk.src_ix,
+                    expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
+                    display_src_ix: None,
+                    hidden_rows,
+                });
             }
         }
+        self.collapsed_diff_visible_rows = visible_rows.into();
         self.rebuild_collapsed_diff_header_display_cache();
     }
 

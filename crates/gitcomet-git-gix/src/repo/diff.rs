@@ -4,9 +4,7 @@ use super::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{
-    git_command_failed_error, run_git_parsed_stdout, run_git_parsed_stdout_cancellable,
-};
+use crate::util::{run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
@@ -30,6 +28,37 @@ const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 1024;
 
 impl GixRepo {
+    pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
+        self.diff_file_text_impl_cancellable(target, &CancellationToken::new())
+    }
+    pub(super) fn diff_preview_text_file_impl(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+    ) -> Result<Option<DiffPreviewTextFile>> {
+        self.diff_preview_text_file_impl_cancellable(target, side, &CancellationToken::new())
+    }
+    #[cfg(test)]
+    pub(super) fn cached_preview_blob_file_path(
+        &self,
+        blob_id: gix::ObjectId,
+        path: &Path,
+    ) -> Result<Option<PathBuf>> {
+        self.cached_preview_blob_file_path_cancellable(blob_id, path, &CancellationToken::new())
+    }
+    #[cfg(test)]
+    pub(super) fn cached_git_normalized_worktree_file_source(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+    ) -> Result<Option<FileDiffTextSource>> {
+        self.cached_git_normalized_worktree_file_source_cancellable(
+            repo,
+            path,
+            &CancellationToken::new(),
+        )
+    }
+
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("-c").arg("color.ui=false");
@@ -190,8 +219,12 @@ impl GixRepo {
         &self,
         blob_id: gix::ObjectId,
         logical_path: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffTextSource>> {
-        let Some(path) = self.cached_preview_blob_file_path(blob_id, logical_path)? else {
+        cancellation.check_cancelled()?;
+        let Some(path) =
+            self.cached_preview_blob_file_path_cancellable(blob_id, logical_path, cancellation)?
+        else {
             return Ok(None);
         };
         Ok(Some(FileDiffTextSource::with_identity(
@@ -205,11 +238,13 @@ impl GixRepo {
         repo: &gix::Repository,
         revision: &str,
         path: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffTextSource>> {
+        cancellation.check_cancelled()?;
         let Some(blob_id) = gix_revision_path_blob_object_id_optional(repo, revision, path)? else {
             return Ok(None);
         };
-        self.file_diff_source_from_blob_id(blob_id, path)
+        self.file_diff_source_from_blob_id(blob_id, path, cancellation)
     }
 
     fn file_diff_source_from_index_stage(
@@ -217,19 +252,23 @@ impl GixRepo {
         repo: &gix::Repository,
         path: &Path,
         stage: u8,
+        cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffTextSource>> {
+        cancellation.check_cancelled()?;
         let Some(blob_id) = gix_index_stage_object_id_optional(repo, path, stage)? else {
             return Ok(None);
         };
-        self.file_diff_source_from_blob_id(blob_id, path)
+        self.file_diff_source_from_blob_id(blob_id, path, cancellation)
     }
 
     fn file_diff_source_from_worktree_path_optional(
         &self,
         repo: &gix::Repository,
         path: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffTextSource>> {
-        self.cached_git_normalized_worktree_file_source(repo, path)
+        cancellation.check_cancelled()?;
+        self.cached_git_normalized_worktree_file_source_cancellable(repo, path, cancellation)
     }
 
     /// Symlinks skip the filter pipeline: git stores the link text verbatim.
@@ -259,21 +298,24 @@ impl GixRepo {
         &self,
         repo: &gix::Repository,
         path: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<Option<std::path::PathBuf>> {
         match worktree_entry_optional(&self.spec.workdir, path) {
             Some(WorktreeEntry::Regular(full)) => Ok(Some(full)),
             Some(WorktreeEntry::Symlink { .. }) => Ok(self
-                .cached_git_normalized_worktree_file_source(repo, path)?
+                .cached_git_normalized_worktree_file_source_cancellable(repo, path, cancellation)?
                 .map(|source| source.path)),
             None => Ok(None),
         }
     }
 
-    pub(super) fn cached_git_normalized_worktree_file_source(
+    pub(super) fn cached_git_normalized_worktree_file_source_cancellable(
         &self,
         repo: &gix::Repository,
         path: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffTextSource>> {
+        cancellation.check_cancelled()?;
         let full = match worktree_entry_optional(&self.spec.workdir, path) {
             Some(WorktreeEntry::Regular(full)) => full,
             Some(WorktreeEntry::Symlink { target }) => {
@@ -287,13 +329,8 @@ impl GixRepo {
         // row re-opens on every status refresh. A file modified within the
         // last two seconds is never memoized (git's racy-file rule): a write
         // inside mtime granularity would otherwise be missed.
-        let file_stamp = DiskFileStamp::read(&full).filter(|stamp| {
-            stamp.modified.is_some_and(|modified| {
-                std::time::SystemTime::now()
-                    .duration_since(modified)
-                    .is_ok_and(|age| age >= std::time::Duration::from_secs(2))
-            })
-        });
+        // Recording requires the same identity again after the complete read.
+        let file_stamp = DiskFileStamp::read_for_verification_memo(&full);
         let attributes_fingerprint =
             file_stamp.and_then(|_| worktree_attributes_fingerprint(repo, path));
         if let (Some(file_stamp), Some(attributes_fingerprint)) =
@@ -316,6 +353,11 @@ impl GixRepo {
             )));
         }
 
+        // Record the identity before verification and check it again afterwards.
+        let file_stamp =
+            attributes_fingerprint.and_then(|_| DiskFileStamp::read_for_verification_memo(&full));
+        #[cfg(test)]
+        WORKTREE_FILTER_RUNS.with(|runs| runs.set(runs.get() + 1));
         let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "gix worktree filter pipeline: {e}"
@@ -333,27 +375,44 @@ impl GixRepo {
         let mut content_hasher = FxHasher::default();
         match normalized {
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
-                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
+                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher, cancellation)?;
             }
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Process(mut file) => {
-                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
+                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher, cancellation)?;
             }
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(bytes) => {
                 bytes.hash(&mut content_hasher);
-                tmp_file.write_all(bytes).map_err(io_err_to_error)?;
+                for chunk in bytes.chunks(64 * 1024) {
+                    cancellation.check_cancelled()?;
+                    tmp_file.write_all(chunk).map_err(io_err_to_error)?;
+                }
             }
         }
+        cancellation.check_cancelled()?;
         tmp_file.flush().map_err(io_err_to_error)?;
 
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
         let cache_path = worktree_git_cache_path(path, &identity);
-        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        // Capture the identity before comparing an existing output's contents.
+        let cache_file_stamp =
+            file_stamp.and_then(|_| DiskFileStamp::read_for_verification_memo(&cache_path));
+        let created = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        // A file this call created is private to it (0600, content-addressed,
+        // never rewritten), so fresh timestamps cannot hide a later write.
+        #[cfg(unix)]
+        let cache_file_stamp = cache_file_stamp.or_else(|| {
+            (file_stamp.is_some() && created)
+                .then(|| DiskFileStamp::read(&cache_path))
+                .flatten()
+        });
+        #[cfg(not(unix))]
+        let _ = created;
         let identity: Arc<str> = Arc::from(format!("worktree-git:{identity}"));
 
         if let (Some(file_stamp), Some(attributes_fingerprint), Some(cache_file)) = (
-            file_stamp,
+            file_stamp.filter(|stamp| DiskFileStamp::read(&full) == Some(*stamp)),
             attributes_fingerprint,
-            DiskFileStamp::read(&cache_path),
+            cache_file_stamp.filter(|stamp| DiskFileStamp::read(&cache_path) == Some(*stamp)),
         ) {
             let mut memo = self
                 .worktree_source_memo
@@ -378,7 +437,12 @@ impl GixRepo {
         )))
     }
 
-    pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
+    pub(super) fn diff_file_text_impl_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        cancellation.check_cancelled()?;
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -396,15 +460,22 @@ impl GixRepo {
                     DiffArea::Unstaged => {
                         let old = match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)?
                         {
-                            IndexUnconflictedBlobId::Present(blob_id) => {
-                                self.file_diff_source_from_blob_id(blob_id, &repo_path)?
-                            }
+                            IndexUnconflictedBlobId::Present(blob_id) => self
+                                .file_diff_source_from_blob_id(blob_id, &repo_path, cancellation)?,
                             IndexUnconflictedBlobId::Missing => None,
                             IndexUnconflictedBlobId::Unmerged => {
-                                let ours =
-                                    self.file_diff_source_from_index_stage(&repo, &repo_path, 2)?;
-                                let theirs =
-                                    self.file_diff_source_from_index_stage(&repo, &repo_path, 3)?;
+                                let ours = self.file_diff_source_from_index_stage(
+                                    &repo,
+                                    &repo_path,
+                                    2,
+                                    cancellation,
+                                )?;
+                                let theirs = self.file_diff_source_from_index_stage(
+                                    &repo,
+                                    &repo_path,
+                                    3,
+                                    cancellation,
+                                )?;
                                 return Ok(Some(FileDiffText::new_sources(
                                     path.clone(),
                                     ours,
@@ -412,22 +483,38 @@ impl GixRepo {
                                 )));
                             }
                         };
-                        let new =
-                            self.file_diff_source_from_worktree_path_optional(&repo, &repo_path)?;
+                        let new = self.file_diff_source_from_worktree_path_optional(
+                            &repo,
+                            &repo_path,
+                            cancellation,
+                        )?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old =
-                            self.file_diff_source_from_revision_path(&repo, "HEAD", &repo_path)?;
+                        let old = self.file_diff_source_from_revision_path(
+                            &repo,
+                            "HEAD",
+                            &repo_path,
+                            cancellation,
+                        )?;
                         let new = match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)?
                         {
-                            IndexUnconflictedBlobId::Present(blob_id) => {
-                                self.file_diff_source_from_blob_id(blob_id, &repo_path)?
-                            }
+                            IndexUnconflictedBlobId::Present(blob_id) => self
+                                .file_diff_source_from_blob_id(blob_id, &repo_path, cancellation)?,
                             IndexUnconflictedBlobId::Missing => None,
                             IndexUnconflictedBlobId::Unmerged => self
-                                .file_diff_source_from_index_stage(&repo, &repo_path, 2)?
-                                .or(self.file_diff_source_from_index_stage(&repo, &repo_path, 3)?),
+                                .file_diff_source_from_index_stage(
+                                    &repo,
+                                    &repo_path,
+                                    2,
+                                    cancellation,
+                                )?
+                                .or(self.file_diff_source_from_index_stage(
+                                    &repo,
+                                    &repo_path,
+                                    3,
+                                    cancellation,
+                                )?),
                         };
                         (old, new)
                     }
@@ -452,13 +539,20 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => {
-                        self.file_diff_source_from_revision_path(&repo, &parent, path)?
-                    }
+                    Some(parent) => self.file_diff_source_from_revision_path(
+                        &repo,
+                        &parent,
+                        path,
+                        cancellation,
+                    )?,
                     None => None,
                 };
-                let new =
-                    self.file_diff_source_from_revision_path(&repo, commit_id.as_ref(), path)?;
+                let new = self.file_diff_source_from_revision_path(
+                    &repo,
+                    commit_id.as_ref(),
+                    path,
+                    cancellation,
+                )?;
 
                 Ok(Some(
                     self.with_large_file_sides(&repo, path, path, old, new, false),
@@ -474,18 +568,27 @@ impl GixRepo {
                 };
 
                 let repo = self.repo();
-                let old =
-                    self.file_diff_source_from_revision_path(&repo, from_commit_id.as_ref(), path)?;
+                let old = self.file_diff_source_from_revision_path(
+                    &repo,
+                    from_commit_id.as_ref(),
+                    path,
+                    cancellation,
+                )?;
                 let new = match to_commit_id {
                     Some(to_commit_id) => self.file_diff_source_from_revision_path(
                         &repo,
                         to_commit_id.as_ref(),
                         path,
+                        cancellation,
                     )?,
                     // Working-tree tip: the new side is the live worktree file.
                     None => {
                         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-                        self.file_diff_source_from_worktree_path_optional(&repo, &repo_path)?
+                        self.file_diff_source_from_worktree_path_optional(
+                            &repo,
+                            &repo_path,
+                            cancellation,
+                        )?
                     }
                 };
 
@@ -501,12 +604,13 @@ impl GixRepo {
         }
     }
 
-    pub(super) fn diff_preview_text_file_impl(
+    pub(super) fn diff_preview_text_file_impl_cancellable(
         &self,
         target: &DiffTarget,
         side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
     ) -> Result<Option<DiffPreviewTextFile>> {
-        let Some(path) = self.diff_preview_text_file_path_impl(target, side)? else {
+        let Some(path) = self.diff_preview_text_file_path_impl(target, side, cancellation)? else {
             return Ok(None);
         };
         let logical_path = match target {
@@ -530,6 +634,7 @@ impl GixRepo {
                     ..
                 }
             );
+        cancellation.check_cancelled()?;
         let source = FileDiffTextSource::new(path.clone());
         let (large_file, path) =
             match self.large_file_side(&self.repo(), &source, logical_path, worktree) {
@@ -549,7 +654,9 @@ impl GixRepo {
         &self,
         target: &DiffTarget,
         side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
     ) -> Result<Option<std::path::PathBuf>> {
+        cancellation.check_cancelled()?;
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -565,7 +672,7 @@ impl GixRepo {
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
-                        self.worktree_preview_path_optional(&repo, &repo_path)
+                        self.worktree_preview_path_optional(&repo, &repo_path, cancellation)
                     }
                     (DiffArea::Unstaged, DiffPreviewTextSide::Old)
                     | (DiffArea::Staged, DiffPreviewTextSide::New) => {
@@ -576,9 +683,11 @@ impl GixRepo {
                                 | IndexUnconflictedBlobId::Unmerged => None,
                             };
                         match blob_id {
-                            Some(blob_id) => {
-                                self.cached_preview_blob_file_path(blob_id, &repo_path)
-                            }
+                            Some(blob_id) => self.cached_preview_blob_file_path_cancellable(
+                                blob_id,
+                                &repo_path,
+                                cancellation,
+                            ),
                             None => Ok(None),
                         }
                     }
@@ -586,9 +695,11 @@ impl GixRepo {
                         let blob_id =
                             gix_revision_path_blob_object_id_optional(&repo, "HEAD", &repo_path)?;
                         match blob_id {
-                            Some(blob_id) => {
-                                self.cached_preview_blob_file_path(blob_id, &repo_path)
-                            }
+                            Some(blob_id) => self.cached_preview_blob_file_path_cancellable(
+                                blob_id,
+                                &repo_path,
+                                cancellation,
+                            ),
                             None => Ok(None),
                         }
                     }
@@ -614,7 +725,9 @@ impl GixRepo {
                 };
 
                 match blob_id {
-                    Some(blob_id) => self.cached_preview_blob_file_path(blob_id, path),
+                    Some(blob_id) => {
+                        self.cached_preview_blob_file_path_cancellable(blob_id, path, cancellation)
+                    }
                     None => Ok(None),
                 }
             }
@@ -631,7 +744,7 @@ impl GixRepo {
                 // Working-tree tip + New side: the preview is the live worktree file.
                 if matches!(side, DiffPreviewTextSide::New) && to_commit_id.is_none() {
                     let repo_path = to_repo_path(path, &self.spec.workdir)?;
-                    return self.worktree_preview_path_optional(&repo, &repo_path);
+                    return self.worktree_preview_path_optional(&repo, &repo_path, cancellation);
                 }
                 let blob_id = match side {
                     DiffPreviewTextSide::New => gix_revision_path_blob_object_id_optional(
@@ -650,52 +763,37 @@ impl GixRepo {
                 };
 
                 match blob_id {
-                    Some(blob_id) => self.cached_preview_blob_file_path(blob_id, path),
+                    Some(blob_id) => {
+                        self.cached_preview_blob_file_path_cancellable(blob_id, path, cancellation)
+                    }
                     None => Ok(None),
                 }
             }
         }
     }
 
-    pub(super) fn cached_preview_blob_file_path(
+    pub(super) fn cached_preview_blob_file_path_cancellable(
         &self,
         blob_id: gix::ObjectId,
         logical_path: &Path,
+        cancellation: &CancellationToken,
     ) -> Result<Option<std::path::PathBuf>> {
+        cancellation.check_cancelled()?;
         let repo = self.repo();
         if !gix_object_id_is_blob(&repo, blob_id)? {
             return Ok(None);
         }
 
         let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id);
-        if self.cached_preview_blob_matches(&repo, &cache_path, blob_id) {
+        if self.cached_preview_blob_matches(&repo, &cache_path, blob_id, cancellation) {
             return Ok(Some(cache_path));
         }
 
-        let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
         let mut command = self.git_workdir_cmd();
-        command
-            .arg("cat-file")
-            .arg("blob")
-            .arg(blob_id.to_string())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        let mut child = command.spawn().map_err(io_err_to_error)?;
-        let mut stdout = child.stdout.take().ok_or_else(|| {
-            Error::new(ErrorKind::Backend(
-                "git cat-file did not expose stdout".to_string(),
-            ))
-        })?;
-        std::io::copy(&mut stdout, &mut tmp_file).map_err(io_err_to_error)?;
+        command.arg("cat-file").arg("blob").arg(blob_id.to_string());
+        let tmp_file = copy_git_stdout_to_temp_file(command, "git cat-file", cancellation)?;
 
-        let output = child.wait_with_output().map_err(io_err_to_error)?;
-        if !output.status.success() {
-            return Err(git_command_failed_error("git cat-file", output));
-        }
-        tmp_file.flush().map_err(io_err_to_error)?;
-
-        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        let _ = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
         // Do not memoize newly materialized files. They must be hashed again
         // outside the timestamp race window before their stamp can be trusted.
         Ok(Some(cache_path))
@@ -705,7 +803,15 @@ impl GixRepo {
         &self,
         target: &DiffTarget,
     ) -> Result<Option<FileDiffImage>> {
-        let Some(mut image) = self.diff_file_image_git_form(target)? else {
+        self.diff_file_image_impl_cancellable(target, &CancellationToken::new())
+    }
+
+    pub(super) fn diff_file_image_impl_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        let Some(mut image) = self.diff_file_image_git_form(target, cancellation)? else {
             return Ok(None);
         };
         // Git LFS / git-annex sides hold pointer text; show the real image
@@ -716,6 +822,7 @@ impl GixRepo {
             (&mut image.old, &mut image.old_large),
             (&mut image.new, &mut image.new_large),
         ] {
+            cancellation.check_cancelled()?;
             if let Some((large, bytes)) = side.as_deref().and_then(|git_form| {
                 self.large_file_image_side(&repo, git_form, &logical, MAX_IMAGE_DIFF_SIDE_BYTES)
             }) {
@@ -726,7 +833,12 @@ impl GixRepo {
         Ok(Some(image))
     }
 
-    fn diff_file_image_git_form(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
+    fn diff_file_image_git_form(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        cancellation.check_cancelled()?;
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -762,9 +874,10 @@ impl GixRepo {
                                 }));
                             }
                         };
-                        let new = read_worktree_image_file_bytes_optional(
+                        let new = read_worktree_image_file_bytes_cancellable(
                             &self.spec.workdir,
                             &repo_path,
+                            cancellation,
                         )?;
                         (old, new)
                     }
@@ -843,7 +956,11 @@ impl GixRepo {
                     // Working-tree tip: read the live worktree image bytes.
                     None => {
                         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-                        read_worktree_image_file_bytes_optional(&self.spec.workdir, &repo_path)?
+                        read_worktree_image_file_bytes_cancellable(
+                            &self.spec.workdir,
+                            &repo_path,
+                            cancellation,
+                        )?
                     }
                 };
 
@@ -1084,6 +1201,31 @@ fn canonicalize_existing_path_prefix(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Streams a command's stdout into a temp file. Uses the same owned-child
+/// cancellation and stderr draining as diff; any non-zero exit is an error,
+/// since a truncated stream must never be persisted as a content-addressed cache.
+fn copy_git_stdout_to_temp_file(
+    command: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<tempfile::NamedTempFile> {
+    let mut tmp_file =
+        tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+    let mut tmp_file = run_git_parsed_stdout_cancellable(
+        command,
+        label,
+        false,
+        cancellation,
+        move |mut stdout| {
+            std::io::copy(&mut stdout, &mut tmp_file).map_err(io_err_to_error)?;
+            Ok(tmp_file)
+        },
+    )?;
+    cancellation.check_cancelled()?;
+    tmp_file.flush().map_err(io_err_to_error)?;
+    Ok(tmp_file)
+}
+
 fn ensure_image_diff_side_size(path: &Path, bytes: u64) -> Result<()> {
     if bytes > MAX_IMAGE_DIFF_SIDE_BYTES {
         return Err(Error::new(ErrorKind::Backend(format!(
@@ -1094,7 +1236,17 @@ fn ensure_image_diff_side_size(path: &Path, bytes: u64) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn read_worktree_image_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
+    read_worktree_image_file_bytes_cancellable(workdir, path, &CancellationToken::new())
+}
+
+fn read_worktree_image_file_bytes_cancellable(
+    workdir: &Path,
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<Option<Vec<u8>>> {
+    cancellation.check_cancelled()?;
     let full = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -1119,10 +1271,22 @@ fn read_worktree_image_file_bytes_optional(workdir: &Path, path: &Path) -> Resul
     };
     ensure_image_diff_side_size(path, metadata.len())?;
 
-    match std::fs::read(&full) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+    let mut file = match std::fs::File::open(&full) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_err_to_error(e)),
+    };
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        cancellation.check_cancelled()?;
+        let read = read_chunk_cancellable(&mut file, &mut chunk, cancellation)?;
+        cancellation.check_cancelled()?;
+        if read == 0 {
+            return Ok(Some(bytes));
+        }
+        ensure_image_diff_side_size(path, (bytes.len() + read) as u64)?;
+        bytes.extend_from_slice(&chunk[..read]);
     }
 }
 
@@ -1416,14 +1580,41 @@ fn worktree_entry_optional(workdir: &Path, path: &Path) -> Option<WorktreeEntry>
     metadata.is_file().then_some(WorktreeEntry::Regular(full))
 }
 
+#[cfg(test)]
+thread_local! {
+    static WORKTREE_FILTER_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn worktree_filter_runs_for_test() -> usize {
+    WORKTREE_FILTER_RUNS.with(std::cell::Cell::get)
+}
+
+fn read_chunk_cancellable(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    cancellation: &CancellationToken,
+) -> Result<usize> {
+    loop {
+        cancellation.check_cancelled()?;
+        match reader.read(buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => return result.map_err(io_err_to_error),
+        }
+    }
+}
+
 fn copy_and_hash(
     reader: &mut impl Read,
     writer: &mut impl Write,
     hasher: &mut FxHasher,
+    cancellation: &CancellationToken,
 ) -> Result<()> {
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        let read = reader.read(&mut buffer).map_err(io_err_to_error)?;
+        cancellation.check_cancelled()?;
+        let read = read_chunk_cancellable(reader, &mut buffer, cancellation)?;
+        cancellation.check_cancelled()?;
         if read == 0 {
             return Ok(());
         }
@@ -1444,6 +1635,7 @@ fn cached_preview_blob_matches(
     repo: &gix::Repository,
     cache_path: &Path,
     blob_id: gix::ObjectId,
+    cancellation: &CancellationToken,
 ) -> bool {
     let Ok(metadata) = std::fs::symlink_metadata(cache_path) else {
         return false;
@@ -1451,11 +1643,27 @@ fn cached_preview_blob_matches(
     if !metadata.is_file() {
         return false;
     }
-    let Ok(bytes) = std::fs::read(cache_path) else {
+    let Ok(mut file) = std::fs::File::open(cache_path) else {
         return false;
     };
-    gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &bytes)
-        .is_ok_and(|id| id == blob_id)
+    let mut hasher = gix::hash::hasher(repo.object_hash());
+    hasher.update(format!("blob {}\0", metadata.len()).as_bytes());
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        if cancellation.is_cancelled() {
+            return false;
+        }
+        let Ok(count) = read_chunk_cancellable(&mut file, &mut buffer, cancellation) else {
+            return false;
+        };
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        hasher.update(&buffer[..count]);
+    }
+    total == metadata.len() && hasher.try_finalize().is_ok_and(|id| id == blob_id)
 }
 
 impl GixRepo {
@@ -1469,6 +1677,7 @@ impl GixRepo {
         repo: &gix::Repository,
         cache_path: &Path,
         blob_id: gix::ObjectId,
+        cancellation: &CancellationToken,
     ) -> bool {
         let stamp = DiskFileStamp::read_for_verification_memo(cache_path);
         if let Some(stamp) = stamp
@@ -1481,7 +1690,7 @@ impl GixRepo {
         {
             return true;
         }
-        let matches = cached_preview_blob_matches(repo, cache_path, blob_id);
+        let matches = cached_preview_blob_matches(repo, cache_path, blob_id, cancellation);
         // Require a non-racy stamp from BEFORE hashing as well as an unchanged
         // stamp afterwards. A fresh snapshot must not become trusted merely
         // because hashing took long enough to leave the race window.
@@ -1561,15 +1770,16 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
 /// Move `tmp_file` to the content-addressed `cache_path`, keeping an existing
 /// regular file only when its bytes are identical. Shared by the worktree and
 /// preview caches, both of which live in the shared temp directory.
+/// Returns whether this call created the file at `cache_path`.
 fn persist_worktree_git_cache_file(
     tmp_file: tempfile::NamedTempFile,
     cache_path: &Path,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
     }
     match tmp_file.persist_noclobber(cache_path) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(true),
         Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let tmp_file = err.file;
             // A symlink is replaced even when the bytes it reaches match: its
@@ -1581,7 +1791,7 @@ fn persist_worktree_git_cache_file(
                 // both cheaper and semantically important: replacing it changes
                 // filesystem metadata that open diff rows use as a freshness
                 // guard, despite the normalized bytes being unchanged.
-                return Ok(());
+                return Ok(false);
             }
 
             // A corrupt file or the exceptionally unlikely hash collision must
@@ -1589,7 +1799,7 @@ fn persist_worktree_git_cache_file(
             std::fs::remove_file(cache_path).map_err(io_err_to_error)?;
             tmp_file
                 .persist_noclobber(cache_path)
-                .map(|_| ())
+                .map(|_| true)
                 .map_err(|err| io_err_to_error(err.error))
         }
         Err(err) => Err(io_err_to_error(err.error)),
@@ -1828,6 +2038,141 @@ fn unified_body_line_count(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunked_reads_retry_interruptions_and_remain_cancellable() {
+        struct InterruptedReader {
+            interruptions: usize,
+            cancellation: Option<CancellationToken>,
+            bytes: &'static [u8],
+        }
+        impl Read for InterruptedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.interruptions > 0 {
+                    self.interruptions -= 1;
+                    if let Some(token) = &self.cancellation {
+                        token.cancel();
+                    }
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.bytes.read(buffer)
+            }
+        }
+        let mut reader = InterruptedReader {
+            interruptions: 3,
+            cancellation: None,
+            bytes: b"complete contents",
+        };
+        let mut output = Vec::new();
+        copy_and_hash(
+            &mut reader,
+            &mut output,
+            &mut FxHasher::default(),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(output, b"complete contents");
+
+        let token = CancellationToken::new();
+        let mut reader = InterruptedReader {
+            interruptions: 3,
+            cancellation: Some(token.clone()),
+            bytes: b"never read",
+        };
+        let error = read_chunk_cancellable(&mut reader, &mut [0; 32], &token).unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert_eq!(
+            reader.interruptions, 2,
+            "cancellation is checked between retries"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_memo_checks_allow_in_place_saves_and_replacements() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("identity.txt");
+        std::fs::write(&path, b"before").unwrap();
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        // Kept alive across the edits: a lookup holding a handle would block them.
+        let _stamp = DiskFileStamp::read_for_verification_memo(&path);
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("memo lookup must allow in-place editor saves");
+        writer.write_all(b"edited").unwrap();
+        drop(writer);
+        let replacement = tmp.path().join("replacement.txt");
+        std::fs::write(&replacement, b"replacement").unwrap();
+        std::fs::rename(&replacement, &path).expect("memo lookup must allow atomic saves");
+        std::fs::remove_file(&path).expect("memo lookup must allow deletion");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_preview_verification_rechecks_same_length_edit_with_open_writer() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        let blob_id = stage_blob(tmp.path(), "asset.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+        let cache = repo
+            .cached_preview_blob_file_path(blob_id, Path::new("asset.bin"))
+            .unwrap()
+            .unwrap();
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let handle = repo.repo();
+        let token = CancellationToken::new();
+        assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+        assert!(
+            repo.preview_blob_verified.lock().unwrap().is_empty(),
+            "Windows must verify preview contents even outside the timestamp race window"
+        );
+        let modified = std::fs::metadata(&cache).unwrap().modified().unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&cache)
+            .unwrap();
+        assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+        writer.write_all(b"fake blob bytes").unwrap();
+        writer.set_modified(modified).unwrap();
+        // Keep the writer open: Windows can defer metadata updates until close.
+        assert!(!repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blob_copy_rejects_partial_output_with_exit_code_one() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf partial; exit 1"]);
+        let error =
+            copy_git_stdout_to_temp_file(command, "git cat-file", &CancellationToken::new())
+                .expect_err("a failed cat-file must not produce a cache candidate");
+        assert!(
+            !matches!(error.kind(), ErrorKind::Cancelled),
+            "unexpected error kind: {error:?}"
+        );
+    }
+
+    #[test]
+    fn cancelled_copy_stops_between_chunks_without_publishing_partial_content() {
+        struct CancelReader(CancellationToken, usize);
+        impl Read for CancelReader {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.1 += 1;
+                bytes.fill(b'x');
+                self.0.cancel();
+                Ok(bytes.len())
+            }
+        }
+        let token = CancellationToken::new();
+        let mut reader = CancelReader(token.clone(), 0);
+        let mut output = Vec::new();
+        let error =
+            copy_and_hash(&mut reader, &mut output, &mut FxHasher::default(), &token).unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert_eq!(reader.1, 1);
+        assert!(output.is_empty());
+    }
     use gitcomet_core::domain::{DiffArea, DiffTarget};
     use gitcomet_core::error::ErrorKind;
     use std::process::Command;
@@ -1970,6 +2315,52 @@ mod tests {
         assert_ne!(first, second);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_worktree_verification_repairs_cache_and_observes_open_writer() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        let path = Path::new("memo.txt");
+        stage_blob(tmp.path(), "memo.txt", b"correct content\n");
+        let repo = open_repo(tmp.path());
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let source = repo
+            .cached_git_normalized_worktree_file_source(&repo.repo(), path)
+            .unwrap()
+            .unwrap();
+        repo.cached_git_normalized_worktree_file_source(&repo.repo(), path)
+            .unwrap();
+        let modified = std::fs::metadata(&source.path).unwrap().modified().unwrap();
+        std::fs::write(&source.path, b"altered content\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&source.path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let reloaded = repo
+            .cached_git_normalized_worktree_file_source(&repo.repo(), path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(std::fs::read(reloaded.path).unwrap(), b"correct content\n");
+        let worktree_path = tmp.path().join(path);
+        let modified = std::fs::metadata(&worktree_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&worktree_path)
+            .unwrap();
+        writer.write_all(b"changed content\n").unwrap();
+        writer.set_modified(modified).unwrap();
+        let changed = repo
+            .cached_git_normalized_worktree_file_source(&repo.repo(), path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(std::fs::read(changed.path).unwrap(), b"changed content\n");
+    }
+
     fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {
         std::fs::write(workdir.join(relative), content).expect("write file");
         run_git(workdir, &["add", relative]);
@@ -2002,6 +2393,7 @@ mod tests {
         );
     }
 
+    // Injecting a real memo stamp requires Unix; Windows always rehashes.
     #[cfg(unix)]
     #[test]
     fn preview_blob_verification_memo_rechecks_matching_racy_stamp() {
@@ -2041,7 +2433,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn preview_blob_verification_memo_does_not_record_racy_hash_verification() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2067,6 +2459,43 @@ mod tests {
             repo.preview_blob_verified.lock().expect("memo").is_empty(),
             "verification inside the race window must not become trusted as time passes"
         );
+    }
+
+    /// The stamp taken for the memo lookup is the one hashing must preserve, so
+    /// a verified miss stats the cache file once before hashing and once after.
+    #[test]
+    fn preview_blob_verification_stats_cache_file_once_before_hashing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+        let cache = repo
+            .cached_preview_blob_file_path(blob_id, Path::new("image.bin"))
+            .expect("materialize blob")
+            .expect("blob exists");
+        repo.preview_blob_verified.lock().expect("memo").clear();
+        let _clock = super::super::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let handle = repo.repo();
+        let token = CancellationToken::new();
+
+        let stats = super::super::disk_file_stats_for_test();
+        assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+        assert_eq!(
+            super::super::disk_file_stats_for_test() - stats,
+            2,
+            "a verified miss stats before and after hashing"
+        );
+        // Unix records the verified stamp; the next check is a memo hit.
+        #[cfg(unix)]
+        {
+            let stats = super::super::disk_file_stats_for_test();
+            assert!(repo.cached_preview_blob_matches(&handle, &cache, blob_id, &token));
+            assert_eq!(
+                super::super::disk_file_stats_for_test() - stats,
+                1,
+                "a memo hit stats once"
+            );
+        }
     }
 
     #[cfg(unix)]

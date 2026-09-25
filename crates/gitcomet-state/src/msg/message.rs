@@ -58,6 +58,41 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
+        match self {
+            Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
+            Self::UnstagePath | Self::UnstagePaths => Some(DiffArea::Staged),
+            _ => None,
+        }
+    }
+
+    /// Whether the action can rewrite files in the checkout (index-only and
+    /// ref-only actions cannot).
+    pub fn writes_worktree(self) -> bool {
+        match self {
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash => true,
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DropStash => false,
+        }
+    }
+
     pub(crate) fn hook_activity_label(self) -> &'static str {
         match self {
             Self::CheckoutBranch | Self::CheckoutRemoteBranch | Self::CheckoutCommit => "Checkout",
@@ -1430,6 +1465,14 @@ pub enum InternalMsg {
     RepoActionFinished {
         repo_id: RepoId,
         action: RepoActionKind,
+        result: Result<(), Error>,
+    },
+    /// Carries the affected paths so the reducer can retire their status diffs
+    /// only after a successful stage, unstage, or discard.
+    RepoPathsActionFinished {
+        repo_id: RepoId,
+        action: RepoActionKind,
+        paths: RepoPathList,
         result: Result<(), Error>,
     },
     /// The action ran into an existing branch; open the collision prompt.

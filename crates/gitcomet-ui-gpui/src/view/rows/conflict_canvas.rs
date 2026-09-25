@@ -36,18 +36,20 @@ pub(super) struct ConflictChunkContext {
 
 fn conflict_canvas_click_target(
     view: &Entity<MainPaneView>,
-    action: &str,
+    action: impl std::hash::Hash,
     cx: &App,
 ) -> gpui::ElementId {
     let state = &view.read(cx).conflict_resolver;
-    (
-        gpui::ElementId::View(view.entity_id()),
-        SharedString::from(format!(
-            "conflict:{:?}:{:?}:{:?}:{action}",
-            state.repo_id, state.path, state.source_hash,
-        )),
+    crate::kit::click::canvas_target(
+        "conflict-click",
+        (
+            view.entity_id(),
+            state.repo_id,
+            &state.path,
+            state.source_hash,
+            action,
+        ),
     )
-        .into()
 }
 
 impl ConflictChunkContext {
@@ -64,7 +66,7 @@ impl ConflictChunkContext {
         let chunk = self.clone();
         crate::kit::click::on_canvas_click(
             window,
-            (target, "menu").into(),
+            crate::kit::click::canvas_target("conflict-menu", &target),
             hitbox,
             gpui::MouseButton::Right,
             true,
@@ -292,7 +294,16 @@ pub(super) fn split_conflict_row_canvas(
                         chunk_context.conflict_ix, row_ix
                     )
                     .into();
-                    let target = conflict_canvas_click_target(&view, &invoker, cx);
+                    let target = conflict_canvas_click_target(
+                        &view,
+                        (
+                            "two-way-split-chunk",
+                            side,
+                            chunk_context.conflict_ix,
+                            row_ix,
+                        ),
+                        cx,
+                    );
                     let select_view = view.clone();
                     let conflict_ix = chunk_context.conflict_ix;
                     crate::kit::click::on_canvas_click(
@@ -476,10 +487,7 @@ pub(super) fn single_column_conflict_canvas(
 
             let target = conflict_canvas_click_target(
                 &view,
-                &format!(
-                    "{id_prefix}:{visible_row_ix}:{row_ix}:{}",
-                    prepared.text_hash
-                ),
+                (id_prefix, visible_row_ix, row_ix, prepared.text_hash),
                 cx,
             );
             let conflict_ix = chunk_context.as_ref().map(|chunk| chunk.conflict_ix);

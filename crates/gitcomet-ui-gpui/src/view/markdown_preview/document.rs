@@ -39,10 +39,25 @@ pub(crate) fn parse_markdown_diff(
     Some((old_doc, new_doc))
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) fn build_markdown_diff_preview(
     old_source: &str,
     new_source: &str,
 ) -> Option<MarkdownPreviewDiff> {
+    build_markdown_diff_preview_of(Some(old_source), Some(new_source))
+}
+
+/// The diff preview of a change that may add or delete the file: `None` is a
+/// side the file is not on.
+pub(crate) fn build_markdown_diff_preview_of(
+    old_source: Option<&str>,
+    new_source: Option<&str>,
+) -> Option<MarkdownPreviewDiff> {
+    let sources = (
+        MarkdownDiffSideSource::of(old_source),
+        MarkdownDiffSideSource::of(new_source),
+    );
+    let (old_source, new_source) = (old_source.unwrap_or(""), new_source.unwrap_or(""));
     let (mut old, mut new) = parse_markdown_diff(old_source, new_source)?;
     let plan = gitcomet_core::file_diff::side_by_side_plan(old_source, new_source);
     let old_line_count = old_source.lines().count();
@@ -52,15 +67,18 @@ pub(crate) fn build_markdown_diff_preview(
     annotate_change_hints(&mut old, &mut new, &old_mask, &new_mask);
     let (old_line_to_diff_row, new_line_to_diff_row) =
         gitcomet_core::file_diff::plan_line_to_row_maps(&plan, old_line_count, new_line_count);
-    align_markdown_diff_rows(
-        &mut old,
-        &mut new,
-        old_line_to_diff_row.as_slice(),
-        new_line_to_diff_row.as_slice(),
-        plan.row_count,
-    )?;
-    let inline = build_inline_markdown_diff_document(&old, &new);
-    Some(MarkdownPreviewDiff { old, new, inline })
+    let groups = markdown_diff_row_groups(
+        old.rows,
+        &old_line_to_diff_row,
+        new.rows,
+        &new_line_to_diff_row,
+    );
+    let (inline, inline_old) = inline_markdown_diff_document(&groups);
+    let (old, new) = aligned_markdown_diff_documents(groups)?;
+    let mut diff = MarkdownPreviewDiff::new(old, new, inline);
+    diff.inline_old = inline_old;
+    (diff.old_source, diff.new_source) = sources;
+    Some(diff)
 }
 
 pub(crate) fn scrollbar_markers_for_diff_preview(
@@ -99,82 +117,143 @@ pub(crate) fn annotate_change_hints(
     }
 }
 
-pub(crate) fn align_markdown_diff_rows(
-    old_doc: &mut MarkdownPreviewDocument,
-    new_doc: &mut MarkdownPreviewDocument,
+/// Rows of both sides that describe the same stretch of the diff: they are
+/// drawn beside each other in the split view, and compared or replaced as a
+/// unit in the inline one.
+pub(crate) struct MarkdownDiffRowGroup {
+    old: Vec<MarkdownPreviewRow>,
+    new: Vec<MarkdownPreviewRow>,
+}
+
+/// The diff rows `row`'s source lines fall on, first and last.
+fn markdown_row_diff_span(
+    row: &MarkdownPreviewRow,
+    line_to_diff_row: &[Option<usize>],
+) -> Option<(usize, usize)> {
+    let start = row.source_line_range.start.min(line_to_diff_row.len());
+    let end = row.source_line_range.end.min(line_to_diff_row.len());
+    let mut rows = line_to_diff_row[start..end].iter().flatten().copied();
+    let first = rows.next()?;
+    Some(rows.fold((first, first), |(lo, hi), row| (lo.min(row), hi.max(row))))
+}
+
+/// Group the rows of both sides wherever their diff spans overlap.
+///
+/// A row is not tied to one line: a paragraph whose first line was added
+/// starts at that line on the new side, but its old version starts one diff
+/// row later. Grouping by overlap keeps the two versions together, so they are
+/// compared as one change instead of reading as an addition beside unchanged
+/// text. A group that holds any change marks its unmarked rows modified: they
+/// are the other version of that change.
+pub(crate) fn markdown_diff_row_groups(
+    old_rows: Vec<MarkdownPreviewRow>,
     old_line_to_diff_row: &[Option<usize>],
+    new_rows: Vec<MarkdownPreviewRow>,
     new_line_to_diff_row: &[Option<usize>],
-    diff_row_count: usize,
-) -> Option<()> {
-    let old_rows = std::mem::take(&mut old_doc.rows);
-    let new_rows = std::mem::take(&mut new_doc.rows);
+) -> Vec<MarkdownDiffRowGroup> {
+    let with_spans = |rows: Vec<MarkdownPreviewRow>, map: &[Option<usize>]| {
+        rows.into_iter()
+            .map(|row| {
+                let span = markdown_row_diff_span(&row, map);
+                (row, span)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut old_rows = with_spans(old_rows, old_line_to_diff_row)
+        .into_iter()
+        .peekable();
+    let mut new_rows = with_spans(new_rows, new_line_to_diff_row)
+        .into_iter()
+        .peekable();
+
+    let mut groups: Vec<MarkdownDiffRowGroup> = Vec::new();
+    // The last diff row the open group covers; `None` while it holds only rows
+    // without a span.
+    let mut group_end: Option<usize> = None;
+    loop {
+        // Take whichever side's next row starts first in the diff. A row with
+        // no span follows the row before it on its own side.
+        let take_old = match (old_rows.peek(), new_rows.peek()) {
+            (None, None) => break,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some((_, None)), _) => true,
+            (_, Some((_, None))) => false,
+            (Some((_, Some((old_start, _)))), Some((_, Some((new_start, _))))) => {
+                old_start <= new_start
+            }
+        };
+        let Some((row, span)) = (if take_old {
+            old_rows.next()
+        } else {
+            new_rows.next()
+        }) else {
+            break;
+        };
+        let joins_open_group = !groups.is_empty()
+            && match (span, group_end) {
+                (None, _) | (Some(_), None) => true,
+                (Some((start, _)), Some(end)) => start <= end,
+            };
+        if !joins_open_group {
+            groups.push(MarkdownDiffRowGroup {
+                old: Vec::new(),
+                new: Vec::new(),
+            });
+            group_end = None;
+        }
+        if let Some((_, end)) = span {
+            group_end = Some(group_end.map_or(end, |group_end| group_end.max(end)));
+        }
+        let group = groups.last_mut().expect("a group was opened for this row");
+        if take_old {
+            group.old.push(row);
+        } else {
+            group.new.push(row);
+        }
+    }
+
+    for group in &mut groups {
+        let changed = group
+            .old
+            .iter()
+            .chain(&group.new)
+            .any(|row| row.change_hint != MarkdownChangeHint::None);
+        if !changed {
+            continue;
+        }
+        for row in group.old.iter_mut().chain(group.new.iter_mut()) {
+            if row.change_hint == MarkdownChangeHint::None
+                && !matches!(row.kind, MarkdownPreviewRowKind::Spacer)
+            {
+                row.change_hint = MarkdownChangeHint::Modified;
+            }
+        }
+    }
+    groups
+}
+
+/// Both sides padded with spacer rows so each group occupies the same row
+/// indices on the two.
+fn aligned_markdown_diff_documents(
+    groups: Vec<MarkdownDiffRowGroup>,
+) -> Option<(MarkdownPreviewDocument, MarkdownPreviewDocument)> {
     // Each side ends up near max(old, new) plus padding rows -- not the sum --
     // and both vecs are moved into the documents below without shrinking, so an
     // over-estimate is retained for the cached document's lifetime.
-    let aligned_capacity = old_rows.len().max(new_rows.len());
-
-    let (mut old_groups, old_trailing) =
-        markdown_rows_grouped_by_diff_anchor(old_rows, old_line_to_diff_row, diff_row_count);
-    let (mut new_groups, new_trailing) =
-        markdown_rows_grouped_by_diff_anchor(new_rows, new_line_to_diff_row, diff_row_count);
-
-    let mut old_aligned = Vec::with_capacity(aligned_capacity);
-    let mut new_aligned = Vec::with_capacity(aligned_capacity);
-
-    for diff_ix in 0..diff_row_count {
-        let old_group = std::mem::take(&mut old_groups[diff_ix]);
-        let new_group = std::mem::take(&mut new_groups[diff_ix]);
-        push_aligned_markdown_row_groups(&mut old_aligned, &mut new_aligned, old_group, new_group)?;
+    let capacity = groups
+        .iter()
+        .map(|group| group.old.len().max(group.new.len()))
+        .sum();
+    let mut old_aligned = Vec::with_capacity(capacity);
+    let mut new_aligned = Vec::with_capacity(capacity);
+    for group in groups {
+        push_aligned_markdown_row_groups(&mut old_aligned, &mut new_aligned, group.old, group.new)?;
     }
-
-    push_aligned_markdown_row_groups(
-        &mut old_aligned,
-        &mut new_aligned,
-        old_trailing,
-        new_trailing,
-    )?;
-
-    old_doc.rows = old_aligned;
-    new_doc.rows = new_aligned;
-    Some(())
-}
-
-pub(crate) fn markdown_rows_grouped_by_diff_anchor(
-    rows: Vec<MarkdownPreviewRow>,
-    line_to_diff_row: &[Option<usize>],
-    diff_row_count: usize,
-) -> (Vec<Vec<MarkdownPreviewRow>>, Vec<MarkdownPreviewRow>) {
-    let mut groups = vec![Vec::new(); diff_row_count];
-    let mut trailing = Vec::new();
-
-    for row in rows {
-        if let Some(anchor_ix) = markdown_row_diff_anchor(&row, line_to_diff_row)
-            && let Some(group) = groups.get_mut(anchor_ix)
-        {
-            group.push(row);
-            continue;
-        }
-        trailing.push(row);
-    }
-
-    (groups, trailing)
-}
-
-pub(crate) fn markdown_row_diff_anchor(
-    row: &MarkdownPreviewRow,
-    line_to_diff_row: &[Option<usize>],
-) -> Option<usize> {
-    if row.source_line_range.is_empty() {
-        return None;
-    }
-
-    let start = row.source_line_range.start.min(line_to_diff_row.len());
-    let end = row.source_line_range.end.min(line_to_diff_row.len());
-    if start >= end {
-        return None;
-    }
-
-    line_to_diff_row[start..end].iter().flatten().copied().min()
+    Some((
+        MarkdownPreviewDocument { rows: old_aligned },
+        MarkdownPreviewDocument { rows: new_aligned },
+    ))
 }
 
 pub(crate) fn push_aligned_markdown_row_groups(
@@ -207,85 +286,88 @@ pub(crate) fn markdown_preview_spacer_row_with_range(
     source_line_range: Range<usize>,
 ) -> MarkdownPreviewRow {
     MarkdownPreviewRow {
-        kind: MarkdownPreviewRowKind::Spacer,
-        text: SharedString::from(""),
-        inline_spans: Arc::new(Vec::new()),
-        code_language: None,
-        code_block_horizontal_scroll_hint: false,
         source_line_range,
-        change_hint: MarkdownChangeHint::None,
-        indent_level: 0,
-        blockquote_level: 0,
-        footnote_label: None,
-        alert_kind: None,
-        starts_alert: false,
-        image: None,
-        inline_images: Arc::from(Vec::new()),
-        styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
-        measured_width_px: MarkdownPreviewRowWidthCache::default(),
+        ..MarkdownPreviewRow::default()
     }
 }
 
-pub(crate) fn build_inline_markdown_diff_document(
-    old_doc: &MarkdownPreviewDocument,
-    new_doc: &MarkdownPreviewDocument,
-) -> MarkdownPreviewDocument {
-    let row_count = old_doc.rows.len().max(new_doc.rows.len());
-    let mut rows = Vec::with_capacity(row_count);
-
-    for row_ix in 0..row_count {
-        let old_row = old_doc.rows.get(row_ix);
-        let new_row = new_doc.rows.get(row_ix);
-
-        match (old_row, new_row) {
-            (Some(old_row), Some(new_row))
-                if markdown_inline_diff_rows_can_merge(old_row, new_row) =>
-            {
-                rows.push(old_row.clone());
-            }
-            (Some(old_row), Some(new_row)) => {
-                if !matches!(old_row.kind, MarkdownPreviewRowKind::Spacer) {
-                    rows.push(old_row.clone());
-                }
-                if !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer) {
-                    rows.push(new_row.clone());
-                }
-            }
-            (Some(old_row), None) => {
-                if !matches!(old_row.kind, MarkdownPreviewRowKind::Spacer) {
-                    rows.push(old_row.clone());
-                }
-            }
-            (None, Some(new_row)) => {
-                if !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer) {
-                    rows.push(new_row.clone());
-                }
-            }
-            (None, None) => {}
+/// The inline diff: each unchanged group once, in its current form, and each
+/// changed group as its old rows followed by its new ones.
+///
+/// Emitting a changed group whole, rather than interleaving its rows one index
+/// at a time, keeps a rewritten list or table reading as one old version and
+/// one new version.
+pub(crate) fn inline_markdown_diff_document(
+    groups: &[MarkdownDiffRowGroup],
+) -> (MarkdownPreviewDocument, Vec<bool>) {
+    let drawn = |rows: &[MarkdownPreviewRow]| {
+        rows.iter()
+            .filter(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let capacity = groups
+        .iter()
+        .map(|group| group.old.len().max(group.new.len()))
+        .sum();
+    let mut rows = Vec::with_capacity(capacity);
+    let mut from_old = Vec::with_capacity(capacity);
+    for group in groups {
+        let old = drawn(&group.old);
+        let new = drawn(&group.new);
+        let unchanged = old.len() == new.len()
+            && old
+                .iter()
+                .zip(&new)
+                .all(|(old, new)| markdown_inline_diff_rows_can_merge(old, new));
+        if !unchanged {
+            from_old.resize(from_old.len() + old.len(), true);
+            rows.extend(old);
         }
+        from_old.resize(from_old.len() + new.len(), false);
+        rows.extend(new);
     }
-
-    MarkdownPreviewDocument { rows }
+    (MarkdownPreviewDocument { rows }, from_old)
 }
 
+/// Whether an old row and a new one show the same thing and can be drawn once.
+///
+/// List numbers and link or picture destinations are not compared: an item
+/// renumbered by an insertion above it, or a reference definition that moved
+/// elsewhere in the file, has not changed on its own line. The merged row is
+/// the new one, so what is drawn is the current document.
 pub(crate) fn markdown_inline_diff_rows_can_merge(
     old_row: &MarkdownPreviewRow,
     new_row: &MarkdownPreviewRow,
 ) -> bool {
+    let same_kind = match (old_row.kind, new_row.kind) {
+        (
+            MarkdownPreviewRowKind::ListItem { number: old },
+            MarkdownPreviewRowKind::ListItem { number: new },
+        ) => old.is_some() == new.is_some(),
+        (old, new) => old == new,
+    };
+    let same_spans = old_row.inline_spans.len() == new_row.inline_spans.len()
+        && old_row
+            .inline_spans
+            .iter()
+            .zip(new_row.inline_spans.iter())
+            .all(|(old, new)| old.byte_range == new.byte_range && old.style == new.style);
     old_row.change_hint == MarkdownChangeHint::None
         && new_row.change_hint == MarkdownChangeHint::None
         && !matches!(old_row.kind, MarkdownPreviewRowKind::Spacer)
         && !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer)
-        && old_row.kind == new_row.kind
+        && same_kind
         && old_row.text == new_row.text
-        && old_row.inline_spans == new_row.inline_spans
+        && same_spans
         && old_row.code_language == new_row.code_language
-        && old_row.code_block_horizontal_scroll_hint == new_row.code_block_horizontal_scroll_hint
         && old_row.indent_level == new_row.indent_level
         && old_row.blockquote_level == new_row.blockquote_level
         && old_row.footnote_label == new_row.footnote_label
         && old_row.alert_kind == new_row.alert_kind
         && old_row.starts_alert == new_row.starts_alert
+        && old_row.continues_item == new_row.continues_item
+        && old_row.task.map(|task| task.checked) == new_row.task.map(|task| task.checked)
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────
@@ -327,6 +409,25 @@ pub(crate) fn scrollbar_markers_for_documents(
     super::super::diff_utils::scrollbar_markers_from_flags(bucket_count, |bucket_ix| {
         buckets.get(bucket_ix).copied().unwrap_or(0)
     })
+}
+
+/// Markers for changes measured at `(top, bottom, flag)` in a scroll content
+/// `content_height` tall.
+pub(crate) fn scrollbar_markers_for_extents(
+    extents: &[(f32, f32, u8)],
+    content_height: f32,
+) -> Vec<crate::view::components::ScrollbarMarker> {
+    const BUCKETS: usize = 240;
+    let mut buckets = [0u8; BUCKETS];
+    for &(top, bottom, flag) in extents {
+        let bucket = |y: f32| ((y / content_height).clamp(0.0, 1.0) * BUCKETS as f32) as usize;
+        let first = bucket(top).min(BUCKETS - 1);
+        let last = bucket(bottom).clamp(first, BUCKETS - 1);
+        for cell in &mut buckets[first..=last] {
+            *cell |= flag;
+        }
+    }
+    super::super::diff_utils::scrollbar_markers_from_flags(BUCKETS, |ix| buckets[ix])
 }
 
 pub(crate) fn scrollbar_flag_for_change_hint(hint: MarkdownChangeHint) -> u8 {

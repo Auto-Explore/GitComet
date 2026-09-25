@@ -59,11 +59,12 @@ pub(super) fn send_or_log<T>(
     message: T,
     kind: SendFailureKind,
     context: &'static str,
-) {
+) -> bool {
     match tx.send(message) {
-        Ok(()) => {}
+        Ok(()) => true,
         Err(_) => {
             record_send_failure(kind, context);
+            false
         }
     }
 }

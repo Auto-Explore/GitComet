@@ -259,6 +259,22 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing,
+                load_remote_image_url,
+            } => self.context_menu_view(
+                PopoverKind::LocalFileLinkMenu {
+                    repo_id,
+                    source,
+                    path,
+                    missing,
+                    load_remote_image_url,
+                },
+                cx,
+            ),
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,

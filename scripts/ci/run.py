@@ -2,6 +2,7 @@
 """Build once, inventory every test, then run nextest + the GPUI libtest harness."""
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from contextlib import ExitStack
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,7 +25,10 @@ REPORTS = ROOT / "target" / "ci-reports"
 REPORT_LOCK = threading.RLock()
 CONSOLE_LOCK = threading.RLock()
 UI = "gitcomet-ui-gpui"
-NEXTEST_PROFILES = ("ci", "ci-git-limited")
+NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first")
+# Audited in-memory tests: no process-global environment, filesystem, or native
+# resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
+PURE_BATCHES = {"gitcomet-core": ("conflict_session::",)}
 CONTEXTS = {
     "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
@@ -41,11 +46,58 @@ GIT_PREREQUISITE_SKIP = re.compile(
     r"\bskipping\b[^\n]*(?:Git-for-Windows|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
     re.IGNORECASE,
 )
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+LIBTEST_RESULT = re.compile(r"test \S+(?: - should panic)? \.\.\. (ok|FAILED|ignored(?:, .*)?)")
+LIBTEST_FAILED = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. FAILED\s*$", re.MULTILINE)
+NEXTEST_PASS = re.compile(r"\s*PASS \[\s*(\d+(?:\.\d+)?)s\]")
+NEXTEST_COUNTER = re.compile(r"\s*[A-Z][A-Z0-9 -]*\[[^\]]*\] \(\s*(\d+)/(\d+)\)")
+NEXTEST_OUTPUT = re.compile(r"\s*(?:stdout|stderr|output) ─")
+TEST_TOTAL = re.compile(r"running (\d+) tests?$|\s+Starting (\d+) tests? across")
+# Passes at least this slow print in full; nextest reports its own SLOW at 60s.
+SLOW_PASS_SECONDS = 10
+MARKS_PER_LINE = 100
 
 
 def uses_libtest(package):
     # Run the GPUI harness in one process on every platform.
     return package == UI
+
+
+def batch_pure_enabled(mode="auto"):
+    if mode not in ("auto", "on", "off"):
+        raise ValueError(f"Unsupported pure-test batching mode: {mode}")
+    return mode == "on" or (mode == "auto" and sys.platform == "win32")
+
+
+def pure_batches(suites, mode="auto"):
+    if not batch_pure_enabled(mode):
+        return []
+    return [(binary_id, suite, prefix)
+            for binary_id, suite in suites.items() if suite.get("kind") == "lib"
+            for prefix in PURE_BATCHES.get(binary_id, ())
+            if any(name.startswith(prefix) and not test["ignored"]
+                   for name, test in suite["testcases"].items())]
+
+
+def batched_test_names(batches):
+    return {(binary_id, name) for binary_id, suite, prefix in batches
+            for name, test in suite["testcases"].items()
+            if name.startswith(prefix) and not test["ignored"]}
+
+
+def runner_label(package, binary_id, name, batched):
+    return ("libtest" if uses_libtest(package) else
+            "libtest-pure" if (binary_id, name) in batched else "nextest")
+
+
+def nextest_filter(batches):
+    # `binary` matches the Cargo binary name; `binary_id` also distinguishes
+    # library and integration harnesses. Inventory verification below remains
+    # the authority for the actual partition.
+    exclusions = [f"package(={UI})"]
+    for _, suite, prefix in batches:
+        exclusions.append(f"(package(={suite['package-name']}) & kind(lib) & test(/^{re.escape(prefix)}/))")
+    return "not " + exclusions[0] if len(exclusions) == 1 else "not (" + " | ".join(exclusions) + ")"
 
 
 def record(name, duration, returncode, **details):
@@ -86,12 +138,114 @@ def reject_prerequisite_skips(name, text):
         raise RuntimeError(f"{name}: required Git test did not run: {match.group()}")
 
 
-def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=None, live=True, cancel=None):
-    """Keep complete logs, surface runtime skips, and never mask subprocess failures."""
+def annotate_failures(name, tests):
+    # Error annotations surface failures on the run page, outside collapsed groups.
+    with CONSOLE_LOCK:
+        for test in tests:
+            message = f"{name}: {test}".replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Test failed::{message}", flush=True)
+
+
+def failed_junit_cases(junit):
+    return [f"{suite.attrib['name']} {case.attrib['name']}"
+            for suite in ET.parse(junit).getroot().findall("testsuite") for case in suite.findall("testcase")
+            if case.find("failure") is not None or case.find("error") is not None]
+
+
+class DotConsole:
+    """Echo test output as one mark per fast pass; print every other line in full."""
+
+    def __init__(self):
+        self.pending = ""
+        self.column = 0
+        self.done = 0
+        self.total = None
+        self.successes = False
+        self.last_pass = None
+
+    def write(self, text):
+        *lines, self.pending = (self.pending + text).split("\n")
+        for line in lines:
+            self.line(line)
+
+    def close(self):
+        if self.pending:
+            self.line(self.pending)
+            self.pending = ""
+        self.end_marks()
+
+    def line(self, raw):
+        plain = ANSI_ESCAPE.sub("", raw).rstrip()
+        if self.successes:
+            # libtest --show-output: passing tests' output, then every passing name.
+            if plain != "failures:" and not plain.startswith("test result:"):
+                return
+            self.successes = False
+        elif plain == "successes:":
+            self.successes = True
+            return
+        if total := TEST_TOTAL.match(plain):
+            self.total = int(total[1] or total[2])
+        result = LIBTEST_RESULT.fullmatch(plain)
+        passed = NEXTEST_PASS.match(plain)
+        mark = ("." if (result and result[1] == "ok") or (passed and float(passed[1]) < SLOW_PASS_SECONDS)
+                else "i" if result and result[1].startswith("ignored") else None)
+        if mark is None:
+            self.end_marks()
+        if counter := NEXTEST_COUNTER.match(plain):
+            self.done, self.total = int(counter[1]), int(counter[2])
+        elif result:
+            self.done += 1
+        if mark:
+            self.mark(mark)
+            self.last_pass = raw if passed else None
+            return
+        # An immediate success-output block needs the PASS line it belongs to.
+        if self.last_pass is not None and NEXTEST_OUTPUT.match(plain):
+            print(self.last_pass, flush=True)
+        self.last_pass = None
+        print(raw, flush=True)
+
+    def mark(self, char):
+        self.column += 1
+        print(char, end="", flush=True)
+        if self.column == MARKS_PER_LINE:
+            self.end_marks()
+
+    def end_marks(self):
+        if self.column:
+            print(f" {self.done}" + (f"/{self.total}" if self.total else ""), flush=True)
+            self.column = 0
+
+
+def configure_output():
+    # Redirected Windows streams can default to cp1252, while Cargo/nextest
+    # produce UTF-8. Imported callers (runtime/probes) need the CLI policy too.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and (stream.encoding != "utf-8" or stream.errors != "backslashreplace"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=None, live=True, cancel=None, dots=False):
+    """Keep complete logs, surface runtime skips, and never mask subprocess failures.
+
+    `dots` only filters the console; the log file always keeps every line.
+    """
+    configure_output()
     REPORTS.mkdir(parents=True, exist_ok=True)
     if cancel is not None and cancel.is_set():
         raise RuntimeError("test scheduling cancelled")
     command_text = "$ " + subprocess.list2cmdline([str(arg) for arg in command])
+    console = DotConsole() if dots else None
+
+    def echo(text, *, final=False):
+        if console is None:
+            print(text, end="", flush=True)
+            return
+        console.write(text)
+        if final:
+            console.close()
+
     if live:
         print(f"::group::{name}", flush=True)
         print(command_text, flush=True)
@@ -105,12 +259,12 @@ def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=N
         # Tail a file instead of blocking on a pipe that a leaked descendant
         # could hold open after its parent exits. Deadlines cover silent hangs.
         reader = stack.enter_context(log_path.open(encoding="utf-8", errors="replace"))
-        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stdout,
+        process = subprocess.Popen(command, cwd=ROOT if cwd is None else cwd, env=env, stdout=stdout,
                                    stderr=log, start_new_session=os.name != "nt")
         try:
             while process.poll() is None:
                 if live:
-                    print(reader.read(), end="", flush=True)
+                    echo(reader.read())
                 if cancel is not None and cancel.is_set():
                     raise RuntimeError("test scheduling cancelled")
                 if timeout is not None and time.monotonic() - start >= timeout:
@@ -120,7 +274,7 @@ def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=N
                 time.sleep(0.05)
             code = 124 if timed_out else process.wait()
             if live:
-                print(reader.read(), end="", flush=True)
+                echo(reader.read(), final=True)
         except BaseException:
             stop_process_tree(process)
             record(name, time.monotonic() - start, 130, cancelled=True, timed_out=False,
@@ -129,7 +283,8 @@ def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=N
                 if not live:
                     print(f"::group::{name}", flush=True)
                     print(command_text, flush=True)
-                    print(log_path.read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+                    echo(log_path.read_text(encoding="utf-8", errors="replace"))
+                echo("", final=True)
                 print("::endgroup::", flush=True)
             raise
     if timed_out:
@@ -145,8 +300,10 @@ def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=N
         if not live:
             print(f"::group::{name}", flush=True)
             print(command_text, flush=True)
-            print(log_path.read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+            echo(log_path.read_text(encoding="utf-8", errors="replace"), final=True)
         print("::endgroup::", flush=True)
+        if dots and code:
+            print(f"{name}: full output is {log_path.name} in the uploaded target/ci-reports artifact", flush=True)
     if check and code:
         raise subprocess.CalledProcessError(code, command)
     return code
@@ -173,9 +330,70 @@ def package_names(context):
     return {package["id"]: package["name"] for package in metadata["packages"]}
 
 
-def compile_tests(context, profile):
+def windows_linker_environment():
+    """Discover the MSVC/SDK/Rust linker once, then share it with Cargo's links.
+
+    This environment belongs only to the current Cargo invocation. Do not save
+    it in a disk cache: another toolchain, SDK or target needs fresh discovery.
+    """
+    if os.name != "nt":
+        return None
+    started = time.monotonic()
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GITCOMET_LINKER_")}
+    result = subprocess.run(["cmd.exe", "/d", "/u", "/c", "scripts\\windows\\msvc-linker.cmd",
+                             "--gitcomet-print-env"], cwd=ROOT, env=dict(env),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
+    values = dict(line.split("=", 1) for line in result.stdout.decode("utf-16-le").splitlines() if "=" in line)
+    for source, target in (("LINK_EXE", "EXE"), ("LIB", "LIB"), ("LIBPATH", "LIBPATH"),
+                           ("INCLUDE", "INCLUDE"), ("GITCOMET_TARGET_ARCH", "ARCH")):
+        if not values.get(source):
+            raise RuntimeError(f"Linker bootstrap did not return {source}")
+        env["GITCOMET_LINKER_" + target] = values[source]
+    record("windows-linker-discovery", time.monotonic() - started, 0)
+    return env
+
+
+def prepare_runtime_binaries(context):
+    """Keep static link directories out of Windows' runtime DLL search PATH.
+
+    Cargo metadata includes native static-library directories too. Large
+    workspaces can exceed CMD's inherited PATH limit, breaking nested tools.
+    Keep DLL/executable directories and any directory we cannot inspect.
+    """
+    if os.name != "nt":
+        return
+    directory = paths(context)
+    path = directory / "binaries.json"
+    original = path.read_bytes()
+    metadata = json.loads(original)
+    build = metadata["rust-build-meta"]
+    linked = build.get("linked-paths", [])
+    target = Path(build["target-directory"])
+    removed = []
+    for name in linked:
+        try:
+            runtime_files = any(item.suffix.lower() in (".dll", ".exe", ".com", ".cmd", ".bat")
+                                for item in (target / name).iterdir())
+        except OSError:
+            continue
+        if not runtime_files:
+            removed.append(name)
+    if not removed:
+        return
+    (directory / "binaries-original.json").write_bytes(original)
+    build["linked-paths"] = [name for name in linked if name not in removed]
+    path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+    (directory / "runtime-link-paths.json").write_text(json.dumps({
+        "removed_static_directories": removed,
+        "retained_directories": list(build["linked-paths"]),
+    }, indent=2) + "\n", encoding="utf-8")
+
+
+def compile_tests(context, profile, test_targets=()):
     directory = paths(context)
     selection = CONTEXTS[context]
+    targets = [arg for target in test_targets for arg in ("--test", target)]
     # Metadata cannot select packages, but must use the same feature switches.
     features = selection[1:] if selection[0] == "--workspace" else selection[2:]
     run(f"{context}-metadata", ["cargo", "metadata", "--format-version", "1", "--locked", *features],
@@ -183,32 +401,46 @@ def compile_tests(context, profile):
     run(f"{context}-features", ["cargo", "tree", "--locked", *selection,
         "--edges", "normal,build,dev", "--prefix", "none", "--format", "{p}|{f}"],
         output=directory / "features.txt")
-    run(f"{context}-compile", ["cargo", "nextest", "list", *selection,
+    run(f"{context}-compile", ["cargo", "nextest", "list", *selection, *targets,
         "--locked", "--cargo-profile", profile, "--timings",
         "--list-type", "binaries-only", "--message-format", "json"],
-        output=directory / "binaries.json")
+        output=directory / "binaries.json", env=windows_linker_environment())
+    prepare_runtime_binaries(context)
     run(f"{context}-inventory", ["cargo", "nextest", "list", *reuse_args(context),
         "--message-format", "json", "--ignore-default-filter"], output=directory / "tests.json")
     packages = package_names(context)
     entries = []
+    batched = batched_test_names(pure_batches(inventory(context)["rust-suites"]))
     for binary_id, suite in inventory(context)["rust-suites"].items():
         package = packages[suite["package-id"]]
         for name, test in suite["testcases"].items():
             entries.append(dict(package=package, binary=binary_id, test=name,
-                                ignored=test["ignored"],
-                                runner="libtest" if uses_libtest(package) else "nextest"))
+                                ignored=test["ignored"], runner=runner_label(package, binary_id, name, batched)))
     if not entries:
         raise RuntimeError(f"No tests discovered for {context}")
     (directory / "coverage.json").write_text(json.dumps({
-        "context": context, "selection": selection, "profile": profile,
+        "context": context, "selection": [*selection, *targets], "profile": profile,
         "rustc": subprocess.check_output(["rustc", "-vV"], text=True),
         "tests": entries,
     }, indent=2) + "\n", encoding="utf-8")
     print(f"Inventoried {len(entries)} tests ({sum(t['ignored'] for t in entries)} ignored)")
 
 
-def suite_env(context, suite):
+def suite_env(context, suite, *, cleanup):
     env = dict(os.environ)
+    if suite.get("package-name") == UI:
+        # Keep copied/renamed UI harnesses away from the developer's session.
+        # Explicit session files created by subprocess tests still take
+        # precedence over DISABLE_SESSION_PERSIST in the session loader.
+        env.pop("GITCOMET_SESSION_FILE", None)
+        env["GITCOMET_DISABLE_SESSION_PERSIST"] = "1"
+        if os.name == "nt":
+            parent = REPORTS / "ui-appdata"
+            parent.mkdir(parents=True, exist_ok=True)
+            # A straggling child or antivirus may still hold a file; keep the suite's result.
+            appdata = cleanup.enter_context(tempfile.TemporaryDirectory(dir=parent, ignore_cleanup_errors=True))
+            env["LOCALAPPDATA"] = str(appdata)
+            env["APPDATA"] = str(appdata)
     binary_dir = str(Path(suite["binary-path"]).parent)
     metadata = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
     build = metadata["rust-build-meta"]
@@ -226,47 +458,62 @@ def suite_env(context, suite):
     return env
 
 
-def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None):
+def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None, verify_names=False):
     expected = [name for name, test in suite["testcases"].items()
                 if not test["ignored"] and (test_filter is None or
                     (name == test_filter if exact else test_filter in name))]
     if test_filter and not expected:
         raise RuntimeError(f"Smoke selector {test_filter!r} matches no tests in {binary_id}")
-    command = [suite["binary-path"], "--nocapture"]
+    # Capture output so libtest prints it under the failing test. --show-output
+    # keeps passing tests' skip notices in the log; smoke runs keep --nocapture.
+    dots = verify_names or test_filter is None
+    if not dots:
+        command = [suite["binary-path"], "--nocapture"]
+    elif verify_names:
+        command = [suite["binary-path"], "--format", "pretty"]
+    else:
+        command = [suite["binary-path"], "--format", "pretty", "--show-output"]
     if threads is not None:
         command += ["--test-threads", str(threads)]
     if test_filter:
         command += [test_filter]
     if exact:
         command += ["--exact"]
-    env = suite_env(context, suite)
-    env.update(env_overrides or {})
-    name = f"{context}-{binary_id}-{test_filter or 'all'}"
-    if env_overrides:
-        name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
-    code = run(name, command, cwd=suite["cwd"], env=env, check=False,
-               timeout=180 if test_filter else 600, live=live, cancel=cancel)
+    with ExitStack() as cleanup:
+        env = suite_env(context, suite, cleanup=cleanup)
+        env.update(env_overrides or {})
+        name = f"{context}-{binary_id}-{test_filter or 'all'}"
+        if env_overrides:
+            name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
+        code = run(name, command, cwd=suite["cwd"], env=env, check=False,
+                   timeout=180 if test_filter else 600, live=live, cancel=cancel, dots=dots)
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
     log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8", errors="replace")
+    annotate_failures(name, LIBTEST_FAILED.findall(log))
     reject_prerequisite_skips(name, log)
     summaries = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", log)
     if not code and (not summaries or sum(map(int, summaries[-1])) != len(expected)):
         raise RuntimeError(f"{name}: libtest did not execute the inventoried test count ({len(expected)})")
+    if verify_names and not code:
+        actual = re.findall(r"^test (\S+)(?: - should panic)? \.\.\. ok\s*$", log, re.MULTILINE)
+        if Counter(actual) != Counter(expected):
+            raise RuntimeError(f"{name}: libtest test-name coverage mismatch")
     return code
 
 
-def check_nextest_results(context, suites, packages, junit):
+def check_nextest_results(context, suites, packages, junit, *, excluded=frozenset()):
     expected = {(binary_id, name) for binary_id, suite in suites.items()
                 if not uses_libtest(packages[suite["package-id"]])
-                for name, test in suite["testcases"].items() if not test["ignored"]}
+                for name, test in suite["testcases"].items() if not test["ignored"]} - excluded
     xml = ET.parse(junit)
     for case in xml.iter("testcase"):
         reject_prerequisite_skips(f"{context}:{case.attrib['name']}",
                                   case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
-    actual = {(suite.attrib["name"], case.attrib["name"])
+    observed = [(suite.attrib["name"], case.attrib["name"])
               for suite in xml.getroot().findall("testsuite") for case in suite.findall("testcase")
-              if case.find("skipped") is None}
-    if expected != actual:
+              if case.find("skipped") is None]
+    actual = set(observed)
+    if len(observed) != len(actual) or expected != actual:
         raise RuntimeError(f"{context}: nextest coverage mismatch: {len(expected - actual)} missing, {len(actual - expected)} unexpected")
     with REPORT_LOCK, (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
         for case in xml.iter("testcase"):
@@ -293,13 +540,25 @@ def run_parallel(tasks):
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci"):
-    if nextest_threads is not None and (nextest_threads < 1 or schedule != "serial"):
-        raise ValueError("--nextest-threads must be positive and requires --schedule serial")
+def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None, batch_pure_tests="auto"):
+    batch_pure_enabled(batch_pure_tests)
+    for option, threads in (("nextest", nextest_threads), ("ui", ui_threads)):
+        if threads is not None and (threads < 1 or schedule != "serial"):
+            raise ValueError(f"--{option}-threads must be positive and requires --schedule serial")
     if nextest_profile not in NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
+    prepare_runtime_binaries(context)
     packages = package_names(context)
     suites = inventory(context)["rust-suites"]
+    batches = pure_batches(suites, batch_pure_tests)
+    batched = batched_test_names(batches)
+    # Compile labels with the default mode; record the mode this run actually uses.
+    coverage = paths(context) / "coverage.json"
+    if coverage.exists():
+        document = json.loads(coverage.read_text(encoding="utf-8"))
+        for test in document["tests"]:
+            test["runner"] = runner_label(test["package"], test["binary"], test["test"], batched)
+        coverage.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     cpus = os.cpu_count() or 1
     balanced = schedule == "balanced" and cpus > 1
     start = time.monotonic()
@@ -312,13 +571,14 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest" / nextest_profile / "junit.xml"
         junit.unlink(missing_ok=True)
         command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", nextest_profile,
-                   "--ignore-default-filter", "-E", f"not package(={UI})", "--no-fail-fast"]
+                   "--ignore-default-filter", "-E", nextest_filter(batches), "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]
-        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel)
+        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True)
         if junit.exists():
             shutil.copyfile(junit, paths(context) / "junit.xml")
-            check_nextest_results(context, suites, packages, junit)
+            annotate_failures(f"{context}-nextest", failed_junit_cases(junit))
+            check_nextest_results(context, suites, packages, junit, excluded=batched)
         elif not code:
             raise RuntimeError(f"{context}: nextest produced no results")
         return code
@@ -328,21 +588,32 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
     if not libtest or len(libtest) == len(suites):
         # Package-only contexts have nothing to overlap. Keep their full budget.
         balanced = False
-    ui_threads = max(1, cpus // 2)
+    effective_ui_threads = max(1, cpus // 2) if balanced else ui_threads
+    default_ui_threads = os.environ.get("RUST_TEST_THREADS", str(cpus))
+    # Invalid environment overrides will fail libtest, but must not prevent the
+    # finally block from recording that failure.
+    default_ui_threads = int(default_ui_threads) if default_ui_threads.isdecimal() else None
 
     def ui(*, cancel=None, live=True):
-        results = [run_suite(context, binary_id, suite, threads=ui_threads, live=live, cancel=cancel)
+        results = [run_suite(context, binary_id, suite, threads=effective_ui_threads, live=live, cancel=cancel)
                    for binary_id, suite in libtest]
         return int(any(results))
 
     succeeded = False
     try:
+        for binary_id, suite, prefix in batches:
+            # libtest's filter is a substring; reject any inventory for which
+            # it would select a test outside the audited module prefix.
+            if any(prefix in name and not name.startswith(prefix) for name in suite["testcases"]):
+                raise RuntimeError(f"{binary_id}: ambiguous pure-test prefix {prefix}")
+            codes.append(run_suite(context, binary_id, suite, test_filter=prefix,
+                                   threads=nextest_threads or cpus, verify_names=True))
         if balanced:
-            codes.extend(run_parallel([partial(nextest, threads=cpus - ui_threads), ui]))
+            codes.extend(run_parallel([partial(nextest, threads=cpus - effective_ui_threads), ui]))
         else:
             codes.append(nextest(threads=nextest_threads))
             for binary_id, suite in libtest:
-                codes.append(run_suite(context, binary_id, suite))
+                codes.append(run_suite(context, binary_id, suite, threads=ui_threads))
         if any(codes):
             raise RuntimeError(f"{context}: test execution failed")
         succeeded = True
@@ -350,6 +621,11 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         (paths(context) / "execution.json").write_text(json.dumps({
             "schedule": schedule, "effective_schedule": "balanced" if balanced else "serial",
             "nextest_profile": nextest_profile,
+            "batch_pure_tests": batch_pure_tests, "batched_tests": sorted(batched),
+            "ui_threads": ui_threads,
+            "effective_ui_threads": effective_ui_threads if effective_ui_threads is not None else
+                                    default_ui_threads,
+            "effective_nextest_threads": cpus - effective_ui_threads if balanced else nextest_threads or cpus,
             "nextest_threads": nextest_threads, "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
         }, indent=2) + "\n", encoding="utf-8")
 
@@ -369,18 +645,28 @@ def main():
     parser.add_argument("phase", choices=["compile", "test", "doc", "display", "cmd-smoke", "command"])
     parser.add_argument("--context", choices=CONTEXTS, default="workspace")
     parser.add_argument("--cargo-profile", default="ci-test")
+    parser.add_argument("--test-target", action="append", default=[],
+                        help="Compile only this integration target; repeat for multiple smoke targets")
     parser.add_argument("--name", default="command")
     parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
     parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
+    parser.add_argument("--ui-threads", type=int, help="Opt-in libtest concurrency experiment (serial schedule only)")
     parser.add_argument("--nextest-profile", choices=NEXTEST_PROFILES, default="ci")
+    parser.add_argument("--batch-pure-tests", choices=("auto", "on", "off"), default="auto",
+                        help="Batch audited pure tests in libtest (auto enables on Windows)")
     args, extra = parser.parse_known_args()
-    if args.nextest_threads is not None and (args.phase != "test" or args.nextest_threads < 1 or args.schedule != "serial"):
-        parser.error("--nextest-threads must be positive and requires test --schedule serial")
+    if args.test_target and args.phase != "compile":
+        parser.error("--test-target requires compile")
+    for option in ("nextest", "ui"):
+        threads = getattr(args, option + "_threads")
+        if threads is not None and (args.phase != "test" or threads < 1 or args.schedule != "serial"):
+            parser.error(f"--{option}-threads must be positive and requires test --schedule serial")
     os.chdir(ROOT)
     if args.phase == "compile":
-        compile_tests(args.context, args.cargo_profile)
+        compile_tests(args.context, args.cargo_profile, args.test_target)
     elif args.phase == "test":
-        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile)
+        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile,
+                args.ui_threads, args.batch_pure_tests)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":
@@ -405,11 +691,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows CI redirects these streams through pipes, which can default to
-    # cp1252 even though Cargo/nextest logs contain UTF-8. Match the log files
-    # and GitHub Actions output so forwarding Unicode cannot abort the suite.
-    for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    configure_output()
     try:
         main()
     except (RuntimeError, subprocess.CalledProcessError) as error:

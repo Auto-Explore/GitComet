@@ -559,6 +559,48 @@ impl LargeFileCommand {
         )
     }
 
+    /// Rewrites files in the checkout: content replaces pointers or the
+    /// reverse, a branch is checked out or merged, `.gitattributes` or file
+    /// permissions change.
+    pub fn writes_worktree(&self) -> bool {
+        match self {
+            Self::LfsPull { .. }
+            | Self::LfsLock { .. }
+            | Self::LfsUnlock { .. }
+            | Self::LfsTrack { .. }
+            | Self::AnnexGet { .. }
+            | Self::AnnexGetKeys { .. }
+            | Self::AnnexDrop { .. }
+            | Self::AnnexMove { .. }
+            | Self::AnnexUnlock { .. }
+            | Self::AnnexLock { .. }
+            | Self::AnnexAdd { .. }
+            | Self::AnnexPull { .. }
+            | Self::AnnexPush { .. }
+            | Self::AnnexSync { .. }
+            | Self::AnnexAdjust { .. }
+            | Self::AnnexLeaveAdjusted { .. }
+            | Self::AnnexFsck => true,
+            Self::LfsFetchForDiff { .. }
+            | Self::LfsFetchAll
+            | Self::LfsPushAll { .. }
+            | Self::LfsPrune
+            | Self::LfsFsck
+            | Self::LfsInstall
+            | Self::AnnexCopy { .. }
+            | Self::AnnexInit
+            | Self::AnnexEnableRemote { .. }
+            | Self::AnnexInitRemote { .. }
+            | Self::AnnexTrust { .. }
+            | Self::AnnexDescribe { .. }
+            | Self::AnnexNumcopies { .. }
+            | Self::AnnexRestage
+            | Self::AnnexDropUnused { .. }
+            | Self::AnnexWebapp
+            | Self::AnnexStopAssistant => false,
+        }
+    }
+
     /// Changes lock state, so the lock list must be reloaded afterwards.
     pub fn changes_locks(&self) -> bool {
         matches!(self, Self::LfsLock { .. } | Self::LfsUnlock { .. })

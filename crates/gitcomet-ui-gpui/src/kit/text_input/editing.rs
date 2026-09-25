@@ -66,6 +66,18 @@ fn interpolated_source_window(
 }
 
 impl TextInput {
+    fn emit_content_changed(&self, cx: &mut Context<Self>) {
+        let snapshot = self.content.snapshot();
+        crate::ui_probe::action_phase(self.probe_action, "applied", || {
+            serde_json::json!({
+                "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()
+            })
+        });
+        cx.emit(TextInputChanged {
+            model_id: snapshot.model_id(),
+            revision: snapshot.revision(),
+        });
+    }
     pub fn new(options: TextInputOptions, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::from_options(options, cx)
     }
@@ -81,6 +93,7 @@ impl TextInput {
         });
         Self {
             focus_handle,
+            probe_action: 0,
             content: TextModel::new(),
             placeholder: options.placeholder,
             leading_icon: options.leading_icon,
@@ -489,10 +502,12 @@ impl TextInput {
             return;
         }
         let preserve_selection = preserve_append && text.starts_with(self.content.as_ref());
+        self.probe_action = 0;
         // Computed before the overwrite so highlights already on screen can ride
         // along; the equality check above keeps this O(n) scan off the hot path.
         let text_edit_delta = utf8_edit_delta_between_texts(self.content.as_ref(), text.as_ref());
         self.content.set_text(text.as_ref());
+        self.emit_content_changed(cx);
         self.protected_ranges = Arc::from([]);
         self.rebuild_content_width_cache_if_present();
         if !preserve_selection {
@@ -663,7 +678,8 @@ impl TextInput {
         cx.notify();
     }
 
-    pub fn set_vertical_padding(&mut self, padding: Option<Pixels>, cx: &mut Context<Self>) {
+    /// `padding` is in design px, so it follows the UI zoom.
+    pub fn set_vertical_padding(&mut self, padding: Option<f32>, cx: &mut Context<Self>) {
         if self.vertical_padding_override == padding {
             return;
         }
@@ -929,13 +945,30 @@ impl TextInput {
         }
     }
 
-    fn replace_content_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
+    fn replace_content_range(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        if range.start <= range.end
+            && range.end <= self.content.len()
+            && self.content.clamp_to_char_boundary(range.start) == range.start
+            && self.content.clamp_to_char_boundary(range.end) == range.end
+            // Before `slice`, which copies a range spanning rope chunks.
+            && range.len() == new_text.len()
+            && self.content.snapshot().slice(range.clone()).as_ref() == new_text
+        {
+            return range;
+        }
+        self.probe_action = crate::ui_probe::begin_action("typing");
         // Snapshotting is an `Arc` bump, and it is the only way to read the
         // pre-edit row layout after `replace_range` has already moved on.
         let track_lines = self.content_width_cache.is_some() || (self.multiline && self.soft_wrap);
         let old_affected =
             track_lines.then(|| Self::affected_lines(&self.content.snapshot(), range.clone()));
         let inserted = self.content.replace_range(range, new_text);
+        self.emit_content_changed(cx);
         let Some(old_affected) = old_affected else {
             return inserted;
         };
@@ -2214,7 +2247,7 @@ impl TextInput {
         let range = self.normalized_utf8_range(range);
         let previous_selection = self.selection.range.clone();
         let previous_reversed = self.selection.reversed;
-        let inserted = self.replace_content_range(range.clone(), new_text);
+        let inserted = self.replace_content_range(range.clone(), new_text, cx);
         self.shift_protected_ranges_for_edit(&range, &inserted);
         self.push_undo_snapshot(undo_snapshot);
         self.selection.redo_stack.clear();
@@ -2465,12 +2498,16 @@ impl TextInput {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        self.probe_action = crate::ui_probe::begin_action("typing");
         let text_edit_delta =
             utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
         let old_lines = text_edit_delta
             .as_ref()
             .map(|(old, _)| Self::affected_lines(&self.content.snapshot(), old.clone()));
         self.content = snapshot.content.into();
+        if text_edit_delta.is_some() {
+            self.emit_content_changed(cx);
+        }
         if let Some(old_lines) = old_lines
             && let Some((_, new)) = &text_edit_delta
         {
@@ -3387,7 +3424,7 @@ impl EntityInputHandler for TextInput {
             return;
         }
 
-        let inserted = self.replace_content_range(range.clone(), new_text.as_str());
+        let inserted = self.replace_content_range(range.clone(), new_text.as_str(), cx);
         self.shift_protected_ranges_for_edit(&range, &inserted);
         self.selection
             .pending_text_edit_deltas
@@ -3429,7 +3466,7 @@ impl EntityInputHandler for TextInput {
             return;
         }
 
-        let inserted = self.replace_content_range(range.clone(), new_text.as_str());
+        let inserted = self.replace_content_range(range.clone(), new_text.as_str(), cx);
         self.shift_protected_ranges_for_edit(&range, &inserted);
         self.selection
             .pending_text_edit_deltas

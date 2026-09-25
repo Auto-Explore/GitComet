@@ -440,7 +440,10 @@ pub(super) fn create_tracking_store(
         repo: Arc::clone(&repo),
     }));
     store.dispatch(Msg::OpenRepo(workdir.clone()));
-    wait_until("tracked test repo to open", || {
+    // Branches load after `open` turns Ready. The ref pickers index rows by
+    // position (HEAD, then branches), so a view built before they land is
+    // missing rows; slow CI runners (Windows) hit that.
+    wait_until("tracked test repo to open and list branches", || {
         let snapshot = store.snapshot();
         snapshot
             .active_repo
@@ -453,6 +456,7 @@ pub(super) fn create_tracking_store(
             .is_some_and(|repo_state| {
                 repo_state.spec.workdir == expected_workdir
                     && matches!(repo_state.open, Loadable::Ready(()))
+                    && matches!(repo_state.branches, Loadable::Ready(_))
             })
     });
     (store, events, repo, workdir)
@@ -3738,7 +3742,9 @@ fn rename_branch_prompt_existing_name_opens_collision_dialog(cx: &mut gpui::Test
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(!cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()));
-    assert!(store.snapshot().branch_exists_prompt.is_none());
+    wait_until("rename collision prompt cancellation", || {
+        store.snapshot().branch_exists_prompt.is_none()
+    });
 }
 
 #[gpui::test]

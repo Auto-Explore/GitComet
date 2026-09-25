@@ -2,6 +2,7 @@ use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::main::DiskSurface;
 use crate::view::panes::main::diff_search::DiffSearchOptions;
 use gpui::Focusable;
 
@@ -404,7 +405,12 @@ impl MainPaneView {
                     return true;
                 }
                 self.clear_status_selection_for_shortcut(repo_id, cx);
-                self.stage_or_unstage_status_paths(repo_id, area, paths);
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &self.store,
+                    repo_id,
+                    area,
+                    paths,
+                );
                 self.rebuild_diff_cache(cx);
                 return true;
             }
@@ -544,7 +550,12 @@ impl MainPaneView {
                             return true;
                         }
                         self.clear_status_selection_for_shortcut(repo_id, cx);
-                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
                         self.rebuild_diff_cache(cx);
                         return true;
                     }
@@ -618,7 +629,12 @@ impl MainPaneView {
                             return true;
                         }
                         self.clear_status_selection_for_shortcut(repo_id, cx);
-                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
                         self.rebuild_diff_cache(cx);
                         return true;
                     }
@@ -1108,6 +1124,7 @@ impl MainPaneView {
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_search_cancel_pending_query_recompute();
         self.diff_search_active = false;
+        self.diff_search_document = None;
         self.diff_search_query = SharedString::default();
         self.diff_search_regex_error = None;
         self.diff_search_matches.clear();
@@ -1118,7 +1135,7 @@ impl MainPaneView {
         self.clear_diff_text_query_overlay_cache();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
-        self.markdown_preview_reveal.clear();
+        self.markdown_interaction.reveal.clear();
         // Hand the buffer back, caret still on the match. The panel focus handle
         // every other view returns to would drop the user out of the text.
         if self.is_file_editor_active() {
@@ -1135,13 +1152,13 @@ impl MainPaneView {
         window.focus(&focus, cx);
     }
 
-    fn refresh_diff_search_after_option_change(&mut self) {
+    fn refresh_diff_search_after_option_change(&mut self, cx: &mut gpui::Context<Self>) {
         let query = self.diff_search_query.clone();
         self.invalidate_diff_text_query_overlay_cache(query.as_ref(), self.diff_search_options);
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
         self.diff_search_cancel_pending_query_recompute();
-        self.diff_search_recompute_matches_and_scroll_to_first();
+        self.diff_search_schedule_query_recompute(self.diff_search_query.clone(), cx);
     }
 
     fn set_diff_search_options(
@@ -1152,7 +1169,7 @@ impl MainPaneView {
     ) {
         if self.diff_search_options != next {
             self.diff_search_options = next;
-            self.refresh_diff_search_after_option_change();
+            self.refresh_diff_search_after_option_change(cx);
         }
         self.focus_diff_search_input(window, cx);
         cx.notify();
@@ -1396,6 +1413,119 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// The "File changed on disk" strip, when the notice names the surface on
+    /// screen. Sits between the toolbar and the body; the body itself is left
+    /// exactly as it was, which is the point.
+    fn render_file_disk_notice(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let notice = self.file_disk_notice_for_screen()?;
+        let name = notice
+            .abs_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "this file".to_string());
+        // Read live, not at notice time: the user may have typed since.
+        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty;
+        let actor = if notice.by_git_operation {
+            "A git operation"
+        } else {
+            "Another program"
+        };
+        let verb = if notice.deleted {
+            "deleted"
+        } else {
+            "modified"
+        };
+
+        let reload_button = components::Button::new("file_disk_notice_reload", "Reload")
+            .style(if discards_edits {
+                components::ButtonStyle::Danger
+            } else {
+                components::ButtonStyle::Filled
+            })
+            .on_click(theme, cx, |this, _e, _window, cx| {
+                this.reload_file_from_disk_notice(cx);
+            })
+            .debug_selector(|| "file_disk_notice_reload".to_string());
+        let dismiss_button = components::Button::new(
+            "file_disk_notice_dismiss",
+            if discards_edits {
+                "Keep my edits"
+            } else {
+                "Dismiss"
+            },
+        )
+        .style(components::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, _window, cx| {
+            this.dismiss_file_disk_notice(cx);
+        })
+        .debug_selector(|| "file_disk_notice_dismiss".to_string());
+
+        Some(
+            div()
+                .id("file_disk_notice")
+                .debug_selector(|| "file_disk_notice".to_string())
+                .mx_2()
+                .mt_1()
+                .px_2()
+                .py_1()
+                // One row: message left, buttons right. The buttons drop below
+                // only once the pane is too narrow for both.
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap_x_3()
+                .gap_y_1()
+                .bg(theme.colors.notice.background)
+                .border_1()
+                .border_color(theme.colors.notice.border)
+                .rounded(px(theme.radii.panel))
+                .text_size(theme.ui_text(13.0))
+                .child(
+                    div()
+                        .debug_selector(|| "file_disk_notice_text".to_string())
+                        .flex_1()
+                        .min_w(crate::ui_scale::design_px(200.0, cx))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_x_2()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(theme.colors.notice.foreground)
+                                .child("File changed on disk"),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.colors.notice.secondary)
+                                .child(format!("{actor} {verb} {name}.")),
+                        )
+                        .when(discards_edits, |d| {
+                            d.child(
+                                div()
+                                    .text_color(theme.colors.notice.secondary)
+                                    .child("Reloading discards your unsaved edits."),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(reload_button)
+                        .child(dismiss_button),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The explicit "Save" button, shown while editing with auto-save off.
     fn file_editor_save_button(
         &self,
@@ -1556,7 +1686,7 @@ impl MainPaneView {
                     .start_slot(svg_icon(
                         "icons/line_break.svg",
                         theme.colors.foreground.primary,
-                        px(14.0),
+                        ui_scale.px(14.0),
                     ))
                     .borderless()
                     .style(components::ButtonStyle::Subtle)
@@ -1637,7 +1767,7 @@ impl MainPaneView {
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
                         theme.colors.foreground.secondary,
-                        px(12.0),
+                        ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, window, cx| {
@@ -1688,6 +1818,7 @@ impl MainPaneView {
     ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
@@ -1695,23 +1826,16 @@ impl MainPaneView {
 
         let title = self.diff_panel_title(theme, cx);
         let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
-        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
-
-        let has_submodule_summary = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
-        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
-            None
-        } else {
-            self.untracked_directory_notice()
-        };
-
-        let is_file_preview = self.is_file_preview_active()
-            && untracked_directory_notice.is_none()
-            && !has_submodule_summary
-            && !inline_submodule_diff_active;
-        let supports_diff_content_toggle = (inline_submodule_diff_active || !has_submodule_summary)
-            && self.supports_diff_content_mode_toggle(is_file_preview);
+        // What the pane shows, as every other question about it answers it.
+        let surface = self.main_pane_surface();
+        let inline_submodule_diff_active = surface.inline_submodule_diff;
+        let has_submodule_summary = surface.submodule_summary;
+        let untracked_directory_notice = surface
+            .directory_notice
+            .then(|| self.untracked_directory_notice())
+            .flatten();
+        let is_file_preview = surface.file_preview;
+        let supports_diff_content_toggle = surface.supports_diff_content_toggle;
 
         // Browsing a historical commit: tint the header and the content surface
         // instead of framing the pane, and only while the content on screen is
@@ -1727,10 +1851,7 @@ impl MainPaneView {
         // whether the path is *previewable*, and a file the preview declines
         // (an unknown extension, say) is still a file the editor can open — it
         // does its own UTF-8 check and reports the failure in place.
-        let is_file_editor = self.is_file_editor_active()
-            && untracked_directory_notice.is_none()
-            && !has_submodule_summary
-            && !inline_submodule_diff_active;
+        let is_file_editor = surface.file_editor;
         if is_file_editor {
             self.ensure_file_editor_loaded(cx);
         } else if is_file_preview {
@@ -1745,32 +1866,16 @@ impl MainPaneView {
             self.reset_worktree_preview_source_state();
             self.reset_diff_horizontal_scroll_state();
         }
-        let wants_file_diff =
-            supports_diff_content_toggle && self.wants_file_diff_view(is_file_preview);
-        let wants_collapsed_diff =
-            supports_diff_content_toggle && self.wants_collapsed_diff_view(is_file_preview);
+        let wants_file_diff = surface.wants_file_diff;
+        let wants_collapsed_diff = surface.wants_collapsed_diff;
 
         if self.is_conflict_rendered_markdown_preview_active() {
-            self.ensure_conflict_markdown_preview_cache();
+            self.ensure_conflict_markdown_preview_cache(cx);
         }
         let repo = self.active_repo();
         let conflict_target = (!inline_submodule_diff_active)
-            .then_some(())
-            .and(repo)
-            .and_then(|repo| {
-                let DiffTarget::WorkingTree { path, area } =
-                    repo.diff_state.diff_target.as_ref()?
-                else {
-                    return None;
-                };
-                if *area != DiffArea::Unstaged {
-                    return None;
-                }
-                let conflict = repo
-                    .status_entry_for_path(DiffArea::Unstaged, path.as_path())
-                    .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
-                Some((path.clone(), conflict.conflict))
-            });
+            .then(|| self.conflicted_worktree_target())
+            .flatten();
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
@@ -1796,12 +1901,7 @@ impl MainPaneView {
         let conflict_rendered_preview_active = self.is_conflict_rendered_preview_active();
         let rendered_preview_kind =
             super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
-        let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
-            wants_file_diff,
-            wants_collapsed_diff,
-            is_file_preview,
-            rendered_preview_kind,
-        );
+        let rendered_view_toggle_kind = surface.toggle_kind;
         let is_markdown_preview_view = rendered_view_toggle_kind
             == Some(RenderedPreviewKind::Markdown)
             && self
@@ -1911,7 +2011,7 @@ impl MainPaneView {
                         .child(svg_icon(
                             "icons/chevron_down.svg",
                             theme.colors.foreground.secondary,
-                            px(12.0),
+                            scaled_px(12.0),
                         ))
                         .on_activate(
                             false,
@@ -1937,11 +2037,14 @@ impl MainPaneView {
                 let can_nav_next = self.diff_nav_next_target_ix(&nav_entries).is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
-                    .start_slot(svg_icon(
-                        "icons/arrow_up.svg",
-                        theme.colors.foreground.primary,
-                        px(14.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/arrow_up.svg",
+                            theme.colors.foreground.primary,
+                            scaled_px(14.0),
+                        )
+                        .debug_selector(|| "diff_prev_hunk_icon".to_string()),
+                    )
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_prev)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1954,11 +2057,14 @@ impl MainPaneView {
                     );
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
-                    .start_slot(svg_icon(
-                        "icons/arrow_down.svg",
-                        theme.colors.foreground.primary,
-                        px(14.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/arrow_down.svg",
+                            theme.colors.foreground.primary,
+                            scaled_px(14.0),
+                        )
+                        .debug_selector(|| "diff_next_hunk_icon".to_string()),
+                    )
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_next)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -2201,11 +2307,14 @@ impl MainPaneView {
                 .is_some_and(|id| id == &diff_action_invoker);
             controls = controls.child(
                 components::Button::new(cog_id, "")
-                    .start_slot(svg_icon(
-                        "icons/cog.svg",
-                        theme.colors.foreground.secondary,
-                        px(14.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/cog.svg",
+                            theme.colors.foreground.secondary,
+                            scaled_px(14.0),
+                        )
+                        .debug_selector(move || format!("{cog_id}_icon")),
+                    )
                     .style(components::ButtonStyle::Transparent)
                     .open(diff_action_active)
                     .selected_bg(theme.colors.interaction.pressed_background)
@@ -2222,11 +2331,14 @@ impl MainPaneView {
             );
             controls = controls.child(
                 components::Button::new("diff_close", "")
-                    .start_slot(svg_icon(
-                        "icons/generic_close.svg",
-                        theme.colors.foreground.secondary,
-                        px(12.0),
-                    ))
+                    .start_slot(
+                        svg_icon(
+                            "icons/generic_close.svg",
+                            theme.colors.foreground.secondary,
+                            scaled_px(12.0),
+                        )
+                        .debug_selector(|| "diff_close_icon".to_string()),
+                    )
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         this.clear_status_multi_selection(repo_id, cx);
@@ -2286,6 +2398,8 @@ impl MainPaneView {
             old_large.as_ref(),
             new_large.as_ref(),
         );
+        let disk_notice = self.render_file_disk_notice(theme, cx);
+
         let body: AnyElement = if has_large_file && !show_large_file_content {
             let action = self.large_file_card_actions(
                 theme,
@@ -2318,8 +2432,7 @@ impl MainPaneView {
                     }
                     Loadable::Ready(_) => {
                         self.ensure_single_markdown_preview_cache(cx);
-                        self.watch_pending_markdown_preview_images(cx);
-                        match &self.worktree_markdown_preview {
+                        match &self.worktree_markdown.document {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Loading")
                                     .into_any_element()
@@ -2343,32 +2456,32 @@ impl MainPaneView {
                                     )
                                 } else {
                                     // A single document lays out as one flowing
-                                    // element tree rather than a uniform row
-                                    // list: text wraps by itself, images sit at
-                                    // their own size, and the gaps around
+                                    // element tree: text wraps by itself, images
+                                    // sit at their own size, and the gaps around
                                     // headings are margins.
-                                    self.markdown_preview_wrap
-                                        .clear_list(MarkdownPreviewList::Worktree);
                                     let document = std::sync::Arc::clone(document);
-                                    let image_base_dir = self
-                                        .markdown_preview_image_base_dir()
-                                        .map(|dir| std::sync::Arc::from(dir.as_path()));
+                                    let image_root = self.markdown_preview_image_root();
+                                    let drawn_pictures = rows::MarkdownDrawnPictures::default();
                                     let body = rows::render_markdown_document(
                                         &document,
                                         &rows::MarkdownDocumentContext {
                                             theme,
                                             ui_scale_percent,
                                             editor_font_family: editor_font_family.clone().into(),
-                                            image_base_dir,
+                                            image_root,
                                             remote_image_access: self
                                                 .markdown_remote_image_access(Some(cx.entity())),
                                             picture_sizes: std::sync::Arc::clone(
-                                                &self.worktree_markdown_preview_picture_sizes,
+                                                &self.worktree_markdown.picture_sizes,
                                             ),
+                                            drawn_pictures: Some(drawn_pictures.clone()),
+                                            row_boxes: Default::default(),
                                             block_scrolls: self
-                                                .worktree_markdown_preview_block_scrolls
+                                                .worktree_markdown
+                                                .block_scrolls
                                                 .clone(),
-                                            blocks: self.worktree_markdown_preview_blocks.clone(),
+                                            blocks: self.worktree_markdown.blocks.clone(),
+                                            layout: self.worktree_markdown.layout.clone(),
                                             view: Some(cx.entity()),
                                             text_region: DiffTextRegion::Inline,
                                             change_bar_color:
@@ -2376,7 +2489,13 @@ impl MainPaneView {
                                                     self, theme,
                                                 ),
                                             query: self.markdown_preview_search_query(),
-                                            reveal: self.markdown_preview_reveal.clone(),
+                                            reveal: self.markdown_interaction.reveal.clone(),
+                                            hovered_link: self
+                                                .markdown_interaction
+                                                .hovered_link
+                                                .clone(),
+                                            change_extents: None,
+                                            tasks_editable: self.markdown_preview_tasks_editable(),
                                             scroll: Some(
                                                 self.worktree_preview_scroll
                                                     .0
@@ -2385,6 +2504,10 @@ impl MainPaneView {
                                                     .clone(),
                                             ),
                                         },
+                                    );
+                                    self.watch_pending_markdown_preview_images(
+                                        drawn_pictures.take(),
+                                        cx,
                                     );
 
                                     let scroll_handle =
@@ -3345,6 +3468,7 @@ impl MainPaneView {
                     .border_b_1()
                     .border_color(theme.colors.stroke.default),
             )
+            .when_some(disk_notice, |d, strip| d.child(strip))
             .child(
                 div()
                     .id("diff_body_container")

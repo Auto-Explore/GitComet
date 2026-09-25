@@ -59,6 +59,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         PopoverKind::DiffContentModeSettings
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
+        | PopoverKind::LocalFileLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
@@ -214,6 +215,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::HistoryBranchFilter { repo_id }
         | PopoverKind::HistoryAuthorFilter { repo_id }
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
+        | PopoverKind::LocalFileLinkMenu { repo_id, .. }
         | PopoverKind::ReflogEntryMenu { repo_id, .. }
         | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
     }?;
@@ -471,6 +473,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
+        | PopoverKind::LocalFileLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
@@ -585,6 +588,20 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         } => {
             96u8.hash(hasher);
             url.hash(hasher);
+            load_remote_image_url.hash(hasher);
+        }
+        PopoverKind::LocalFileLinkMenu {
+            repo_id,
+            source,
+            path,
+            missing,
+            load_remote_image_url,
+        } => {
+            109u8.hash(hasher);
+            repo_id.hash(hasher);
+            source.hash(hasher);
+            path.hash(hasher);
+            missing.hash(hasher);
             load_remote_image_url.hash(hasher);
         }
         PopoverKind::CommitShaLinkMenu {
@@ -1159,6 +1176,31 @@ mod tests {
             local_branch: "main".to_string(),
             local_head: CommitId("2222222222222222222222222222222222222222".into()),
         }
+    }
+
+    #[test]
+    fn local_file_link_menus_hash_their_path_and_presence() {
+        let menu = |path: &str, missing: bool| PopoverKind::LocalFileLinkMenu {
+            repo_id: RepoId(7),
+            source: LocalFileLinkSource::Version(
+                gitcomet_core::domain::FileSource::WorkingDirectory,
+            ),
+            path: std::path::PathBuf::from(path),
+            missing,
+            load_remote_image_url: None,
+        };
+        assert_eq!(
+            hash_kind(menu("docs/a.md", false)),
+            hash_kind(menu("docs/a.md", false))
+        );
+        assert_ne!(
+            hash_kind(menu("docs/a.md", false)),
+            hash_kind(menu("docs/b.md", false))
+        );
+        assert_ne!(
+            hash_kind(menu("docs/a.md", false)),
+            hash_kind(menu("docs/a.md", true))
+        );
     }
 
     #[test]

@@ -888,7 +888,7 @@ fn native_barrier_waits_for_debounced_refresh_without_counting_its_cookie() {
 #[test]
 fn native_sync_checkpoint_waits_for_refresh_and_policy_rebuild() {
     let (_temp, root) = repository();
-    let monitor = RunningMonitor::start(&root);
+    let monitor = RunningMonitor::start_for_unique_path(&root);
     let mut generation = monitor
         .checkpoint_native(Instant::now() + SYNC_TIMEOUT)
         .unwrap();
@@ -917,6 +917,19 @@ fn native_sync_checkpoint_waits_for_refresh_and_policy_rebuild() {
     monitor.quiet();
 }
 
+/// `refresh()` then `quiet()`, without a second window after a guarded settle:
+/// that settle already ended with a full quiet window (see `counted_monitor`).
+#[track_caller]
+fn refresh_then_quiet(monitor: &RunningMonitor) {
+    match monitor.rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Msg::RepoExternallyChanged { .. }) => {}
+        other => panic!("expected repository refresh, got {other:?}"),
+    }
+    if monitor.settle() == Settled::NativeFence {
+        monitor.quiet();
+    }
+}
+
 #[test]
 fn native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves() {
     let (_temp, root) = repository();
@@ -930,26 +943,21 @@ fn native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves() {
     fs::write(root.join(".gitignore"), &ignore).unwrap();
     let monitor = RunningMonitor::start(&root);
     fs::write(root.join(".gitignore"), format!("{ignore}vendor/\n")).unwrap();
-    monitor.refresh(); // Sent only once replacement watches are installed.
-    monitor.quiet();
+    refresh_then_quiet(&monitor); // Sent only once replacement watches are installed.
     fs::write(root.join("vendor/pkg/.gitignore"), "*").unwrap();
     fs::write(root.join("vendor/pkg/ignored.txt"), "churn").unwrap();
     monitor.quiet();
     fs::rename(root.join("vendor"), root.join("source")).unwrap();
-    monitor.refresh();
-    monitor.quiet();
+    refresh_then_quiet(&monitor);
     fs::write(root.join("source/visible.txt"), "edit").unwrap();
-    monitor.refresh();
-    monitor.quiet();
+    refresh_then_quiet(&monitor);
     // Portable atomic replacement: rename the original away then the new file in.
     fs::write(root.join("replacement.txt"), "after").unwrap();
     fs::rename(root.join("root.txt"), root.join("old.txt")).unwrap();
     fs::rename(root.join("replacement.txt"), root.join("root.txt")).unwrap();
-    monitor.refresh();
-    monitor.quiet();
+    refresh_then_quiet(&monitor);
     fs::write(root.join("root.txt"), "second edit").unwrap();
-    monitor.refresh();
-    monitor.quiet();
+    refresh_then_quiet(&monitor);
     drop(monitor); // The joined monitor releases all registrations before cleanup.
 }
 

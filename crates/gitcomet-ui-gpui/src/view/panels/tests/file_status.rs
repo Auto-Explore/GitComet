@@ -786,13 +786,13 @@ fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_containe
                     source.len(),
                     cx,
                 );
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                pane.worktree_markdown.path = Some(abs_path.clone());
+                pane.worktree_markdown.source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
                     crate::view::markdown_preview::parse_markdown(source)
                         .expect("untracked markdown preview should parse"),
                 ));
-                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_markdown.inflight = None;
                 cx.notify();
             });
         });
@@ -6843,6 +6843,27 @@ fn commit_details_signature_icon_follows_ui_scale(cx: &mut gpui::TestAppContext)
         .size;
     assert_eq!(enlarged.width, normal.width * 2.0);
     assert_eq!(enlarged.height, normal.height * 2.0);
+}
+
+/// Unlike the signature icon, the close icon is sized in design px, so it
+/// only zooms through the pane's UI scale rather than the window's rem size.
+#[gpui::test]
+fn commit_details_close_icon_follows_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, cx) = commit_details_signature_fixture(cx, None);
+    let normal = cx
+        .debug_bounds("commit_details_close_icon")
+        .expect("close icon")
+        .size;
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+    let zoomed = cx
+        .debug_bounds("commit_details_close_icon")
+        .expect("zoomed close icon")
+        .size;
+    assert_eq!(zoomed.width, normal.width * 2.0);
+    assert_eq!(zoomed.height, normal.height * 2.0);
 }
 
 #[gpui::test]

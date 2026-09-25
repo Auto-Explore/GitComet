@@ -485,7 +485,7 @@ impl Render for GitCometView {
                 .start_slot(svg_icon(
                     "icons/generic_close.svg",
                     theme.colors.foreground.secondary,
-                    px(12.0),
+                    scaled_px(12.0),
                 ))
                 .style(components::ButtonStyle::Transparent)
                 .on_click(theme, cx, move |this, _e, _w, _cx| {

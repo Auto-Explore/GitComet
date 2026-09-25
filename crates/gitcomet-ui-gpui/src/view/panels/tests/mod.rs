@@ -20,17 +20,26 @@ pub(super) fn simulate_counted_click(
     position: gpui::Point<Pixels>,
     click_count: usize,
 ) {
-    cx.simulate_mouse_move(position, None, Modifiers::default());
+    simulate_modified_click(cx, position, click_count, Modifiers::default());
+}
+
+pub(super) fn simulate_modified_click(
+    cx: &mut gpui::VisualTestContext,
+    position: gpui::Point<Pixels>,
+    click_count: usize,
+    modifiers: Modifiers,
+) {
+    cx.simulate_mouse_move(position, None, modifiers);
     cx.simulate_event(MouseDownEvent {
         position,
-        modifiers: Modifiers::default(),
+        modifiers,
         button: MouseButton::Left,
         click_count,
         first_mouse: false,
     });
     cx.simulate_event(MouseUpEvent {
         position,
-        modifiers: Modifiers::default(),
+        modifiers,
         button: MouseButton::Left,
         click_count,
     });
@@ -1236,11 +1245,14 @@ pub(super) fn set_ui_scale_percent_for_test(
 mod comparison;
 mod conflict;
 mod control_interaction;
+mod diff_marker_refresh;
 mod diff_stage_gutter;
 mod file_diff;
+mod file_disk_notice;
 mod file_editor;
 mod file_preview;
 mod file_status;
 mod large_file_diff;
 mod markdown;
 mod shortcuts;
+mod status_staging;

@@ -17,7 +17,8 @@ use crate::model::{
     SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{
-    BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList,
+    BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoActionKind, RepoCommandKind,
+    RepoPath, RepoPathList,
 };
 use crate::store::repo_load_trace;
 use gitcomet_core::auth::StagedGitAuth;
@@ -1282,6 +1283,7 @@ fn reduce_inner(
                 && matches!(
                     message.as_ref(),
                     crate::msg::InternalMsg::RepoActionFinished { .. }
+                        | crate::msg::InternalMsg::RepoPathsActionFinished { .. }
                         | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
                 );
             let previous_diagnostic_len = suppress_nested_diagnostics
@@ -2967,6 +2969,34 @@ fn reduce_inner(
             action,
             result,
         }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
+        Msg::Internal(crate::msg::InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action,
+            paths,
+            result,
+        }) => {
+            if result.is_ok() {
+                if matches!(
+                    action,
+                    RepoActionKind::DiscardWorktreeChangesPath
+                        | RepoActionKind::DiscardWorktreeChangesPaths
+                ) {
+                    diff_selection::clear_diff_selection_after_discard(
+                        state,
+                        repo_id,
+                        paths.as_slice(),
+                    );
+                } else if let Some(area) = action.status_diff_area() {
+                    diff_selection::clear_diff_selection_for_status_action(
+                        state,
+                        repo_id,
+                        area,
+                        paths.as_slice(),
+                    );
+                }
+            }
+            external_and_history::repo_action_finished(repos, state, repo_id, action, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
             external_and_history::branch_already_exists(repos, state, action, prompt)
         }

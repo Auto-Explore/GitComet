@@ -811,6 +811,63 @@ fn diff_file_image_returns_none_for_directories() {
 }
 
 #[test]
+fn gitlink_supplement_handles_literal_paths_dirty_children_and_staged_removal() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let name = "child [literal] é";
+    let nested = repo.join(name);
+    std::fs::create_dir(&nested).unwrap();
+    for path in [repo, nested.as_path()] {
+        run_git(path, &["init", "-q"]);
+        run_git(path, &["config", "user.email", "you@example.com"]);
+        run_git(path, &["config", "user.name", "You"]);
+        run_git(path, &["config", "commit.gpgsign", "false"]);
+    }
+    write(&nested, "file.txt", "base\n");
+    run_git(&nested, &["add", "."]);
+    run_git(&nested, &["commit", "-qm", "child"]);
+    // Retain .gitmodules through deletion so supplementation is also exercised
+    // when the removed gitlink no longer appears in the index.
+    write(
+        repo,
+        ".gitmodules",
+        &format!("[submodule \"child\"]\n path = {name}\n url = ../child\n"),
+    );
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-qm", "parent"]);
+    let opened = GixBackend.open(repo).unwrap();
+    assert!(opened.status().unwrap().unstaged.is_empty());
+    for file in ["file.txt", "untracked.txt"] {
+        write(&nested, file, "dirty\n");
+        let status = opened.status().unwrap();
+        assert!(
+            status
+                .unstaged
+                .iter()
+                .any(|entry| entry.path == Path::new(name))
+        );
+        assert!(
+            opened
+                .worktree_status()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.path == Path::new(name))
+        );
+        if file == "file.txt" {
+            run_git(&nested, &["checkout", "--", "file.txt"]);
+        }
+    }
+    run_git(repo, &["rm", "--cached", "--", name]);
+    for entries in [
+        opened.status().unwrap().staged.to_vec(),
+        opened.staged_status().unwrap(),
+    ] {
+        assert!(entries.iter().any(|entry| entry.path == Path::new(name) && entry.kind == FileStatusKind::Deleted));
+    }
+}
+
+#[test]
 fn gitlink_added_and_unstaged_modified_reports_expected_status_and_diff() {
     let _ = ensure_isolated_git_test_env();
 

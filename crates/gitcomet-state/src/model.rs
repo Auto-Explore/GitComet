@@ -1734,7 +1734,10 @@ pub struct RepoState {
     /// exists instead of selecting the dropped tab's neighbour.
     external_drop_previous_active_repo: Option<RepoId>,
     pub loads_in_flight: RepoLoadsInFlight,
+    /// Fetches and prunes as well as pulls.
     pub pull_in_flight: u32,
+    /// The pulls among `pull_in_flight`: those also merge into the checkout.
+    pub worktree_pull_in_flight: u32,
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
     pub local_actions_in_flight: u32,
@@ -1852,6 +1855,14 @@ pub struct RepoState {
 
     pub open_rev: u64,
     pub ops_rev: u64,
+    /// Bumped when the watcher (or the window-focus full refresh) reports a
+    /// working-tree write. The view stats the open file when this moves; the
+    /// watcher itself carries no paths.
+    pub worktree_change_rev: u64,
+    /// Bumped when a GitComet-run git command that may have rewritten
+    /// worktree files completes. Not `ops_rev`: that one also moves when a
+    /// command *starts*, which would spend the signal before the disk changed.
+    pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
 
     pub feedback: RepoFeedbackState,
@@ -1879,6 +1890,7 @@ impl RepoState {
             external_drop_previous_active_repo: None,
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
+            worktree_pull_in_flight: 0,
             push_in_flight: 0,
             worktrees_in_flight: 0,
             local_actions_in_flight: 0,
@@ -1959,6 +1971,8 @@ impl RepoState {
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
+            worktree_change_rev: 0,
+            local_worktree_write_rev: 0,
             last_active_at: None,
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
@@ -3067,6 +3081,26 @@ impl RepoState {
 
     pub(crate) fn bump_ops_rev(&mut self) {
         self.ops_rev = self.ops_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_worktree_change_rev(&mut self) {
+        self.worktree_change_rev = self.worktree_change_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_local_worktree_write_rev(&mut self) {
+        self.local_worktree_write_rev = self.local_worktree_write_rev.wrapping_add(1);
+    }
+
+    /// A long-running GitComet git command that writes the checkout is still
+    /// going: merge/rebase/reset family, a pull, or a commit whose hooks may
+    /// rewrite files. Its watcher flush can arrive before it finishes. Not
+    /// fetch, push, staging or our own editor save — counting those would pass
+    /// off another program's edit as ours. Short commands (checkout, discard,
+    /// stash) finish before the debounced flush and need no entry here.
+    pub fn git_operation_in_flight(&self) -> bool {
+        self.sequencer_actions_in_flight > 0
+            || self.worktree_pull_in_flight > 0
+            || self.commit_in_flight > 0
     }
 
     pub(crate) fn bump_load_epoch(&mut self) -> u64 {
@@ -4204,6 +4238,28 @@ mod tests {
         assert_eq!(repo.ops_rev, before + 1);
         repo.bump_ops_rev();
         assert_eq!(repo.ops_rev, before + 2);
+    }
+
+    #[test]
+    fn git_operation_in_flight_counts_commands_that_can_write_the_worktree() {
+        let mut repo = new_repo();
+        assert!(!repo.git_operation_in_flight());
+        for set in [
+            |repo: &mut RepoState| repo.sequencer_actions_in_flight = 1,
+            |repo: &mut RepoState| repo.worktree_pull_in_flight = 1,
+            |repo: &mut RepoState| repo.commit_in_flight = 1,
+        ] {
+            let mut repo = new_repo();
+            set(&mut repo);
+            assert!(repo.git_operation_in_flight());
+        }
+        // A fetch, a push, staging, an editor save: none writes the checkout
+        // behind the user's back.
+        repo.pull_in_flight = 1;
+        repo.push_in_flight = 1;
+        repo.worktrees_in_flight = 1;
+        repo.local_actions_in_flight = 1;
+        assert!(!repo.git_operation_in_flight());
     }
 
     // --- Equality-guard tests: setters that skip rev bump on no-change ---

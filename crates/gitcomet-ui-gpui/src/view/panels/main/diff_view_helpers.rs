@@ -190,6 +190,7 @@ impl MainPaneView {
         let can_back = repo.navigation.view_history.can_back();
         let can_forward = repo.navigation.view_history.can_forward();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
         let (badge_label, path): (SharedString, std::path::PathBuf) =
             match self.rendered_diff_target()? {
@@ -233,7 +234,7 @@ impl MainPaneView {
             .child(svg_icon(
                 "icons/history.svg",
                 theme.colors.foreground.secondary,
-                px(12.0),
+                scaled_px(12.0),
             ))
             .child(
                 div()
@@ -264,7 +265,7 @@ impl MainPaneView {
             .start_slot(svg_icon(
                 "icons/arrow_left.svg",
                 theme.colors.foreground.primary,
-                px(14.0),
+                scaled_px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
             .disabled(!can_back)
@@ -278,7 +279,7 @@ impl MainPaneView {
             .start_slot(svg_icon(
                 "icons/arrow_right.svg",
                 theme.colors.foreground.primary,
-                px(14.0),
+                scaled_px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
             .disabled(!can_forward)
@@ -378,6 +379,7 @@ impl MainPaneView {
         let Some(repo_id) = repo_id else {
             return (None, None);
         };
+        let scaled_px = crate::ui_scale::scaler(crate::ui_scale::current(cx).percent);
 
         let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
         let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
@@ -429,7 +431,11 @@ impl MainPaneView {
                       delta: i8,
                       cx: &mut gpui::Context<Self>| {
             let btn = components::Button::new(id, "")
-                .start_slot(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
+                .start_slot(svg_icon(
+                    icon,
+                    theme.colors.foreground.primary,
+                    scaled_px(14.0),
+                ))
                 .style(components::ButtonStyle::Outlined);
             let btn = if borderless { btn.borderless() } else { btn };
             btn.on_click(theme, cx, move |this, _e, window, cx| {

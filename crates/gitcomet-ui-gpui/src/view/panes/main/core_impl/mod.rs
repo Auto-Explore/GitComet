@@ -221,6 +221,17 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            // The open-file disk check keys off these; working-tree targets
+            // only, for the same reason as the status rev.
+            let disk_revs = if matches!(
+                repo.diff_state.diff_target,
+                Some(DiffTarget::WorkingTree { .. })
+            ) {
+                (repo.worktree_change_rev, repo.local_worktree_write_rev)
+            } else {
+                (0, 0)
+            };
+            disk_revs.hash(&mut hasher);
             // Edit-size sorting can change file neighbors without a status change.
             let line_stats_rev = match repo.diff_state.diff_target.as_ref() {
                 Some(DiffTarget::WorkingTree { area, .. }) => repo.line_stats_rev(*area),
@@ -618,7 +629,9 @@ impl MainPaneView {
         // so the request must go with it rather than fire against whatever row
         // now holds that index.
         self.diff_search_horizontal_reveal = None;
-        self.markdown_preview_reveal.clear();
+        self.markdown_interaction.reveal.clear();
+        self.markdown_interaction.hovered_link = None;
+        self.markdown_interaction.plain_link = None;
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -637,18 +650,6 @@ impl MainPaneView {
         column: DiffHorizontalScrollColumn,
     ) -> Pixels {
         self.diff_horizontal_content_width_for_column(column)
-    }
-
-    pub(in crate::view) fn record_diff_horizontal_content_width(
-        &mut self,
-        width: Pixels,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.record_diff_horizontal_content_width_for_column(
-            DiffHorizontalScrollColumn::Primary,
-            width,
-            cx,
-        );
     }
 
     pub(in crate::view) fn record_diff_horizontal_content_width_for_column(
@@ -1273,7 +1274,7 @@ impl MainPaneView {
         self.conflict_three_way_segments_cache.clear();
         self.conflict_three_way_query_segments_cache.clear();
         self.diff_wrap_visible_cache_key = None;
-        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows = Arc::from([]);
         cx.notify();
     }
 
@@ -1284,7 +1285,7 @@ impl MainPaneView {
 
         self.diff_word_wrap = next;
         self.diff_wrap_visible_cache_key = None;
-        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows = Arc::from([]);
         self.reset_diff_horizontal_scroll_state();
         cx.notify();
     }
@@ -1309,13 +1310,15 @@ impl MainPaneView {
         next: RemoteMarkdownImagePolicy,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.remote_markdown_image_policy == next {
+        if self.remote_markdown_images.policy == next {
             return;
         }
-        self.remote_markdown_image_policy = next;
-        self.approved_remote_markdown_image_urls = Arc::default();
-        self.remote_markdown_image_approval_revision =
-            self.remote_markdown_image_approval_revision.wrapping_add(1);
+        self.remote_markdown_images.policy = next;
+        self.remote_markdown_images.approved_urls = Arc::default();
+        self.remote_markdown_images.approval_revision = self
+            .remote_markdown_images
+            .approval_revision
+            .wrapping_add(1);
         cx.notify();
     }
 
@@ -1324,8 +1327,8 @@ impl MainPaneView {
         approval_view: Option<Entity<MainPaneView>>,
     ) -> rows::MarkdownRemoteImageAccess {
         rows::MarkdownRemoteImageAccess {
-            policy: self.remote_markdown_image_policy,
-            approved_urls: Arc::clone(&self.approved_remote_markdown_image_urls),
+            policy: self.remote_markdown_images.policy,
+            approved_urls: Arc::clone(&self.remote_markdown_images.approved_urls),
             approval_view,
         }
     }
@@ -1335,12 +1338,14 @@ impl MainPaneView {
         url: SharedString,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+        if self.remote_markdown_images.policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
             return;
         }
-        if Arc::make_mut(&mut self.approved_remote_markdown_image_urls).insert(url) {
-            self.remote_markdown_image_approval_revision =
-                self.remote_markdown_image_approval_revision.wrapping_add(1);
+        if Arc::make_mut(&mut self.remote_markdown_images.approved_urls).insert(url) {
+            self.remote_markdown_images.approval_revision = self
+                .remote_markdown_images
+                .approval_revision
+                .wrapping_add(1);
             cx.notify();
         }
     }
@@ -2067,23 +2072,6 @@ impl MainPaneView {
         true
     }
 
-    /// Stage (or unstage) a whole status selection in one batch, clearing the
-    /// diff selection first because every one of those files is about to move to
-    /// the other section. Same order the context menu uses.
-    pub(in crate::view) fn stage_or_unstage_status_paths(
-        &mut self,
-        repo_id: RepoId,
-        area: DiffArea,
-        paths: Vec<std::path::PathBuf>,
-    ) {
-        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-        let paths = paths.into();
-        self.store.dispatch(match area {
-            DiffArea::Unstaged => Msg::StagePaths { repo_id, paths },
-            DiffArea::Staged => Msg::UnstagePaths { repo_id, paths },
-        });
-    }
-
     pub(in crate::view) fn clear_status_multi_selection(
         &mut self,
         repo_id: RepoId,
@@ -2188,9 +2176,13 @@ impl MainPaneView {
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
         if prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target {
-            self.approved_remote_markdown_image_urls = Arc::default();
-            self.remote_markdown_image_approval_revision =
-                self.remote_markdown_image_approval_revision.wrapping_add(1);
+            self.remote_markdown_images.approved_urls = Arc::default();
+            self.remote_markdown_images.approval_revision = self
+                .remote_markdown_images
+                .approval_revision
+                .wrapping_add(1);
+            // Another repository's file at the same path is another file.
+            self.rendered_preview_modes.end_markdown_budget_fallback();
         }
         if prev_diff_target != next_diff_target {
             self.clear_diff_selection_state();
@@ -2198,10 +2190,7 @@ impl MainPaneView {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.worktree_preview_content_rev = 0;
-            self.worktree_markdown_preview_path = None;
-            self.worktree_markdown_preview_source_rev = 0;
-            self.worktree_markdown_preview = Loadable::NotLoaded;
-            self.worktree_markdown_preview_inflight = None;
+            self.worktree_markdown.invalidate();
             self.worktree_preview_syntax_language = None;
             self.reset_worktree_preview_source_state();
             self.reset_diff_horizontal_scroll_state();
@@ -2212,6 +2201,10 @@ impl MainPaneView {
         // A closed repo tab takes its `RepoId` with it; buffers stashed under it
         // can never be saved again and would block every future close.
         self.prune_orphaned_file_editor_stash();
+        self.sync_file_disk_check(
+            prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target,
+            cx,
+        );
 
         self.sync_conflict_resolver(cx);
         self.ensure_file_image_diff_cache(cx);
@@ -2634,8 +2627,9 @@ impl MainPaneView {
                 return;
             }
             let end_visible_ix = count - 1;
-            let end_offset =
-                self.diff_text_line_len_for_region(end_visible_ix, DiffTextRegion::Inline);
+            let end_offset = self
+                .diff_text_full_line_for_region(end_visible_ix, DiffTextRegion::Inline)
+                .len();
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {

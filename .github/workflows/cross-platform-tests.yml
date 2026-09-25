@@ -25,6 +25,10 @@ on:
         description: Optional limit for concurrent Git-heavy tests
         type: string
         default: ci
+      ui-threads:
+        description: Optional positive UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
       fixture-timings:
         description: Collect per-test fixture and subprocess timings
         type: boolean
@@ -57,6 +61,10 @@ on:
         type: choice
         options: [ci, ci-git-limited]
         default: ci
+      ui-threads:
+        description: Optional positive UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
       fixture-timings:
         description: Collect per-test fixture and subprocess timings
         type: boolean
@@ -70,6 +78,7 @@ env:
   CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
   CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
   CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
+  CI_UI_THREADS: ${{ inputs.ui-threads || '' }}
   CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
   GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
@@ -145,6 +154,7 @@ jobs:
         run: |
           args=(--nextest-profile "$CI_NEXTEST_PROFILE")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           else
@@ -182,7 +192,7 @@ jobs:
       - name: Compile original Windows CMD smoke context
         if: success() && runner.os == 'Windows'
         shell: pwsh
-        run: python3 scripts/ci/run.py compile --context app
+        run: python3 scripts/ci/run.py compile --context app --test-target standalone_tool_mode_integration
       - name: Standalone smoke test in CMD
         if: success() && runner.os == 'Windows'
         shell: cmd
@@ -263,6 +273,7 @@ jobs:
         run: |
           args=(--nextest-profile "$CI_NEXTEST_PROFILE")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           else

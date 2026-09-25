@@ -194,6 +194,68 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    /// Whether the command can rewrite files in the checkout, so a file that
+    /// changed under the view when it finished was GitComet's doing. Our own
+    /// editor save is not here: the view recognizes those bytes itself.
+    pub fn writes_worktree(&self) -> bool {
+        match self {
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Reset { .. }
+            | Self::SquashCommits { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::ExportPatch { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::ApplyWorktreePatch { .. } => true,
+            Self::FetchAll
+            | Self::PruneMergedBranches
+            | Self::PruneLocalTags
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk => false,
+            Self::LargeFile { command } => command.writes_worktree(),
+        }
+    }
+
     pub(crate) fn hook_activity_label(&self) -> &'static str {
         match self {
             Self::FetchAll => "Fetch",

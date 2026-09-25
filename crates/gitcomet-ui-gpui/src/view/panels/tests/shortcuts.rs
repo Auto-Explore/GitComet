@@ -3373,6 +3373,188 @@ fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// A synchronous recompute (data arrival, option toggle) cancels the worker
+/// but leaves the rows unchanged. It used to drop the captured document too,
+/// so the next keystroke recaptured it and lost its query cache.
+#[gpui::test]
+fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70548);
+    let commit_id = CommitId("1122334455667748".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_document_reuse",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    // Without file text the file-diff cache resets on every render, which
+    // bumps the projection and would recapture the document regardless.
+    repo.diff_state.diff_file =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+            path.clone(),
+            Some("old one\nunchanged\n".into()),
+            Some("new one\nunchanged\n".into()),
+        ))));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    let set_query = |cx: &mut gpui::VisualTestContext, query: &'static str| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_search_input
+                        .update(cx, |input, cx| input.set_text(query, cx));
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+    let document = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert!(!pane.diff_search_worker_running);
+            pane.diff_search_document
+                .as_ref()
+                .map(|(_, document)| Arc::clone(document))
+        })
+    };
+
+    set_query(cx, "new");
+    let first = document(cx).expect("the worker captured a document");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane
+                .update(cx, |pane, _| pane.diff_search_recompute_matches());
+        });
+    });
+    set_query(cx, "ne");
+    let second = document(cx).expect("the worker captured a document");
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "unchanged rows must keep the captured document"
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = match pane.diff_view {
+                    DiffViewMode::Split => DiffViewMode::Inline,
+                    DiffViewMode::Inline => DiffViewMode::Split,
+                };
+                pane.diff_search_recompute_matches();
+            });
+        });
+    });
+    assert!(
+        document(cx).is_none(),
+        "changed rows drop the stale document instead of pinning it"
+    );
+
+    focus_diff_search_input(cx, &view);
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(
+        document(cx).is_none(),
+        "closing search releases the document"
+    );
+}
+
+/// A split file diff searches only the file rows. The capture also cloned
+/// the patch header map and pinned the patch and inline row sources.
+#[gpui::test]
+fn split_file_diff_search_captures_only_file_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70549);
+    let commit_id = CommitId("1122334455667749".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_capture_scope",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    repo.diff_state.diff_file =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+            path.clone(),
+            Some("old one\nunchanged\n".into()),
+            Some("new one\nunchanged\n".into()),
+        ))));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.ensure_diff_visible_indices();
+                assert!(pane.is_file_diff_view_active());
+                let patch = pane.diff_row_provider.clone().expect("patch rows loaded");
+                let counts = |pane: &crate::view::panes::MainPaneView| {
+                    (
+                        Arc::strong_count(&patch),
+                        Arc::strong_count(&pane.diff_cache),
+                        Arc::strong_count(&pane.diff_split_cache),
+                        Arc::strong_count(&pane.file_diff_inline_cache),
+                        pane.diff_split_row_provider.as_ref().map(Arc::strong_count),
+                        pane.file_diff_inline_row_provider
+                            .as_ref()
+                            .map(Arc::strong_count),
+                    )
+                };
+                let before = counts(pane);
+                let file_rows = pane.file_diff_row_provider.as_ref().map(Arc::strong_count);
+                let _document = pane.capture_search_document();
+                assert_eq!(counts(pane), before, "the capture pinned unused rows");
+                assert_eq!(
+                    pane.file_diff_row_provider.as_ref().map(Arc::strong_count),
+                    file_rows.map(|count| count + 1),
+                    "the capture shares the file rows it searches"
+                );
+            });
+        });
+    });
+}
+
 #[gpui::test]
 fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
     cx: &mut gpui::TestAppContext,
@@ -3567,6 +3749,90 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
     );
 }
 
+/// Icons are sized in design px, which only zoom through the UI scale; a bare
+/// `px()` holds them at 100% while the buttons around them grow.
+#[gpui::test]
+fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70547);
+    let commit_id = CommitId("1122334455667747".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_icons_follow_ui_scale",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    // Wide and tall enough that nothing collapses into an overflow at 200%.
+    cx.simulate_resize(gpui::size(px(2400.0), px(1400.0)));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    const ICONS: [&str; 8] = [
+        "diff_prev_hunk_icon",
+        "diff_next_hunk_icon",
+        "diff_action_menu_icon",
+        "diff_close_icon",
+        "commit_button_icon",
+        "commit_options_icon",
+        "previous_commit_messages_icon",
+        "change_tracking_unstaged_header_chevron",
+    ];
+    let sizes = |cx: &mut gpui::VisualTestContext| {
+        ICONS.map(|selector| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("expected {selector} to render"))
+                .size
+        })
+    };
+    let normal = sizes(cx);
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+    let zoomed = sizes(cx);
+
+    let unscaled: Vec<String> = ICONS
+        .into_iter()
+        .enumerate()
+        .filter(|(ix, _)| {
+            (zoomed[*ix].width, zoomed[*ix].height)
+                != (normal[*ix].width * 2.0, normal[*ix].height * 2.0)
+        })
+        .map(|(ix, selector)| format!("{selector}: {:?} -> {:?}", normal[ix], zoomed[ix]))
+        .collect();
+    assert!(
+        unscaled.is_empty(),
+        "icons must double at 200% UI scale: {unscaled:#?}"
+    );
+}
+
 #[gpui::test]
 fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -3592,12 +3858,12 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
                     preview_content_rev: 0,
                     reveal_whitespace_chars: false,
                 });
-                pane.diff_wrap_visible_rows = vec![DiffWrapVisualRow {
+                pane.diff_wrap_visible_rows = Arc::from([DiffWrapVisualRow {
                     source_visible_ix: 0,
                     wrap_ix: 0,
                     primary_range: rows::DiffWrapByteRange { start: 0, end: 4 },
                     secondary_range: rows::DiffWrapByteRange::default(),
-                }];
+                }]);
                 pane.set_diff_reveal_whitespace_chars(true, cx);
             });
         });
@@ -4063,8 +4329,8 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert!(
-            pane.diff_search_matches.is_empty(),
-            "expected match recompute to wait for the search debounce"
+            !pane.diff_search_worker_running,
+            "background search should finish without a debounce timer"
         );
     });
     wait_for_diff_search_debounce(cx);
@@ -4091,7 +4357,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::TestAppContext) {
+fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -4157,10 +4423,7 @@ fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::Test
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
-        assert!(
-            pane.diff_search_matches.is_empty(),
-            "expected F3 to navigate before the debounce has recomputed matches"
-        );
+        assert_eq!(pane.diff_search_matches.len(), 2);
     });
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
@@ -5523,7 +5786,7 @@ fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
-fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
+fn space_keeps_the_diff_when_the_selected_files_cannot_be_staged(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -5582,18 +5845,22 @@ fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
         "staging the selection must consume it"
     );
 
-    // The single-file path would advance the diff to the next unstaged file;
-    // acting on the whole selection clears it instead.
-    wait_until(cx, "the diff selection to be cleared", |cx| {
+    // This fixture has no repository handle, so staging fails. Consuming the
+    // selection must not close the diff or advance it to another file.
+    wait_until(cx, "the staging failure", |cx| {
         cx.update(|_window, app| {
             let snapshot = view.read(app).store.snapshot();
             snapshot
                 .repos
                 .iter()
                 .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| repo.diff_state.diff_target.is_none())
+                .is_some_and(|repo| {
+                    repo.local_actions_in_flight == 0 && repo.feedback.last_error.is_some()
+                })
         })
     });
+    sync_store_snapshot(cx, &view);
+    assert_eq!(active_worktree_diff_target_path(cx, &view), Some(first));
 }
 
 /// Ctrl+S must resolve the multi-file selection before confirming, the way
@@ -6138,3 +6405,208 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
 mod hook_activity;
 mod status_selection;
 mod window_and_file_actions;
+
+#[gpui::test]
+fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70541);
+    let commit_id = CommitId("1122334455667741".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_query_edit",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.rebuild_diff_cache(cx);
+            pane.ensure_diff_visible_indices();
+            pane.diff_search_active = true;
+            for query in ["old", "absent", "new"] {
+                let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                // A stale projection must be rebuilt without scanning on the
+                // UI thread before the background search even starts.
+                pane.diff_visible_cache_len = usize::MAX;
+                pane.diff_search_schedule_query_recompute(previous, cx);
+                assert!(
+                    pane.diff_search_matches.is_empty(),
+                    "UI callback must not synchronously scan"
+                );
+            }
+            pane.diff_search_next_match();
+            assert!(pane.diff_search_worker_running);
+            assert_eq!(pane.diff_search_pending_navigation, 1);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "new");
+        assert_eq!(pane.diff_search_matches.len(), 2);
+        assert_eq!(pane.diff_search_match_ix, Some(1));
+        assert!(!pane.diff_search_worker_running);
+        assert!(pane.diff_search_pending_previous_query.is_none());
+    });
+}
+
+// A diff reload recomputes synchronously and cancels the running worker, whose
+// result is then discarded. Navigation must act on the fresh synchronous
+// matches instead of queueing behind a worker that will never publish.
+#[gpui::test]
+fn diff_search_navigation_after_synchronous_recompute_is_not_lost(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70547);
+    let commit_id = CommitId("1122334455667747".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_cancelled_worker_nav",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    let navigated = cx.update(|_, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.rebuild_diff_cache(cx);
+            pane.ensure_diff_visible_indices();
+            pane.diff_search_active = true;
+            let previous = std::mem::replace(&mut pane.diff_search_query, "new".into());
+            pane.diff_search_schedule_query_recompute(previous, cx);
+            assert!(pane.diff_search_worker_running);
+            // What a diff reload does while the worker is still running.
+            pane.diff_search_recompute_matches();
+            assert_eq!(pane.diff_search_matches.len(), 2);
+            let before = pane.diff_search_match_ix;
+            pane.diff_search_next_match();
+            assert_ne!(
+                pane.diff_search_match_ix, before,
+                "F3 must step through the synchronously recomputed matches"
+            );
+            pane.diff_search_match_ix
+        })
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_matches.len(), 2);
+        assert_eq!(pane.diff_search_match_ix, navigated);
+        assert_eq!(pane.diff_search_pending_navigation, 0);
+        assert!(!pane.diff_search_worker_running);
+    });
+}
+
+// A query edit leaves the document unchanged, so the previous matches stay
+// valid. Clearing them on every keystroke blanked the highlights and counter
+// until the worker published.
+#[gpui::test]
+fn diff_search_query_edit_keeps_previous_matches_until_the_worker_publishes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70549);
+    let commit_id = CommitId("1122334455667749".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_keeps_matches",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    let schedule = |cx: &mut gpui::VisualTestContext, query: &'static str| {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.clone();
+            pane.update(app, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                pane.diff_search_active = true;
+                let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
+                pane.diff_search_schedule_query_recompute(previous, cx);
+                (pane.diff_search_matches.clone(), pane.diff_search_match_ix)
+            })
+        })
+    };
+    schedule(cx, "new");
+    draw_and_drain_test_window(cx);
+    let published = cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_search_matches
+            .clone()
+    });
+    assert_eq!(published.len(), 2);
+
+    let (while_pending, ix_while_pending) = schedule(cx, "ne");
+    assert_eq!(
+        while_pending, published,
+        "the previous query's matches stay on screen while the worker runs"
+    );
+    assert!(ix_while_pending.is_some());
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "ne");
+        assert!(!pane.diff_search_worker_running);
+        assert_eq!(pane.diff_search_match_ix, Some(0));
+    });
+}

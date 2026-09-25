@@ -129,7 +129,8 @@ def cache_context(key):
     if key.startswith("gitcomet-ci-v2-deps-"):
         return "deps/" + key.removeprefix("gitcomet-ci-v2-deps-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-v2-sources-"):
-        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 1)[0]
+        # Also parses pre-layout keys (os-deps), so new bundles retire those.
+        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-v1-"):
         return "deps/" + key.removeprefix("gitcomet-ci-v1-").rsplit("-", 1)[0]
     if key.startswith("gitcomet-ci-audit-"):
@@ -166,13 +167,24 @@ def runtime_statistics(directory):
             seen[identity] = record
         environment = {field: record.get(field) for field in environment_fields}
         environment["dirty"] = record.get("dirty", False)
+        # Hosted runners get a new hostname per job; their image identifies the machine.
+        environment["runner_environment"] = record.get("runner_environment")
+        environment["machine_id"] = (None if environment["runner_environment"] == "github-hosted"
+                                     else record.get("machine_id"))
+        environment["source_diff_sha256"] = record.get("source_diff_sha256")
         for sample in record["samples"]:
             descriptor = dict(environment, schedule=sample.get("schedule"),
+                              batch_pure_tests=sample.get("batch_pure_tests", record.get("batch_pure_tests", "off")),
                               nextest_profile=sample.get("nextest_profile", "ci"),
-                              nextest_threads=sample.get("nextest_threads"))
+                              nextest_threads=sample.get("nextest_threads"),
+                              ui_threads=sample.get("ui_threads"),
+                              effective_nextest_threads=sample.get("effective_nextest_threads"),
+                              effective_ui_threads=sample.get("effective_ui_threads"))
             key = json.dumps(descriptor, sort_keys=True)
-            group = groups.setdefault(key, {"descriptor": descriptor, "seconds": [], "failed": 0, "jobs": set()})
+            group = groups.setdefault(key, {"descriptor": descriptor, "seconds": [], "failed": 0, "jobs": set(), "local_sessions": set()})
             group["jobs"].add(record["job"])
+            if record["job"].startswith("local/") and record.get("local_session"):
+                group["local_sessions"].add(record["local_session"])
             if sample["success"]:
                 group["seconds"].append(sample["seconds"])
             else:
@@ -185,11 +197,20 @@ def runtime_statistics(directory):
         descriptor = group["descriptor"]
         environment_recorded = all(descriptor.get(field) is not None
                                    for field in environment_fields)
+        local_recorded = all(descriptor.get(field) is not None for field in
+                             (*[field for field in environment_fields if field != "runner_image"],
+                              "machine_id", "source_diff_sha256"))
         result.append(dict(descriptor, samples=len(values), failed=group["failed"],
                            median_seconds=statistics.median(values) if values else None,
+                           # Nearest-rank p95; with fewer than 20 samples this
+                           # conservatively reports the slowest observation.
+                           p95_seconds=values[-(len(values) // 20 + 1)] if values else None,
                            min_seconds=min(values) if values else None,
                            max_seconds=max(values) if values else None,
                            jobs=sorted(jobs), environment_recorded=environment_recorded,
+                           local_sessions=sorted(group["local_sessions"]),
+                           local_enough_samples=len(values) >= 6 and len(group["local_sessions"]) >= 2
+                                                and not group["failed"] and local_recorded,
                            enough_samples=len(values) >= 5 and len(jobs) >= 2 and not group["failed"]
                                           and environment_recorded and not descriptor["dirty"]))
     return result

@@ -485,6 +485,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::WebLinkMenu { .. }
+            | PopoverKind::LocalFileLinkMenu { .. }
             | PopoverKind::CommitShaLinkMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
@@ -975,9 +976,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             Some(DIALOG_440_WIDTH)
         }
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::WebLinkMenu { .. } | PopoverKind::DiffActionMenu => {
-            Some(DIFF_ACTION_MENU_WIDTH)
-        }
+        PopoverKind::WebLinkMenu { .. }
+        | PopoverKind::LocalFileLinkMenu { .. }
+        | PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         // SHA-link and commit menus share their width to keep navigation
         // and file-browsing actions consistent.
         PopoverKind::CommitShaLinkMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),

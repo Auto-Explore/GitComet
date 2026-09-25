@@ -134,11 +134,16 @@ fn ignored_parent_of_separate_git_dir_keeps_metadata_visible() {
         "native exclusions hide the only Git metadata stream: {exclusions:?}"
     );
     assert!(exclusions.contains(&git_dir.join("objects")));
-    let monitor = RunningMonitor::start(&root);
-    run_git(&root, &["commit", "--allow-empty", "-m", "External commit"]);
-    monitor.refresh();
-    run_git(&root, &["checkout", "-b", "other"]);
-    monitor.refresh();
+    // Moving .git named only the directory, never these ref files, so startup
+    // residue cannot satisfy the waits and no settle is needed.
+    let head = fs::read_to_string(git_dir.join("HEAD")).unwrap();
+    let branch = git_dir.join(head.trim().strip_prefix("ref: ").unwrap());
+    let monitor = RunningMonitor::start_for_unique_path(&root);
+    let commit = || run_git(&root, &["commit", "--allow-empty", "-m", "External commit"]);
+    assert!(monitor.expect_change(&branch, commit).git_state);
+    let other = git_dir.join("refs/heads/other");
+    let checkout = || run_git(&root, &["checkout", "-b", "other"]);
+    assert!(monitor.expect_change(&other, checkout).git_state);
 }
 
 #[test]
@@ -177,9 +182,16 @@ fn inactive_unresolvable_include_keeps_source_coverage() {
     assert!(!info.discovery_incomplete);
     assert!(info.ignore_inputs.contains(&root.join(".git/config")));
     assert!(info.ignore_inputs.contains(&include));
-    let monitor = RunningMonitor::start(&root);
-    fs::write(root.join("source/file.txt"), "observed").unwrap();
-    monitor.refresh();
+    let monitor = RunningMonitor::start_for_unique_path(&root);
+    let source = root.join("source/file.txt");
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "observed").unwrap())
+            .worktree
+    );
+    // External config is revalidated rather than natively observed. Drain the
+    // preceding source burst before checking that independent policy refresh.
+    monitor.settle();
     fs::write(&include, "[core]\n    ignoreCase = true\n").unwrap();
     monitor.revalidate();
     monitor.refresh();

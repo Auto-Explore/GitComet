@@ -1,9 +1,5 @@
 use super::*;
 
-/// parse time. Must track `MARKDOWN_PREVIEW_ROW_HEIGHT_PX`; both scale with the
-/// UI together, so the row count is scale-independent.
-const MARKDOWN_PREVIEW_IMAGE_ROW_HEIGHT_PX: u32 = 28;
-
 /// A picture that shares a line with the text around it.
 ///
 /// Markdown draws no distinction between a picture on a line of its own and one
@@ -38,31 +34,23 @@ pub(crate) struct MarkdownImage {
 }
 
 impl MarkdownImage {
-    /// Rows this image's block occupies.
+    /// Height, in design pixels, this picture reserves before its own size is
+    /// known.
     ///
     /// A declared height is authoritative. With only a width — the common
     /// `<img width="26">` used for an inline logo — the picture is assumed no
     /// taller than it is wide, which keeps small images from reserving a
-    /// screenful of blank rows. `object_fit: contain` letterboxes anything
+    /// screenful of blank space. `object_fit: contain` letterboxes anything
     /// that turns out to be taller.
-    pub(crate) fn block_rows(&self) -> u8 {
-        // A declared size of zero says nothing about how tall the picture is,
-        // so it is treated as undeclared rather than collapsing the block to a
-        // single row — and each dimension is judged on its own, so `height="0"`
-        // falls through to a usable width instead of discarding it.
-        let Some(declared) = self
-            .height_px
+    pub(crate) fn reserved_height_px(&self) -> u32 {
+        // A declared size of zero says nothing, so each dimension is judged
+        // on its own: `height="0"` falls through to a usable width.
+        self.height_px
             .filter(|declared| *declared > 0)
             .or(self.width_px.filter(|declared| *declared > 0))
-        else {
-            return MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS;
-        };
-        let rows = declared
-            .div_ceil(MARKDOWN_PREVIEW_IMAGE_ROW_HEIGHT_PX)
-            .max(1);
-        u8::try_from(rows)
-            .unwrap_or(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
-            .min(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+            .map_or(MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX, |declared| {
+                declared.min(MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX)
+            })
     }
 }
 
@@ -70,7 +58,8 @@ impl MarkdownImage {
 pub(crate) struct MarkdownInlineSpan {
     pub(crate) byte_range: Range<usize>,
     pub(crate) style: MarkdownInlineStyle,
-    /// Destination of the link this span sits inside.
+    /// Destination of the link this span sits inside: a web URL or a local
+    /// file path (see `classify_markdown_link_destination`).
     ///
     /// Carried on the span rather than in a parallel list so it survives the
     /// byte remapping that whitespace normalisation and table alignment apply,
@@ -131,35 +120,11 @@ pub(crate) struct MarkdownFootnoteContext {
     pub(crate) emitted_label: bool,
 }
 
-/// Parse state every row flush consults.
-///
-/// Both parts are answers to "what does the row being closed inherit?": the
-/// blockquote stack decides its alert, and `pending_images` holds the pictures
-/// read since the last flush, which belong to the line they were written on.
-#[derive(Default)]
-pub(crate) struct MarkdownRowContext {
-    pub(crate) blockquote_stack: Vec<MarkdownBlockQuoteContext>,
-    pub(crate) pending_images: Vec<MarkdownInlineImage>,
-}
-
-impl MarkdownRowContext {
-    /// True when a row has to be emitted even though its text is empty.
-    ///
-    /// Pictures only reach the document through the row that closes over them,
-    /// so a construct that would otherwise skip an empty row — a list item
-    /// holding nothing but a badge — has to emit one anyway or the picture is
-    /// carried onto an unrelated row later, or dropped at the end of the parse.
-    pub(crate) fn has_pending_images(&self) -> bool {
-        !self.pending_images.is_empty()
-    }
-}
-
 pub(crate) struct MarkdownPreviewRowInput<'a> {
     pub(crate) kind: MarkdownPreviewRowKind,
     pub(crate) text: &'a str,
     pub(crate) inline_spans: &'a [MarkdownInlineSpan],
     pub(crate) code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
-    pub(crate) code_block_horizontal_scroll_hint: bool,
     pub(crate) source_line_range: Range<usize>,
     pub(crate) indent_level: u8,
     pub(crate) blockquote_level: u8,
@@ -181,7 +146,6 @@ impl<'a> MarkdownPreviewRowInput<'a> {
             text,
             inline_spans,
             code_language: None,
-            code_block_horizontal_scroll_hint: false,
             source_line_range,
             indent_level,
             blockquote_level,
@@ -195,50 +159,45 @@ impl<'a> MarkdownPreviewRowInput<'a> {
         text: &'a str,
         source_line_range: Range<usize>,
         code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
-        code_block_horizontal_scroll_hint: bool,
         indent_level: u8,
         blockquote_level: u8,
     ) -> Self {
         Self {
-            kind,
-            text,
-            inline_spans: &[],
             code_language,
-            code_block_horizontal_scroll_hint,
-            source_line_range,
-            indent_level,
-            blockquote_level,
-            image: None,
-            inline_images: Arc::from(Vec::new()),
+            ..Self::plain(
+                kind,
+                text,
+                &[],
+                source_line_range,
+                indent_level,
+                blockquote_level,
+            )
         }
     }
 
+    /// A picture alone on its line. `link` is the picture's alt text styled as
+    /// the link it is wrapped in, so the row stays clickable.
     pub(crate) fn image(
-        slice_ix: u8,
-        slice_count: u8,
         alt: &'a str,
+        link: &'a [MarkdownInlineSpan],
         image: Arc<MarkdownImage>,
         source_line_range: Range<usize>,
         indent_level: u8,
         blockquote_level: u8,
     ) -> Self {
         Self {
-            kind: MarkdownPreviewRowKind::Image {
-                slice_ix,
-                slice_count,
-            },
             // The alt text stays the row text so selection and copy still see
             // something meaningful, and so a picture that cannot be loaded can
             // fall back to describing itself.
-            text: alt,
-            inline_spans: &[],
-            code_language: None,
-            code_block_horizontal_scroll_hint: false,
-            source_line_range,
-            indent_level,
-            blockquote_level,
             image: Some(image),
-            inline_images: Arc::from(Vec::new()),
+            ..Self::plain(
+                MarkdownPreviewRowKind::Image,
+                alt,
+                link,
+                source_line_range,
+                indent_level,
+                blockquote_level,
+            )
         }
     }
 }
@@ -248,65 +207,46 @@ pub(crate) struct MarkdownPreviewRowDecoration {
     pub(crate) footnote_label: Option<SharedString>,
     pub(crate) alert_kind: Option<MarkdownAlertKind>,
     pub(crate) starts_alert: bool,
+    pub(crate) task: Option<MarkdownTaskMarker>,
+    pub(crate) continues_item: bool,
 }
 
+/// A row's styled text for the theme it was last drawn with.
+///
+/// Keyed by a signature of the theme's colours, not its darkness: two dark
+/// themes colour links and code differently, and a switch between them has to
+/// restyle rows that were parsed before it.
 #[derive(Debug, Default)]
-pub(crate) struct MarkdownPreviewRowWidthCache(Mutex<Option<(u64, u32)>>);
+pub(crate) struct MarkdownPreviewRowStyledTextCache(Mutex<Option<(u64, CachedDiffStyledText)>>);
 
-impl Clone for MarkdownPreviewRowWidthCache {
+impl Clone for MarkdownPreviewRowStyledTextCache {
     fn clone(&self) -> Self {
         let cached = match self.0.lock() {
-            Ok(guard) => *guard,
-            Err(poisoned) => *poisoned.into_inner(),
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         };
-
         Self(Mutex::new(cached))
     }
 }
 
-impl MarkdownPreviewRowWidthCache {
-    pub(crate) fn get_or_init(&self, key: u64, compute: impl FnOnce() -> u32) -> u32 {
-        let mut cached = match self.0.lock() {
+impl MarkdownPreviewRowStyledTextCache {
+    pub(crate) fn get_or_insert_with(
+        &self,
+        theme_signature: u64,
+        compute: impl FnOnce() -> CachedDiffStyledText,
+    ) -> CachedDiffStyledText {
+        let mut slot = match self.0.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some((cached_key, value)) = *cached
-            && cached_key == key
+        if let Some((signature, styled)) = slot.as_ref()
+            && *signature == theme_signature
         {
-            return value;
+            return styled.clone();
         }
-
-        let value = compute();
-        *cached = Some((key, value));
-        value
-    }
-}
-
-impl PartialEq for MarkdownPreviewRowWidthCache {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for MarkdownPreviewRowWidthCache {}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct MarkdownPreviewRowStyledTextCache {
-    pub(crate) dark: OnceLock<CachedDiffStyledText>,
-    pub(crate) light: OnceLock<CachedDiffStyledText>,
-}
-
-impl MarkdownPreviewRowStyledTextCache {
-    pub(crate) fn get_or_init(
-        &self,
-        is_dark: bool,
-        compute: impl FnOnce() -> CachedDiffStyledText,
-    ) -> &CachedDiffStyledText {
-        if is_dark {
-            self.dark.get_or_init(compute)
-        } else {
-            self.light.get_or_init(compute)
-        }
+        let styled = compute();
+        *slot = Some((theme_signature, styled.clone()));
+        styled
     }
 }
 
@@ -322,12 +262,10 @@ impl Eq for MarkdownPreviewRowStyledTextCache {}
 
 /// A run of rows that renders as one element in the flowing preview.
 ///
-/// The row model is shaped for the diff preview, which paints into a uniform
-/// (fixed row height) list and therefore needs one row per painted line. The
-/// single-document preview lays out naturally instead, so consecutive rows
-/// belonging to the same construct — the lines of a code block, the bands of
-/// an image, the rows of a table — are grouped back into the block they came
-/// from. Both previews stay on one parsed model this way.
+/// The row model keeps one row per painted line — each line of a code block,
+/// each row of a table — which is what selection, copy, and search key on.
+/// The renderer groups consecutive rows of one construct back into the block
+/// they came from.
 /// Blocks address rows by index rather than by reference: selection, copy, and
 /// hit testing are all keyed by row index, so the flowing renderer hands the
 /// same indices to the same machinery the row preview used.
@@ -338,8 +276,8 @@ pub(crate) enum MarkdownBlock {
         row_ix: usize,
     },
     Paragraph(usize),
-    /// The bands of one image; only the first carries the source.
-    Image(Range<usize>),
+    /// A picture on a line of its own.
+    Image(usize),
     ThematicBreak(usize),
     List(Range<usize>),
     Blockquote(Range<usize>),
@@ -353,9 +291,9 @@ impl MarkdownBlock {
         match self {
             Self::Heading { row_ix, .. }
             | Self::Paragraph(row_ix)
+            | Self::Image(row_ix)
             | Self::ThematicBreak(row_ix) => *row_ix..*row_ix + 1,
-            Self::Image(range)
-            | Self::List(range)
+            Self::List(range)
             | Self::Blockquote(range)
             | Self::Code(range)
             | Self::Table(range) => range.clone(),
@@ -365,15 +303,46 @@ impl MarkdownBlock {
 
 /// Group a document's rows into the blocks the flowing preview renders.
 ///
-/// Spacer rows are dropped: they exist to open a gap in a fixed row grid, and
-/// the flowing layout expresses the same separation as one interactive gap
-/// element between blocks.
+/// Spacer rows are dropped: the layout expresses the separation they stand
+/// for as one interactive gap element between blocks.
 pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Vec<MarkdownBlock> {
-    let mut blocks: Vec<MarkdownBlock> = Vec::new();
-    let mut ix = 0usize;
+    markdown_blocks_in(document, 0..document.rows.len(), 0)
+}
 
-    while ix < document.rows.len() {
+/// Group `range` of a document's rows into blocks, as seen from inside
+/// `quote_depth` quotes: a row quoted deeper than that belongs to a quote
+/// block, whatever else it is — a list, code, or a table inside a quote is
+/// drawn inside that quote's bar. The renderer groups a quote block's rows
+/// again one level deeper.
+pub(crate) fn markdown_blocks_in(
+    document: &MarkdownPreviewDocument,
+    range: Range<usize>,
+    quote_depth: u8,
+) -> Vec<MarkdownBlock> {
+    let mut blocks: Vec<MarkdownBlock> = Vec::new();
+    let end = range.end.min(document.rows.len());
+    let mut ix = range.start;
+
+    while ix < end {
         let row = &document.rows[ix];
+        if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
+            ix += 1;
+            continue;
+        }
+        if row.blockquote_level > quote_depth {
+            // Two alerts that touch are two blocks: each carries its own bar
+            // and badge, and folding them together would label the second one
+            // with the first one's kind.
+            blocks.push(MarkdownBlock::Blockquote(take_run(
+                document,
+                &mut ix,
+                end,
+                |offset, row| {
+                    row.blockquote_level > quote_depth && (offset == 0 || !row.starts_alert)
+                },
+            )));
+            continue;
+        }
         match row.kind {
             MarkdownPreviewRowKind::Spacer => ix += 1,
             MarkdownPreviewRowKind::ThematicBreak => {
@@ -384,45 +353,18 @@ pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Ve
                 blocks.push(MarkdownBlock::Heading { level, row_ix: ix });
                 ix += 1;
             }
-            MarkdownPreviewRowKind::Image { .. } => {
-                // Every band of one image repeats the same source; the block
-                // needs it once.
-                let source = row.image.as_ref().map(|image| image.source.clone());
-                let start = ix;
+            MarkdownPreviewRowKind::Image => {
+                blocks.push(MarkdownBlock::Image(ix));
                 ix += 1;
-                while ix < document.rows.len()
-                    && document.rows[ix].kind.is_image()
-                    && document.rows[ix]
-                        .image
-                        .as_ref()
-                        .map(|image| image.source.clone())
-                        == source
-                    && !matches!(
-                        document.rows[ix].kind,
-                        MarkdownPreviewRowKind::Image { slice_ix: 0, .. }
-                    )
-                {
-                    ix += 1;
-                }
-                blocks.push(MarkdownBlock::Image(start..ix));
             }
             MarkdownPreviewRowKind::ListItem { .. } => {
                 blocks.push(MarkdownBlock::List(take_run(
                     document,
                     &mut ix,
-                    |_, row| matches!(row.kind, MarkdownPreviewRowKind::ListItem { .. }),
-                )));
-            }
-            MarkdownPreviewRowKind::BlockquoteLine => {
-                // Two alerts that touch are two blocks: each carries its own
-                // bar and badge, and folding them together would label the
-                // second one with the first one's kind.
-                blocks.push(MarkdownBlock::Blockquote(take_run(
-                    document,
-                    &mut ix,
-                    |offset, row| {
-                        matches!(row.kind, MarkdownPreviewRowKind::BlockquoteLine)
-                            && (offset == 0 || !row.starts_alert)
+                    end,
+                    |_, row| {
+                        matches!(row.kind, MarkdownPreviewRowKind::ListItem { .. })
+                            && row.blockquote_level == quote_depth
                     },
                 )));
             }
@@ -430,7 +372,11 @@ pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Ve
                 blocks.push(MarkdownBlock::Code(take_run(
                     document,
                     &mut ix,
-                    |_, row| matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }),
+                    end,
+                    |_, row| {
+                        matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. })
+                            && row.blockquote_level == quote_depth
+                    },
                 )));
             }
             MarkdownPreviewRowKind::TableRow { .. } => {
@@ -439,13 +385,18 @@ pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Ve
                 blocks.push(MarkdownBlock::Table(take_run(
                     document,
                     &mut ix,
+                    end,
                     |offset, row| match row.kind {
-                        MarkdownPreviewRowKind::TableRow { is_header } => offset == 0 || !is_header,
+                        MarkdownPreviewRowKind::TableRow { is_header } => {
+                            (offset == 0 || !is_header) && row.blockquote_level == quote_depth
+                        }
                         _ => false,
                     },
                 )));
             }
-            MarkdownPreviewRowKind::Paragraph
+            // A quote's own lines, seen from inside it, are its paragraphs.
+            MarkdownPreviewRowKind::BlockquoteLine
+            | MarkdownPreviewRowKind::Paragraph
             | MarkdownPreviewRowKind::DetailsSummary
             | MarkdownPreviewRowKind::PlainFallback => {
                 blocks.push(MarkdownBlock::Paragraph(ix));
@@ -457,15 +408,30 @@ pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Ve
     blocks
 }
 
-/// Consume the run of consecutive rows `belongs` accepts, which sees each row
-/// together with its offset from the start of the run.
+/// Consume the run of consecutive rows before `end` that `belongs` accepts,
+/// which sees each row together with its offset from the start of the run.
 pub(crate) fn take_run(
     document: &MarkdownPreviewDocument,
     ix: &mut usize,
+    end: usize,
     belongs: impl Fn(usize, &MarkdownPreviewRow) -> bool,
 ) -> Range<usize> {
     let start = *ix;
-    while let Some(row) = document.rows.get(*ix) {
+    while *ix < end {
+        let row = &document.rows[*ix];
+        // A diff pads one side with spacers to line it up with the other; the
+        // run goes on through them when the row after them still belongs.
+        if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
+            let next = (*ix..end)
+                .find(|&next| !matches!(document.rows[next].kind, MarkdownPreviewRowKind::Spacer));
+            match next {
+                Some(next) if next > start && belongs(next - start, &document.rows[next]) => {
+                    *ix = next;
+                    continue;
+                }
+                _ => break,
+            }
+        }
         if !belongs(*ix - start, row) {
             break;
         }
@@ -474,167 +440,62 @@ pub(crate) fn take_run(
     start..*ix
 }
 
-// ── Word wrap ───────────────────────────────────────────────────────────
-
-/// One rendered row of a wrapped preview document.
-///
-/// Preview rows are painted into a uniform (fixed row height) list, so word
-/// wrap works the same way it does in the text diff: a source row that does
-/// not fit is split into several visual rows, each carrying the byte range of
-/// `MarkdownPreviewRow::text` it paints. `wrap_ix > 0` marks a continuation,
-/// which drops the list marker and alert badge so the text keeps its indent.
+/// A slice of an aligned diff that both sides draw side by side. No block on
+/// either side crosses its edges, so the taller side sets its height and the
+/// other is left with blank space, which is what keeps the two lined up.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MarkdownPreviewVisualRow {
-    pub(crate) row_ix: usize,
-    pub(crate) wrap_ix: u32,
-    pub(crate) byte_range: Range<usize>,
+pub(crate) struct MarkdownDiffBand {
+    /// Aligned row indices, the same on both sides.
+    pub(crate) rows: Range<usize>,
+    /// Indices into each side's blocks.
+    pub(crate) old_blocks: Range<usize>,
+    pub(crate) new_blocks: Range<usize>,
 }
 
-impl MarkdownPreviewVisualRow {
-    pub(crate) fn is_continuation(&self) -> bool {
-        self.wrap_ix > 0
-    }
-
-    /// The portion of `row.text` this visual row paints.
-    ///
-    /// Hit testing, selection, and copy index rows by visual position, so they
-    /// need the slice the row painted rather than the whole source row.
-    pub(crate) fn text_slice(&self, row: &MarkdownPreviewRow) -> SharedString {
-        if self.byte_range == (0..row.text.len()) {
-            return row.text.clone();
+/// Cut an aligned diff into bands at every row boundary that no block on
+/// either side spans. Bands where neither side draws anything are dropped.
+pub(crate) fn markdown_diff_bands(
+    old_blocks: &[MarkdownBlock],
+    new_blocks: &[MarkdownBlock],
+    row_count: usize,
+) -> Vec<MarkdownDiffBand> {
+    let mut inside = vec![false; row_count + 1];
+    for block in old_blocks.iter().chain(new_blocks) {
+        let range = block.row_range();
+        let end = range.end.min(row_count);
+        if range.start + 1 < end {
+            inside[range.start + 1..end].fill(true);
         }
-        row.text
-            .get(self.byte_range.clone())
-            .map(SharedString::new)
-            .unwrap_or_default()
-    }
-}
-
-/// Source-row to visual-row mapping for one wrapped preview document.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct MarkdownPreviewWrapPlan {
-    pub(crate) rows: Vec<MarkdownPreviewVisualRow>,
-}
-
-impl MarkdownPreviewWrapPlan {
-    pub(crate) fn len(&self) -> usize {
-        self.rows.len()
     }
 
-    pub(crate) fn get(&self, visual_ix: usize) -> Option<&MarkdownPreviewVisualRow> {
-        self.rows.get(visual_ix)
-    }
-
-    /// First visual row painted for `row_ix`, for scroll and autoscroll targets.
-    pub(crate) fn visual_ix_for_row(&self, row_ix: usize) -> usize {
-        self.rows.partition_point(|row| row.row_ix < row_ix)
-    }
-}
-
-/// Build the visual-row mapping for `document`.
-///
-/// `wrap_row` returns the byte ranges a row's painted text splits into at the
-/// current width; an empty result (or a row that fits) yields a single visual
-/// row covering the whole text, so every source row keeps at least one row.
-///
-/// Returns `None` when the wrapped document would exceed
-/// `MAX_PREVIEW_WRAPPED_ROWS`, which the caller must treat as "do not wrap".
-/// Truncating the plan instead would drop the tail of the document out of the
-/// list with no way to scroll to it.
-pub(crate) fn build_markdown_preview_wrap_plan(
-    document: &MarkdownPreviewDocument,
-    mut wrap_row: impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>>,
-) -> Option<MarkdownPreviewWrapPlan> {
-    let mut rows = Vec::with_capacity(document.rows.len());
-    for (row_ix, row) in document.rows.iter().enumerate() {
-        push_wrapped_visual_rows(&mut rows, row_ix, wrap_row(row), row, 0)?;
-    }
-    rows.shrink_to_fit();
-    Some(MarkdownPreviewWrapPlan { rows })
-}
-
-/// Build the visual-row mappings for the two sides of a split diff preview.
-///
-/// `align_markdown_diff_rows` pads the two documents so source row `ix` is the
-/// same diff row on both sides; wrapping each side independently would break
-/// that, because a long paragraph on the left would push every later left row
-/// down relative to its right-hand counterpart while the synced scroll keeps
-/// the two lists at the same offset. Both sides therefore get the same number
-/// of visual rows per source row, the shorter side padded with empty
-/// continuations.
-pub(crate) fn build_markdown_preview_split_wrap_plans(
-    old_doc: &MarkdownPreviewDocument,
-    new_doc: &MarkdownPreviewDocument,
-    mut wrap_row: impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>>,
-) -> Option<(MarkdownPreviewWrapPlan, MarkdownPreviewWrapPlan)> {
-    // `align_markdown_diff_rows` pushes to both sides in lockstep, so the two
-    // documents are the same length by the time they reach a split preview.
-    debug_assert_eq!(old_doc.rows.len(), new_doc.rows.len());
-
-    let row_count = old_doc.rows.len().min(new_doc.rows.len());
-    let mut old_rows = Vec::with_capacity(row_count);
-    let mut new_rows = Vec::with_capacity(row_count);
-
-    for (row_ix, (old_row, new_row)) in old_doc.rows.iter().zip(new_doc.rows.iter()).enumerate() {
-        let old_ranges = wrap_row(old_row);
-        let new_ranges = wrap_row(new_row);
-        let visual_count = old_ranges.len().max(new_ranges.len()).max(1);
-
-        push_wrapped_visual_rows(&mut old_rows, row_ix, old_ranges, old_row, visual_count)?;
-        push_wrapped_visual_rows(&mut new_rows, row_ix, new_ranges, new_row, visual_count)?;
-    }
-
-    old_rows.shrink_to_fit();
-    new_rows.shrink_to_fit();
-    Some((
-        MarkdownPreviewWrapPlan { rows: old_rows },
-        MarkdownPreviewWrapPlan { rows: new_rows },
-    ))
-}
-
-/// Append the visual rows for one source row, padding up to `min_visual_rows`
-/// with empty continuations so a split counterpart stays row-aligned.
-pub(crate) fn push_wrapped_visual_rows(
-    out: &mut Vec<MarkdownPreviewVisualRow>,
-    row_ix: usize,
-    ranges: Vec<Range<usize>>,
-    row: &MarkdownPreviewRow,
-    min_visual_rows: usize,
-) -> Option<()> {
-    let text_len = row.text.len();
-    let push =
-        |out: &mut Vec<MarkdownPreviewVisualRow>, wrap_ix: usize, byte_range: Range<usize>| {
-            out.push(MarkdownPreviewVisualRow {
-                row_ix,
-                wrap_ix: u32::try_from(wrap_ix).unwrap_or(u32::MAX),
-                byte_range,
-            });
-            (out.len() <= MAX_PREVIEW_WRAPPED_ROWS).then_some(())
+    let mut bands = Vec::new();
+    let (mut old_ix, mut new_ix) = (0usize, 0usize);
+    let mut start = 0usize;
+    let cuts = (1..=row_count).filter(|&end| end == row_count || !inside[end]);
+    for end in cuts {
+        let take = |blocks: &[MarkdownBlock], ix: &mut usize| {
+            let first = *ix;
+            while blocks
+                .get(*ix)
+                .is_some_and(|block| block.row_range().start < end)
+            {
+                *ix += 1;
+            }
+            first..*ix
         };
-
-    // A row that fits keeps one visual row covering all of its text; building
-    // a one-element Vec for that common case would allocate per source row.
-    let mut wrap_ix = 0usize;
-    if ranges.len() < 2 {
-        push(out, wrap_ix, 0..text_len)?;
-        wrap_ix += 1;
-    } else {
-        for byte_range in ranges {
-            push(out, wrap_ix, byte_range)?;
-            wrap_ix += 1;
+        let old = take(old_blocks, &mut old_ix);
+        let new = take(new_blocks, &mut new_ix);
+        if !old.is_empty() || !new.is_empty() {
+            bands.push(MarkdownDiffBand {
+                rows: start..end,
+                old_blocks: old,
+                new_blocks: new,
+            });
         }
+        start = end;
     }
-    while wrap_ix < min_visual_rows {
-        push(out, wrap_ix, text_len..text_len)?;
-        wrap_ix += 1;
-    }
-    Some(())
+    bands
 }
-
-/// Upper bound on visual rows in a wrapped document. A pathological window
-/// width (a few pixels wide) would otherwise wrap every character onto its own
-/// row and blow up the uniform list.
-const MAX_PREVIEW_WRAPPED_ROWS: usize = MAX_PREVIEW_ROWS * 8;
 
 // ── Error messages ──────────────────────────────────────────────────────
 
@@ -648,12 +509,9 @@ pub(crate) fn single_preview_unavailable_reason(source_len: usize) -> &'static s
     }
 }
 
-/// Why a single-document preview could not be produced.
-///
-/// The two cases read the same to a user — no preview — but they are not the
-/// same problem: one document cannot be parsed within the row cap at all, the
-/// other parses fine and is only too big for a renderer that lays every row
-/// out at once. Only the second has a good answer, which is to show the source.
+/// Why a rendered diff was not produced although both of its sides parsed:
+/// its inline form, which holds both sides' changed rows, is past the row cap.
+/// The diff still reads as text, so the pane shows that.
 pub(crate) const TOO_MANY_ROWS_TO_RENDER_MESSAGE: &str =
     "Markdown preview unavailable: document is too large to render; showing source.";
 
@@ -661,7 +519,7 @@ pub(crate) const TOO_MANY_ROWS_TO_RENDER_MESSAGE: &str =
 pub(crate) enum MarkdownPreviewRefusal {
     /// Unreadable, or past the source-size or parsed-row cap.
     Unavailable(String),
-    /// Parsed, but past what the flowing renderer will lay out in a frame.
+    /// A diff whose inline form holds more rows than one document may.
     TooManyRowsToRender,
 }
 

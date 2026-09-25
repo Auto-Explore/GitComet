@@ -1516,9 +1516,9 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
 
 #[gpui::test]
 async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext) {
-    // Regression: a save bumps the repo's status revision, which the clean-buffer
-    // disk-follow treats as "the file may have moved". That path used to blank
-    // the input before re-reading, so every save re-seated the buffer — resetting
+    // Regression: a save is followed by a disk check (the write bumps the
+    // repo's revisions), and an earlier version of that follow-up blanked the
+    // input before re-reading, so every save re-seated the buffer — resetting
     // the caret to 0 and clearing undo, once per auto-save.
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -2809,6 +2809,67 @@ async fn file_editor_search_next_match_steps_within_a_line(cx: &mut gpui::TestAp
         ],
         "three same-line hits are three stops, and the walk wraps"
     );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn file_editor_search_keeps_navigation_relative_to_the_match_before_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let contents = "needle\nneedle\nneedle\n";
+    let workdir = seed_editor(
+        &view,
+        cx,
+        999,
+        "file_editor_search_pending_navigation",
+        contents,
+    );
+    search_the_editor_for(&view, cx, "needle");
+
+    for (case, (current, edits, next, expected)) in [
+        (1, 1, true, 2),
+        (1, 2, true, 2),
+        (1, 2, false, 0),
+        (0, 1, false, 2),
+        (2, 1, true, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.clone();
+            pane.update(app, |pane, cx| {
+                pane.diff_search_match_ix = Some(current);
+                for edit in 0..edits {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.set_text(format!("{contents}case {case} edit {edit}"), cx);
+                    });
+                    pane.on_file_editor_edited(cx);
+                }
+                assert!(pane.diff_search_worker_running);
+                assert!(pane.diff_search_matches.is_empty());
+                if next {
+                    pane.diff_search_next_match();
+                } else {
+                    pane.diff_search_prev_match();
+                }
+            });
+        });
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(pane.diff_search_matches, vec![0, 1, 2]);
+            assert_eq!(pane.diff_search_match_ix, Some(expected), "case {case}");
+            assert!(!pane.diff_search_worker_running);
+            assert!(pane.diff_search_pending_previous_query.is_none());
+        });
+    }
 
     let _ = std::fs::remove_dir_all(&workdir);
 }

@@ -1412,6 +1412,7 @@ impl PopoverHost {
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
                     | PopoverKind::WebLinkMenu { .. }
+                    | PopoverKind::LocalFileLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
                     | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
