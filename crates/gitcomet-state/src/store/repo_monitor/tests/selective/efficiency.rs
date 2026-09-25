@@ -163,14 +163,24 @@ fn ignored_directory_replaced_by_file_keeps_creation_and_edits_visible() {
     for cycle in 0..2 {
         fs::remove_dir_all(&boundary).unwrap();
         monitor.quiet(); // Removing an ignored directory alone is still noise.
-        if cycle == 0 {
-            fs::write(&boundary, "now an untracked file").unwrap();
+        // Each expect_change below awaits `build` once after a quiet window or
+        // settle, so a late event for an earlier write cannot satisfy it.
+        let created = if cycle == 0 {
+            monitor.expect_change(&boundary, || {
+                fs::write(&boundary, "now an untracked file").unwrap()
+            })
         } else {
             let replacement = root.join("replacement");
-            fs::write(&replacement, "renamed into the excluded boundary").unwrap();
-            monitor.refresh();
-            fs::rename(replacement, &boundary).unwrap();
-        }
+            assert!(
+                monitor
+                    .expect_change(&replacement, || {
+                        fs::write(&replacement, "renamed into the excluded boundary").unwrap()
+                    })
+                    .worktree
+            );
+            monitor.expect_change(&boundary, || fs::rename(&replacement, &boundary).unwrap())
+        };
+        assert!(created.worktree);
         let status = Command::new("git")
             .arg("-C")
             .arg(&root)
@@ -185,12 +195,25 @@ fn ignored_directory_replaced_by_file_keeps_creation_and_edits_visible() {
             .unwrap();
         assert!(status.status.success());
         assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "?? build");
-        monitor.refresh();
-        fs::write(&boundary, "later in-place edit").unwrap();
-        monitor.refresh();
-        fs::remove_file(&boundary).unwrap();
-        fs::create_dir(&boundary).unwrap();
-        monitor.refresh(); // The previously visible file was removed.
+        monitor.settle();
+        assert!(
+            monitor
+                .expect_change(&boundary, || {
+                    fs::write(&boundary, "later in-place edit").unwrap()
+                })
+                .worktree
+        );
+        monitor.settle();
+        // The previously visible file was removed.
+        assert!(
+            monitor
+                .expect_change(&boundary, || {
+                    fs::remove_file(&boundary).unwrap();
+                    fs::create_dir(&boundary).unwrap();
+                })
+                .worktree
+        );
+        monitor.settle();
         let before = builds.load(Ordering::Relaxed);
         fs::write(boundary.join(format!("ignored-{cycle}")), "ignored again").unwrap();
         monitor.quiet();
@@ -283,8 +306,12 @@ fn force_adding_file_under_ignored_dir_starts_watching_it() {
         "coverage reused the refreshed index snapshot"
     );
     assert_eq!(builds.load(Ordering::Relaxed), 1);
-    fs::write(&source, "tracked edit").unwrap();
-    monitor.refresh();
+    // `source` has not been written since the fixture, so this awaits only the edit.
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "tracked edit").unwrap())
+            .worktree
+    );
 }
 
 #[test]
@@ -319,8 +346,12 @@ fn external_excludes_edit_applies_on_revalidate() {
     monitor.revalidate();
     monitor.refresh();
     assert_eq!(builds.load(Ordering::Relaxed), 1);
-    fs::write(root.join("generated/nested/source.txt"), "now observed").unwrap();
-    monitor.refresh();
+    let source = root.join("generated/nested/source.txt");
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "now observed").unwrap())
+            .worktree
+    );
 }
 
 #[test]
@@ -404,7 +435,11 @@ fn unchanged_failed_policy_waits_for_throttled_recovery() {
     failing.store(false, Ordering::Relaxed);
     fs::write(root.join(".gitignore"), "other/\n").unwrap();
     monitor.revalidate();
-    monitor.refresh();
+    // The quiet checks above leave nothing queued, so this refresh is the recovery.
+    assert!(matches!(
+        monitor.rx.recv_timeout(Duration::from_secs(10)),
+        Ok(Msg::RepoExternallyChanged { .. })
+    ));
 }
 
 #[cfg(windows)]

@@ -303,7 +303,7 @@ pub enum FileEntryKind {
     Directory,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Default)]
 pub enum FileSource {
     #[default]
     WorkingDirectory,

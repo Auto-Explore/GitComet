@@ -14,8 +14,10 @@ mod file_disk;
 mod file_editor;
 mod helpers;
 mod interactive_rebase;
+mod markdown_state;
 mod preview;
 pub(in crate::view) mod submodule_summary;
+mod surface;
 
 #[cfg(feature = "benchmarks")]
 #[allow(unused_imports)]
@@ -25,16 +27,23 @@ pub(in crate::view) use diff_search::{
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl MainPaneView`.
 pub(in crate::view) use core_impl::MainPaneInit;
+#[cfg(test)]
+pub(in crate::view) use diff_text::take_opened_web_links_for_tests;
 pub(in crate::view) use file_disk::{
     DiskCheckCause, DiskIdentity, DiskSurface, FileDiskNotice, FileDiskSeen,
 };
 #[cfg(test)]
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::*;
+pub(in crate::view) use markdown_state::*;
 #[cfg(test)]
 pub(in crate::view) use preview::{
     remote_markdown_image_row_visits_for_tests, reset_remote_markdown_image_row_visits_for_tests,
+    take_link_followability_checks_for_tests,
 };
+#[cfg(test)]
+pub(in crate::view) use surface::take_file_preview_active_checks_for_tests;
+pub(in crate::view) use surface::{MainPaneBody, MainPaneSurfaceMemo};
 
 #[cfg(not(test))]
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
@@ -76,6 +85,8 @@ pub(in crate::view) fn pane_content_width_for_layout(
 
 impl Render for MainPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        // A new frame re-reads from disk what the surface depends on.
+        self.main_pane_surface_frame = self.main_pane_surface_frame.wrapping_add(1);
         debug_assert!(matches!(
             self.view_mode,
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool

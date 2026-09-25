@@ -39,6 +39,7 @@ lru = { workspace = true }
 memchr = { workspace = true }
 palette = { workspace = true }
 pulldown-cmark = { workspace = true }
+unicode-normalization = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
 rustfs-mimalloc = { workspace = true }

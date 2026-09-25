@@ -104,39 +104,11 @@ impl MainPaneView {
     }
 
     pub(super) fn current_main_diff_supports_diff_content_toggle(&self) -> bool {
-        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
-        let has_submodule_summary = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
-        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
-            None
-        } else {
-            self.untracked_directory_notice()
-        };
-        let is_file_preview = self.is_file_preview_active()
-            && untracked_directory_notice.is_none()
-            && !has_submodule_summary
-            && !inline_submodule_diff_active;
-        (inline_submodule_diff_active || !has_submodule_summary)
-            && self.supports_diff_content_mode_toggle(is_file_preview)
+        self.main_pane_surface().supports_diff_content_toggle
     }
 
     pub(super) fn current_main_diff_wants_file_diff(&self) -> bool {
-        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
-        let has_submodule_summary = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
-        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
-            None
-        } else {
-            self.untracked_directory_notice()
-        };
-        let is_file_preview = self.is_file_preview_active()
-            && untracked_directory_notice.is_none()
-            && !has_submodule_summary
-            && !inline_submodule_diff_active;
-        self.current_main_diff_supports_diff_content_toggle()
-            && self.wants_file_diff_view(is_file_preview)
+        self.main_pane_surface().wants_file_diff
     }
 
     pub(super) fn rendered_patch_diff_cache_is_current(&self) -> bool {

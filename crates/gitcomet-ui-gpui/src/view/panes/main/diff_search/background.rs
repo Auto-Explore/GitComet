@@ -19,8 +19,7 @@ pub(in crate::view) struct SearchDocumentKey {
     projection: (u64, DiffViewMode, bool, Option<DiffWrapVisibleCacheKey>),
     preview: u64,
     editor: Option<(u64, u64)>,
-    markdown: u64,
-    markdown_wrap: [Option<MarkdownPreviewWrapKey>; 4],
+    markdown: (u64, u64, Option<MarkdownSearchSurface>),
     conflict: (u64, Option<u64>, u64, ConflictResolverViewMode, bool),
     conflict_projection: u64,
     surface: (bool, bool, bool, bool),
@@ -515,8 +514,11 @@ impl MainPaneView {
                 .file_editor_search_source
                 .as_ref()
                 .map(|s| (s.model_id(), s.revision())),
-            markdown: self.file_markdown_preview_seq,
-            markdown_wrap: self.markdown_preview_wrap.keys(),
+            markdown: (
+                self.diff_markdown.seq,
+                self.worktree_markdown.seq,
+                self.markdown_search_surface(),
+            ),
             conflict: (
                 self.conflict_resolver.conflict_rev,
                 self.conflict_resolver.source_hash,
@@ -545,28 +547,22 @@ impl MainPaneView {
                 .markdown_search_surface()
                 .into_iter()
                 .flat_map(|surface| self.markdown_search_documents(surface))
-                .map(|(list, doc)| {
-                    (
-                        doc.rows
-                            .iter()
-                            .map(|row| row.text.clone())
-                            .collect::<Vec<_>>(),
-                        list.and_then(|list| self.markdown_preview_wrap_plan(list))
-                            .cloned(),
-                    )
+                .map(|doc| {
+                    doc.rows
+                        .iter()
+                        .map(|row| row.text.clone())
+                        .collect::<Vec<_>>()
                 })
                 .collect();
             return SearchDocument(DocumentSource::Custom(Box::new(move |matcher| {
                 let mut out = Vec::new();
-                for (rows, plan) in &documents {
+                for rows in &documents {
                     out.extend(
                         rows.iter()
                             .enumerate()
                             .take_while(|_| !matcher.is_cancelled())
                             .filter(|(_, text)| matcher.is_match(text.as_ref()))
-                            .map(|(ix, _)| {
-                                plan.as_ref().map_or(ix, |plan| plan.visual_ix_for_row(ix))
-                            }),
+                            .map(|(ix, _)| ix),
                     );
                 }
                 out.sort_unstable();
@@ -580,17 +576,39 @@ impl MainPaneView {
             // Only search inputs are copied; syntax/image/layout caches remain
             // owned by the live view. Deferred line indexes stay shared.
             let source = &self.conflict_resolver;
-            let snapshot = ConflictResolverUiState {
-                view_mode: source.view_mode,
-                marker_segments: source.marker_segments.clone(),
-                mode_state: source.mode_state.clone(),
-                three_way_text: source.three_way_text.clone(),
-                three_way_line_starts: source.three_way_line_starts.clone(),
-                three_way_aligned: source.three_way_aligned.clone(),
-                ..Default::default()
-            };
+            let view_mode = source.view_mode;
+            let marker_segments = source.marker_segments.clone();
+            let mode_state = source.mode_state.clone();
+            let text = source.three_way_text.clone();
+            let line_starts = source.three_way_line_starts.clone();
+            let aligned = source.three_way_aligned.clone();
             return SearchDocument(DocumentSource::Custom(Box::new(move |matcher| {
-                let context = ConflictResolverSearchContext::from_conflict_resolver(&snapshot);
+                let ConflictModeState::Streamed(mode) = &mode_state;
+                let starts = |side: ThreeWayColumn| {
+                    if view_mode == ConflictResolverViewMode::ThreeWay {
+                        line_starts[side].starts(text[side].as_ref())
+                    } else {
+                        &[][..]
+                    }
+                };
+                let context = ConflictResolverSearchContext {
+                    view_mode,
+                    marker_segments: &marker_segments,
+                    three_way_visible: ConflictResolverSearchVisibleRows::Projection(
+                        &mode.three_way_visible_projection,
+                    ),
+                    three_way_base_text: &text.base,
+                    three_way_base_line_starts: starts(ThreeWayColumn::Base),
+                    three_way_ours_text: &text.ours,
+                    three_way_ours_line_starts: starts(ThreeWayColumn::Ours),
+                    three_way_theirs_text: &text.theirs,
+                    three_way_theirs_line_starts: starts(ThreeWayColumn::Theirs),
+                    three_way_aligned: &aligned,
+                    two_way_rows: ConflictResolverSearchTwoWayRows::Streamed {
+                        split_row_index: &mode.split_row_index,
+                        two_way_split_projection: &mode.two_way_split_projection,
+                    },
+                };
                 conflict_resolver_visible_match_indices_with_matcher(matcher, &context)
             })));
         }

@@ -1146,24 +1146,33 @@ pub(in crate::view) use self::conflict_resolver::{
 };
 pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
+#[cfg(test)]
+pub(in crate::view) use self::history::take_markdown_image_stats_for_tests;
 pub(in crate::view) use self::history::{
+    MarkdownDrawnPictures, MarkdownImageRoot, MarkdownPictureContext, MarkdownPreviewHoveredLink,
     MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
     MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
-    markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
-    markdown_preview_image_source, markdown_preview_inline_image, markdown_preview_marker_label,
+    markdown_preview_alert_label, markdown_preview_document_path, markdown_preview_flow_image,
+    markdown_preview_highlighted_text, markdown_preview_image_source,
+    markdown_preview_inline_image, markdown_preview_local_link_missing,
+    markdown_preview_local_link_target, markdown_preview_marker_label,
     markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
     markdown_preview_row_background, markdown_preview_row_extent,
-    markdown_preview_styled_row_with_query, worktree_markdown_preview_bar_color,
+    markdown_preview_styled_row_with_query, markdown_preview_task_checkbox,
+    percent_decode_link_path, worktree_markdown_preview_bar_color,
 };
 pub(in crate::view) use self::markdown_document::{
-    MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls, MarkdownDocumentContext,
-    render_markdown_document,
+    MarkdownChangeExtents, MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls,
+    MarkdownDocumentContext, MarkdownDocumentLayoutCache, MarkdownRowBoxes,
+    render_markdown_diff_split, render_markdown_document, render_markdown_document_with_blocks,
 };
 #[cfg(test)]
 pub(in crate::view) use self::markdown_flow_text::{
-    MarkdownFlowPaintPhase, begin_markdown_flow_paint_phase_capture_for_tests,
-    clear_markdown_selection_paint_log_for_tests, markdown_flow_paint_phases_for_tests,
-    markdown_selection_paint_log_for_tests,
+    MarkdownFlowPaintPhase, begin_markdown_flow_font_capture_for_tests,
+    begin_markdown_flow_paint_phase_capture_for_tests,
+    clear_markdown_selection_paint_log_for_tests, markdown_flow_fonts_for_tests,
+    markdown_flow_paint_phases_for_tests, markdown_selection_paint_log_for_tests,
+    take_markdown_flow_texts_built_for_tests,
 };
 pub(in crate::view) use self::markdown_flow_text::{
     markdown_flow_painted_offset, markdown_flow_row_offset,

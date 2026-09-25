@@ -1775,14 +1775,10 @@ pub(super) fn history_commit_row_canvas(
                     }
                 }
             });
-            let target = gpui::ElementId::from((
-                gpui::ElementId::View(view.entity_id()),
-                gpui::SharedString::from(format!(
-                    "history-menu:{}:{}",
-                    repo_id.0,
-                    commit_id.as_ref()
-                )),
-            ));
+            let target = crate::kit::click::canvas_target(
+                "history-menu",
+                (view.entity_id(), repo_id.0, commit_id.as_ref()),
+            );
             let view = view.clone();
             let commit_id = commit_id.clone();
             crate::kit::click::on_canvas_click(

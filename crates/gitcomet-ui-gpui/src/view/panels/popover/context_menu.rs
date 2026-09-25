@@ -23,6 +23,7 @@ mod file_browser_folder;
 pub(super) mod file_history_commit;
 mod history_branch_filter;
 mod history_refs;
+mod local_file_link;
 mod mergetool_settings;
 mod pinned_section;
 mod previous_commit_messages;
@@ -468,10 +469,29 @@ impl PopoverHost {
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_image_policy
+                    self.main_pane.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(web_link::model(url, load_remote_image_url))
+            }
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing,
+                load_remote_image_url,
+            } => {
+                let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
+                    self.main_pane.read(cx).remote_markdown_images.policy
+                        == RemoteMarkdownImagePolicy::AskBeforeLoading
+                });
+                Some(local_file_link::model(
+                    *repo_id,
+                    source,
+                    path,
+                    *missing,
+                    load_remote_image_url,
+                ))
             }
             PopoverKind::CommitShaLinkMenu {
                 repo_id,

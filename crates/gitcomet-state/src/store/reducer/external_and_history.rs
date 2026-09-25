@@ -124,6 +124,9 @@ pub(super) fn reload_repo(
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
+    // The view re-requests sidebar data only when its request changes, so
+    // worktrees and stashes reset above would otherwise stay NotLoaded.
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
     // repo's own `.git`, so a commit or stash made inside a linked worktree

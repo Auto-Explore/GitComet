@@ -2410,6 +2410,7 @@ dependencies = [
  "tree-sitter-xml",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+ "unicode-normalization",
  "unicode-segmentation",
  "ureq",
  "url",

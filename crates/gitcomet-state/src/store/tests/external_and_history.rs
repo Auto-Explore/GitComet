@@ -1194,6 +1194,49 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     );
 }
 
+/// Reload resets sidebar data to NotLoaded; like a finished repo action (#247)
+/// it must reload what the sidebar asked for, or those sections stay empty.
+#[test]
+fn reload_repo_reloads_requested_sidebar_data() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.repos[0].set_sidebar_data_request(crate::model::SidebarDataRequest {
+        worktrees: true,
+        submodules: false,
+        stashes: true,
+    });
+    state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
+    state.repos[0].set_stashes(Loadable::Ready(Vec::new()));
+    state.active_repo = Some(repo_id);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReloadRepo { repo_id },
+    );
+
+    assert!(state.repos[0].worktrees.is_loading());
+    assert!(state.repos[0].stashes.is_loading());
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadWorktrees { repo_id: id } if *id == repo_id
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadStashes { repo_id: id, .. } if *id == repo_id
+    )));
+}
+
 fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);

@@ -359,7 +359,7 @@ impl MainPaneView {
                             .into_any_element()
                     } else {
                         self.ensure_file_markdown_preview_cache(cx);
-                        match &self.file_markdown_preview {
+                        match &self.diff_markdown.preview {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Processing preview...")
                                     .into_any_element()
@@ -370,17 +370,7 @@ impl MainPaneView {
                             }
                             Loadable::Ready(preview) => {
                                 let preview = std::sync::Arc::clone(preview);
-                                let document_rev = self.file_markdown_preview_seq;
-                                let (old_len, new_len, inline_len) = self
-                                    .ensure_markdown_preview_wrap_plans(
-                                        &preview,
-                                        document_rev,
-                                        window,
-                                        cx,
-                                    );
-                                self.render_markdown_diff_preview(
-                                    theme, old_len, new_len, inline_len, cx,
-                                )
+                                self.render_markdown_diff_preview(theme, preview, window, cx)
                             }
                         }
                     }
@@ -926,319 +916,168 @@ impl MainPaneView {
         }
     }
 
+    /// Scrollbar markers where last frame drew the changes. The first frame of
+    /// a preview has nothing measured yet: it places them by row count and asks
+    /// for one more frame, which measures them.
+    pub(in crate::view) fn markdown_diff_scrollbar_markers(
+        &mut self,
+        preview: &crate::view::markdown_preview::MarkdownPreviewDiff,
+        scroll: &gpui::ScrollHandle,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<components::ScrollbarMarker> {
+        // Measurements are only good for the preview and layout they were taken in.
+        let key = (self.diff_markdown.seq, self.diff_view);
+        let measured = self.diff_markdown.change_extents.take();
+        let measured_key = self.diff_markdown.change_extents_key.replace(key);
+        let content_height =
+            f32::from(scroll.bounds().size.height + scroll.max_offset().y.max(px(0.0)));
+        if measured_key == Some(key) && !measured.is_empty() && content_height > 0.0 {
+            return crate::view::markdown_preview::scrollbar_markers_for_extents(
+                &measured,
+                content_height,
+            );
+        }
+        if self.diff_markdown.change_extents_requested != Some(key) {
+            self.diff_markdown.change_extents_requested = Some(key);
+            let view = cx.entity();
+            window.on_next_frame(move |_, cx| view.update(cx, |_, cx| cx.notify()));
+        }
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                crate::view::markdown_preview::scrollbar_markers_for_document(&preview.inline)
+            }
+            DiffViewMode::Split => {
+                crate::view::markdown_preview::scrollbar_markers_for_diff_preview(preview)
+            }
+        }
+    }
+
     fn render_markdown_diff_preview(
         &mut self,
         theme: AppTheme,
-        old_len: usize,
-        new_len: usize,
-        inline_len: usize,
+        preview: std::sync::Arc<crate::view::markdown_preview::MarkdownPreviewDiff>,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        if old_len == 0 && new_len == 0 {
+        if preview.old_blocks.is_empty() && preview.new_blocks.is_empty() {
             return empty_diff_text_document(
                 cx.entity(),
                 DiffTextRegion::Inline,
-                components::empty_state(theme, "Preview", "Empty file.").into_any_element(),
+                components::empty_state(theme, "Preview", preview.empty_notice())
+                    .into_any_element(),
             );
         }
 
         self.maybe_autoscroll_diff_to_first_change();
 
-        let scrollbar_markers = match &self.file_markdown_preview {
-            Loadable::Ready(preview) => match self.diff_view {
-                DiffViewMode::Inline => {
-                    crate::view::markdown_preview::scrollbar_markers_for_document(&preview.inline)
-                }
-                DiffViewMode::Split => {
-                    crate::view::markdown_preview::scrollbar_markers_for_diff_preview(
-                        preview.as_ref(),
-                    )
-                }
-            },
-            _ => Vec::new(),
-        };
-
-        let empty_column = |region| {
-            empty_diff_text_document(
-                cx.entity(),
-                region,
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(theme.ui_text(14.0))
-                    .text_color(theme.colors.foreground.secondary)
-                    .child("Empty file.")
-                    .into_any_element(),
-            )
-        };
-
-        let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
-        let mk_column = |id: &'static str,
-                         vscrollbar_id: &'static str,
-                         hscrollbar_id: &'static str,
-                         list: AnyElement,
-                         scroll: UniformListScrollHandle,
-                         scroll_handle: gpui::ScrollHandle|
-         -> AnyElement {
-            let vertical_scrollbar_gutter = if vertical_sync_enabled {
-                px(0.0)
-            } else {
-                components::Scrollbar::visible_gutter(
-                    scroll.clone(),
-                    components::ScrollbarAxis::Vertical,
-                )
+        let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+        let scrollbar_markers =
+            self.markdown_diff_scrollbar_markers(&preview, &scroll_handle, window, cx);
+        let editor_font_family: SharedString =
+            crate::font_preferences::current_editor_font_family(cx).into();
+        let image_root = self.markdown_preview_image_root();
+        // Built once for both sides of a split: each matcher compiles a regex.
+        let query = self.markdown_preview_search_query();
+        // One document listener serves both sides of a split.
+        let row_boxes = rows::MarkdownRowBoxes::default();
+        let context =
+            |this: &Self, region: DiffTextRegion, side: usize| rows::MarkdownDocumentContext {
+                theme,
+                ui_scale_percent,
+                editor_font_family: editor_font_family.clone(),
+                image_root: image_root.clone(),
+                remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
+                picture_sizes: Default::default(),
+                drawn_pictures: None,
+                row_boxes: row_boxes.clone(),
+                block_scrolls: this.diff_markdown.block_scrolls[side].clone(),
+                blocks: Default::default(),
+                view: Some(cx.entity()),
+                text_region: region,
+                change_bar_color: None,
+                query: query.clone(),
+                reveal: this.markdown_interaction.reveal.clone(),
+                scroll: Some(scroll_handle.clone()),
+                hovered_link: this.markdown_interaction.hovered_link.clone(),
+                change_extents: Some(this.diff_markdown.change_extents.clone()),
+                layout: this.diff_markdown.layouts[side].clone(),
+                // Only the split's new side is parsed from the working-tree file.
+                tasks_editable: region == DiffTextRegion::SplitRight
+                    && this.markdown_preview_tasks_editable(),
             };
-            div()
-                .id(id)
-                .relative()
-                .flex_1()
-                .min_w(px(0.0))
-                .h_full()
-                .child(
-                    div()
-                        .h_full()
-                        .min_h(px(0.0))
-                        .pr(vertical_scrollbar_gutter)
-                        .child(list),
-                )
-                .when(!vertical_sync_enabled, |d| {
-                    d.child(
-                        components::Scrollbar::new(vscrollbar_id, scroll.clone())
-                            .always_visible()
-                            .render(theme),
-                    )
-                })
-                .child(
-                    components::Scrollbar::horizontal(hscrollbar_id, scroll_handle)
-                        .always_visible()
-                        .render(theme),
-                )
-                .into_any_element()
+        let body = match self.diff_view {
+            DiffViewMode::Inline => rows::render_markdown_document_with_blocks(
+                &preview.inline,
+                &preview.inline_blocks,
+                &context(self, DiffTextRegion::Inline, 2),
+            ),
+            DiffViewMode::Split => rows::render_markdown_diff_split(
+                &preview,
+                &context(self, DiffTextRegion::SplitLeft, 0),
+                &context(self, DiffTextRegion::SplitRight, 1),
+            ),
         };
 
-        let document_edge_gap = crate::ui_scale::design_px_from_percent(
+        let edge_gap = crate::ui_scale::design_px_from_percent(
             MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX,
             ui_scale_percent,
         );
-        macro_rules! mk_list {
-            ($name:expr, $len:expr, $region:expr, $scroll:expr, $proc:expr) => {
-                uniform_list($name, $len, $proc)
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pt(document_edge_gap)
-                    .pb(document_edge_gap)
-                    .track_scroll(&$scroll)
-                    .with_decoration(DiffTextEmptySpaceDecoration {
-                        view: cx.entity(),
-                        region: $region,
-                    })
-                    .with_horizontal_sizing_behavior(
-                        gpui::ListHorizontalSizingBehavior::Unconstrained,
-                    )
-                    .into_any_element()
-            };
-        }
-
-        if self.diff_view == DiffViewMode::Inline {
-            if inline_len == 0 {
-                return components::empty_state(theme, "Preview", "Nothing to render.")
-                    .into_any_element();
-            }
-
-            let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-            let list = mk_list!(
-                "diff_markdown_preview_inline",
-                inline_len,
-                DiffTextRegion::Inline,
-                self.diff_scroll.clone(),
-                cx.processor(Self::render_markdown_diff_inline_rows)
-            );
-
-            return div()
-                .id("diff_markdown_preview_container")
-                .relative()
-                .h_full()
-                .min_h(px(0.0))
-                .flex()
-                .flex_col()
-                .bg(theme.colors.surface.canvas)
-                .child(
-                    div()
-                        .id("diff_markdown_preview_inline_container")
-                        .relative()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(
-                            div()
-                                .h_full()
-                                .min_h(px(0.0))
-                                .pr(components::Scrollbar::visible_gutter(
-                                    self.diff_scroll.clone(),
-                                    components::ScrollbarAxis::Vertical,
-                                ))
-                                .child(list),
-                        )
-                        .child(
-                            components::Scrollbar::horizontal(
-                                "diff_markdown_preview_inline_hscrollbar",
-                                scroll_handle.clone(),
-                            )
-                            .always_visible()
-                            .render(theme),
-                        ),
-                )
-                .child(
-                    components::Scrollbar::new(
-                        "diff_markdown_preview_scrollbar",
-                        self.diff_scroll.clone(),
-                    )
-                    .markers(scrollbar_markers)
-                    .always_visible()
-                    .render(theme),
-                )
-                .into_any_element();
-        }
-
-        let (left_column, right_column, vertical_scroll_handle) = if old_len == 0 {
-            let handle = self.diff_scroll.0.borrow().base_handle.clone();
-            let list = mk_list!(
-                "diff_markdown_preview_right_single",
-                new_len,
-                DiffTextRegion::SplitRight,
-                self.diff_scroll.clone(),
-                cx.processor(Self::render_markdown_diff_right_rows)
-            );
-            (
-                empty_column(DiffTextRegion::SplitLeft),
-                mk_column(
-                    "diff_markdown_preview_right",
-                    "diff_markdown_preview_right_scrollbar",
-                    "diff_markdown_preview_right_hscrollbar",
-                    list,
-                    self.diff_scroll.clone(),
-                    handle.clone(),
-                ),
-                handle,
-            )
-        } else if new_len == 0 {
-            let handle = self.diff_scroll.0.borrow().base_handle.clone();
-            let list = mk_list!(
-                "diff_markdown_preview_left_single",
-                old_len,
-                DiffTextRegion::SplitLeft,
-                self.diff_scroll.clone(),
-                cx.processor(Self::render_markdown_diff_left_rows)
-            );
-            (
-                mk_column(
-                    "diff_markdown_preview_left",
-                    "diff_markdown_preview_left_scrollbar",
-                    "diff_markdown_preview_left_hscrollbar",
-                    list,
-                    self.diff_scroll.clone(),
-                    handle.clone(),
-                ),
-                empty_column(DiffTextRegion::SplitRight),
-                handle,
-            )
-        } else {
-            self.sync_diff_split_scroll();
-            let left_handle = self.diff_scroll.0.borrow().base_handle.clone();
-            let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
-            let vertical_scroll_handle = if new_len > old_len {
-                right_handle.clone()
-            } else {
-                left_handle.clone()
-            };
-            let left_list = mk_list!(
-                "diff_markdown_preview_left",
-                old_len,
-                DiffTextRegion::SplitLeft,
-                self.diff_scroll.clone(),
-                cx.processor(Self::render_markdown_diff_left_rows)
-            );
-            let right_list = mk_list!(
-                "diff_markdown_preview_right",
-                new_len,
-                DiffTextRegion::SplitRight,
-                self.diff_split_right_scroll.clone(),
-                cx.processor(Self::render_markdown_diff_right_rows)
-            );
-            (
-                mk_column(
-                    "diff_markdown_preview_left",
-                    "diff_markdown_preview_left_scrollbar",
-                    "diff_markdown_preview_left_hscrollbar",
-                    left_list,
-                    self.diff_scroll.clone(),
-                    left_handle.clone(),
-                ),
-                mk_column(
-                    "diff_markdown_preview_right",
-                    "diff_markdown_preview_right_scrollbar",
-                    "diff_markdown_preview_right_hscrollbar",
-                    right_list,
-                    self.diff_split_right_scroll.clone(),
-                    right_handle.clone(),
-                ),
-                vertical_scroll_handle,
-            )
-        };
-
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            scroll_handle.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
         div()
             .id("diff_markdown_preview_container")
+            .debug_selector(|| "diff_markdown_preview_container".to_string())
             .relative()
             .h_full()
             .min_h(px(0.0))
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
-            .child(
-                div()
-                    .pr(if vertical_sync_enabled {
-                        components::Scrollbar::visible_gutter(
-                            vertical_scroll_handle.clone(),
-                            components::ScrollbarAxis::Vertical,
-                        )
-                    } else {
-                        px(0.0)
-                    })
-                    .flex()
-                    .flex_col()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .child(components::split_columns_header(
-                        theme,
-                        ui_scale_percent,
-                        "A (before)",
-                        "B (after)",
-                    ))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .flex()
-                            .child(left_column)
-                            .child(div().w(px(1.0)).h_full().bg(theme.colors.stroke.default))
-                            .child(right_column),
-                    ),
-            )
-            .when(vertical_sync_enabled, |d| {
-                d.child(
-                    components::Scrollbar::new(
-                        "diff_markdown_preview_scrollbar",
-                        vertical_scroll_handle,
-                    )
-                    .markers(scrollbar_markers)
-                    .always_visible()
-                    .render(theme),
+            .when(self.diff_view == DiffViewMode::Split, |container| {
+                container.child(
+                    div()
+                        .pr(scrollbar_gutter)
+                        .child(components::split_columns_header(
+                            theme,
+                            ui_scale_percent,
+                            "A (before)",
+                            "B (after)",
+                        )),
                 )
             })
+            .child(
+                div()
+                    .id("diff_markdown_preview_scroll_area")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(
+                        div()
+                            .id("diff_markdown_preview_document")
+                            .debug_selector(|| "diff_markdown_preview_document".to_string())
+                            .size_full()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll_handle)
+                            .pt(edge_gap)
+                            .pb(edge_gap)
+                            .pr(scrollbar_gutter)
+                            .child(body),
+                    )
+                    .child(
+                        components::Scrollbar::new(
+                            "diff_markdown_preview_scrollbar",
+                            scroll_handle,
+                        )
+                        .markers(scrollbar_markers)
+                        .always_visible()
+                        .render(theme),
+                    ),
+            )
             .into_any_element()
     }
 }

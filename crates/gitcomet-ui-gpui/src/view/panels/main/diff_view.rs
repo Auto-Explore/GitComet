@@ -1135,7 +1135,7 @@ impl MainPaneView {
         self.clear_diff_text_query_overlay_cache();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
-        self.markdown_preview_reveal.clear();
+        self.markdown_interaction.reveal.clear();
         // Hand the buffer back, caret still on the match. The panel focus handle
         // every other view returns to would drop the user out of the text.
         if self.is_file_editor_active() {
@@ -1826,23 +1826,16 @@ impl MainPaneView {
 
         let title = self.diff_panel_title(theme, cx);
         let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
-        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
-
-        let has_submodule_summary = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
-        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
-            None
-        } else {
-            self.untracked_directory_notice()
-        };
-
-        let is_file_preview = self.is_file_preview_active()
-            && untracked_directory_notice.is_none()
-            && !has_submodule_summary
-            && !inline_submodule_diff_active;
-        let supports_diff_content_toggle = (inline_submodule_diff_active || !has_submodule_summary)
-            && self.supports_diff_content_mode_toggle(is_file_preview);
+        // What the pane shows, as every other question about it answers it.
+        let surface = self.main_pane_surface();
+        let inline_submodule_diff_active = surface.inline_submodule_diff;
+        let has_submodule_summary = surface.submodule_summary;
+        let untracked_directory_notice = surface
+            .directory_notice
+            .then(|| self.untracked_directory_notice())
+            .flatten();
+        let is_file_preview = surface.file_preview;
+        let supports_diff_content_toggle = surface.supports_diff_content_toggle;
 
         // Browsing a historical commit: tint the header and the content surface
         // instead of framing the pane, and only while the content on screen is
@@ -1858,10 +1851,7 @@ impl MainPaneView {
         // whether the path is *previewable*, and a file the preview declines
         // (an unknown extension, say) is still a file the editor can open — it
         // does its own UTF-8 check and reports the failure in place.
-        let is_file_editor = self.is_file_editor_active()
-            && untracked_directory_notice.is_none()
-            && !has_submodule_summary
-            && !inline_submodule_diff_active;
+        let is_file_editor = surface.file_editor;
         if is_file_editor {
             self.ensure_file_editor_loaded(cx);
         } else if is_file_preview {
@@ -1876,32 +1866,16 @@ impl MainPaneView {
             self.reset_worktree_preview_source_state();
             self.reset_diff_horizontal_scroll_state();
         }
-        let wants_file_diff =
-            supports_diff_content_toggle && self.wants_file_diff_view(is_file_preview);
-        let wants_collapsed_diff =
-            supports_diff_content_toggle && self.wants_collapsed_diff_view(is_file_preview);
+        let wants_file_diff = surface.wants_file_diff;
+        let wants_collapsed_diff = surface.wants_collapsed_diff;
 
         if self.is_conflict_rendered_markdown_preview_active() {
-            self.ensure_conflict_markdown_preview_cache();
+            self.ensure_conflict_markdown_preview_cache(cx);
         }
         let repo = self.active_repo();
         let conflict_target = (!inline_submodule_diff_active)
-            .then_some(())
-            .and(repo)
-            .and_then(|repo| {
-                let DiffTarget::WorkingTree { path, area } =
-                    repo.diff_state.diff_target.as_ref()?
-                else {
-                    return None;
-                };
-                if *area != DiffArea::Unstaged {
-                    return None;
-                }
-                let conflict = repo
-                    .status_entry_for_path(DiffArea::Unstaged, path.as_path())
-                    .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
-                Some((path.clone(), conflict.conflict))
-            });
+            .then(|| self.conflicted_worktree_target())
+            .flatten();
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
@@ -1927,12 +1901,7 @@ impl MainPaneView {
         let conflict_rendered_preview_active = self.is_conflict_rendered_preview_active();
         let rendered_preview_kind =
             super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
-        let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
-            wants_file_diff,
-            wants_collapsed_diff,
-            is_file_preview,
-            rendered_preview_kind,
-        );
+        let rendered_view_toggle_kind = surface.toggle_kind;
         let is_markdown_preview_view = rendered_view_toggle_kind
             == Some(RenderedPreviewKind::Markdown)
             && self
@@ -2435,8 +2404,7 @@ impl MainPaneView {
                     }
                     Loadable::Ready(_) => {
                         self.ensure_single_markdown_preview_cache(cx);
-                        self.watch_pending_markdown_preview_images(cx);
-                        match &self.worktree_markdown_preview {
+                        match &self.worktree_markdown.document {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Loading")
                                     .into_any_element()
@@ -2460,32 +2428,32 @@ impl MainPaneView {
                                     )
                                 } else {
                                     // A single document lays out as one flowing
-                                    // element tree rather than a uniform row
-                                    // list: text wraps by itself, images sit at
-                                    // their own size, and the gaps around
+                                    // element tree: text wraps by itself, images
+                                    // sit at their own size, and the gaps around
                                     // headings are margins.
-                                    self.markdown_preview_wrap
-                                        .clear_list(MarkdownPreviewList::Worktree);
                                     let document = std::sync::Arc::clone(document);
-                                    let image_base_dir = self
-                                        .markdown_preview_image_base_dir()
-                                        .map(|dir| std::sync::Arc::from(dir.as_path()));
+                                    let image_root = self.markdown_preview_image_root();
+                                    let drawn_pictures = rows::MarkdownDrawnPictures::default();
                                     let body = rows::render_markdown_document(
                                         &document,
                                         &rows::MarkdownDocumentContext {
                                             theme,
                                             ui_scale_percent,
                                             editor_font_family: editor_font_family.clone().into(),
-                                            image_base_dir,
+                                            image_root,
                                             remote_image_access: self
                                                 .markdown_remote_image_access(Some(cx.entity())),
                                             picture_sizes: std::sync::Arc::clone(
-                                                &self.worktree_markdown_preview_picture_sizes,
+                                                &self.worktree_markdown.picture_sizes,
                                             ),
+                                            drawn_pictures: Some(drawn_pictures.clone()),
+                                            row_boxes: Default::default(),
                                             block_scrolls: self
-                                                .worktree_markdown_preview_block_scrolls
+                                                .worktree_markdown
+                                                .block_scrolls
                                                 .clone(),
-                                            blocks: self.worktree_markdown_preview_blocks.clone(),
+                                            blocks: self.worktree_markdown.blocks.clone(),
+                                            layout: self.worktree_markdown.layout.clone(),
                                             view: Some(cx.entity()),
                                             text_region: DiffTextRegion::Inline,
                                             change_bar_color:
@@ -2493,7 +2461,13 @@ impl MainPaneView {
                                                     self, theme,
                                                 ),
                                             query: self.markdown_preview_search_query(),
-                                            reveal: self.markdown_preview_reveal.clone(),
+                                            reveal: self.markdown_interaction.reveal.clone(),
+                                            hovered_link: self
+                                                .markdown_interaction
+                                                .hovered_link
+                                                .clone(),
+                                            change_extents: None,
+                                            tasks_editable: self.markdown_preview_tasks_editable(),
                                             scroll: Some(
                                                 self.worktree_preview_scroll
                                                     .0
@@ -2502,6 +2476,10 @@ impl MainPaneView {
                                                     .clone(),
                                             ),
                                         },
+                                    );
+                                    self.watch_pending_markdown_preview_images(
+                                        drawn_pictures.take(),
+                                        cx,
                                     );
 
                                     let scroll_handle =
