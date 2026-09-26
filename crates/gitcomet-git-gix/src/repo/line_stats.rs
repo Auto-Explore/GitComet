@@ -5,6 +5,7 @@ use crate::util::path_buf_from_git_bytes;
 use gitcomet_core::domain::{FileStatus, FileStatusKind, LineStats, UncommittedLineStats};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
+use gix::error::ResultExt as _;
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
@@ -59,7 +60,7 @@ fn staged_line_stats(
         gix::status::tree_index::TrackRenames::AsConfigured,
         |change, _, _| {
             use gix::diff::index::ChangeRef;
-            cancellation.check_cancelled()?;
+            cancellation.check_cancelled().or_erased()?;
             let (location, old_id, new_id) = match change {
                 ChangeRef::Addition { location, id, .. } => (location, None, Some(id.into_owned())),
                 ChangeRef::Deletion { location, id, .. } => (location, Some(id.into_owned()), None),
@@ -85,12 +86,13 @@ fn staged_line_stats(
                     Some(id.into_owned()),
                 ),
             };
-            let path = path_buf_from_git_bytes(location.as_ref(), "gix staged line stats path")?;
+            let path = path_buf_from_git_bytes(location.as_ref(), "gix staged line stats path")
+                .or_erased()?;
             out.insert(
                 path,
                 commit_file_line_stats(repo, old_id, new_id, &mut scratch).into(),
             );
-            Ok::<_, Error>(std::ops::ControlFlow::Continue(()))
+            Ok(std::ops::ControlFlow::Continue(()))
         },
     );
     // The walk wraps callback errors; preserve cancellation as its own error kind.
