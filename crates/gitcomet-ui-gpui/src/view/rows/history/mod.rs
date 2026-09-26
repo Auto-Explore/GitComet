@@ -55,6 +55,7 @@ impl HistoryView {
         // One lane keeps full colour; the rest wash out. Resolved once here rather
         // than per row -- it is a scan of the page behind a memo.
         let selected_lane = this.history_selected_lane(plan.show_working_tree_summary_row());
+        let find_query = this.history_find_query().cloned();
 
         let Some(repo) = this.active_repo() else {
             return Vec::new();
@@ -277,6 +278,11 @@ impl HistoryView {
                         selected,
                         base_row_vm.is_head,
                         is_stash_node,
+                        crate::view::panes::history::find::history_find_row_dimmed(
+                            find_query.as_ref(),
+                            commit,
+                            selected,
+                        ),
                         this.active_context_menu_invoker.as_ref(),
                         cx,
                     ))
@@ -453,6 +459,9 @@ fn history_message_border(ui_scale: ui_scale::UiScale, color: gpui::Rgba) -> imp
         .bg(color)
 }
 
+/// Opacity of rows that miss the find bar's query.
+const HISTORY_FIND_DIMMED_OPACITY: f32 = 0.35;
+
 pub(in crate::view) fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
     ui_scale.row_height(HISTORY_ROW_HEIGHT_PX, 36.0)
 }
@@ -500,6 +509,8 @@ fn history_table_row(
     selected: bool,
     is_head: bool,
     is_stash_node: bool,
+    // A known miss while the find bar has a query.
+    find_dimmed: bool,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
@@ -610,6 +621,10 @@ fn history_table_row(
                 .w(ui_scale.px(3.0))
                 .bg(with_alpha(theme.colors.accent.foreground, 0.90)),
         );
+    }
+
+    if find_dimmed {
+        row = row.opacity(HISTORY_FIND_DIMMED_OPACITY);
     }
 
     place_history_row(row, row_top).into_any_element()

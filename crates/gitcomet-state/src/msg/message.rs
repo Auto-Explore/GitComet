@@ -219,6 +219,7 @@ pub enum RepoWatchDegradedReason {
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
+    HistoryFind(crate::history_find::HistoryFindMsg),
     OpenRepo(PathBuf),
     /// Opens a repository candidate supplied by an external file-system drop.
     /// The candidate is not persisted until the backend has opened it

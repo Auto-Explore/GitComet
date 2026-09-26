@@ -1236,7 +1236,7 @@ impl HistoryView {
         true
     }
 
-    fn scroll_indexed_to(&mut self, row: usize, center: bool) {
+    pub(super) fn scroll_indexed_to(&mut self, row: usize, center: bool) {
         if let Some(logical) = &mut self.scroll_interaction.borrow_mut().logical {
             let top = row as f64 * logical.height;
             let position = if center {

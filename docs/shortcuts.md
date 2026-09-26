@@ -7,6 +7,7 @@ Source of truth:
 - `crates/gitcomet-ui-gpui/src/focused_diff.rs`
 - `crates/gitcomet-ui-gpui/src/view/terminal_panel.rs`
 - `crates/gitcomet-ui-gpui/src/view/panels/main/diff_view.rs`
+- `crates/gitcomet-ui-gpui/src/view/panes/history/find.rs`
 - `crates/gitcomet-ui-gpui/src/view/conflict_resolver.rs`
 
 Notes:
@@ -86,6 +87,17 @@ Compatibility note:
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Commit staged changes | `Cmd-Enter` | `Ctrl-Enter` | Commit message input only, and only when the Commit action is enabled. |
+
+## History view shortcuts
+
+These shortcuts apply while the commit history list is showing.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Find a commit | `Cmd-F` | `Ctrl-F` | Opens the find bar over the history. Matches the commit summary or author, ignoring case, or the start of the SHA (4+ hex characters), across the whole history, not only the loaded rows. Typing selects the first match. With the bar already open, refocuses it with the query selected. |
+| Next match | `Enter`, `F3` | `Enter`, `F3` | Selects the next match below the selected commit, wrapping to the top. `Enter` only from the find bar; `F3` also from the list. Also the ↓ button. |
+| Previous match | `Shift-Enter`, `F2` | `Shift-Enter`, `F2` | Selects the previous match above the selected commit, wrapping to the bottom. `Shift-Enter` only from the find bar; `F2` also from the list. Also the ↑ button. |
+| Close the find bar | `Escape` | `Escape` | Also the × button. Focus returns to the history list. |
 
 ## Picker shortcuts
 

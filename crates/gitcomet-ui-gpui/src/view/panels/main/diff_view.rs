@@ -1610,12 +1610,26 @@ impl MainPaneView {
             .active_repo()
             .and_then(|repo| repo.diff_state.diff_target.as_ref())
             .is_some();
-        if !diff_visible {
+        if diff_visible {
+            self.activate_diff_search(window, cx);
+            return true;
+        }
+        if !self.history_is_active_surface() {
             return false;
         }
-
-        self.activate_diff_search(window, cx);
+        self.history_view
+            .update(cx, |history, cx| history.open_history_find(window, cx));
         true
+    }
+
+    /// Whether the main pane shows the history list, rather than a diff or
+    /// an interactive rebase or cherry-pick setup.
+    pub(in crate::view) fn history_is_active_surface(&self) -> bool {
+        self.active_repo().is_some_and(|repo| {
+            repo.diff_state.diff_target.is_none()
+                && repo.interactive_rebase_setup.is_none()
+                && repo.interactive_cherry_pick_setup.is_none()
+        })
     }
 
     fn render_diff_search_overlay(

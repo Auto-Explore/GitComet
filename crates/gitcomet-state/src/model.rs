@@ -1044,6 +1044,7 @@ pub struct PendingCommitRetry {
 pub struct HistoryState {
     pub indexed: crate::indexed_history::IndexedHistoryState,
     pub authors: crate::history_authors::HistoryAuthorsState,
+    pub find: crate::history_find::HistoryFindState,
     pub history_scope: LogScope,
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
@@ -1201,6 +1202,7 @@ impl Default for HistoryState {
         Self {
             indexed: Default::default(),
             authors: Default::default(),
+            find: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
             log: Loadable::NotLoaded,
@@ -2901,6 +2903,7 @@ impl RepoState {
         self.load_epoch = self.load_epoch.wrapping_add(1);
         self.history_state.indexed.cancel();
         self.history_state.authors.cancellation.cancel();
+        self.history_state.find.interrupt();
         previous
     }
 }

@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+pub(in crate::view) mod find;
 mod history_panel;
 mod indexed;
 pub(in crate::view) mod indexed_graph;
@@ -1122,6 +1123,8 @@ pub(in super::super) struct HistoryView {
     relative_time_tick: Option<gpui::Task<()>>,
     signature_viewport: Option<signatures::ViewportKey>,
     signature_debounce: Option<gpui::Task<()>>,
+    /// The Cmd-F find bar, created the first time it opens.
+    find: Option<find::HistoryFind>,
 }
 
 /// A hoverable sub-area of a history row. Both are painted on the canvas, so
@@ -1314,6 +1317,18 @@ impl HistoryView {
                     .iter()
                     .find(|repo| Some(repo.id) == next.active_repo)
                     .map(|repo| repo.history_state.commit_signatures_rev);
+            let find_changed = this.history_find_is_open()
+                && this
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| Some(repo.id) == this.state.active_repo)
+                    .map(|repo| repo.history_state.find.rev)
+                    != next
+                        .repos
+                        .iter()
+                        .find(|repo| Some(repo.id) == next.active_repo)
+                        .map(|repo| repo.history_state.find.rev);
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
@@ -1359,7 +1374,7 @@ impl HistoryView {
                 this.notify_fingerprint = next_fingerprint;
                 this.dismiss_history_refs_hover(cx);
                 cx.notify();
-            } else if signatures_changed {
+            } else if signatures_changed || find_changed {
                 cx.notify();
             }
         });
@@ -1429,6 +1444,7 @@ impl HistoryView {
             relative_time_tick: None,
             signature_viewport: None,
             signature_debounce: None,
+            find: None,
         }
     }
 

@@ -51,6 +51,7 @@ impl HistoryView {
         self.sync_history_loading(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
+        self.sync_history_find(cx);
         let plan = self.ensure_history_list_plan();
         if self.indexed.presentation.is_none() {
             self.sync_history_viewport(&plan, cx);
@@ -173,7 +174,18 @@ impl HistoryView {
                 .into_any_element()
         };
 
+        let find_bar = {
+            let ui_scale = ui_scale::UiScale::from_percent(self.ui_scale_percent)
+                .with_appearance(theme.metrics);
+            let header_height = ui_scale.row_height(
+                HISTORY_HEADER_HEIGHT_PX,
+                HISTORY_HEADER_COMFORTABLE_HEIGHT_PX,
+            );
+            self.render_history_find(header_height, scrollbar_gutter, cx)
+        };
+
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -201,6 +213,10 @@ impl HistoryView {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
                         "enter" => this.history_open_selected_worktree(cx),
+                        "escape" if this.history_find_is_open() => {
+                            this.close_history_find(window, cx);
+                            true
+                        }
                         _ => false,
                     };
 
@@ -230,6 +246,7 @@ impl HistoryView {
                     .min_h(px(0.0))
                     .child(div().flex_1().min_h(px(0.0)).child(body)),
             )
+            .children(find_bar)
     }
 
     /// Enter on a worktree row opens that worktree, matching what clicking its

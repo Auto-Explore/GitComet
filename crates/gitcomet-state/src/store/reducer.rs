@@ -5,6 +5,7 @@ mod effects;
 mod external_and_history;
 mod git_hook_activity;
 mod history_authors;
+mod history_find;
 mod indexed_history;
 #[cfg(test)]
 mod line_stats_tests;
@@ -2455,6 +2456,7 @@ fn reduce_inner(
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
+        Msg::HistoryFind(event) => history_find::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             seq,

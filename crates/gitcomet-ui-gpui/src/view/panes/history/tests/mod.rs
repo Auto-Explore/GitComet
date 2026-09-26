@@ -261,6 +261,7 @@ fn lane_branch_labels(
 mod base_cache;
 mod branch_names;
 mod columns;
+mod find;
 mod interaction;
 mod lane_attribution;
 mod refresh;

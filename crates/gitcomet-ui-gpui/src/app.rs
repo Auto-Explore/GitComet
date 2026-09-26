@@ -4,9 +4,9 @@ use crate::ui_scale;
 use crate::view::{
     DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, LocateFileInExplorer, MainPaneView,
-    OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss, PopoverPromptTabNext,
-    PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
+    GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode, LocateFileInExplorer,
+    MainPaneView, OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss,
+    PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
     PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport,
     TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange,
     TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
@@ -2037,6 +2037,13 @@ fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
         KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
+        // Registered after the generic binding so the history find bar's
+        // input steps back through matches instead of swallowing the key.
+        KeyBinding::new(
+            "shift-enter",
+            HistoryFindPrevious,
+            Some("HistoryFind > TextInput"),
+        ),
         KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
         KeyBinding::new("f1", TextInputDiffPrevFile, Some("TextInput")),
         KeyBinding::new("f4", TextInputDiffNextFile, Some("TextInput")),
@@ -2396,6 +2403,9 @@ mod tests {
     struct KeyBindingProbe {
         focus_handle: FocusHandle,
         key_context: Option<&'static str>,
+        /// A context on an ancestor of the focused element, for bindings
+        /// scoped like "Outer > Inner".
+        outer_key_context: Option<&'static str>,
         observed_actions: Arc<Mutex<Vec<String>>>,
     }
 
@@ -2408,7 +2418,20 @@ mod tests {
             Self {
                 focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
                 key_context,
+                outer_key_context: None,
                 observed_actions,
+            }
+        }
+
+        fn nested(
+            outer_key_context: &'static str,
+            key_context: &'static str,
+            observed_actions: Arc<Mutex<Vec<String>>>,
+            cx: &mut Context<Self>,
+        ) -> Self {
+            Self {
+                outer_key_context: Some(outer_key_context),
+                ..Self::new(Some(key_context), observed_actions, cx)
             }
         }
 
@@ -2497,6 +2520,7 @@ mod tests {
                     crate::view::TextInputDiffNextChange
                 ))
                 .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
+                .on_action(record_action_listener!(crate::view::HistoryFindPrevious))
                 .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
                 .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
                 .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
@@ -2528,10 +2552,16 @@ mod tests {
             #[cfg(target_os = "macos")]
             let root = root.on_action(record_action_listener!(crate::kit::ShowCharacterPalette));
 
-            if let Some(key_context) = self.key_context {
+            let root = if let Some(key_context) = self.key_context {
                 root.key_context(key_context)
             } else {
                 root
+            };
+            match self.outer_key_context {
+                Some(outer) => {
+                    gpui::ParentElement::child(div().size_full().key_context(outer), root)
+                }
+                None => root,
             }
         }
     }
@@ -2695,6 +2725,61 @@ mod tests {
                 Some(expected_action),
                 "expected `{keystroke}` to resolve to `{expected_action}`"
             );
+        }
+    }
+
+    /// The history find bar's input steps back through matches on
+    /// Shift-Enter. Its binding is registered after the generic `TextInput`
+    /// one so it wins inside the bar, while every other text input keeps
+    /// `ShiftEnter`.
+    #[gpui::test]
+    fn history_find_text_input_shift_enter_resolves_to_previous_match(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        for (outer, expected) in [
+            (Some("HistoryFind"), crate::view::HistoryFindPrevious.name()),
+            (None, crate::kit::ShiftEnter.name()),
+            // An unrelated ancestor context does not pick up the find binding.
+            (Some("DiffSearch"), crate::kit::ShiftEnter.name()),
+        ] {
+            let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let (view, cx) = cx.add_window_view(|_window, cx| match outer {
+                Some(outer) => {
+                    KeyBindingProbe::nested(outer, "TextInput", Arc::clone(&observed_actions), cx)
+                }
+                None => KeyBindingProbe::new(Some("TextInput"), Arc::clone(&observed_actions), cx),
+            });
+
+            cx.update(|window, app| {
+                app.clear_key_bindings();
+                bind_app_keys(app);
+                bind_text_input_keys(app);
+                let focus = view.update(app, |view, _cx| view.focus_handle());
+                window.focus(&focus, app);
+                let _ = window.draw(app);
+            });
+
+            for (keystroke, expected_action) in [
+                ("shift-enter", expected),
+                // Plain Enter stays the text input's own action everywhere.
+                ("enter", crate::kit::Enter.name()),
+            ] {
+                observed_actions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clear();
+                cx.simulate_keystrokes(keystroke);
+                let actual_action = observed_actions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .last()
+                    .cloned();
+                assert_eq!(
+                    actual_action.as_deref(),
+                    Some(expected_action),
+                    "expected `{keystroke}` under {outer:?} > TextInput to resolve to `{expected_action}`"
+                );
+            }
         }
     }
 
