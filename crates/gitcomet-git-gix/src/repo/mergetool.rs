@@ -849,7 +849,11 @@ fn git_config_get_bool_with_scope(
     match value.transpose() {
         Some(Ok(value)) => Ok(Some(value)),
         Some(Err(err)) => {
-            let value = bytes_to_text_preserving_utf8(err.input.as_ref());
+            let input = err.metadata().find_map(|values| match values.get("input") {
+                Some(gix::error::MetadataValue::Bytes(input)) => Some(input.as_slice()),
+                _ => None,
+            });
+            let value = bytes_to_text_preserving_utf8(input.unwrap_or_default());
             Err(Error::new(ErrorKind::Backend(format!(
                 "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
                 value
@@ -1382,6 +1386,7 @@ mod tests {
         assert!(matches!(
             err.kind(),
             ErrorKind::Backend(message) if message.contains("Invalid boolean value")
+                && message.contains("\"sometimes\"")
         ));
     }
 

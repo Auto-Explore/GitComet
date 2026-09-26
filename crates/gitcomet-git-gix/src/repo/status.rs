@@ -9,8 +9,8 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
+use gix::error::ResultExt as _;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -453,8 +453,8 @@ fn collect_staged_status_from_tree_index(
         None,
         gix::status::tree_index::TrackRenames::AsConfigured,
         |change, _, _| {
-            collect_tree_index_change(change, &mut staged)?;
-            Ok::<_, Error>(std::ops::ControlFlow::Continue(()))
+            collect_tree_index_change(change, &mut staged).or_erased()?;
+            Ok(std::ops::ControlFlow::Continue(()))
         },
     )
     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
@@ -475,8 +475,8 @@ fn collect_staged_index_paths_from_tree_index(
         None,
         gix::status::tree_index::TrackRenames::AsConfigured,
         |change, _, _| {
-            collect_tree_index_change_paths(change, &mut paths)?;
-            Ok::<_, Error>(std::ops::ControlFlow::Continue(()))
+            collect_tree_index_change_paths(change, &mut paths).or_erased()?;
+            Ok(std::ops::ControlFlow::Continue(()))
         },
     )
     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
@@ -836,18 +836,17 @@ struct NoopSubmoduleStatus;
 
 impl gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus for NoopSubmoduleStatus {
     type Output = gix::submodule::Status;
-    type Error = Infallible;
 
     fn status(
         &mut self,
         _entry: &gix::index::Entry,
         _rela_path: &gix::bstr::BStr,
-    ) -> std::result::Result<Option<Self::Output>, Self::Error> {
+    ) -> gix::ExnResult<Option<Self::Output>> {
         Ok(None)
     }
 }
 
-fn collect_index_worktree_status_direct_with_submodule<S, E>(
+fn collect_index_worktree_status_direct_with_submodule<S>(
     repo: &gix::Repository,
     index: &gix::worktree::Index,
     dirwalk_options: gix::dirwalk::Options,
@@ -858,10 +857,8 @@ fn collect_index_worktree_status_direct_with_submodule<S, E>(
 where
     S: gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus<
             Output = gix::submodule::Status,
-            Error = E,
         > + Send
         + Clone,
-    E: std::error::Error + Send + Sync + 'static,
 {
     let workdir = repo
         .workdir()
@@ -879,10 +876,7 @@ where
         false,
         std::iter::empty::<gix::bstr::BString>(),
         true,
-        || -> std::result::Result<
-            gix::worktree::Stack,
-            Box<dyn std::error::Error + Send + Sync + 'static>,
-        > {
+        || -> gix::ExnResult<gix::worktree::Stack> {
             unreachable!("empty direct-status patterns never require pathspec attributes")
         },
     )

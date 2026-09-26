@@ -5,9 +5,8 @@ pub(crate) fn reference_commit_id(
 ) -> Result<Option<gix::ObjectId>> {
     match reference.peel_to_commit() {
         Ok(commit) => Ok(Some(commit.id().detach())),
-        Err(gix::reference::peel::to_kind::Error::PeelObject(
-            gix::object::peel::to_kind::Error::NotFound { .. },
-        )) => Ok(None),
+        // gix reports peeling to a tree or blob as a validation failure.
+        Err(e) if e.is_validation() => Ok(None),
         Err(e) => {
             let ref_name = reference.name().as_bstr().to_str_lossy();
             Err(Error::new(ErrorKind::Backend(format!(
@@ -89,7 +88,7 @@ pub(crate) fn commit_from_walk_parts<F: gix::objs::Find + Clone>(
         // can miss while another handle loads an index; cloning the handle
         // collects the store's current snapshot. Retry only that missing
         // object, once, so a persistent hole still fails normally.
-        Err(gix::objs::find::existing_object::Error::NotFound { .. }) => decode(&objects.clone()),
+        Err(e) if e.is_not_found() => decode(&objects.clone()),
         result => result,
     };
     result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?
@@ -234,7 +233,7 @@ mod tests {
             &self,
             _id: &gix::oid,
             buffer: &'a mut Vec<u8>,
-        ) -> std::result::Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
+        ) -> gix::ExnResult<Option<gix::objs::Data<'a>>> {
             self.reads.set(self.reads.get() + 1);
             let Some(data) = self.data.filter(|_| self.visible) else {
                 return Ok(None);
