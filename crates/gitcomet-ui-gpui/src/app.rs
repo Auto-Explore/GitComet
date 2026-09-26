@@ -2017,6 +2017,12 @@ fn bind_text_input_keys(cx: &mut App) {
             Some("TextInput"),
         ),
         KeyBinding::new("alt-delete", crate::kit::DeleteWordRight, Some("TextInput")),
+        KeyBinding::new(
+            "cmd-backspace",
+            crate::kit::DeleteToLineStart,
+            Some("TextInput"),
+        ),
+        KeyBinding::new("cmd-delete", crate::kit::DeleteToLineEnd, Some("TextInput")),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
         KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
         KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
@@ -2423,6 +2429,8 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::Delete))
                 .on_action(record_action_listener!(crate::kit::DeleteWordLeft))
                 .on_action(record_action_listener!(crate::kit::DeleteWordRight))
+                .on_action(record_action_listener!(crate::kit::DeleteToLineStart))
+                .on_action(record_action_listener!(crate::kit::DeleteToLineEnd))
                 .on_action(record_action_listener!(crate::kit::Enter))
                 .on_action(record_action_listener!(crate::kit::ShiftEnter))
                 .on_action(record_action_listener!(crate::kit::Left))
@@ -2585,6 +2593,8 @@ mod tests {
             ("ctrl-delete", crate::kit::DeleteWordRight.name()),
             ("alt-backspace", crate::kit::DeleteWordLeft.name()),
             ("alt-delete", crate::kit::DeleteWordRight.name()),
+            ("cmd-backspace", crate::kit::DeleteToLineStart.name()),
+            ("cmd-delete", crate::kit::DeleteToLineEnd.name()),
             ("enter", crate::kit::Enter.name()),
             ("shift-enter", crate::kit::ShiftEnter.name()),
             ("secondary-enter", crate::view::TextInputCommitSubmit.name()),

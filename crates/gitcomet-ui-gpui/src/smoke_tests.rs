@@ -577,6 +577,92 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
+fn text_input_cmd_backspace_and_cmd_delete_delete_to_the_line_edges(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+    let set_text = |cx: &mut gpui::VisualTestContext, text: &'static str| {
+        cx.update(|window, app| {
+            let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+            window.focus(&focus, app);
+            view.update(app, |this, cx| {
+                this.input.update(cx, |input, cx| input.set_text(text, cx));
+            });
+        });
+    };
+    let text = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string())
+    };
+
+    cx.update(|_window, app| {
+        app.bind_keys([
+            KeyBinding::new("alt-left", crate::kit::WordLeft, Some("TextInput")),
+            KeyBinding::new("cmd-left", crate::kit::Home, Some("TextInput")),
+            KeyBinding::new(
+                "cmd-backspace",
+                crate::kit::DeleteToLineStart,
+                Some("TextInput"),
+            ),
+            KeyBinding::new("cmd-delete", crate::kit::DeleteToLineEnd, Some("TextInput")),
+        ]);
+    });
+
+    // With the caret at the end, the usual case in a search box, the whole
+    // query goes.
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(text(cx), "");
+
+    // Mid-line, each deletes only its own side of the caret.
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("alt-left cmd-backspace");
+    assert_eq!(text(cx), "world");
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("alt-left cmd-delete");
+    assert_eq!(text(cx), "hello brave ");
+
+    // With nothing on that side there is nothing to delete.
+    set_text(cx, "hello");
+    cx.simulate_keystrokes("cmd-left cmd-backspace");
+    assert_eq!(text(cx), "hello");
+    cx.simulate_keystrokes("cmd-delete");
+    assert_eq!(text(cx), "");
+}
+
+#[gpui::test]
+fn text_input_cmd_backspace_joins_lines_at_the_start_of_a_row(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(TextInputCursorScrollView::new);
+    cx.update(|window, app| {
+        app.bind_keys([KeyBinding::new(
+            "cmd-backspace",
+            crate::kit::DeleteToLineStart,
+            Some("TextInput"),
+        )]);
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus, app);
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("first\nsecond", cx));
+        });
+        let _ = window.draw(app);
+    });
+    let text = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string())
+    };
+
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(
+        text(cx),
+        "first\n",
+        "deletes back to the start of its own row"
+    );
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(
+        text(cx),
+        "first",
+        "at a row start, joins with the row above"
+    );
+}
+
+#[gpui::test]
 fn text_input_shift_backspace_deletes_like_backspace(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
