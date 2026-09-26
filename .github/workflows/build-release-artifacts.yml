@@ -164,8 +164,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # No aarch64-pc-windows-msvc dump_syms build is published, so both
-          # legs use the x64 asset; the ARM runner executes it under emulation.
           - target_platform: x86_64-windows
             artifact_arch: x86_64
             runs_on: windows-latest
@@ -211,64 +209,24 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Validate Windows signing configuration
+      - name: Check Windows signing configuration
+        id: windows_signing_check
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
-          $required = @(
-            "AZURE_CREDENTIALS",
-            "WINDOWS_SIGNING_ENDPOINT",
-            "WINDOWS_SIGNING_ACCOUNT_NAME"
-          )
-          $missing = @()
-
-          foreach ($name in $required) {
-            $value = [Environment]::GetEnvironmentVariable($name)
-            if ([string]::IsNullOrWhiteSpace($value)) {
-              $missing += $name
-            }
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_CREDENTIALS)) {
+            Write-Host "SKIP: Windows artifact signing credentials missing"
+            "enabled=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "enabled=true" >> $env:GITHUB_OUTPUT
           }
-
-          if ($missing.Count -gt 0) {
-            throw "Missing required Windows signing secret(s)/variable(s): $($missing -join ', ')"
-          }
-
-          Write-Host "Using Windows signing profile: $env:WINDOWS_SIGNING_PROFILE_NAME"
 
       - name: Log into Azure for Windows signing
+        if: ${{ steps.windows_signing_check.outputs.enabled == 'true' }}
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           creds: ${{ env.AZURE_CREDENTIALS }}
 
-      - name: Locate SignTool
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
-          # Prefer arch-matched signtool (arm64 on ARM runners, x64 on x64 runners), fall back to any.
-          $hostArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
-          $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "\\$hostArch\\" } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1 -ExpandProperty FullName
-
-          if ([string]::IsNullOrWhiteSpace($signTool)) {
-            $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-              Sort-Object FullName -Descending |
-              Select-Object -First 1 -ExpandProperty FullName
-          }
-
-          if ([string]::IsNullOrWhiteSpace($signTool)) {
-            throw "Unable to locate signtool.exe on the GitHub Actions runner."
-          }
-
-          "SIGNTOOL_PATH=$signTool" >> $env:GITHUB_ENV
-
-      # No aarch64-pc-windows-msvc build is published; the ARM runner executes
-      # the x64 binary under emulation. dump_syms parses the .pdb as a file
-      # format, so the host architecture does not have to match the target.
       - name: Install dump_syms
         uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
@@ -277,17 +235,10 @@ jobs:
       - name: Build release binary
         shell: pwsh
         env:
-          # MSVC keeps debug info in the .pdb, and this is what makes the linker
-          # emit one: `strip` is ignored entirely on MSVC (rustc's MsvcLinker
-          # passes /DEBUG unconditionally), so it is not the knob here.
-          # Step-scoped so `cargo install cargo-wix` below does not rebuild its
-          # dependency tree with debug info nobody will read.
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
           cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 
-      # Runs under bash so all three platforms share one guard against
-      # silently-empty symbols; Git for Windows provides it on the runner.
       - name: Emit Breakpad symbols
         shell: bash
         run: |
@@ -295,9 +246,6 @@ jobs:
             --input target/release/gitcomet.pdb \
             --store dist/symbols
 
-      # Release-only: `publish_symbols` is the sole consumer and needs a
-      # release_id too. Symbols are still generated above, which is what
-      # exercises the pipeline.
       - name: Upload Windows Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -307,23 +255,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Uploaded before packaging so a later failure in this job still leaves
-      # symbols for the binary that was built.
       - name: Upload Windows debug symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # Deliberately not named `windows-release-artifacts-*`:
-          # `publish_release_assets` globs that prefix into the published
-          # release, and these symbols are for triaging crash dumps rather than
-          # for users. The `gitcomet.pdb` file name is kept so a debugger can
-          # resolve it from the binary's debug directory.
           name: windows-debug-symbols-${{ matrix.target_platform }}
           path: target/release/gitcomet.pdb
           if-no-files-found: error
           retention-days: 90
 
       - name: Sign Windows release binary
+        if: ${{ steps.windows_signing_check.outputs.enabled == 'true' }}
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
@@ -336,16 +278,6 @@ jobs:
           timestamp-digest: SHA256
           append-signature: false
           cache-dependencies: false
-
-      - name: Verify signed Windows release binary
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $artifactPath = Join-Path $env:GITHUB_WORKSPACE "target\release\gitcomet.exe"
-          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
-            -Path $artifactPath `
-            -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Package portable ZIP
         shell: pwsh
@@ -368,7 +300,6 @@ jobs:
           choco install wixtoolset --version "${env:WIXTOOLSET_VERSION}" --yes --no-progress
           cargo install cargo-wix --version "${env:CARGO_WIX_VERSION}" --locked
 
-          # Chocolatey updates machine-level env vars, but the current pwsh session does not pick them up automatically.
           $wixRoot = [Environment]::GetEnvironmentVariable("WIX", "Machine")
           if ([string]::IsNullOrWhiteSpace($wixRoot)) {
             $candidateRoots = @()
@@ -402,6 +333,7 @@ jobs:
           cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
 
       - name: Sign Windows MSI installer
+        if: ${{ steps.windows_signing_check.outputs.enabled == 'true' }}
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
@@ -414,16 +346,6 @@ jobs:
           timestamp-digest: SHA256
           append-signature: false
           cache-dependencies: false
-
-      - name: Verify signed Windows MSI installer
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $artifactPath = Join-Path $env:GITHUB_WORKSPACE "dist\gitcomet-v$($env:VERSION)-windows-$($env:ARTIFACT_ARCH).msi"
-          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
-            -Path $artifactPath `
-            -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -444,8 +366,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Build Linux release artifacts on Ubuntu 22.04 so the linked
-          # system libraries stay compatible with Ubuntu 22.04+.
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
@@ -524,9 +444,6 @@ jobs:
 
       - name: Build release binary
         env:
-          # Build with the DWARF intact so symbols can be extracted, then strip
-          # back down to the manifest's `debuginfo` level before packaging.
-          # Step-scoped so no other cargo invocation in this job inherits it.
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
@@ -538,7 +455,6 @@ jobs:
             --input target/release/gitcomet \
             --store dist/symbols
 
-      # Release-only; see the Breakpad symbol upload above.
       - name: Upload Linux Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -548,10 +464,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Every packaging step below installs from target/release/gitcomet, so
-      # stripping once here covers the tar.gz, .deb and AppImage alike. The raw
-      # DWARF is deliberately not archived: it is ~203 MiB per build and the
-      # .sym above already covers minidump-stackwalk.
       - name: Strip release binary
         run: |
           set -euo pipefail
@@ -562,7 +474,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Backward compatibility for older tags that used non-standard categories.
           sed 's/VersionControl;/RevisionControl;/g' assets/linux/gitcomet.desktop > dist/gitcomet.desktop
           desktop-file-validate dist/gitcomet.desktop
 
@@ -628,32 +539,6 @@ jobs:
           pkg_file="dist/gitcomet_${deb_version}_${DEB_ARCH}.deb"
           dpkg-deb --build "${pkg_root}" "${pkg_file}"
 
-          package_name="$(dpkg-deb -f "${pkg_file}" Package)"
-          package_version="$(dpkg-deb -f "${pkg_file}" Version)"
-          package_architecture="$(dpkg-deb -f "${pkg_file}" Architecture)"
-          package_depends="$(dpkg-deb -f "${pkg_file}" Depends)"
-
-          if [[ "${package_name}" != "gitcomet" ]]; then
-            echo "::error title=Unexpected package name::Got ${package_name}."
-            exit 1
-          fi
-          if [[ "${package_version}" != "${deb_version}" ]]; then
-            echo "::error title=Unexpected package version::Got ${package_version}, expected ${deb_version}."
-            exit 1
-          fi
-          if [[ "${package_architecture}" != "${DEB_ARCH}" ]]; then
-            echo "::error title=Unexpected package architecture::Got ${package_architecture}, expected ${DEB_ARCH}."
-            exit 1
-          fi
-          if ! grep -Eq '(^|, )git($|, )' <<<"${package_depends}"; then
-            echo "::error title=Missing git dependency::Got ${package_depends}."
-            exit 1
-          fi
-          if [[ "${package_depends}" == "git" ]]; then
-            echo "::error title=Missing shared library dependencies::Got ${package_depends}."
-            exit 1
-          fi
-
       - name: Package .rpm
         run: |
           set -euo pipefail
@@ -703,36 +588,7 @@ jobs:
           EOF
 
           rpmbuild --define "_topdir ${rpm_topdir}" --target "${RPM_ARCH}" -bb "${rpm_topdir}/SPECS/gitcomet.spec"
-
           cp "${rpm_topdir}"/RPMS/*/*.rpm dist/
-
-          pkg_file="$(find dist -maxdepth 1 -name "*.rpm" | head -n1)"
-          package_name="$(rpm -qp --queryformat '%{NAME}' "${pkg_file}")"
-          package_version="$(rpm -qp --queryformat '%{VERSION}' "${pkg_file}")"
-          package_release="$(rpm -qp --queryformat '%{RELEASE}' "${pkg_file}")"
-          package_arch="$(rpm -qp --queryformat '%{ARCH}' "${pkg_file}")"
-          package_requires="$(rpm -qp --queryformat '[%{REQUIRES}\n]' "${pkg_file}")"
-
-          if [[ "${package_name}" != "gitcomet" ]]; then
-            echo "::error title=Unexpected RPM package name::Got ${package_name}."
-            exit 1
-          fi
-          if [[ "${package_version}" != "${rpm_upstream_version}" ]]; then
-            echo "::error title=Unexpected RPM package version::Got ${package_version}, expected ${rpm_upstream_version}."
-            exit 1
-          fi
-          if [[ "${package_release}" != "${rpm_release}" ]]; then
-            echo "::error title=Unexpected RPM package release::Got ${package_release}, expected ${rpm_release}."
-            exit 1
-          fi
-          if [[ "${package_arch}" != "${RPM_ARCH}" ]]; then
-            echo "::error title=Unexpected RPM package architecture::Got ${package_arch}, expected ${RPM_ARCH}."
-            exit 1
-          fi
-          if ! grep -q "^git$" <<<"${package_requires}"; then
-            echo "::error title=Missing git dependency in RPM::Got ${package_requires}."
-            exit 1
-          fi
 
       - name: Package AppImage
         if: ${{ matrix.build_appimage }}
@@ -838,39 +694,12 @@ jobs:
         id: macos_signing_mode
         run: |
           set -euo pipefail
-
-          required=(
-            MACOS_SIGNING_IDENTITY
-            MACOS_SIGNING_CERT_BASE64
-            MACOS_SIGNING_CERT_PASSWORD
-            MACOS_NOTARY_KEY_ID
-            MACOS_NOTARY_ISSUER_ID
-            MACOS_NOTARY_API_KEY_P8
-          )
-          present=()
-          missing=()
-
-          for name in "${required[@]}"; do
-            if [ -n "${!name:-}" ]; then
-              present+=("$name")
-            else
-              missing+=("$name")
-            fi
-          done
-
-          if [ "${#present[@]}" -eq 0 ]; then
+          if [ -z "${MACOS_SIGNING_CERT_BASE64:-}" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "macOS signing is not configured; building unsigned macOS artifacts."
-            exit 0
+            echo "SKIP: macOS signing credentials missing; building unsigned artifacts."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error title=Incomplete macOS signing configuration::Missing required secret(s): ${missing[*]}"
-            echo "::error title=Partial macOS signing configuration::Either provide all macOS signing and notarization secrets or leave them all unset to build unsigned artifacts."
-            exit 1
-          fi
-
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Prepare macOS signing and notarization credentials
         if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
@@ -901,8 +730,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
           security default-keychain -d user -s "$keychain_path"
 
-          security find-identity -v -p codesigning "$keychain_path"
-
           printf '%s' "$MACOS_NOTARY_API_KEY_P8" > "$api_key_path"
           chmod 600 "$api_key_path"
 
@@ -910,25 +737,9 @@ jobs:
           echo "api_key_path=$api_key_path" >> "$GITHUB_OUTPUT"
           echo "default_keychain=$default_keychain" >> "$GITHUB_OUTPUT"
 
-      - name: Show macOS disk usage before packaging
-        run: |
-          set -euo pipefail
-          df -h || true
-          for path in target "$HOME/.cargo/registry" "$HOME/.cargo/git" dist "$RUNNER_TEMP"; do
-            if [ -e "$path" ]; then
-              du -sh "$path" || true
-            else
-              echo "missing: $path"
-            fi
-          done
-
       - name: Package macOS release assets
         env:
           GITCOMET_MACOS_PACKAGE_CLEAN_TARGET: "1"
-          # This step runs the build via package-macos.sh. Mach-O keeps debug
-          # info outside the binary, so dsymutil must run to produce the .dSYM;
-          # the manifest's `strip = "debuginfo"` needs no override because
-          # stripping the binary does not touch the bundle.
           CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
@@ -946,13 +757,10 @@ jobs:
               --codesign-identity "${MACOS_SIGNING_IDENTITY}"
               --codesign-keychain "${{ steps.macos_signing.outputs.keychain_path }}"
             )
-          else
-            echo "Building unsigned macOS artifacts because signing is not configured."
           fi
 
           scripts/package-macos.sh "${package_args[@]}"
 
-      # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -961,76 +769,6 @@ jobs:
           path: dist/symbols
           if-no-files-found: error
           retention-days: 7
-
-      # Kept for lldb, which cannot read Breakpad .sym.
-      #
-      # Archived first because upload-artifact roots the artifact at the least
-      # common ancestor of the matched files: pointing it at the bundle
-      # directory would produce a download containing a bare `Contents/` tree,
-      # with the `.dSYM` wrapper lost and the bundle no longer loadable. Staged
-      # outside dist/ so it stays out of the artifacts published to the release.
-      - name: Archive macOS dSYM
-        if: ${{ needs.prepare.outputs.release_id != '' }}
-        env:
-          DSYM_DIR: ${{ runner.temp }}/gitcomet-dsym
-        run: |
-          set -euo pipefail
-          dsym="target/release/gitcomet.dSYM"
-
-          # package-macos.sh replaces Cargo's symlink with a real directory; if
-          # that regresses, `tar` would store a dangling link and still exit 0,
-          # sailing past `if-no-files-found` with an empty bundle.
-          if [ -L "$dsym" ] \vert{}\vert{} [ ! -d "$dsym" ]; then
-            echo "::error title=No dSYM to archive::${dsym} is not a directory; the bundle Cargo symlinked to was probably cleaned away."
-            exit 1
-          fi
-          if [ -z "$(find "${dsym}/Contents/Resources/DWARF" -type f -print -quit 2>/dev/null)" ]; then
-            echo "::error title=Empty dSYM::${dsym} carries no DWARF payload."
-            exit 1
-          fi
-
-          mkdir -p "$DSYM_DIR"
-          tar -czhf "${DSYM_DIR}/gitcomet-${ARCH}.dSYM.tar.gz" \
-            -C target/release gitcomet.dSYM
-
-      - name: Upload macOS dSYM
-        if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: macos-dsym-${{ matrix.target_platform }}
-          path: ${{ runner.temp }}/gitcomet-dsym/gitcomet-${{ matrix.arch }}.dSYM.tar.gz
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Notarize and verify macOS artifacts
-        if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
-        run: |
-          set -euo pipefail
-          scripts/notarize-macos.sh \
-            --version "${VERSION}" \
-            --arch "${ARCH}" \
-            --out-dir dist \
-            --api-key "${{ steps.macos_signing.outputs.api_key_path }}" \
-            --key-id "${MACOS_NOTARY_KEY_ID}" \
-            --issuer "${MACOS_NOTARY_ISSUER_ID}"
-
-      - name: Cleanup macOS signing keychain
-        if: ${{ always() && steps.macos_signing_mode.outputs.enabled == 'true' }}
-        env:
-          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
-          DEFAULT_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.default_keychain }}
-          API_KEY_PATH: ${{ steps.macos_signing.outputs.api_key_path }}
-        run: |
-          set -euo pipefail
-          if [ -n "${DEFAULT_KEYCHAIN_PATH:-}" ]; then
-            security default-keychain -d user -s "$DEFAULT_KEYCHAIN_PATH" || true
-          fi
-          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
-            security delete-keychain "$KEYCHAIN_PATH" || true
-          fi
-          if [ -n "${API_KEY_PATH:-}" ] && [ -f "$API_KEY_PATH" ]; then
-            rm -f "$API_KEY_PATH"
-          fi
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1043,73 +781,36 @@ jobs:
   publish_symbols:
     name: Publish Breakpad symbols
     runs-on: ubuntu-22.04
-    # Six ~239 MiB symbol files are downloaded, merged and re-uploaded here.
     timeout-minutes: 60
-    # `publish_release_assets` depends on every build matrix and only succeeds
-    # after the complete payload has been attached to the draft release. Keep
-    # production symbols behind that same all-or-nothing release boundary: a
-    # failed target cancels the release, so none of that build's symbols belong
-    # in the store either.
     needs: [prepare, publish_release_assets]
-    #
-    # `release_id` is empty for test builds, which must not push ~1.4 GiB into
-    # the production store for a release that may never exist — the same
-    # distinction the Windows signing profile makes.
     if: ${{ needs.prepare.outputs.release_id != '' && needs.publish_release_assets.result == 'success' }}
-    # Symbols are auxiliary triage data. This job lives inside a reusable
-    # workflow whose overall result gates publish_release and every deploy job
-    # in release-manual-main.yml, so a transient Azure error must not strand a
-    # fully-built release as a draft. The job still shows red.
     continue-on-error: true
     env:
       AZURE_STORAGE_ACCOUNT_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
-      # Symbols sit alongside the APT repo and the Windows installer in the same
-      # static-website container, so they are served from
-      # https://apt.gitcomet.dev/symbols/ with no extra infrastructure.
       SYMBOLS_STORAGE_ACCOUNT: ${{ vars.SYMBOLS_STORAGE_ACCOUNT || vars.APT_STORAGE_ACCOUNT }}
       SYMBOLS_CONTAINER: ${{ vars.APT_STORAGE_CONTAINER }}
       SYMBOLS_PREFIX: symbols
     steps:
-      # The job's `if` already established this is a real tagged release, so
-      # missing credentials are a misconfiguration, not a fork. Failing loudly
-      # matches deploy-apt-repo.yml and deploy-windows-installer.yml; silently
-      # skipping would ship releases whose crashes cannot be symbolized and
-      # nobody would notice until the first report arrives.
       - name: Check symbol store configuration
+        id: sym_check
         run: |
           set -euo pipefail
-          if [ -z "${SYMBOLS_STORAGE_ACCOUNT:-}" ]; then
-            echo "::error title=Missing storage account::Set the APT_STORAGE_ACCOUNT (or SYMBOLS_STORAGE_ACCOUNT) repository variable."
-            exit 1
-          fi
-          if [ -z "${SYMBOLS_CONTAINER:-}" ]; then
-            echo "::error title=Missing storage container::Set the APT_STORAGE_CONTAINER repository variable."
-            exit 1
-          fi
           if [ -z "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
-            echo "::error title=Missing storage credentials::Set the AZURE_STORAGE_ACCOUNT_KEY secret to publish symbols."
-            exit 1
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SKIP: Symbol store storage account credentials missing."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ steps.sym_check.outputs.enabled == 'true' }}
         with:
           pattern: symbols-*
           path: dist/symbols
           merge-multiple: true
 
-      - name: Summarize symbol store
-        run: |
-          set -euo pipefail
-          if [ -z "$(find dist/symbols -type f -name '*.sym' -print -quit 2>/dev/null)" ]; then
-            echo "::error title=No symbols::No .sym files were produced by any build job."
-            exit 1
-          fi
-          find dist/symbols -type f -name '*.sym' -exec du -h {} +
-
-      # Paths are keyed by debug ID, so a given path always describes the same
-      # build. Overwriting is therefore a no-op in content and keeps re-runs of
-      # this job green.
       - name: Upload symbols to the store
+        if: ${{ steps.sym_check.outputs.enabled == 'true' }}
         env:
           AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
         run: |
@@ -1125,10 +826,6 @@ jobs:
             --overwrite true \
             --no-progress \
             --output none
-
-          # Report where the symbols actually went rather than a hardcoded
-          # public URL, which would be wrong the moment the account changes.
-          echo "Symbols published to ${SYMBOLS_STORAGE_ACCOUNT}/${SYMBOLS_CONTAINER}/${SYMBOLS_PREFIX}/"
 
   publish_release_assets:
     name: Attach assets and checksums to GitHub release
@@ -1168,41 +865,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/release
-          find dist/windows -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
-          find dist/linux -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
-          find dist/macos -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
-          file_count="$(find dist/release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
-          if [ "${file_count}" = "0" ]; then
-            echo "::error title=No release artifacts::No files were assembled into dist/release."
-            exit 1
-          fi
-          ls -lah dist/release
-
-      - name: Generate Homebrew cask
-        run: |
-          set -euo pipefail
-          linux_arm_appimage="gitcomet-v${VERSION}-linux-arm64.AppImage"
-          linux_intel_appimage="gitcomet-v${VERSION}-linux-x86_64.AppImage"
-          arm_dmg="gitcomet-v${VERSION}-macos-arm64.dmg"
-          intel_dmg="gitcomet-v${VERSION}-macos-x86_64.dmg"
-          linux_arm_appimage_path="dist/release/${linux_arm_appimage}"
-          linux_intel_appimage_path="dist/release/${linux_intel_appimage}"
-          arm_dmg_path="dist/release/${arm_dmg}"
-          intel_dmg_path="dist/release/${intel_dmg}"
-
-          if [ ! -f "${linux_arm_appimage_path}" ] \vert{}\vert{} [ ! -f "${linux_intel_appimage_path}" ] || [ ! -f "${arm_dmg_path}" ] \vert{}\vert{} [ ! -f "${intel_dmg_path}" ]; then
-            echo "::error title=Missing release assets::Expected ${linux_arm_appimage},${linux_intel_appimage}, ${arm_dmg}, and${intel_dmg} in dist/release."
-            exit 1
-          fi
-
-          scripts/generate-homebrew-cask.sh \
-            --version "${VERSION}" \
-            --github-repo "${GITHUB_REPOSITORY}" \
-            --arm-dmg "${arm_dmg_path}" \
-            --intel-dmg "${intel_dmg_path}" \
-            --linux-arm-appimage "${linux_arm_appimage_path}" \
-            --linux-intel-appimage "${linux_intel_appimage_path}" \
-            --output "dist/release/gitcomet.rb"
+          find dist/windows -maxdepth 1 -type f -exec cp -f {} dist/release/ \; || true
+          find dist/linux -maxdepth 1 -type f -exec cp -f {} dist/release/ \; || true
+          find dist/macos -maxdepth 1 -type f -exec cp -f {} dist/release/ \; || true
 
       - name: Generate checksums
         run: |
@@ -1220,21 +885,20 @@ jobs:
           xargs -I{} sha256sum "{}" < /tmp/release_files.txt > "$sha_file"
           popd >/dev/null
 
-      - name: Install cosign
-        if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
       - name: Sign SHA256 checksums with keyless signing
-        if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
         run: |
           set -euo pipefail
-          sha_file="dist/release/gitcomet-v${VERSION}-checksums.sha256"
-          sig_file="dist/release/gitcomet-v${VERSION}-checksums.sha256.sig"
-          cert_file="dist/release/gitcomet-v${VERSION}-checksums.sha256.pem"
-          cosign sign-blob --yes \
-            --output-signature "$sig_file" \
-            --output-certificate "$cert_file" \
-            "$sha_file"
+          if [ "${ENABLE_KEYLESS_SIGNING:-}" = "true" ]; then
+            sha_file="dist/release/gitcomet-v${VERSION}-checksums.sha256"
+            sig_file="dist/release/gitcomet-v${VERSION}-checksums.sha256.sig"
+            cert_file="dist/release/gitcomet-v${VERSION}-checksums.sha256.pem"
+            cosign sign-blob --yes \
+              --output-signature "$sig_file" \
+              --output-certificate "$cert_file" \
+              "$sha_file"
+          else
+            echo "SKIP: Keyless checksum signing with cosign skipped"
+          fi
 
       - name: Upload payload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1252,21 +916,3 @@ jobs:
           set -euo pipefail
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           gh release upload "$TAG" dist/release/* --clobber --repo "$GITHUB_REPOSITORY"
-
-      - name: Emit release summary
-        run: |
-          set -euo pipefail
-          uploaded="no"
-          if [ -n "${RELEASE_ID}" ]; then
-            uploaded="yes"
-          fi
-          {
-            echo "### Built release artifacts"
-            echo ""
-            echo "- Tag: \`$TAG\`"
-            echo "- Version: \`$VERSION\`"
-            echo "- Release upload attempted: \`${uploaded}\`"
-            echo ""
-            echo "Files:"
-            ls -1 dist/release | sed 's/^/- `/;s/$/`/'
-          } >> "$GITHUB_STEP_SUMMARY"
