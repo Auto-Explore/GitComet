@@ -13,6 +13,10 @@ on:
         required: false
         type: string
         default: "1"
+      rpm_release:
+        required: false
+        type: string
+        default: "1"
       release_id:
         required: false
         type: string
@@ -48,6 +52,11 @@ on:
         required: true
         default: "1"
         type: string
+      rpm_release:
+        description: "RPM package release suffix (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
+        type: string
       release_id:
         description: "Optional release id for manual backfills"
         required: false
@@ -76,6 +85,7 @@ jobs:
       tag: ${{ steps.norm.outputs.tag }}
       version: ${{ steps.norm.outputs.version }}
       deb_revision: ${{ steps.norm.outputs.deb_revision }}
+      rpm_release: ${{ steps.norm.outputs.rpm_release }}
       release_id: ${{ steps.norm.outputs.release_id }}
     steps:
       - name: Normalize tag and version
@@ -87,6 +97,8 @@ jobs:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           INPUT_DEB_REVISION: ${{ inputs.deb_revision }}
           DISPATCH_DEB_REVISION: ${{ github.event.inputs.deb_revision }}
+          INPUT_RPM_RELEASE: ${{ inputs.rpm_release }}
+          DISPATCH_RPM_RELEASE: ${{ github.event.inputs.rpm_release }}
           INPUT_RELEASE_ID: ${{ inputs.release_id }}
           DISPATCH_RELEASE_ID: ${{ github.event.inputs.release_id }}
         run: |
@@ -95,11 +107,13 @@ jobs:
           tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
           version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
           deb_revision="${INPUT_DEB_REVISION:-${DISPATCH_DEB_REVISION:-1}}"
+          rpm_release="${INPUT_RPM_RELEASE:-${DISPATCH_RPM_RELEASE:-1}}"
           release_id="${INPUT_RELEASE_ID:-${DISPATCH_RELEASE_ID:-}}"
 
           tag="$(echo "$tag" | tr -d '[:space:]')"
           version="$(echo "$version" | tr -d '[:space:]')"
           deb_revision="$(echo "$deb_revision" | tr -d '[:space:]')"
+          rpm_release="$(echo "$rpm_release" | tr -d '[:space:]')"
           release_id="$(echo "$release_id" | tr -d '[:space:]')"
 
           if [ -z "$tag" ]; then
@@ -130,9 +144,15 @@ jobs:
             exit 1
           fi
 
+          if ! [[ "$rpm_release" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error title=Invalid RPM release::Expected a positive integer like 1, 2, or 3."
+            exit 1
+          fi
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "deb_revision=$deb_revision" >> "$GITHUB_OUTPUT"
+          echo "rpm_release=$rpm_release" >> "$GITHUB_OUTPUT"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   build_windows:
@@ -429,6 +449,7 @@ jobs:
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
+            rpm_arch: x86_64
             runs_on: ubuntu-22.04
             build_appimage: true
             appimagetool_asset: appimagetool-x86_64.AppImage
@@ -438,6 +459,7 @@ jobs:
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
+            rpm_arch: aarch64
             runs_on: ubuntu-22.04-arm
             build_appimage: true
             appimagetool_asset: appimagetool-aarch64.AppImage
@@ -448,8 +470,10 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       DEB_REVISION: ${{ needs.prepare.outputs.deb_revision }}
+      RPM_RELEASE: ${{ needs.prepare.outputs.rpm_release }}
       ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
       DEB_ARCH: ${{ matrix.deb_arch }}
+      RPM_ARCH: ${{ matrix.rpm_arch }}
       APPIMAGETOOL_ASSET: ${{ matrix.appimagetool_asset }}
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
@@ -480,6 +504,7 @@ jobs:
             desktop-file-utils \
             dpkg-dev \
             pkg-config \
+            rpm \
             libxcb1-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev
@@ -629,6 +654,86 @@ jobs:
             exit 1
           fi
 
+      - name: Package .rpm
+        run: |
+          set -euo pipefail
+          rpm_upstream_version="${VERSION/-rc./~rc.}"
+          rpm_release="${RPM_RELEASE}"
+
+          rpm_topdir="${PWD}/rpmbuild"
+          mkdir -p "${rpm_topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          trap 'rm -rf "${rpm_topdir}"' EXIT
+
+          cp target/release/gitcomet "${rpm_topdir}/SOURCES/gitcomet"
+          cp dist/gitcomet.desktop "${rpm_topdir}/SOURCES/gitcomet.desktop"
+          cp assets/gitcomet-512.png "${rpm_topdir}/SOURCES/gitcomet-512.png"
+
+          cat <<EOF > "${rpm_topdir}/SPECS/gitcomet.spec"
+          %global _enable_debug_package 0
+          %global debug_package %{nil}
+          %global __os_install_post %{nil}
+
+          Name:           gitcomet
+          Version:        ${rpm_upstream_version}
+          Release:        ${rpm_release}
+          Summary:        Fast, resource-efficient Git GUI written in Rust
+          License:        AGPL-3.0-only
+          Requires:       git
+
+          %description
+          Fast, resource-efficient Git GUI written in Rust.
+
+          %prep
+
+          %build
+
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          mkdir -p %{buildroot}/usr/share/applications
+          mkdir -p %{buildroot}/usr/share/icons/hicolor/512x512/apps
+
+          install -m755 %{_sourcedir}/gitcomet %{buildroot}/usr/bin/gitcomet
+          install -m644 %{_sourcedir}/gitcomet.desktop %{buildroot}/usr/share/applications/gitcomet.desktop
+          install -m644 %{_sourcedir}/gitcomet-512.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/gitcomet.png
+
+          %files
+          %attr(0755, root, root) /usr/bin/gitcomet
+          %attr(0644, root, root) /usr/share/applications/gitcomet.desktop
+          %attr(0644, root, root) /usr/share/icons/hicolor/512x512/apps/gitcomet.png
+          EOF
+
+          rpmbuild --define "_topdir ${rpm_topdir}" --target "${RPM_ARCH}" -bb "${rpm_topdir}/SPECS/gitcomet.spec"
+
+          cp "${rpm_topdir}"/RPMS/*/*.rpm dist/
+
+          pkg_file="$(find dist -maxdepth 1 -name "*.rpm" | head -n1)"
+          package_name="$(rpm -qp --queryformat '%{NAME}' "${pkg_file}")"
+          package_version="$(rpm -qp --queryformat '%{VERSION}' "${pkg_file}")"
+          package_release="$(rpm -qp --queryformat '%{RELEASE}' "${pkg_file}")"
+          package_arch="$(rpm -qp --queryformat '%{ARCH}' "${pkg_file}")"
+          package_requires="$(rpm -qp --queryformat '[%{REQUIRES}\n]' "${pkg_file}")"
+
+          if [[ "${package_name}" != "gitcomet" ]]; then
+            echo "::error title=Unexpected RPM package name::Got ${package_name}."
+            exit 1
+          fi
+          if [[ "${package_version}" != "${rpm_upstream_version}" ]]; then
+            echo "::error title=Unexpected RPM package version::Got ${package_version}, expected ${rpm_upstream_version}."
+            exit 1
+          fi
+          if [[ "${package_release}" != "${rpm_release}" ]]; then
+            echo "::error title=Unexpected RPM package release::Got ${package_release}, expected ${rpm_release}."
+            exit 1
+          fi
+          if [[ "${package_arch}" != "${RPM_ARCH}" ]]; then
+            echo "::error title=Unexpected RPM package architecture::Got ${package_arch}, expected ${RPM_ARCH}."
+            exit 1
+          fi
+          if ! grep -q "^git$" <<<"${package_requires}"; then
+            echo "::error title=Missing git dependency in RPM::Got ${package_requires}."
+            exit 1
+          fi
+
       - name: Package AppImage
         if: ${{ matrix.build_appimage }}
         run: |
@@ -663,6 +768,7 @@ jobs:
             dist/*.tar.gz
             dist/*.AppImage
             dist/*.deb
+            dist/*.rpm
           if-no-files-found: error
           retention-days: 7
 
@@ -874,7 +980,7 @@ jobs:
           # package-macos.sh replaces Cargo's symlink with a real directory; if
           # that regresses, `tar` would store a dangling link and still exit 0,
           # sailing past `if-no-files-found` with an empty bundle.
-          if [ -L "$dsym" ] || [ ! -d "$dsym" ]; then
+          if [ -L "$dsym" ] \vert{}\vert{} [ ! -d "$dsym" ]; then
             echo "::error title=No dSYM to archive::${dsym} is not a directory; the bundle Cargo symlinked to was probably cleaned away."
             exit 1
           fi
@@ -1084,8 +1190,8 @@ jobs:
           arm_dmg_path="dist/release/${arm_dmg}"
           intel_dmg_path="dist/release/${intel_dmg}"
 
-          if [ ! -f "${linux_arm_appimage_path}" ] || [ ! -f "${linux_intel_appimage_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
-            echo "::error title=Missing release assets::Expected ${linux_arm_appimage}, ${linux_intel_appimage}, ${arm_dmg}, and ${intel_dmg} in dist/release."
+          if [ ! -f "${linux_arm_appimage_path}" ] \vert{}\vert{} [ ! -f "${linux_intel_appimage_path}" ] || [ ! -f "${arm_dmg_path}" ] \vert{}\vert{} [ ! -f "${intel_dmg_path}" ]; then
+            echo "::error title=Missing release assets::Expected ${linux_arm_appimage},${linux_intel_appimage}, ${arm_dmg}, and${intel_dmg} in dist/release."
             exit 1
           fi
 

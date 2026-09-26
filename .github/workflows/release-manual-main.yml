@@ -12,6 +12,11 @@ on:
         required: true
         default: "1"
         type: string
+      rpm_release:
+        description: "RPM package release suffix (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
+        type: string
       prerelease:
         description: "Mark GitHub release as prerelease"
         required: true
@@ -153,6 +158,7 @@ jobs:
       tag: ${{ needs.validate.outputs.tag }}
       version: ${{ needs.validate.outputs.version }}
       deb_revision: ${{ github.event.inputs.deb_revision }}
+      rpm_release: ${{ github.event.inputs.rpm_release }}
       release_id: ${{ needs.create_release.outputs.release_id }}
     secrets: inherit
 
