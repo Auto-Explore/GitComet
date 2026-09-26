@@ -318,6 +318,17 @@ fn model_with_header(
             commit_id: commit_id.clone(),
         }),
     });
+    // The file history menu embeds these actions without the header and
+    // offers its own "Copy SHA" among its file entries.
+    if include_header {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy commit SHA".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: Some("C".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText { text: sha.clone() }),
+        });
+    }
     if let Some(permalink) = this
         .state
         .repos
