@@ -17,11 +17,12 @@ pub use scrollbar::{
 pub(crate) use scrollbar::{compute_vertical_click_offset, vertical_thumb_metrics};
 pub(crate) use text_input::utf8_edit_delta_between_texts;
 pub use text_input::{
-    Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, DocumentEnd, DocumentHome, Down,
-    End, Enter, HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste,
-    Redo, Right, SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectPageDown,
-    SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShiftEnter, TextInput,
-    TextInputChanged, TextInputOptions, Undo, Up, WordLeft, WordRight,
+    Backspace, Copy, Cut, Delete, DeleteToLineEnd, DeleteToLineStart, DeleteWordLeft,
+    DeleteWordRight, DocumentEnd, DocumentHome, Down, End, Enter, HighlightProvider,
+    HighlightProviderResult, Home, Left, PageDown, PageUp, Paste, Redo, Right, SelectAll,
+    SelectDown, SelectEnd, SelectHome, SelectLeft, SelectPageDown, SelectPageUp, SelectRight,
+    SelectUp, SelectWordLeft, SelectWordRight, ShiftEnter, TextInput, TextInputChanged,
+    TextInputOptions, Undo, Up, WordLeft, WordRight,
 };
 #[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{
