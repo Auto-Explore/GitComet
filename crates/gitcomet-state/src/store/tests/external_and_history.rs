@@ -4525,6 +4525,7 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
             repo_id: RepoId(1),
             path: PathBuf::from("a.txt"),
             contents: "new\n".to_string(),
+            expected_contents: None,
             stage: false,
         },
     );

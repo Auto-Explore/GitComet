@@ -1778,6 +1778,25 @@ mod worktree_save_target_tests {
     use std::path::Path;
 
     #[test]
+    fn markdown_checkbox_saves_accept_the_read_baseline_and_reject_intervening_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("README.md");
+        let mut filesystem = gitcomet_core::filesystem::Filesystem::default();
+        let unchecked = b"- [ ] ship it\n";
+        let checked = b"- [x] ship it\n";
+        std::fs::write(&path, unchecked).unwrap();
+        super::guarded_worktree_save(&mut filesystem, &path, checked, Some(unchecked)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), checked);
+        super::guarded_worktree_save(&mut filesystem, &path, unchecked, Some(checked)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), unchecked);
+        std::fs::write(&path, b"external edits\n").unwrap();
+        assert!(
+            super::guarded_worktree_save(&mut filesystem, &path, checked, Some(unchecked)).is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"external edits\n");
+    }
+
+    #[test]
     fn merge_save_preserves_external_edits_and_does_not_recreate_a_moved_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conflict.txt");

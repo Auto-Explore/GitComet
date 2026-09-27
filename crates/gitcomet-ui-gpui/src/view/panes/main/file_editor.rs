@@ -186,9 +186,8 @@ pub(in crate::view) struct StashedFileEdit {
 impl StashedFileEdit {
     /// Whether this buffer still differs from what was last written.
     ///
-    /// Clean entries are kept only so a write that fails leaves the text
-    /// somewhere recoverable; they are dropped the next time the file is
-    /// opened, which is also what stops them masking an external edit.
+    /// Clean entries only survive while a save is in flight. Once the write is
+    /// acknowledged, buffers matching that saved version can be released.
     pub(in crate::view) fn is_dirty(&self) -> bool {
         self.text_fingerprint != self.saved_fingerprint
     }
@@ -660,11 +659,16 @@ impl MainPaneView {
         self.file_editor_live_syntax_reparse = None;
         self.file_editor_autosave = None;
 
-        // A stashed buffer that still differs from disk is restored; a clean one
-        // is only kept so a failed write leaves the text somewhere, and must not
-        // shadow the file — drop it and re-read.
+        // Restore unsaved or in-flight buffers. A pending write can change the
+        // baseline even if the user has undone the buffer back to clean.
         match self.file_editor_stash.get(&identity).cloned() {
-            Some(stashed) if stashed.is_dirty() => {
+            Some(stashed)
+                if stashed.is_dirty()
+                    || self
+                        .file_editor_saves
+                        .values()
+                        .any(|(pending, _)| pending == &identity) =>
+            {
                 // The stash holds only buffers that are *not* on screen, so
                 // taking one back hands ownership to the input — leaving the
                 // entry behind would report the file as unsaved even after the
@@ -732,17 +736,15 @@ impl MainPaneView {
             let read = {
                 let absolute = absolute.clone();
                 move || {
+                    super::preview::preflight_worktree_file_for_editing(&absolute)?;
                     let _guard = gitcomet_core::filesystem::global()
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
-                    let version = gitcomet_core::filesystem::DiskVersion::read(&absolute);
-                    // Its errors first: they say "does not exist" in words.
+                    let version =
+                        super::preview::read_worktree_file_version_for_editing(&absolute)?;
                     let (text, stamp, hash) =
                         super::preview::read_worktree_file_for_editing(&absolute)?;
-                    let version = version.map_err(|e| e.to_string())?;
-                    if gitcomet_core::filesystem::DiskVersion::read(&absolute)
-                        .map_err(|e| e.to_string())?
-                        != version
+                    if super::preview::read_worktree_file_version_for_editing(&absolute)? != version
                     {
                         return Err("File changed while reading. Open it again.".to_string());
                     }
@@ -845,7 +847,10 @@ impl MainPaneView {
                     let _guard = gitcomet_core::filesystem::global()
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
-                    gitcomet_core::filesystem::DiskVersion::read(&path)
+                    gitcomet_core::filesystem::DiskVersion::read_file(
+                        &path,
+                        super::preview::FILE_EDITOR_MAX_TEXT_BYTES as u64,
+                    )
                 }
             };
             let version = if crate::ui_runtime::current().uses_background_compute() {
@@ -1078,6 +1083,9 @@ impl MainPaneView {
                 }
                 if let Some(stashed) = self.file_editor_stash.get_mut(&key) {
                     stashed.saved_fingerprint = fingerprint;
+                    if !stashed.is_dirty() {
+                        self.file_editor_stash.remove(&key);
+                    }
                 }
                 if self.file_editor_key.as_ref() == Some(&key) {
                     self.file_editor_saved_fingerprint = Some(fingerprint);
@@ -1141,18 +1149,17 @@ impl MainPaneView {
         let Some(key) = self.file_editor_key.clone() else {
             return;
         };
-        if !self.file_editor_dirty {
+        if !self.file_editor_dirty
+            && !self
+                .file_editor_saves
+                .values()
+                .any(|(pending, _)| pending == &key)
+        {
             // A clean buffer is the truth for this file now — the user may have
             // undone their way back to disk. Drop any *dirty* entry left from an
             // earlier flush, or returning here would restore edits they threw
-            // away. A clean entry is a save's recovery copy and stays.
-            if self
-                .file_editor_stash
-                .get(&key)
-                .is_some_and(StashedFileEdit::is_dirty)
-            {
-                self.file_editor_stash.remove(&key);
-            }
+            // away. Only an in-flight write still needs a recovery copy.
+            self.file_editor_stash.remove(&key);
             return;
         }
         let (text, cursor, text_fingerprint) = self.file_editor_input.read_with(cx, |input, _| {
@@ -1190,12 +1197,15 @@ impl MainPaneView {
         // fingerprint was cleared just before the blanking, so the empty text
         // does not match it. Flushing there stashed that empty placeholder under
         // the file's own path, and the next open restored it over the file.
-        if self.file_editor_loading || self.file_editor_key.is_none() || !self.file_editor_dirty {
+        if self.file_editor_loading || self.file_editor_key.is_none() {
             return;
         }
         // With "File changed on disk" open the buffer is kept, not written:
         // leaving the file is not an answer to the question.
-        if self.auto_save_file_edits && !self.file_disk_notice_awaits_editor() {
+        if self.auto_save_file_edits
+            && self.file_editor_error.is_none()
+            && !self.file_disk_notice_awaits_editor()
+        {
             self.save_file_editor_buffer(cx);
         }
         self.stash_current_file_editor_buffer(cx);

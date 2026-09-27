@@ -1,4 +1,7 @@
 use super::panes::main::file_editor::{StashedFileEdit, file_editor_text_fingerprint};
+use super::panes::main::{
+    preflight_worktree_file_for_editing, read_worktree_file_version_for_editing,
+};
 use super::*;
 use crate::kit::{TextInput, TextInputOptions};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity, Operation, OperationId, Request};
@@ -152,7 +155,16 @@ impl DocumentsView {
             .filter(|(_, b)| b.read(cx).identity.0 == path)
             .max_by_key(|(_, b)| b.read(cx).dirty)
             .map(|(id, _)| *id);
-        let id = existing.unwrap_or_else(|| self.insert_buffer(path, None, cx));
+        let id = if let Some(id) = existing {
+            self.buffers[&id].update(cx, |buffer, cx| {
+                if !buffer.dirty && buffer.saving.is_none() {
+                    buffer.reload(cx);
+                }
+            });
+            id
+        } else {
+            self.insert_buffer(path, None, cx)
+        };
         if display {
             self.active = Some(id);
             self.picker = false;
@@ -611,21 +623,24 @@ impl StandaloneBuffer {
         self.load_generation = self.load_generation.wrapping_add(1);
         let generation = self.load_generation;
         self.loading = true;
+        self.input
+            .update(cx, |input, cx| input.set_read_only(true, cx));
         let path = self.identity.0.clone();
         let identity = self.identity.clone();
         let image = self.image;
         cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
+                preflight_worktree_file_for_editing(&path)?;
                 let _guard = gitcomet_core::filesystem::global()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let version = DiskVersion::read(&path).map_err(|e| e.to_string())?;
+                let version = read_worktree_file_version_for_editing(&path)?;
                 let text = if image {
                     SharedString::default()
                 } else {
                     panes::read_worktree_file_for_editing(&path)?.0
                 };
-                if DiskVersion::read(&path).map_err(|e| e.to_string())? != version {
+                if read_worktree_file_version_for_editing(&path)? != version {
                     return Err("File changed while reading. Open it again.".into());
                 }
                 Ok::<_, String>((version, text))
@@ -644,12 +659,16 @@ impl StandaloneBuffer {
                     Ok((version, text)) => {
                         this.version = Some(version);
                         this.saved = text.clone();
-                        this.input.update(cx, |input, cx| input.set_text(text, cx));
+                        this.input.update(cx, |input, cx| {
+                            input.set_text(text, cx);
+                            input.set_read_only(!this.editing, cx);
+                        });
                         this.saved_fingerprint = Some(file_editor_text_fingerprint(
                             &this.input.read(cx).text_snapshot(),
                         ));
                         this.dirty = false;
                         this.error = None;
+                        this.failed_destination = None;
                     }
                     Err(error) => this.error = Some(error),
                 }
@@ -843,7 +862,7 @@ impl Render for StandaloneBuffer {
                                 this.reload(cx);
                             }
                             this.input
-                                .update(cx, |input, cx| input.set_read_only(false, cx));
+                                .update(cx, |input, cx| input.set_read_only(this.loading, cx));
                             window.focus(&this.input.read(cx).focus_handle(), cx);
                             cx.notify();
                         }),
@@ -878,31 +897,41 @@ impl Render for StandaloneBuffer {
                     .when(self.dirty, |d| d.child(div().text_sm().child("Unsaved"))),
             )
             .when_some(error, |d, error| {
-                d.child(div().p_2().child(error).when(self.dirty, |d| {
-                    d.child(
-                        components::Button::new("document_replace_disk", "Replace disk contents…")
-                            .on_click(theme, cx, |_this, _, window, cx| {
-                                let answer = window.prompt(
-                                    gpui::PromptLevel::Warning,
-                                    "Replace the current file on disk?",
-                                    Some("Another application may have saved a newer version."),
-                                    &[
-                                        gpui::PromptButton::cancel("Cancel"),
-                                        gpui::PromptButton::new("Replace"),
-                                    ],
-                                    cx,
-                                );
-                                cx.spawn_in(window, async move |view, cx| {
-                                    if answer.await.ok() == Some(1) {
-                                        let _ = view.update_in(cx, |this, _, cx| {
-                                            this.save(this.failed_destination.clone(), true, cx)
-                                        });
-                                    }
-                                })
-                                .detach();
-                            }),
-                    )
-                }))
+                d.child(div().p_2().child(error).when(
+                    self.dirty || self.failed_destination.is_some(),
+                    |d| {
+                        d.child(
+                            components::Button::new(
+                                "document_replace_disk",
+                                "Replace disk contents…",
+                            )
+                            .on_click(
+                                theme,
+                                cx,
+                                |_this, _, window, cx| {
+                                    let answer = window.prompt(
+                                        gpui::PromptLevel::Warning,
+                                        "Replace the current file on disk?",
+                                        Some("Another application may have saved a newer version."),
+                                        &[
+                                            gpui::PromptButton::cancel("Cancel"),
+                                            gpui::PromptButton::new("Replace"),
+                                        ],
+                                        cx,
+                                    );
+                                    cx.spawn_in(window, async move |view, cx| {
+                                        if answer.await.ok() == Some(1) {
+                                            let _ = view.update_in(cx, |this, _, cx| {
+                                                this.save(this.failed_destination.clone(), true, cx)
+                                            });
+                                        }
+                                    })
+                                    .detach();
+                                },
+                            ),
+                        )
+                    },
+                ))
             })
             .when(self.loading, |d| d.child("Loading document…"))
             .when(self.image && !self.loading && self.error.is_none(), |d| {
@@ -1122,9 +1151,11 @@ impl GitCometView {
             if !matches!(repo.open, Loadable::Ready(())) {
                 continue;
             }
-            let Ok(path) = path.strip_prefix(&root).map(Path::to_path_buf) else {
+            let Ok(relative_path) = path.strip_prefix(&root).map(Path::to_path_buf) else {
                 continue;
             };
+            update_recent(path, false, cx);
+            let path = relative_path;
             if display {
                 self.documents_active = false;
                 self.store.dispatch(Msg::SetActiveRepo { repo_id: repo.id });

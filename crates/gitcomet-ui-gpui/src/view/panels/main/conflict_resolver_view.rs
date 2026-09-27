@@ -408,6 +408,7 @@ impl MainPaneView {
                         repo_id,
                         path: save_path.clone(),
                         contents: text,
+                        expected_contents: None,
                         stage: false,
                     });
                 });
@@ -444,6 +445,7 @@ impl MainPaneView {
                                         repo_id,
                                         path: stage_path.clone(),
                                         contents: text,
+                                        expected_contents: None,
                                         stage: true,
                                     });
                                 }

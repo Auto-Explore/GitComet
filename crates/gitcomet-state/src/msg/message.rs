@@ -805,6 +805,8 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
         contents: String,
+        /// Contents read by the caller, or `None` to use the loaded conflict baseline.
+        expected_contents: Option<Arc<[u8]>>,
         stage: bool,
     },
     /// Append patterns to the repository-root `.gitignore`, creating it when

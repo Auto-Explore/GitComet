@@ -4,6 +4,7 @@ use crate::view::panes::main::{
     file_editor_provider_binding_key,
 };
 use palette::IntoColor;
+use std::path::PathBuf;
 
 #[path = "file_editor_scrolling.rs"]
 mod scrolling;
@@ -102,6 +103,186 @@ async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(1941);
+    let relative = PathBuf::from("file.txt");
+    let path = directory.path().join(&relative);
+    std::fs::write(&path, "original").unwrap();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, directory.path(), &relative), cx);
+            view.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.auto_save_file_edits = true;
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), "unsaved edits", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    // A directory at the save path fails even for privileged test users.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .clone()
+            .update(app, |pane, cx| pane.save_file_editor_buffer(cx))
+    });
+    finish_editor_saves(&view, cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            assert!(view.main_pane.read(cx).file_editor_is_dirty());
+            assert!(view.main_pane.read(cx).file_editor_error.is_some());
+            assert!(view.request_unsaved_file_edits_prompt(UnsavedFileEditsAction::QuitApp, cx));
+            assert!(
+                view.pending_unsaved_file_edits_prompt.is_some(),
+                "a failed autosave must allow Save/Discard"
+            );
+            assert!(
+                view.main_pane.read(cx).file_editor_saves.is_empty(),
+                "closing must not silently retry the failed write"
+            );
+            assert_eq!(
+                view.main_pane.read(cx).file_editor_input.read(cx).text(),
+                "unsaved edits"
+            );
+        })
+    });
+}
+
+#[gpui::test]
+fn save_acknowledgments_release_clean_stashes_but_keep_newer_edits(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(1942);
+    let first = PathBuf::from("first.txt");
+    let second = PathBuf::from("second.txt");
+    for relative in [&first, &second] {
+        std::fs::write(directory.path().join(relative), "original").unwrap();
+    }
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, directory.path(), &first), cx);
+            pane.update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.auto_save_file_edits = false;
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), "first save", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    let key = cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.save_file_editor_buffer(cx);
+            let key = pane.file_editor_key.clone().unwrap();
+            assert!(
+                pane.file_editor_stash.contains_key(&key),
+                "in-flight writes retain recovery text"
+            );
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), "newer edits", cx);
+            });
+            // Explicitly stash before the save acknowledgment can land.
+            pane.stash_current_file_editor_buffer(cx);
+            key
+        })
+    });
+    finish_editor_saves(&view, cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, directory.path(), &second), cx);
+            pane.update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join(&first)).unwrap(),
+        "first save"
+    );
+    cx.update(|_, app| {
+        let stashed = &pane.read(app).file_editor_stash[&key];
+        assert_eq!(stashed.text.as_ref(), "newer edits");
+        assert!(stashed.is_dirty());
+    });
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.save_all_file_edits(cx)));
+    finish_editor_saves(&view, cx);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join(&first)).unwrap(),
+        "newer edits"
+    );
+    cx.update(|_, app| {
+        assert!(pane.read(app).file_editor_stash.is_empty());
+        assert!(pane.read(app).unsaved_file_edit_labels().is_empty());
+    });
+}
+
+#[gpui::test]
+fn oversized_repository_editor_files_fail_without_capturing_a_baseline(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let relative = PathBuf::from("oversized.txt");
+    std::fs::File::create(directory.path().join(&relative))
+        .unwrap()
+        .set_len(32 * 1024 * 1024 + 1)
+        .unwrap();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(
+                view,
+                editor_state(
+                    gitcomet_state::model::RepoId(1943),
+                    directory.path(),
+                    &relative,
+                ),
+                cx,
+            );
+            view.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.file_editor_error
+                .as_ref()
+                .is_some_and(|error| error.contains("32 MB"))
+        );
+        assert!(pane.file_editor_disk_versions.is_empty());
+        assert!(!pane.file_editor_is_dirty());
+    });
+}
+
+#[gpui::test]
 async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -160,6 +341,10 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
             "a confirmed save settles the buffer"
         );
         assert!(pane.unsaved_file_edit_labels().is_empty());
+        assert!(
+            pane.file_editor_stash.is_empty(),
+            "acknowledged clean buffers must be released"
+        );
     });
 
     let _ = std::fs::remove_dir_all(&workdir);

@@ -90,9 +90,23 @@ impl DiskVersion {
         Self::read_cancellable(path, &Cancellation::default())
     }
 
+    /// Capture an editor baseline without traversing directories or hashing
+    /// oversized files. The limit also applies if the file grows during hashing.
+    pub fn read_file(path: &Path, max_bytes: u64) -> io::Result<Self> {
+        Self::read_version(path, &Cancellation::default(), Some(max_bytes))
+    }
+
     pub(super) fn read_cancellable(path: &Path, cancellation: &Cancellation) -> io::Result<Self> {
+        Self::read_version(path, cancellation, None)
+    }
+
+    fn read_version(
+        path: &Path,
+        cancellation: &Cancellation,
+        max_bytes: Option<u64>,
+    ) -> io::Result<Self> {
         let mut hasher = Sha256::new();
-        hash_entry(path, &mut hasher, cancellation)?;
+        hash_entry(path, &mut hasher, cancellation, max_bytes)?;
         Ok(Self {
             digest: hasher.finalize().into(),
             identity: entry_identity(path)?,
@@ -163,9 +177,22 @@ fn open_regular_file(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-fn hash_entry(path: &Path, hasher: &mut Sha256, cancellation: &Cancellation) -> io::Result<()> {
+fn hash_entry(
+    path: &Path,
+    hasher: &mut Sha256,
+    cancellation: &Cancellation,
+    max_bytes: Option<u64>,
+) -> io::Result<()> {
     check_cancel(cancellation)?;
     let m = fs::symlink_metadata(path)?;
+    if let Some(limit) = max_bytes {
+        if !m.is_file() {
+            return Err(invalid("Only regular files can be edited"));
+        }
+        if m.len() > limit {
+            return Err(invalid(format!("File exceeds the {limit} byte size limit")));
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -179,11 +206,16 @@ fn hash_entry(path: &Path, hasher: &mut Sha256, cancellation: &Cancellation) -> 
         hasher.update(m.len().to_le_bytes());
         let mut file = open_regular_file(path)?;
         let mut buffer = [0u8; 64 * 1024];
+        let mut bytes_read = 0u64;
         loop {
             check_cancel(cancellation)?;
             let len = file.read(&mut buffer)?;
             if len == 0 {
                 break;
+            }
+            bytes_read = bytes_read.saturating_add(len as u64);
+            if max_bytes.is_some_and(|limit| bytes_read > limit) {
+                return Err(invalid("File grew beyond the size limit while reading"));
             }
             #[cfg(test)]
             CONTENT_BYTES_HASHED.with(|counted| counted.set(counted.get() + len as u64));
@@ -196,7 +228,7 @@ fn hash_entry(path: &Path, hasher: &mut Sha256, cancellation: &Cancellation) -> 
                 hasher,
                 entry.file_name().unwrap_or_default().as_encoded_bytes(),
             );
-            hash_entry(&entry, hasher, cancellation)?;
+            hash_entry(&entry, hasher, cancellation, None)?;
         }
         hasher.update(b"end-directory");
     } else {
@@ -238,6 +270,24 @@ pub(super) fn protect(path: &Path, recursive: bool, cancellation: &Cancellation)
     {
         return Err(invalid("Git metadata and filesystem roots are protected"));
     }
+    protect_contents(path, recursive, cancellation)
+}
+
+/// Validate an entry under service-owned recovery storage, which may itself
+/// live inside Git metadata. Names and repositories within the entry remain
+/// protected just as they are at the original source.
+pub(super) fn protect_contents(
+    path: &Path,
+    recursive: bool,
+    cancellation: &Cancellation,
+) -> io::Result<()> {
+    check_cancel(cancellation)?;
+    if path
+        .file_name()
+        .is_none_or(crate::path_utils::is_git_metadata_component)
+    {
+        return Err(invalid("Git metadata and filesystem roots are protected"));
+    }
     let metadata = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -256,7 +306,7 @@ pub(super) fn protect(path: &Path, recursive: bool, cancellation: &Cancellation)
         }
         if recursive {
             for child in children(path)? {
-                protect(&child, true, cancellation)?;
+                protect_contents(&child, true, cancellation)?;
             }
         }
     }

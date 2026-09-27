@@ -816,9 +816,10 @@ impl GitCometView {
         // reduced the message and the edits were lost. Take over the close and
         // let it through once the write has actually drained.
         let flushed_a_pending_write = self.main_pane.update(cx, |pane, cx| {
-            let pending = pane.auto_save_file_edits && !pane.unsaved_file_edit_labels().is_empty();
             pane.flush_file_editor_buffer(cx);
-            pending
+            // Failed saves and dirty stashes are unsaved edits. Only an actual
+            // queued save should delay the dialog and retry the close.
+            !pane.file_editor_saves.is_empty()
         });
         if flushed_a_pending_write {
             self.retry_once_file_edit_writes_drain(action, cx);

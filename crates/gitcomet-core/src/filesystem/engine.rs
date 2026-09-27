@@ -110,10 +110,14 @@ impl JournalEntry {
         } else {
             git_directory.as_deref().unwrap_or(parent)
         };
+        self.reserve_in(storage)
+    }
+
+    fn reserve_in(&mut self, storage: &Path) -> io::Result<PathBuf> {
         let area = tempfile::Builder::new()
             .prefix(".gitcomet-operation-")
             .tempdir_in(storage)?;
-        let path = area.path().join("item");
+        let path = fs::canonicalize(area.path())?.join("item");
         self.areas.push(area);
         Ok(path)
     }
@@ -723,7 +727,9 @@ fn complete_outbound_move(
     rename_exclusive(path, &parked)?;
     if let Err(error) = version
         .matches(&parked, cancellation)
-        .and_then(|_| protect(&parked, true, cancellation))
+        // The service may retain data beneath .git on this volume. Validate
+        // the retained entry and its descendants, not that trusted ancestor.
+        .and_then(|_| protect_contents(&parked, true, cancellation))
     {
         if let Err(restore) = rename_exclusive(&parked, path) {
             for area in recovery.areas {

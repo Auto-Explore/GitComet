@@ -2011,19 +2011,24 @@ fn reduce_inner(
             repo_id,
             path,
             contents,
+            expected_contents,
             stage,
         } => {
-            let expected_contents = state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
-                match &r.conflict_state.conflict_file {
-                    crate::model::Loadable::Ready(Some(file)) if file.path.as_path() == path => {
-                        file.current_bytes.clone().or_else(|| {
-                            file.current
-                                .as_ref()
-                                .map(|text| Arc::<[u8]>::from(text.as_bytes()))
-                        })
+            let expected_contents = expected_contents.or_else(|| {
+                state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
+                    match &r.conflict_state.conflict_file {
+                        crate::model::Loadable::Ready(Some(file))
+                            if file.path.as_path() == path =>
+                        {
+                            file.current_bytes.clone().or_else(|| {
+                                file.current
+                                    .as_ref()
+                                    .map(|text| Arc::<[u8]>::from(text.as_bytes()))
+                            })
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                }
+                })
             });
             begin_local_action(state, repo_id);
             actions_emit_effects::save_worktree_file(

@@ -16,7 +16,10 @@ pub(in crate::view) mod helpers;
 mod interactive_rebase;
 mod markdown_state;
 mod preview;
-pub(in crate::view) use preview::read_worktree_file_for_editing;
+pub(in crate::view) use preview::{
+    preflight_worktree_file_for_editing, read_worktree_file_for_editing,
+    read_worktree_file_version_for_editing,
+};
 pub(in crate::view) mod submodule_summary;
 mod surface;
 

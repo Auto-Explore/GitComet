@@ -9,6 +9,198 @@ fn success(result: &OperationResult) {
     assert!(result.succeeded(), "{:#?}", result.items);
 }
 
+#[cfg(windows)]
+#[test]
+fn exclusive_rename_preserves_identity_and_existing_destinations() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"source").unwrap();
+    fs::write(&target, b"existing").unwrap();
+    let identity = entry_identity(&source).unwrap();
+    assert_eq!(
+        rename_exclusive(&source, &target).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"source");
+    assert_eq!(fs::read(&target).unwrap(), b"existing");
+    let renamed = directory.path().join("renamed");
+    rename_exclusive(&source, &renamed).unwrap();
+    assert!(!source.exists());
+    assert_eq!(entry_identity(&renamed).unwrap(), identity);
+    rename_exclusive(&renamed, &source).unwrap();
+    assert_eq!(entry_identity(&source).unwrap(), identity);
+}
+
+#[cfg(windows)]
+#[test]
+fn cross_volume_windows_moves_use_staged_copy_and_roundtrip() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    fs::write(&source, b"source").unwrap();
+    let identity = entry_identity(&source).unwrap();
+    // Windows CI may expose a second data volume. An explicit writable
+    // directory also lets developer/CI setups exercise mounted volumes.
+    let candidates = std::env::var_os("GITCOMET_TEST_SECOND_VOLUME")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(('A'..='Z').map(|drive| PathBuf::from(format!("{drive}:\\"))));
+    for root in candidates {
+        let Ok(other) = tempfile::tempdir_in(root) else {
+            continue;
+        };
+        if entry_identity(other.path()).unwrap().0 == identity.0 {
+            continue;
+        }
+        let target = other.path().join("source");
+        assert_eq!(
+            rename_exclusive(&source, &target).unwrap_err().kind(),
+            io::ErrorKind::CrossesDevices
+        );
+        assert_eq!(entry_identity(&source).unwrap(), identity);
+        assert_eq!(fs::read(&source).unwrap(), b"source");
+        assert!(!target.exists());
+        let mut service = Filesystem::default();
+        success(&run(
+            &mut service,
+            Operation::Transfer {
+                sources: vec![source.clone()],
+                destination: other.path().to_path_buf(),
+                intent: TransferIntent::Move,
+            },
+        ));
+        assert!(!source.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"source");
+        success(&run(&mut service, Operation::Undo));
+        assert_eq!(entry_identity(&source).unwrap(), identity);
+        assert_eq!(fs::read(&source).unwrap(), b"source");
+        assert!(!target.exists());
+        success(&run(&mut service, Operation::Redo));
+        assert!(!source.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"source");
+        return;
+    }
+    eprintln!("No writable second Windows volume; cross-volume assertion skipped");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_recovery_directory_supports_immediate_undo_and_redo() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = directory.path().join("storage");
+    let alias = directory.path().join("alias");
+    fs::create_dir(&storage).unwrap();
+    std::os::unix::fs::symlink(&storage, &alias).unwrap();
+    let mut journal = JournalEntry::default();
+    let staged = journal.reserve_in(&alias).unwrap();
+    assert_eq!(staged, absolute_identity(&staged).unwrap());
+    let file = fs::canonicalize(directory.path())
+        .unwrap()
+        .join("created.txt");
+    fs::write(&staged, b"created").unwrap();
+    journal.move_entry(staged, file.clone(), None).unwrap();
+    let mut service = Filesystem::default();
+    service.undo.push_back(journal);
+    success(&run(&mut service, Operation::Undo));
+    assert!(!file.exists());
+    success(&run(&mut service, Operation::Redo));
+    assert_eq!(fs::read(file).unwrap(), b"created");
+}
+
+#[test]
+fn recovery_content_validation_ignores_only_service_owned_ancestors() {
+    let directory = tempfile::tempdir().unwrap();
+    let recovery = directory.path().join(".git/recovery/item");
+    fs::create_dir_all(&recovery).unwrap();
+    fs::write(recovery.join("ordinary.txt"), b"data").unwrap();
+    let cancellation = Cancellation::default();
+    assert!(protect(&recovery, true, &cancellation).is_err());
+    protect_contents(&recovery, true, &cancellation).unwrap();
+    for metadata in [".git", ".GIT"] {
+        fs::write(recovery.join(metadata), b"gitdir: elsewhere").unwrap();
+        assert!(protect_contents(&recovery, true, &cancellation).is_err());
+        fs::remove_file(recovery.join(metadata)).unwrap();
+    }
+    fs::create_dir_all(recovery.join("nested/objects")).unwrap();
+    fs::create_dir_all(recovery.join("nested/refs")).unwrap();
+    fs::write(recovery.join("nested/HEAD"), b"ref: refs/heads/main").unwrap();
+    assert!(protect_contents(&recovery, true, &cancellation).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn deletion_and_outbound_cleanup_use_repository_recovery_on_another_filesystem() {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(directory) = tempfile::tempdir_in("/dev/shm") else {
+        return;
+    };
+    if fs::metadata(directory.path()).unwrap().dev()
+        == fs::metadata(std::env::temp_dir()).unwrap().dev()
+    {
+        return;
+    }
+    let git = directory.path().join(".git");
+    fs::create_dir(&git).unwrap();
+    let mut journal = JournalEntry::default();
+    assert!(journal.reserve(directory.path()).unwrap().starts_with(&git));
+    let mut service = Filesystem::default();
+    for outbound in [false, true] {
+        let source = directory.path().join("folder");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested/file"), b"retained until verified").unwrap();
+        let operation = if outbound {
+            Operation::CompleteOutbound {
+                receipt: service
+                    .prepare_outbound(
+                        OperationId::allocate(),
+                        vec![source.clone()],
+                        &Cancellation::default(),
+                    )
+                    .unwrap(),
+                intent: Some(TransferIntent::Move),
+                source_removed: false,
+            }
+        } else {
+            Operation::DeletePermanently {
+                sources: vec![source.clone()],
+                confirmed: true,
+            }
+        };
+        let result = run(&mut service, operation);
+        success(&result);
+        assert!(!source.exists());
+        assert!(!result.undo_available);
+        assert!(git.is_dir());
+    }
+}
+
+#[test]
+fn editor_baselines_reject_oversized_files_and_directories_without_hashing_contents() {
+    let directory = tempfile::tempdir().unwrap();
+    let oversized = directory.path().join("large.bin");
+    File::create(&oversized)
+        .unwrap()
+        .set_len(32 * 1024 * 1024 + 1)
+        .unwrap();
+    let folder = directory.path().join("folder");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("child"), b"must not be hashed").unwrap();
+    super::super::io::CONTENT_BYTES_HASHED.with(|bytes| bytes.set(0));
+    for path in [&oversized, &folder] {
+        assert!(DiskVersion::read_file(path, 32 * 1024 * 1024).is_err());
+    }
+    assert_eq!(
+        super::super::io::CONTENT_BYTES_HASHED.with(|bytes| bytes.get()),
+        0
+    );
+    let normal = directory.path().join("normal.txt");
+    fs::write(&normal, b"small").unwrap();
+    assert_eq!(
+        DiskVersion::read_file(&normal, 5).unwrap(),
+        DiskVersion::read(&normal).unwrap()
+    );
+}
+
 #[test]
 fn case_only_rename_and_numbered_duplicates_roundtrip() {
     let directory = tempfile::tempdir().unwrap();

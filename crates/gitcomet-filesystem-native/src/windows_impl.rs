@@ -7,7 +7,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 use windows::{
-    Win32::{Foundation::E_ABORT, Storage::FileSystem::MoveFileW, System::Com::*, UI::Shell::*},
+    Win32::{
+        Foundation::E_ABORT,
+        Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW},
+        System::Com::*,
+        UI::Shell::*,
+    },
     core::{HRESULT, PCWSTR, Ref, implement},
 };
 
@@ -27,9 +32,16 @@ pub fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let from = native(from)?;
     let to = native(to)?;
     // SAFETY: both strings are NUL-terminated and alive for the synchronous call.
-    // MoveFileW never replaces an existing destination.
-    unsafe { MoveFileW(PCWSTR(from.as_ptr()), PCWSTR(to.as_ptr())) }
-        .map_err(|error| io::Error::from_raw_os_error(error.code().0 & 0xffff))
+    // No REPLACE_EXISTING or COPY_ALLOWED: journal steps must preserve identity
+    // and report cross-volume moves so the engine can stage a reversible copy.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(from.as_ptr()),
+            PCWSTR(to.as_ptr()),
+            MOVE_FILE_FLAGS(0),
+        )
+    }
+    .map_err(|error| io::Error::from_raw_os_error(error.code().0 & 0xffff))
 }
 
 /// Read an entry's volume and file ID without following a reparse point.

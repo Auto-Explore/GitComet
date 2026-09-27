@@ -1,6 +1,36 @@
 use super::*;
 use gitcomet_core::domain::Upstream;
 
+#[test]
+fn markdown_save_uses_the_callers_disk_baseline_without_a_loaded_conflict() {
+    let mut repos = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let original: Arc<[u8]> = Arc::from(b"- [ ] ship it\n".as_slice());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SaveWorktreeFile {
+            repo_id,
+            path: PathBuf::from("README.md"),
+            contents: "- [x] ship it\n".into(),
+            expected_contents: Some(original.clone()),
+            stage: false,
+        },
+    );
+    assert!(matches!(effects.as_slice(), [Effect::SaveWorktreeFile {
+        expected_contents: Some(baseline), contents, stage: false, ..
+    }] if baseline == &original && contents == "- [x] ship it\n"));
+}
+
 fn upstream_target(remote: &str, branch: &str) -> Upstream {
     Upstream {
         remote: remote.to_string(),
@@ -2350,6 +2380,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id,
             path: PathBuf::from("src/lib.rs"),
             contents: "fn main() {}".to_string(),
+            expected_contents: None,
             stage: true,
         },
     );
