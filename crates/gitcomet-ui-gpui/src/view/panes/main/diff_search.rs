@@ -561,7 +561,7 @@ fn inline_patch_diff_search_text<'a>(
     }
 
     Some(Cow::Owned(
-        crate::view::tab_width::expand_tabs(tab_width, line.text.as_ref()).into_owned(),
+        crate::view::tab_width::expand_patch_tabs(tab_width, line.text.as_ref()).into_owned(),
     ))
 }
 

@@ -25,7 +25,10 @@ impl GixRepo {
         let repo_path = super::diff::to_repo_path(path, &self.spec.workdir)?;
         // Configuration snapshots belong to the opened handle. Attribute
         // refreshes must also observe config changes made while it was open.
-        Ok(resolve_text_attributes(&self.reopen_repo()?, &repo_path))
+        Ok(resolve_text_attributes(
+            &self.repo_with_current_config()?,
+            &repo_path,
+        ))
     }
 }
 

@@ -81,7 +81,7 @@ pub(in crate::view) struct TextDecodeRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::view) struct TextDecodeKey {
     kind: SideKind,
-    attributes_rev: u64,
+    attributes: [Option<TextEncoding>; 3],
     encoding: Option<TextEncoding>,
 }
 
@@ -1915,7 +1915,7 @@ impl MainPaneView {
             };
             let key = TextDecodeKey {
                 kind,
-                attributes_rev: 0,
+                attributes: [None; 3],
                 encoding: None,
             };
             return Some((request, key));
@@ -1928,7 +1928,7 @@ impl MainPaneView {
         let encoding = repo.diff_state.selected_encoding_override();
         let key = TextDecodeKey {
             kind,
-            attributes_rev: repo.diff_state.text_attributes_rev,
+            attributes: attributes.decoding_encodings(),
             encoding,
         };
         Some((

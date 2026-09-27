@@ -1531,10 +1531,20 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
     assert!(repo_state.conflict_state.conflict_file.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadSelectedConflictFile {
-            repo_id: RepoId(1),
-            mode: crate::model::ConflictFileLoadMode::CurrentOnly
-        }]
+        [
+            Effect::LoadSelectedConflictFile {
+                repo_id: RepoId(1),
+                mode: crate::model::ConflictFileLoadMode::CurrentOnly
+            },
+            Effect::LoadSelectedDiff {
+                load_patch_diff: false,
+                load_file_text: false,
+                preview_text_side: None,
+                load_submodule_summary: false,
+                load_file_image: false,
+                ..
+            }
+        ]
     ));
 }
 
@@ -1586,10 +1596,20 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
     ));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadSelectedConflictFile {
-            repo_id: RepoId(1),
-            mode: crate::model::ConflictFileLoadMode::CurrentOnly
-        }]
+        [
+            Effect::LoadSelectedConflictFile {
+                repo_id: RepoId(1),
+                mode: crate::model::ConflictFileLoadMode::CurrentOnly
+            },
+            Effect::LoadSelectedDiff {
+                load_patch_diff: false,
+                load_file_text: false,
+                preview_text_side: None,
+                load_submodule_summary: false,
+                load_file_image: false,
+                ..
+            }
+        ]
     ));
 }
 
@@ -3863,6 +3883,15 @@ fn select_conflict_diff_sets_target_and_resets_content_preview() {
     );
 
     let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(repo_state.diff_state.text_attributes.is_loading());
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSelectedDiff {
+            load_patch_diff: false,
+            load_file_text: false,
+            ..
+        }
+    )));
     assert!(!repo_state.diff_state.content_preview);
     assert_eq!(
         repo_state.diff_state.diff_target,
@@ -5709,6 +5738,51 @@ mod text_override {
     fn selecting_a_file_loads_its_attributes() {
         let (_, state) = selected("a.txt");
         assert!(state.repos[0].diff_state.text_attributes.is_loading());
+    }
+
+    #[test]
+    fn ordinary_watcher_batches_do_not_load_attributes_for_commit_views() {
+        for (change, expected) in [
+            (crate::msg::RepoExternalChange::Worktree, false),
+            (crate::msg::RepoExternalChange::Index, false),
+            (crate::msg::RepoExternalChange::GitState, false),
+            (
+                crate::msg::RepoExternalChange {
+                    text_attributes: true,
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                crate::msg::RepoExternalChange {
+                    verification_context: true,
+                    ..Default::default()
+                },
+                true,
+            ),
+        ] {
+            let (mut repos, mut state) = selected("a.txt");
+            state.repos[0].set_diff_target(Some(DiffTarget::Commit {
+                commit_id: CommitId("abc123".into()),
+                path: Some("a.txt".into()),
+            }));
+            let effects = reduce(
+                &mut repos,
+                &AtomicU64::new(10),
+                &mut state,
+                Msg::RepoExternallyChanged {
+                    repo_id: RepoId(1),
+                    change,
+                },
+            );
+            assert_eq!(
+                effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::LoadSelectedDiff { .. })),
+                expected,
+                "{change:?}: {effects:?}"
+            );
+        }
     }
 
     #[test]

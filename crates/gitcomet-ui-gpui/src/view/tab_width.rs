@@ -77,6 +77,31 @@ pub(in crate::view) fn expand_tabs(width: usize, line: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Inline patches paint the sign separately; tab stops begin at the content.
+/// Keep the sign in searchable/copyable text without counting it as a column.
+pub(in crate::view) fn expand_patch_tabs(width: usize, line: &str) -> Cow<'_, str> {
+    if !line.contains('\t') {
+        return Cow::Borrowed(line);
+    }
+    if matches!(line.as_bytes().first(), Some(b'+' | b'-' | b' ')) {
+        let mut out = String::with_capacity(line.len() + width);
+        out.push_str(&line[..1]);
+        push_expanded(width, &mut out, &line[1..], &mut 0);
+        Cow::Owned(out)
+    } else {
+        expand_tabs(width, line)
+    }
+}
+
+/// Length corresponding to `expand_patch_tabs`, without allocating text.
+pub(in crate::view) fn expanded_patch_len(width: usize, line: &str) -> usize {
+    if matches!(line.as_bytes().first(), Some(b'+' | b'-' | b' ')) {
+        1 + expanded_len(width, &line[1..])
+    } else {
+        expanded_len(width, line)
+    }
+}
+
 /// Byte length of `line` once expanded.
 pub(in crate::view) fn expanded_len(width: usize, line: &str) -> usize {
     if !line.contains('\t') {

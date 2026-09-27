@@ -4,7 +4,7 @@
 
 use super::diff::{io_err_to_error, persist_worktree_git_cache_file};
 use super::{DiskFileStamp, GixRepo, TEMP_FILE_MEMO_LIMIT};
-use gitcomet_core::domain::{DiffSectionFormats, FileDiffText, FileDiffTextSource};
+use gitcomet_core::domain::{FileDiffText, FileDiffTextSource};
 use gitcomet_core::services::{CancellationToken, Result};
 use gitcomet_core::text_format::{
     ContentSniffer, LineEndingStats, SideKind, SideTextFormat, TextAttributes, TextEncoding,
@@ -17,6 +17,76 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const SNIFF_READ_BYTES: usize = 64 * 1024;
+
+/// Git's marker file combines original stage bytes. Decode its side ranges
+/// before treating the document as a single encoding, retaining the original
+/// bytes and any manual text outside the markers.
+pub(super) fn decode_mixed_conflict(
+    payload: &gitcomet_core::conflict_session::ConflictPayload,
+    formats: [Option<SideTextFormat>; 3],
+    attributes: &TextAttributes,
+) -> Option<gitcomet_core::conflict_session::ConflictPayload> {
+    use gitcomet_core::conflict_session::{
+        ConflictPayload, ParsedConflictSegmentRanges, parse_conflict_marker_ranges_bytes,
+    };
+    use gitcomet_core::text_format::decode_bytes;
+
+    let bytes = payload.as_bytes()?;
+    let segments = parse_conflict_marker_ranges_bytes(bytes);
+    if !segments
+        .iter()
+        .any(|segment| matches!(segment, ParsedConflictSegmentRanges::Conflict(_)))
+    {
+        return None;
+    }
+    let mut out = String::with_capacity(bytes.len());
+    let mut append = |range: std::ops::Range<usize>, encoding| -> Option<()> {
+        let decoded = decode_bytes(&bytes[range], SideKind::Worktree, attributes, encoding);
+        if !decoded.format.is_writable() {
+            return None;
+        }
+        out.push_str(&decoded.text);
+        Some(())
+    };
+    for segment in segments {
+        match segment {
+            ParsedConflictSegmentRanges::Text(range) => append(range, None)?,
+            ParsedConflictSegmentRanges::Conflict(block) => {
+                append(block.marker_start..block.ours.start, None)?;
+                append(
+                    block.ours.clone(),
+                    formats[1].map(|format| format.format.encoding),
+                )?;
+                let last = if let Some(base) = block.base {
+                    append(block.ours.end..base.start, None)?;
+                    append(
+                        base.clone(),
+                        formats[0].map(|format| format.format.encoding),
+                    )?;
+                    base.end
+                } else {
+                    block.ours.end
+                };
+                append(last..block.theirs.start, None)?;
+                append(
+                    block.theirs.clone(),
+                    formats[2].map(|format| format.format.encoding),
+                )?;
+                append(block.theirs.end..block.marker_end, None)?;
+            }
+        }
+    }
+    let raw = match payload {
+        ConflictPayload::EncodedText { bytes, .. } | ConflictPayload::Binary(bytes) => {
+            Arc::clone(bytes)
+        }
+        _ => Arc::from(bytes),
+    };
+    Some(ConflictPayload::EncodedText {
+        text: out.into(),
+        bytes: raw,
+    })
+}
 
 /// How a content-addressed source reads under given attributes and choice.
 /// Identities are content hashes, so an entry never goes stale; only a
@@ -126,31 +196,6 @@ impl GixRepo {
         Ok(FileDiffTextSource::with_identity(cache_path, identity).with_format(format))
     }
 
-    /// Per-side formats for a single-file patch, read from the same sources
-    /// (and memo) as the file view, so both views decode alike.
-    pub(super) fn patch_section_formats(
-        &self,
-        file_text: Option<&FileDiffText>,
-    ) -> DiffSectionFormats {
-        let side = |source: Option<&FileDiffTextSource>| {
-            source.and_then(|source| source.format).map(|format| {
-                gitcomet_core::text_format::TextFormat {
-                    bom: false,
-                    ..format.format
-                }
-            })
-        };
-        let old = file_text.and_then(|text| side(text.old_source.as_ref()));
-        let new = file_text.and_then(|text| side(text.new_source.as_ref()));
-        match (old, new) {
-            (None, None) => DiffSectionFormats::UTF_8,
-            (old, new) => DiffSectionFormats {
-                old: old.or(new).unwrap_or_default(),
-                new: new.or(old).unwrap_or_default(),
-            },
-        }
-    }
-
     fn text_format_memo_get(&self, key: u64) -> Option<TextFormatMemoEntry> {
         self.text_format_memo
             .lock()
@@ -174,7 +219,7 @@ impl GixRepo {
 fn memo_key(identity: &str, attributes: &TextAttributes, encoding: Option<TextEncoding>) -> u64 {
     let mut hasher = FxHasher::default();
     identity.hash(&mut hasher);
-    attributes.hash(&mut hasher);
+    attributes.decoding_encodings().hash(&mut hasher);
     encoding.hash(&mut hasher);
     hasher.finish()
 }
@@ -215,4 +260,64 @@ fn utf8_cache_path(logical_path: &Path, identity: &str) -> PathBuf {
         "gitcomet-diff-utf8-{:016x}{suffix}",
         hasher.finish()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::conflict_session::ConflictPayload;
+    use gitcomet_core::text_format::decode_bytes;
+
+    #[test]
+    fn mixed_markers_preserve_manual_text_and_original_bytes() {
+        let attributes = TextAttributes::default();
+        let latin1 = decode_bytes(
+            b"caf\xe9\n",
+            SideKind::GitInternal,
+            &attributes,
+            Some(TextEncoding::WINDOWS_1252),
+        )
+        .format;
+        let utf8 = SideTextFormat::utf8(LineEndingStats::default());
+        for base in [b"".as_slice(), b"||||||| base\ncaf\xe9\n"] {
+            let raw: Arc<[u8]> = [
+                "my manual edit 日本語\n<<<<<<< ours\n".as_bytes(),
+                b"caf\xe9 local\n",
+                base,
+                b"=======\n",
+                "café remote 日本語\n>>>>>>> theirs\nmanual tail\n".as_bytes(),
+            ]
+            .concat()
+            .into();
+            let payload = ConflictPayload::Binary(Arc::clone(&raw));
+            let decoded = decode_mixed_conflict(
+                &payload,
+                [Some(latin1), Some(latin1), Some(utf8)],
+                &attributes,
+            )
+            .unwrap();
+            assert!(
+                decoded
+                    .as_text()
+                    .unwrap()
+                    .starts_with("my manual edit 日本語\n")
+            );
+            assert!(decoded.as_text().unwrap().contains("café local\n"));
+            assert!(decoded.as_text().unwrap().contains("café remote 日本語\n"));
+            assert!(decoded.as_text().unwrap().ends_with("manual tail\n"));
+            let ConflictPayload::EncodedText { bytes, .. } = decoded else {
+                panic!("keep original bytes")
+            };
+            assert!(Arc::ptr_eq(&raw, &bytes));
+        }
+        let resolved = ConflictPayload::Text("already resolved 日本語\n".into());
+        assert!(
+            decode_mixed_conflict(
+                &resolved,
+                [Some(latin1), Some(latin1), Some(utf8)],
+                &attributes
+            )
+            .is_none()
+        );
+    }
 }

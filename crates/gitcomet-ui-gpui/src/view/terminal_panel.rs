@@ -850,13 +850,18 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.pending_unsaved_file_edits_prompt = None;
-        self.main_pane.update(cx, |pane, cx| {
+        let saved = self.main_pane.update(cx, |pane, cx| {
             if save {
-                pane.save_all_file_edits(cx);
+                pane.save_all_file_edits(cx)
             } else {
                 pane.discard_all_file_edits(cx);
+                true
             }
         });
+
+        if !saved {
+            return;
+        }
 
         if !save {
             // Ordering note: the caller's `close_popover` defers a clear of

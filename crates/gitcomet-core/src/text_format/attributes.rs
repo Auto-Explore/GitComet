@@ -160,6 +160,16 @@ pub struct TextAttributes {
 }
 
 impl TextAttributes {
+    /// Only these resolved values affect decoding. Display metadata and label
+    /// aliases must not invalidate decoded content.
+    pub fn decoding_encodings(&self) -> [Option<TextEncoding>; 3] {
+        [
+            self.working_tree_encoding(),
+            self.encoding.as_ref().and_then(|attr| attr.encoding),
+            self.gui_encoding.as_ref().and_then(|attr| attr.encoding),
+        ]
+    }
+
     /// The `working-tree-encoding` when it names an encoding we can decode.
     /// Git stores such files as UTF-8.
     pub fn working_tree_encoding(&self) -> Option<TextEncoding> {

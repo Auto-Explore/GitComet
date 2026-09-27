@@ -2092,7 +2092,9 @@ impl MainPaneView {
             {
                 return display.clone();
             }
-            return expand_tabs(line.text.as_ref());
+            return crate::view::tab_width::expand_patch_tabs(tab_width, line.text.as_ref())
+                .into_owned()
+                .into();
         }
 
         match region {
@@ -2297,7 +2299,7 @@ impl MainPaneView {
             {
                 return display.len();
             }
-            return display_len(tab_width, line.text.as_ref());
+            return crate::view::tab_width::expanded_patch_len(tab_width, line.text.as_ref());
         }
 
         match region {

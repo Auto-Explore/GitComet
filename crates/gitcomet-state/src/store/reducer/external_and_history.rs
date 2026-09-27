@@ -242,7 +242,7 @@ pub(super) fn repo_externally_changed(
     };
 
     effects.extend(file_browser_effect);
-    if change.git_state || change.index || change.worktree || change.verification_context {
+    if change.text_attributes || change.verification_context {
         effects.extend(super::util::reload_selected_text_attributes(repo_state));
     }
 

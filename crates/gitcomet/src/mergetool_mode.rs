@@ -108,7 +108,11 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     let conflict_count = result.conflict_count;
 
     // Write merged output to MERGED path.
-    write_merged_output(config, &encode_output(&result.output)?)?;
+    let bytes = match encode_output(&result.output) {
+        Ok(bytes) => bytes,
+        Err(error) => return handle_encoding_conflict(config, &local_bytes, &error),
+    };
+    write_merged_output(config, &bytes)?;
 
     if is_clean {
         let display_name = merged_display_name(config);
@@ -121,7 +125,11 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         // Auto mode: try heuristic passes on conflict blocks.
         if let Some(clean_output) = try_autosolve_merge_plan(&plan, &options) {
             // All conflicts resolved by heuristics — write clean output.
-            write_merged_output(config, &encode_output(&clean_output)?)?;
+            let bytes = match encode_output(&clean_output) {
+                Ok(bytes) => bytes,
+                Err(error) => return handle_encoding_conflict(config, &local_bytes, &error),
+            };
+            write_merged_output(config, &bytes)?;
             let display_name = merged_display_name(config);
             Ok(MergetoolRunResult {
                 stdout: String::new(),
@@ -300,6 +308,24 @@ fn write_merged_output(config: &MergetoolConfig, bytes: &[u8]) -> Result<(), Str
             "Failed to write merged output to {}: {e}",
             config.merged.display()
         )
+    })
+}
+
+/// An encoding mismatch needs a user's decision, just like a binary conflict.
+/// Preserve LOCAL exactly and leave Git's stages unresolved.
+fn handle_encoding_conflict(
+    config: &MergetoolConfig,
+    local: &[u8],
+    error: &str,
+) -> Result<MergetoolRunResult, String> {
+    write_merged_output(config, local)?;
+    Ok(MergetoolRunResult {
+        stdout: String::new(),
+        stderr: format!(
+            "CONFLICT (encoding): {} — keeping local version.\n{error}\n",
+            merged_display_name(config)
+        ),
+        exit_code: exit_code::CANCELED,
     })
 }
 

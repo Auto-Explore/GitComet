@@ -106,6 +106,115 @@ fn koi8() -> TextEncoding {
 }
 
 #[gpui::test]
+fn read_only_line_ending_conversion_preserves_buffer_and_format(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_format::LineEnding;
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
+    show(
+        cx,
+        &view,
+        file_state(
+            gitcomet_state::model::RepoId(9590),
+            workdir.path(),
+            true,
+            Loadable::NotLoaded,
+            Some(TextEncoding::UTF_8),
+        ),
+        true,
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            let before = pane.file_editor_text_format;
+            assert!(!before.unwrap().is_writable());
+            let text = pane.file_editor_input.read(cx).text().to_owned();
+            pane.convert_file_editor_line_endings(LineEnding::CrLf, cx);
+            assert_eq!(pane.file_editor_text_format, before);
+            assert_eq!(pane.file_editor_input.read(cx).text(), text);
+            assert!(!pane.file_editor_is_dirty());
+        });
+    });
+}
+
+#[gpui::test]
+fn display_attributes_keep_the_preview_decode_key(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_format::{SideKind, TabWidth, TabWidthSource};
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join(FILE), "café\n").unwrap();
+    let state = file_state(
+        gitcomet_state::model::RepoId(9591),
+        workdir.path(),
+        false,
+        Loadable::Ready(Arc::default()),
+        None,
+    );
+    show(cx, &view, state.clone(), false);
+    let original = cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .selected_text_decode_request(SideKind::Worktree)
+            .unwrap()
+            .1
+    });
+    let mut next = (*state).clone();
+    next.repos[0].diff_state.text_attributes = Loadable::Ready(Arc::new(TextAttributes {
+        diff_unset: true,
+        tab_width: Some(TabWidth {
+            columns: 8,
+            source: TabWidthSource::Attribute,
+        }),
+        ..TextAttributes::default()
+    }));
+    next.repos[0].diff_state.text_attributes_rev += 1;
+    show(cx, &view, Arc::new(next), false);
+    cx.update(|_, app| {
+        assert_eq!(
+            original,
+            view.read(app)
+                .main_pane
+                .read(app)
+                .selected_text_decode_request(SideKind::Worktree)
+                .unwrap()
+                .1
+        )
+    });
+}
+
+#[gpui::test]
+fn absolute_file_target_produces_repo_relative_attribute_pattern(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join(FILE), "café\n").unwrap();
+    show(
+        cx,
+        &view,
+        file_state_for_path(
+            gitcomet_state::model::RepoId(9592),
+            workdir.path(),
+            workdir.path().join(FILE).to_str().unwrap(),
+            true,
+            Loadable::NotLoaded,
+            None,
+        ),
+        true,
+    );
+    cx.update(|_, app| {
+        let state = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .text_encoding_menu_state()
+            .unwrap();
+        assert_eq!(state.path, Path::new(FILE));
+    });
+}
+
+#[gpui::test]
 fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -165,7 +274,7 @@ fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
         let _ = std::fs::remove_file(workdir.path().join(FILE));
         cx.update(|_, app| {
             view.read(app).main_pane.clone().update(app, |pane, cx| {
-                assert!(pane.conflict_current_text_format().is_none());
+                assert!(pane.conflict_output_text_format().is_none());
                 pane.focused_mergetool_write_side_and_exit(repo_id, Path::new(FILE), &bytes, cx);
             });
         });
@@ -278,6 +387,58 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn conflict_save_uses_output_encoding_without_reopening_sources(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::text_format::{LineEndingStats, SideKind, SideTextFormat};
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(9594);
+    let mut repo = conflict_compare_repo_state(
+        repo_id,
+        workdir.path(),
+        Path::new(FILE),
+        "café\n",
+        "café local\n",
+        "日本語\n",
+        "<<<<<<< ours\ncafé local\n=======\n日本語\n>>>>>>> theirs\n",
+    );
+    set_test_conflict_status(&mut repo, FILE, gitcomet_core::domain::DiffArea::Unstaged);
+    let mut session = ConflictSession::from_stage_inputs(
+        FILE.into(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Text("café\n".into()),
+        ConflictPayload::Text("café local\n".into()),
+        ConflictPayload::Text("日本語\n".into()),
+    );
+    session.current_format = Some(
+        gitcomet_core::text_format::decode_bytes(
+            b"caf\xe9\n",
+            SideKind::Worktree,
+            &TextAttributes::default(),
+            Some(TextEncoding::WINDOWS_1252),
+        )
+        .format,
+    );
+    session.output_format = Some(SideTextFormat::utf8(LineEndingStats::default()));
+    repo.conflict_state.conflict_session = Some(session);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, app_state_with_repo(repo, repo_id), cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            let bytes = pane
+                .conflict_output_bytes_for_save("日本語\n".into(), cx)
+                .unwrap();
+            assert_eq!(bytes.as_bytes(), "日本語\n".as_bytes());
+        })
+    });
+}
+
+#[gpui::test]
 fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     for close_window in [false, true] {
@@ -337,6 +498,67 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
 }
 
 #[gpui::test]
+fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(9593);
+    std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
+    std::fs::write(workdir.path().join("other.txt"), "other\n").unwrap();
+    show(
+        cx,
+        &view,
+        file_state(
+            repo_id,
+            workdir.path(),
+            true,
+            Loadable::NotLoaded,
+            Some(TextEncoding::WINDOWS_1252),
+        ),
+        true,
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.file_editor_input
+                .update(cx, |input, cx| input.replace_utf8_range(0..0, "Ā", cx));
+            pane.on_file_editor_edited(cx);
+            pane.stash_current_file_editor_buffer(cx);
+        })
+    });
+    show(
+        cx,
+        &view,
+        file_state_for_path(
+            repo_id,
+            workdir.path(),
+            "other.txt",
+            true,
+            Loadable::NotLoaded,
+            None,
+        ),
+        true,
+    );
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.resolve_unsaved_file_edits(crate::view::UnsavedFileEditsAction::QuitApp, true, cx);
+            assert!(
+                view.pending_unsaved_file_edits_flush.is_none(),
+                "failed saves must not retry quit"
+            );
+            assert!(view.pending_unsaved_file_edits_prompt.is_none());
+            let stash = &view.main_pane.read(cx).file_editor_stash;
+            let edit = stash
+                .get(&(repo_id, FILE.into()))
+                .expect("retain recovery text");
+            assert_eq!(edit.text.as_ref(), "Ācafé\n");
+            assert!(edit.is_dirty());
+        })
+    });
+}
+
+#[gpui::test]
 fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
@@ -367,7 +589,7 @@ fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::Tes
             pane.default_tab_size = 2;
             pane.sync_display_tab_width(cx);
             pane.diff_search_active = true;
-            pane.diff_search_query = "+       needle".into();
+            pane.diff_search_query = "+        needle".into();
             pane.diff_search_recompute_matches();
             assert!(pane.diff_search_matches.is_empty());
             assert!(pane.diff_search_inline_patch_trigram_index.is_some());
@@ -391,7 +613,7 @@ fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::Tes
                     DiffTextRegion::Inline
                 )
                 .as_ref(),
-                "+       needle"
+                "+        needle"
             );
 
             // Changing width while the search is closed must invalidate it too.
@@ -399,7 +621,7 @@ fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::Tes
             pane.default_tab_size = 2;
             pane.sync_display_tab_width(cx);
             pane.diff_search_active = true;
-            pane.diff_search_query = "+ needle".into();
+            pane.diff_search_query = "+  needle".into();
             pane.diff_search_recompute_matches();
             assert_eq!(pane.diff_search_matches.len(), 1);
         });

@@ -210,14 +210,9 @@ impl GixRepo {
         let mut diff = match bytes {
             Ok(text) => Diff::from_unified_owned(target.clone(), text),
             Err(bytes) if let Some(attributes) = &attributes => {
-                let file_text = self
-                    .diff_file_text_impl_cancellable(target, cancellation)?
-                    .map(|text| {
-                        self.decode_file_diff_text(text, attributes, encoding, cancellation)
-                    })
-                    .transpose()?;
-                let formats = self.patch_section_formats(file_text.as_ref());
-                Diff::from_unified_bytes(target.clone(), bytes, |_| formats)
+                Diff::from_unified_bytes(target.clone(), bytes, |section| {
+                    DiffSectionFormats::resolve(section, attributes, encoding)
+                })
             }
             Err(bytes) => {
                 Diff::from_unified_bytes(target.clone(), bytes, DiffSectionFormats::sniff)
@@ -430,7 +425,7 @@ impl GixRepo {
     ) -> Result<Option<FileDiffText>> {
         cancellation.check_cancelled()?;
         // Worktree normalization consults config as well as attributes.
-        let repo = self.reopen_repo()?;
+        let repo = self.repo_with_current_config()?;
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -900,7 +895,7 @@ impl GixRepo {
         use gitcomet_core::text_format::SideKind;
 
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-        let repo = self.reopen_repo()?;
+        let repo = self.repo_with_current_config()?;
         let stage_data = gix_index_conflict_stage_data(&repo, &repo_path)?;
         let Some(conflict_kind) = stage_data.conflict_kind else {
             return Ok(None);
@@ -914,12 +909,12 @@ impl GixRepo {
                 &attributes,
                 encoding,
             )
-            .0
         };
-        let base = stage(stage_data.base_bytes);
-        let ours = stage(stage_data.ours_bytes);
-        let theirs = stage(stage_data.theirs_bytes);
-        let (current, current_format) = match std::fs::read(self.spec.workdir.join(&repo_path)) {
+        let (base, base_format) = stage(stage_data.base_bytes);
+        let (ours, ours_format) = stage(stage_data.ours_bytes);
+        let (theirs, theirs_format) = stage(stage_data.theirs_bytes);
+        let (mut current, current_format) = match std::fs::read(self.spec.workdir.join(&repo_path))
+        {
             Ok(bytes) => {
                 let (payload, format) = ConflictPayload::decode(
                     Some(Arc::from(bytes)),
@@ -938,6 +933,72 @@ impl GixRepo {
 
         let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
+        let stage_formats = [base_format, ours_format, theirs_format];
+        let automatic_text = strategy == ConflictResolverStrategy::FullTextResolver
+            && encoding.is_none()
+            && attributes.working_tree_encoding().is_none()
+            && stage_formats
+                .into_iter()
+                .flatten()
+                .all(|format| format.is_writable());
+        let stages = [
+            (&base, base_format),
+            (&ours, ours_format),
+            (&theirs, theirs_format),
+        ];
+        // ASCII is shared by these encodings; detecting an ASCII base as UTF-8
+        // does not itself imply a conversion between the branches.
+        let non_ascii_encodings = || {
+            stages.into_iter().filter_map(|(payload, format)| {
+                payload.as_bytes().filter(|bytes| !bytes.is_ascii())?;
+                format.map(|format| format.format.encoding)
+            })
+        };
+        let mixed_encodings = non_ascii_encodings()
+            .any(|encoding| non_ascii_encodings().any(|other| encoding != other));
+        let mixed_current = if automatic_text
+            && mixed_encodings
+            && stage_formats
+                .into_iter()
+                .flatten()
+                .all(|format| format.format.encoding.is_ascii_compatible())
+        {
+            current.as_ref().and_then(|payload| {
+                super::text_decode::decode_mixed_conflict(payload, stage_formats, &attributes)
+            })
+        } else {
+            None
+        };
+        // A mixed marker document has no single source encoding. Its decoded
+        // output uses UTF-8; original bytes remain available in `current`.
+        let needs_utf8 = mixed_current.is_some()
+            || automatic_text
+                && current_format.is_some_and(|format| {
+                    format.is_writable()
+                        && stages.into_iter().any(|(payload, stage_format)| {
+                            stage_format.is_some_and(|stage| {
+                                stage.format.encoding != format.format.encoding
+                            }) && payload.as_text().is_some_and(|text| {
+                                !text.is_ascii()
+                                    && gitcomet_core::text_format::encode(text, format.format)
+                                        .is_err()
+                            })
+                        })
+                });
+        if let Some(decoded) = mixed_current {
+            current = Some(decoded);
+        }
+        let output_format = needs_utf8.then(|| {
+            gitcomet_core::text_format::SideTextFormat::utf8(
+                gitcomet_core::text_format::LineEndingStats::from_bytes(
+                    current
+                        .as_ref()
+                        .and_then(ConflictPayload::as_text)
+                        .unwrap_or_default()
+                        .as_bytes(),
+                ),
+            )
+        });
         let current_payload = current.clone();
         let session = if strategy == ConflictResolverStrategy::FullTextResolver {
             // Full-text sessions use one stage-derived merge plan for aligned
@@ -981,6 +1042,7 @@ impl GixRepo {
         let mut session = session;
         session.current = current_payload;
         session.current_format = current_format;
+        session.output_format = output_format;
         Ok(Some(session))
     }
 

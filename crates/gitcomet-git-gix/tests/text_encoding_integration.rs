@@ -831,6 +831,80 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
 }
 
 #[test]
+fn mixed_encoding_conflict_can_save_either_decoded_stage() {
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let root = dir.path();
+    fs::write(root.join("menu.txt"), b"Caf\xe9 cr\xe8me br\xfbl\xe9e\n").unwrap();
+    commit_all(root, "base");
+    git(root, &["checkout", "-q", "-b", "theirs"]);
+    fs::write(root.join("menu.txt"), "Café crème brûlée 日本語\n").unwrap();
+    commit_all(root, "utf8");
+    git(root, &["checkout", "-q", "-"]);
+    fs::write(
+        root.join("menu.txt"),
+        b"Caf\xe9 cr\xe8me br\xfbl\xe9e maison\n",
+    )
+    .unwrap();
+    commit_all(root, "latin1");
+    let mut merge = Command::new("git");
+    test_git_env::apply(&mut merge);
+    assert!(
+        !merge
+            .arg("-C")
+            .arg(root)
+            .args(["merge", "-q", "theirs"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let repo = open(root);
+    let session = repo
+        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.theirs.as_text(), Some("Café crème brûlée 日本語\n"));
+    let format = session.output_format.expect("output encoding");
+    let current = session.current.as_ref().unwrap().as_text().unwrap();
+    let (ours, theirs) =
+        gitcomet_core::conflict_session::reconstruct_conflict_marker_sides(current);
+    assert_eq!(Some(ours.as_str()), session.ours.as_text());
+    assert_eq!(Some(theirs.as_str()), session.theirs.as_text());
+    assert_eq!(
+        session.current.as_ref().unwrap().as_bytes().unwrap(),
+        fs::read(root.join("menu.txt")).unwrap()
+    );
+    assert!(format.is_writable());
+    for side in [&session.ours, &session.theirs] {
+        let text = side.as_text().unwrap();
+        let encoded = gitcomet_core::text_format::encode(text, format.format)
+            .expect("resolution can be saved");
+        assert_eq!(
+            gitcomet_core::text_format::decode(&encoded, format.format).text,
+            text
+        );
+    }
+}
+
+#[test]
+fn textconv_patch_decodes_its_output_without_reading_original_file_text() {
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let root = dir.path();
+    fs::write(root.join(".gitattributes"), "*.txt diff=menu\n").unwrap();
+    fs::write(root.join("menu.txt"), "old\n").unwrap();
+    commit_all(root, "base");
+    fs::write(root.join("menu.txt"), "new\n").unwrap();
+    git(
+        root,
+        &["config", "diff.menu.textconv", "printf 'caf\\351\\n'; cat"],
+    );
+    let diff = patch(&*open(root), &unstaged("menu.txt"), None);
+    assert!(diff.lines.iter().any(|line| line.text.as_ref() == " café"));
+}
+
+#[test]
 fn exported_patch_keeps_latin1_bytes_and_applies() {
     test_git_env::ensure_initialized();
     let dir = init_repo();

@@ -1269,13 +1269,15 @@ impl MainPaneView {
             .collect()
     }
 
-    /// Write every unsaved buffer, on screen or stashed.
-    pub(in crate::view) fn save_all_file_edits(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Write every unsaved buffer. Returns false if any could not be encoded;
+    /// those edits remain available and a pending close must be canceled.
+    pub(in crate::view) fn save_all_file_edits(&mut self, cx: &mut gpui::Context<Self>) -> bool {
         // `mem::take` empties the map, so the clean recovery entry a previous
         // save left behind would be dropped along with the dirty ones. Put it
         // back afterwards — it is the only copy of text whose write may not have
         // landed, which is the whole reason saving keeps one.
         let current = self.file_editor_key.clone();
+        let mut failed = None;
         let mut clean: Vec<((RepoId, PathBuf), StashedFileEdit)> = Vec::new();
         for ((repo_id, path), stashed) in std::mem::take(&mut self.file_editor_stash) {
             // The buffer on screen is saved below, from the live text rather
@@ -1301,6 +1303,7 @@ impl MainPaneView {
                 Ok((bytes, _)) => bytes,
                 Err(message) => {
                     self.show_text_format_error(message, cx);
+                    failed.get_or_insert_with(|| (repo_id, path.clone()));
                     self.file_editor_stash.insert((repo_id, path), stashed);
                     continue;
                 }
@@ -1328,6 +1331,15 @@ impl MainPaneView {
         // would delete the very copies this just made.
         self.save_file_editor_buffer(cx);
         self.file_editor_stash.extend(clean);
+        if self.file_editor_dirty {
+            return false;
+        }
+        if let Some((repo_id, path)) = failed {
+            // Bring the failed buffer back so its encoding can be changed.
+            self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
+            return false;
+        }
+        true
     }
 
     /// Throw away every unsaved buffer.

@@ -13,6 +13,7 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
     ConflictSession {
         path: PathBuf::from("test.txt"),
         current_format: None,
+        output_format: None,
         conflict_kind: FileConflictKind::BothModified,
         strategy: ConflictResolverStrategy::FullTextResolver,
         base: ConflictPayload::Text("base\n".into()),
@@ -31,6 +32,24 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
 }
 
 // -- ConflictPayload tests --
+
+#[test]
+fn decoding_binary_payload_reuses_shared_bytes() {
+    use crate::text_format::{SideKind, TextAttributes};
+    let bytes: Arc<[u8]> = Arc::from(vec![0, 0, 0xff, 0, 0xff]);
+    let (payload, format) = ConflictPayload::decode(
+        Some(Arc::clone(&bytes)),
+        None,
+        SideKind::GitInternal,
+        &TextAttributes::default(),
+        None,
+    );
+    assert!(format.unwrap().binary);
+    let ConflictPayload::Binary(decoded) = payload else {
+        panic!("expected binary")
+    };
+    assert!(Arc::ptr_eq(&bytes, &decoded));
+}
 
 #[test]
 fn payload_from_bytes_utf8() {

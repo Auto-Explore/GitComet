@@ -1293,6 +1293,23 @@ fn merge_conflict_with_files_scattered_across_directories() {
 // ── Encodings ────────────────────────────────────────────────────
 
 #[test]
+fn unrepresentable_merge_output_preserves_local_as_a_conflict() {
+    for auto in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = make_config(tmp.path(), Some(""), "", "", "unchanged placeholder");
+        config.auto = auto;
+        write_bytes(config.base.as_ref().unwrap(), b"caf\xe9\nbase\nend\n");
+        let local = b"caf\xe9 local\nbase\nend\n";
+        write_bytes(&config.local, local);
+        write_bytes(&config.remote, "\u{feff}café\nbase\n日本語\n".as_bytes());
+        let result = run_mergetool(&config).expect("encoding mismatch is a conflict");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert_eq!(fs::read(&config.merged).unwrap(), local);
+        assert!(result.stderr.contains("encoding"));
+    }
+}
+
+#[test]
 fn binary_fallback_after_decoding_preserves_original_bytes() {
     let text = b"caf\xe9\n".as_slice();
     let binary = b"\x00\x00\xff".as_slice();

@@ -554,6 +554,7 @@ pub(super) fn fill_select_diff_inline(
         };
         debug_assert!(conflict_effects.len() <= SELECT_DIFF_INLINE_EFFECT_CAPACITY);
         effects.extend(conflict_effects);
+        effects.extend(super::util::reload_selected_text_attributes(repo_state));
         return;
     }
 
@@ -606,7 +607,13 @@ pub(super) fn select_conflict_diff(
     repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
 
-    start_conflict_target_reload_with_mode(repo_state, &path, ConflictFileLoadMode::CurrentOnly)
+    let mut effects = start_conflict_target_reload_with_mode(
+        repo_state,
+        &path,
+        ConflictFileLoadMode::CurrentOnly,
+    );
+    effects.extend(super::util::reload_selected_text_attributes(repo_state));
+    effects
 }
 
 pub(super) fn clear_diff_selection_after_discard(
@@ -958,19 +965,9 @@ pub(super) fn text_attributes_loaded(
     // replace decoded content when its encoding changes, including immutable
     // commit and staged views. Tab/EOL metadata and label aliases alone do not
     // change decoding.
-    let decoding = |attributes: &gitcomet_core::text_format::TextAttributes| {
-        (
-            attributes.working_tree_encoding(),
-            attributes.encoding.as_ref().and_then(|attr| attr.encoding),
-            attributes
-                .gui_encoding
-                .as_ref()
-                .and_then(|attr| attr.encoding),
-        )
-    };
     let decoding_changed = matches!(
         (&repo_state.diff_state.text_attributes, &next),
-        (Loadable::Ready(current), Loadable::Ready(new)) if decoding(current) != decoding(new)
+        (Loadable::Ready(current), Loadable::Ready(new)) if current.decoding_encodings() != new.decoding_encodings()
     );
     if !unchanged {
         repo_state.diff_state.text_attributes = next;

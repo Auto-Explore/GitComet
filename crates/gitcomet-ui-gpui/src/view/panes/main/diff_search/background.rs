@@ -66,7 +66,7 @@ mod tests {
             // the offsets belonging to that window's layout.
             for (pane, _, width) in &panes {
                 pane.update(app, |pane, cx| {
-                    let expected = format!("+{}needle", " ".repeat(width - 1));
+                    let expected = format!("+{}needle", " ".repeat(*width));
                     assert_eq!(
                         pane.diff_text_full_line_for_region(0, DiffTextRegion::Inline)
                             .as_ref(),
@@ -79,11 +79,11 @@ mod tests {
                     let anchor = DiffTextPos {
                         source_visible_ix: 0,
                         region: DiffTextRegion::Inline,
-                        offset: *width,
+                        offset: width + 1,
                     };
                     pane.diff_text_anchor = Some(anchor);
                     pane.diff_text_head = Some(DiffTextPos {
-                        offset: width + "needle".len(),
+                        offset: width + 1 + "needle".len(),
                         ..anchor
                     });
                     pane.copy_selected_diff_text_to_clipboard(cx);
@@ -106,7 +106,7 @@ mod tests {
         // and must not depend on the thread on which matching runs.
         for (_, snapshot, width) in panes {
             std::thread::spawn(move || {
-                let query = format!("+{}needle", " ".repeat(width - 1));
+                let query = format!("+{}needle", " ".repeat(width));
                 assert_eq!(
                     snapshot
                         .search(
@@ -120,7 +120,7 @@ mod tests {
                 assert!(
                     snapshot
                         .search(
-                            "+  needle",
+                            "+   needle",
                             DiffSearchOptions::default(),
                             CancellationToken::new()
                         )
@@ -271,8 +271,8 @@ mod tests {
                 let row = (rows.text)(tab_row, 0).expect("row text");
                 assert_eq!(
                     row.as_ref(),
-                    "+   needle",
-                    "tabs still expand to their stop"
+                    "+    needle",
+                    "the diff sign does not advance the content's tab stop"
                 );
             });
         });
@@ -843,7 +843,15 @@ impl MainPaneView {
                         if let Some(header) = headers.get(&ix) {
                             return Some(header.as_ref().into());
                         }
-                        patch_line(ix)
+                        return patch_line(ix).map(|line| {
+                            if line.as_ref().contains('\t') {
+                                crate::view::tab_width::expand_patch_tabs(tab_width, line.as_ref())
+                                    .into_owned()
+                                    .into()
+                            } else {
+                                line
+                            }
+                        });
                     } else {
                         match split
                             .as_ref()

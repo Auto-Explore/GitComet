@@ -125,7 +125,10 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
             &mut state,
             Msg::RepoExternallyChanged {
                 repo_id,
-                change: crate::msg::RepoExternalChange::Worktree,
+                change: crate::msg::RepoExternalChange {
+                    text_attributes: true,
+                    ..crate::msg::RepoExternalChange::Worktree
+                },
             },
         );
         let followups = apply_effect_with_state_for_test(
@@ -300,15 +303,24 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
         Msg::ReloadRepo { repo_id },
         Msg::RepoExternallyChanged {
             repo_id,
-            change: RepoExternalChange::Worktree,
+            change: RepoExternalChange {
+                text_attributes: true,
+                ..RepoExternalChange::Worktree
+            },
         },
         Msg::RepoExternallyChanged {
             repo_id,
-            change: RepoExternalChange::Index,
+            change: RepoExternalChange {
+                text_attributes: true,
+                ..RepoExternalChange::Index
+            },
         },
         Msg::RepoExternallyChanged {
             repo_id,
-            change: RepoExternalChange::GitState,
+            change: RepoExternalChange {
+                text_attributes: true,
+                ..RepoExternalChange::GitState
+            },
         },
     ] {
         fs::write(

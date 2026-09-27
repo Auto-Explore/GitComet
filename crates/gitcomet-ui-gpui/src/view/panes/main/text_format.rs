@@ -131,13 +131,14 @@ impl MainPaneView {
         });
     }
 
-    /// How the conflicted file was read from the working tree.
-    pub(in crate::view) fn conflict_current_text_format(&self) -> Option<SideTextFormat> {
-        self.active_repo()?
+    /// Encoding for the resolver output, independent of a mixed marker file.
+    pub(in crate::view) fn conflict_output_text_format(&self) -> Option<SideTextFormat> {
+        let session = self
+            .active_repo()?
             .conflict_state
             .conflict_session
-            .as_ref()?
-            .current_format
+            .as_ref()?;
+        session.output_format.or(session.current_format)
     }
 
     /// The resolved output as bytes in the conflicted file's encoding, or
@@ -147,8 +148,7 @@ impl MainPaneView {
         text: String,
         cx: &mut gpui::Context<Self>,
     ) -> Option<gitcomet_state::msg::ContentBytes> {
-        match super::file_editor::encode_for_save(text.into(), self.conflict_current_text_format())
-        {
+        match super::file_editor::encode_for_save(text.into(), self.conflict_output_text_format()) {
             Ok((bytes, _)) => Some(bytes),
             Err(message) => {
                 self.show_text_format_error(message, cx);
@@ -173,7 +173,7 @@ impl MainPaneView {
         match self.main_pane_surface().body {
             MainPaneBody::FileEditor => Some((None, self.file_editor_text_format?, true)),
             MainPaneBody::FilePreview => Some((None, self.worktree_preview_text_format?, false)),
-            MainPaneBody::Conflict => Some((None, self.conflict_current_text_format()?, false)),
+            MainPaneBody::Conflict => Some((None, self.conflict_output_text_format()?, false)),
             MainPaneBody::FileDiff | MainPaneBody::Patch => {
                 let repo = self.active_repo()?;
                 let Loadable::Ready(Some(file)) = &repo.diff_state.diff_file else {
@@ -355,7 +355,11 @@ impl MainPaneView {
             current: Some(shown.format.encoding),
             stored_as_utf8: attributes.working_tree_encoding().is_some(),
             had_bom: shown.format.bom,
-            path,
+            path: if path.is_absolute() {
+                path.strip_prefix(&repo.spec.workdir).ok()?.to_path_buf()
+            } else {
+                path
+            },
         })
     }
 
@@ -440,6 +444,9 @@ impl MainPaneView {
             return;
         }
         let converted = self.file_editor_input.update(cx, |input, cx| {
+            if input.is_read_only() {
+                return None;
+            }
             input.set_line_ending(ending.as_str());
             let text = input.text();
             let converted = gitcomet_core::text_format::convert_line_endings(text, ending);

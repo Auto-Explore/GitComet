@@ -34,8 +34,9 @@ pub use autosolve::{
 pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
     ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
-    ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_segments,
-    reader_has_conflict_markers, reconstruct_conflict_marker_sides, text_has_conflict_markers,
+    ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_ranges_bytes,
+    parse_conflict_marker_segments, reader_has_conflict_markers, reconstruct_conflict_marker_sides,
+    text_has_conflict_markers,
 };
 pub use region_edit::{
     ConflictRegionEditOutcome, ConflictRegionSplitBoundaries, join_conflict_regions_text,
@@ -271,7 +272,10 @@ impl ConflictPayload {
         let decoded = crate::text_format::decode_bytes(raw, kind, attributes, encoding);
         let format = decoded.format;
         if format.binary {
-            return (ConflictPayload::Binary(Arc::from(raw)), Some(format));
+            return (
+                ConflictPayload::Binary(bytes.clone().unwrap_or_else(|| Arc::from(raw))),
+                Some(format),
+            );
         }
         let unchanged = (format.format.is_plain_utf8()
             && matches!(decoded.text, std::borrow::Cow::Borrowed(_)))
@@ -642,9 +646,11 @@ pub struct ConflictSession {
     /// Structural split/join edits update this projection without pretending
     /// that the worktree changed before Save.
     pub marker_projection: Option<Arc<str>>,
-    /// How the working-tree file was read, so a save writes it back the same
-    /// way. `None` when nothing decoded it (plain UTF-8 or no worktree file).
+    /// How the working-tree file was read. `None` when it was not decoded.
     pub current_format: Option<crate::text_format::SideTextFormat>,
+    /// Format for resolved output, when it needs to differ from the working
+    /// tree's encoding to represent text from every stage.
+    pub output_format: Option<crate::text_format::SideTextFormat>,
     /// Parsed conflict regions (populated for marker-based text conflicts).
     pub regions: Vec<ConflictRegion>,
     /// Source coordinates corresponding positionally to [`regions`](Self::regions).
@@ -738,6 +744,7 @@ impl ConflictSession {
         Self {
             path,
             current_format: None,
+            output_format: None,
             conflict_kind,
             strategy,
             base,

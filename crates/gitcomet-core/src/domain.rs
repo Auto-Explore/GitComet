@@ -653,20 +653,52 @@ impl DiffSectionFormats {
     /// Guess from the section's own bytes, for callers that know nothing
     /// about the file. Valid UTF-8 stays UTF-8.
     pub fn sniff(section: &[u8]) -> Self {
-        let format = crate::text_format::ContentSniff::of(section)
-            .resolve(
-                crate::text_format::SideKind::GitInternal,
-                &crate::text_format::TextAttributes::default(),
-                None,
-            )
-            .format;
-        let format = TextFormat {
+        Self::resolve(
+            section,
+            &crate::text_format::TextAttributes::default(),
+            None,
+        )
+    }
+
+    /// Decode patch content per side without loading or transcoding the full
+    /// files. Textconv output can use a different encoding from those files.
+    pub fn resolve(
+        section: &[u8],
+        attributes: &crate::text_format::TextAttributes,
+        encoding: Option<crate::text_format::TextEncoding>,
+    ) -> Self {
+        use crate::text_format::{ContentSniffer, SideKind};
+        let mut old = ContentSniffer::new();
+        let mut new = ContentSniffer::new();
+        for line in section.split_inclusive(|&byte| byte == b'\n') {
+            match Diff::classify_unified_line_bytes(line) {
+                DiffLineKind::Remove => old.feed(&line[1..]),
+                DiffLineKind::Add => new.feed(&line[1..]),
+                DiffLineKind::Context if line.starts_with(b" ") => {
+                    old.feed(&line[1..]);
+                    new.feed(&line[1..]);
+                }
+                DiffLineKind::Hunk => {
+                    if let Some(offset) = line
+                        .get(2..)
+                        .and_then(|rest| memchr::memmem::find(rest, b"@@"))
+                    {
+                        old.feed(&line[offset + 4..]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let resolve = |sniffer: ContentSniffer| TextFormat {
             bom: false,
-            ..format
+            ..sniffer
+                .finish()
+                .resolve(SideKind::GitInternal, attributes, encoding)
+                .format
         };
         Self {
-            old: format,
-            new: format,
+            old: resolve(old),
+            new: resolve(new),
         }
     }
 }
@@ -1282,14 +1314,14 @@ impl Diff {
                 decode_into(&line[1..], format, out);
             }
             DiffLineKind::Hunk => {
-                // `@@ -a,b +c,d @@ <function context from the new side>`.
+                // Git takes function context from the old side.
                 let context_start = line
                     .get(2..)
                     .and_then(|rest| memchr::memmem::find(rest, b"@@"))
                     .map_or(line.len(), |offset| offset + 4);
                 let context_start = context_start.min(line.len());
                 decode_into(&line[..context_start], TextFormat::UTF_8, out);
-                decode_into(&line[context_start..], formats.new, out);
+                decode_into(&line[context_start..], formats.old, out);
             }
             _ => decode_into(line, TextFormat::UTF_8, out),
         }
@@ -1634,7 +1666,7 @@ index 1111111..2222222 100644\n\
             });
         let texts: Vec<&str> = diff.lines.iter().map(|line| line.text.as_ref()).collect();
         // The context line decodes as the new side (UTF-8), so 0xE9 is invalid there.
-        assert_eq!(texts[4], "@@ -1,2 +1,2 @@ caf\u{fffd}");
+        assert_eq!(texts[4], "@@ -1,2 +1,2 @@ café");
         assert_eq!(texts[5], " caf\u{fffd}");
         assert_eq!(texts[6], "-naïve");
         assert_eq!(texts[7], "+naïve");
@@ -1653,6 +1685,17 @@ index 1111111..2222222 100644\n\
             diff.lines[3].text.raw_bytes(),
             b"+caf\xe9 cr\xe8me br\xfbl\xe9e!"
         );
+    }
+
+    #[test]
+    fn hunk_context_supplies_old_side_encoding_when_changed_lines_are_ascii() {
+        let diff = Diff::from_unified_bytes(
+            target("a.txt"),
+            b"@@ -6 +6 @@ caf\xe9\n-old\n+\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n".to_vec(),
+            DiffSectionFormats::sniff,
+        );
+        assert_eq!(diff.lines[0].text.as_ref(), "@@ -6 +6 @@ café");
+        assert_eq!(diff.lines[2].text.as_ref(), "+日本語");
     }
 
     #[test]

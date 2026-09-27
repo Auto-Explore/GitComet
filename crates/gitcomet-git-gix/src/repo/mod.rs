@@ -41,6 +41,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
 }
 
 mod blame;
+mod config;
 mod conflict_stages;
 mod diff;
 mod discard;
@@ -450,6 +451,7 @@ const LOG_PAGED_TOPO_WALK_CACHE_LIMIT: usize = 4;
 pub(crate) struct GixRepo {
     spec: RepoSpec,
     _repo: gix::ThreadSafeRepository,
+    config_repo: std::sync::Mutex<config::ConfigRepo>,
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
@@ -476,9 +478,11 @@ pub(crate) struct GixRepo {
 
 impl GixRepo {
     pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Self {
+        let config_repo = config::ConfigRepo::new(repo.to_thread_local());
         Self {
             spec: RepoSpec { workdir },
             _repo: repo,
+            config_repo: std::sync::Mutex::new(config_repo),
             gitlink_status_capability: std::sync::Mutex::new(None),
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
