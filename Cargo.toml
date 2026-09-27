@@ -59,7 +59,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
@@ -90,7 +90,7 @@ dekobon-tree-sitter-groovy = "0.3.0"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"
-gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+gix = { version = "0.88.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1"] }
 gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "dd2493af9c5acfbcdee8a625570d566d9247296b" }
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "dd2493af9c5acfbcdee8a625570d566d9247296b", features = ["font-kit"] }
 image = "0.25.10"
@@ -115,7 +115,7 @@ schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 signal-hook = "0.4.4"
-smallvec = "1.16.1"
+smallvec = "1.16.2"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"

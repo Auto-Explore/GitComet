@@ -980,6 +980,24 @@ impl MainPaneView {
         let image_root = self.markdown_preview_image_root();
         // Built once for both sides of a split: each matcher compiles a regex.
         let query = self.markdown_preview_search_query();
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            scroll_handle.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
+        // The split's two sides share the width left of the scrollbar but for
+        // the 1px divider, clamped like the text split's columns.
+        let split_available =
+            (self.main_pane_content_width(cx) - scrollbar_gutter - px(1.0)).max(px(0.0));
+        let (split_left_w, _) = diff_split_column_widths_from_available(
+            split_available,
+            px(DIFF_SPLIT_COL_MIN_PX),
+            self.diff_split_ratio,
+        );
+        let split_ratio = if split_available > px(0.0) {
+            split_left_w / split_available
+        } else {
+            0.5
+        };
         // One document listener serves both sides of a split.
         let row_boxes = rows::MarkdownRowBoxes::default();
         let context =
@@ -1017,16 +1035,23 @@ impl MainPaneView {
                 &preview,
                 &context(self, DiffTextRegion::SplitLeft, 0),
                 &context(self, DiffTextRegion::SplitRight, 1),
+                split_ratio,
             ),
+        };
+        let split_handle = |this: &Self, id, idle_line, cx: &mut gpui::Context<Self>| {
+            this.markdown_split_resize_handle(
+                id,
+                split_available,
+                idle_line,
+                theme,
+                ui_scale_percent,
+                cx,
+            )
         };
 
         let edge_gap = crate::ui_scale::design_px_from_percent(
             MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX,
             ui_scale_percent,
-        );
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            scroll_handle.clone(),
-            components::ScrollbarAxis::Vertical,
         );
         div()
             .id("diff_markdown_preview_container")
@@ -1039,14 +1064,39 @@ impl MainPaneView {
             .bg(theme.colors.surface.canvas)
             .when(self.diff_view == DiffViewMode::Split, |container| {
                 container.child(
-                    div()
-                        .pr(scrollbar_gutter)
-                        .child(components::split_columns_header(
-                            theme,
-                            ui_scale_percent,
-                            "A (before)",
-                            "B (after)",
-                        )),
+                    div().pr(scrollbar_gutter).child(
+                        div()
+                            .h(crate::ui_scale::design_px_from_percent(
+                                components::CONTROL_HEIGHT_PX,
+                                ui_scale_percent,
+                            ))
+                            .flex()
+                            .items_center()
+                            .text_size(theme.ui_text(12.0))
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex_grow(split_ratio)
+                                    .min_w(px(0.0))
+                                    .px_2()
+                                    .child("A (before)"),
+                            )
+                            .child(split_handle(
+                                self,
+                                "markdown_split_resize_handle_header",
+                                Some(theme.colors.stroke.default),
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex_grow(1.0 - split_ratio)
+                                    .min_w(px(0.0))
+                                    .px_2()
+                                    .child("B (after)"),
+                            ),
+                    ),
                 )
             })
             .child(
@@ -1076,9 +1126,119 @@ impl MainPaneView {
                         .markers(scrollbar_markers)
                         .always_visible()
                         .render(theme),
-                    ),
+                    )
+                    // Over the divider, the height of the viewport rather than
+                    // of the document; the spacers take no pointer events.
+                    .when(self.diff_view == DiffViewMode::Split, |area| {
+                        area.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .pr(scrollbar_gutter)
+                                .flex()
+                                .child(div().flex_1().flex_grow(split_ratio))
+                                .child(split_handle(
+                                    self,
+                                    "markdown_split_resize_handle_body",
+                                    None,
+                                    cx,
+                                ))
+                                .child(div().flex_1().flex_grow(1.0 - split_ratio)),
+                        )
+                    }),
             )
             .into_any_element()
+    }
+
+    /// The rendered split's divider, dragged like the text split's and sharing
+    /// its ratio: a 1px column on the divider line with the handle centred on it.
+    fn markdown_split_resize_handle(
+        &self,
+        id: &'static str,
+        available: Pixels,
+        idle_line: Option<gpui::Rgba>,
+        theme: AppTheme,
+        ui_scale_percent: u32,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        let handle_w = px(PANE_RESIZE_HANDLE_PX);
+        let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
+        let handle = div()
+            .id(id)
+            .group(id)
+            .debug_selector(move || id.to_string())
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left((px(1.0) - handle_w) / 2.0)
+            .w(handle_w)
+            .cursor(CursorStyle::ResizeLeftRight)
+            .child(components::resize_grip(
+                theme,
+                ui_scale_percent,
+                id,
+                components::ResizeGripAxis::Vertical,
+                self.diff_split_resize.is_some(),
+                idle_line,
+            ))
+            .on_drag(
+                DiffSplitResizeHandle::Divider,
+                |_handle, _offset, _window, cx| cx.new(|_cx| DiffSplitResizeDragGhost),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
+                    this.diff_split_resize = Some(DiffSplitResizeState {
+                        handle: DiffSplitResizeHandle::Divider,
+                        start_x: e.position.x,
+                        start_ratio: this.diff_split_ratio,
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &gpui::DragMoveEvent<DiffSplitResizeHandle>, _w, cx| {
+                    let Some(state) = this.diff_split_resize else {
+                        return;
+                    };
+                    if state.handle != *e.drag(cx) {
+                        return;
+                    }
+                    let dx = e.event.position.x - state.start_x;
+                    let next =
+                        next_diff_split_drag_ratio(available, min_col_w, state.start_ratio, dx)
+                            .unwrap_or(0.5);
+                    if (this.diff_split_ratio - next).abs() > f32::EPSILON {
+                        this.diff_split_ratio = next;
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if this.diff_split_resize.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if this.diff_split_resize.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            );
+        div()
+            .relative()
+            .flex_none()
+            .w(px(1.0))
+            .h_full()
+            .child(handle)
     }
 }
 
