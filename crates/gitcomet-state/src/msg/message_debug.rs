@@ -323,12 +323,12 @@ impl std::fmt::Debug for InternalMsg {
                 .finish(),
             InternalMsg::AnnexWhereisLoaded {
                 repo_id,
-                path,
+                key,
                 result,
             } => f
                 .debug_struct("AnnexWhereisLoaded")
                 .field("repo_id", repo_id)
-                .field("path", path)
+                .field("key", key)
                 .field("result", result)
                 .finish(),
             InternalMsg::AnnexUnusedLoaded { repo_id, result } => f

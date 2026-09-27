@@ -7807,7 +7807,7 @@ fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::T
 }
 
 /// An annexed file without local content offers Get, and "Where is it?"
-/// results appear under the card once loaded for that path.
+/// results appear under the card once loaded for that content key.
 #[gpui::test]
 fn missing_annex_content_offers_get_and_lists_copies(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -7847,8 +7847,8 @@ fn missing_annex_content_offers_get_and_lists_copies(cx: &mut gpui::TestAppConte
                     .with_large_sides(Some(side.clone()), Some(side.clone())),
                 )));
                 if whereis {
-                    repo.annex_whereis = Some((
-                        path.clone(),
+                    repo.annex_whereis.insert(
+                        "SHA256E-s4200000--abc.tif".into(),
                         gitcomet_state::model::Loadable::Ready(Arc::new(
                             gitcomet_core::large_files::AnnexWhereis {
                                 key: "SHA256E-s4200000--abc.tif".into(),
@@ -7860,7 +7860,7 @@ fn missing_annex_content_offers_get_and_lists_copies(cx: &mut gpui::TestAppConte
                                 untrusted: Vec::new(),
                             },
                         )),
-                    ));
+                    );
                     repo.annex_whereis_rev = 1;
                 }
                 push_test_state(this, app_state_with_repo(repo, repo_id), cx);

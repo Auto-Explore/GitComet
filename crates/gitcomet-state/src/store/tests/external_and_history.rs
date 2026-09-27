@@ -1157,6 +1157,11 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
         Msg::ReloadRepo { repo_id: RepoId(1) },
     );
 
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadLargeFileSupport { repo_id: RepoId(1) }))
+    );
     let repo_state = &state.repos[0];
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
@@ -4579,4 +4584,68 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
     assert!(!state.repos[0].git_operation_in_flight());
     assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
     assert_eq!(rev(&state), before + 1);
+}
+
+#[test]
+fn external_support_refresh_is_targeted_and_coalesced_without_branch_changes() {
+    use crate::msg::{InternalMsg, RepoExternalChange};
+    for (change, expected) in [
+        (RepoExternalChange::Worktree, 0),
+        (RepoExternalChange::Index, 1),
+        (RepoExternalChange::GitState, 1),
+        (
+            RepoExternalChange {
+                large_file_support: true,
+                ..RepoExternalChange::Worktree
+            },
+            1,
+        ),
+        (
+            RepoExternalChange {
+                verification_context: true,
+                ..Default::default()
+            },
+            1,
+        ),
+    ] {
+        let repo_id = RepoId(1);
+        let mut state = AppState::test_default();
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: "/tmp/repo".into(),
+            },
+        ));
+        state.repos[0].set_open(Loadable::Ready(()));
+        state.repos[0].set_head_branch(Loadable::Ready("main".into()));
+        let mut repos = FxHashMap::default();
+        let ids = AtomicU64::new(2);
+        let refresh = || Msg::RepoExternallyChanged { repo_id, change };
+        let count = |effects: &[Effect]| {
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::LoadLargeFileSupport { .. }))
+                .count()
+        };
+        assert_eq!(
+            count(&reduce(&mut repos, &ids, &mut state, refresh())),
+            expected,
+            "{change:?}"
+        );
+        assert_eq!(
+            count(&reduce(&mut repos, &ids, &mut state, refresh())),
+            0,
+            "coalesced {change:?}"
+        );
+        if expected == 1 {
+            let complete = || {
+                Msg::Internal(InternalMsg::LargeFileSupportLoaded {
+                    repo_id,
+                    result: Ok(Default::default()),
+                })
+            };
+            assert_eq!(count(&reduce(&mut repos, &ids, &mut state, complete())), 1);
+            assert_eq!(count(&reduce(&mut repos, &ids, &mut state, complete())), 0);
+        }
+    }
 }

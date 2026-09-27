@@ -1650,22 +1650,22 @@ pub(super) fn schedule_load_annex_whereis(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    path: std::path::PathBuf,
+    key: String,
     cancellation: CancellationToken,
 ) {
-    let missing_path = path.clone();
+    let missing_key = key.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = repo.annex_whereis_cancellable(&path, &cancellation);
+            let result = repo.annex_whereis_cancellable(&key, &cancellation);
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
                     repo_id,
-                    path,
+                    key,
                     result,
                 }),
             );
@@ -1675,7 +1675,7 @@ pub(super) fn schedule_load_annex_whereis(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
                     repo_id,
-                    path: missing_path,
+                    key: missing_key,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );

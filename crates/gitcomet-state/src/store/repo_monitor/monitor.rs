@@ -296,6 +296,7 @@ pub(super) fn summarize(
         git_state: false,
         tags: false,
         verification_context: false,
+        large_file_support: false,
     };
     let structural = structural_event(event);
     for path in &event.paths {
@@ -367,6 +368,16 @@ pub(super) fn summarize(
             }
             PathClass::Worktree => {
                 let relative = path.strip_prefix(&snapshot.workdir).unwrap();
+                if path
+                    .file_name()
+                    .is_some_and(|name| name == ".gitattributes")
+                {
+                    // Git reads attributes even when the file itself is ignored.
+                    // Excluded parent directories have already been filtered.
+                    change.worktree = true;
+                    change.large_file_support = true;
+                    continue;
+                }
                 if path.file_name().is_some_and(|name| name == ".gitignore") {
                     if !rules.is_ignored_rel(relative.parent().unwrap_or(Path::new("")), Some(true))
                     {
@@ -642,6 +653,7 @@ pub(super) fn repo_monitor_thread(
                         git_state: false,
                         tags: false,
                         verification_context: false,
+                        large_file_support: false,
                     }),
                     RepoExternalChange {
                         worktree: false,
@@ -649,6 +661,7 @@ pub(super) fn repo_monitor_thread(
                         git_state: false,
                         tags: false,
                         verification_context: false,
+                        large_file_support: false,
                     },
                 ));
             }

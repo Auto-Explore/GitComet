@@ -796,10 +796,10 @@ impl GitRepository for GixRepo {
 
     fn annex_whereis_cancellable(
         &self,
-        path: &Path,
+        key: &str,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::AnnexWhereis> {
-        self.annex_whereis_impl(path, cancellation)
+        self.annex_whereis_impl(key, cancellation)
     }
 
     fn annex_unused_cancellable(

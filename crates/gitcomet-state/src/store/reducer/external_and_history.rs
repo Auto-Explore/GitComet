@@ -123,6 +123,9 @@ pub(super) fn reload_repo(
     super::refresh_selected_head_gitlink(repos, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
+    effects.extend(super::effects::request_large_file_support_effect(
+        repo_state,
+    ));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // The view re-requests sidebar data only when its request changes, so
     // worktrees and stashes reset above would otherwise stay NotLoaded.
@@ -241,6 +244,14 @@ pub(super) fn repo_externally_changed(
     };
 
     effects.extend(file_browser_effect);
+    // Config, refs and index changes may introduce LFS/annex without moving
+    // to a different branch. Worktree edits only rescan when attributes changed.
+    if change.large_file_support || change.git_state || change.index || change.verification_context
+    {
+        effects.extend(super::effects::request_large_file_support_effect(
+            repo_state,
+        ));
+    }
 
     // Tag reloads are driven by the `tags` flag alone, independent of
     // `git_state`, so any change that sets `tags` refreshes them regardless of

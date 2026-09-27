@@ -96,7 +96,8 @@ impl super::GixRepo {
         let patterns = paths
             .iter()
             .map(|path| {
-                lfs_include_pattern(path).ok_or_else(|| {
+                let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
+                lfs_include_pattern(relative).ok_or_else(|| {
                     Error::new(ErrorKind::Backend(format!(
                         "cannot download `{}` by name: Git LFS patterns cannot contain commas",
                         path.display()
@@ -104,10 +105,11 @@ impl super::GixRepo {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let include = patterns.join(",");
-        let mut fetch = self.git_lfs(&["fetch"]);
-        fetch.arg(format!("--include={include}")).arg("--exclude=");
-        let fetched = run_git_with_output(fetch, "git lfs fetch")?;
+        let mut revisions = self.index_side_trees(paths)?;
+        if let Ok(head) = self.repo().head_id() {
+            revisions.push(head.to_string());
+        }
+        let fetched = self.lfs_fetch_revisions(&patterns, revisions)?;
         let mut checkout = self.git_lfs(&["checkout", "--"]);
         // Checkout also accepts gitignore globs, not literal pathspecs.
         checkout.args(&patterns);
@@ -121,7 +123,7 @@ impl super::GixRepo {
             DiffTarget::WorkingTree { path, .. } => {
                 // The index side need not be in HEAD (after `reset --soft`, or
                 // theirs in a merge), and git-lfs fetches by commit or tree.
-                index_trees = self.index_side_trees(path)?;
+                index_trees = self.index_side_trees(std::slice::from_ref(path))?;
                 let head = self.repo().head_id().is_ok();
                 (path, head.then(|| "HEAD".to_string()).into_iter().collect())
             }
@@ -155,29 +157,37 @@ impl super::GixRepo {
         };
         // Resolve to object ids before writing the line-delimited stdin protocol.
         // Git LFS chooses the remote itself, just as for its ordinary fetch.
+        let repo = self.repo();
         for revision in &mut revisions {
             validate_ref_like_arg(revision, "revision")?;
-            *revision = self
-                .repo()
+            *revision = repo
                 .rev_parse_single(revision.as_str())
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("resolve LFS revision: {e}"))))?
                 .detach()
                 .to_string();
         }
         revisions.extend(index_trees);
-        revisions.sort();
-        revisions.dedup();
-        if revisions.is_empty() {
-            return Err(paths_arg_error("git lfs fetch for diff"));
-        }
         let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
         let include = lfs_include_pattern(relative).ok_or_else(|| {
             Error::new(ErrorKind::Backend(
                 "Git LFS cannot select this path with an include pattern".to_string(),
             ))
         })?;
+        self.lfs_fetch_revisions(&[include], revisions)
+    }
+
+    fn lfs_fetch_revisions(
+        &self,
+        patterns: &[String],
+        mut revisions: Vec<String>,
+    ) -> Result<CommandOutput> {
+        revisions.sort_unstable();
+        revisions.dedup();
+        if revisions.is_empty() {
+            return Err(paths_arg_error("git lfs fetch"));
+        }
         let mut cmd = self.git_lfs(&["fetch", "--stdin", "--exclude="]);
-        cmd.arg(format!("--include={include}"));
+        cmd.arg(format!("--include={}", patterns.join(",")));
         run_git_with_input_output(
             cmd,
             "git lfs fetch",
@@ -185,50 +195,52 @@ impl super::GixRepo {
         )
     }
 
-    /// One tree per index stage of `path`, holding just that blob at that
-    /// path, so git-lfs can fetch the index side. Only loose objects are
+    /// One tree per index stage of each path, holding just that blob, so
+    /// git-lfs can fetch the index side. Only loose objects are
     /// written; the index itself is untouched.
-    fn index_side_trees(&self, path: &std::path::Path) -> Result<Vec<String>> {
+    fn index_side_trees(&self, paths: &[PathBuf]) -> Result<Vec<String>> {
         use gix::objs::tree::{Entry, EntryKind};
         let repo = self.repo();
         let backend = |e: &dyn std::fmt::Display| {
             Error::new(ErrorKind::Backend(format!("index side for LFS fetch: {e}")))
         };
-        let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
-        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative));
         let index = repo.index_or_empty().map_err(|e| backend(&e))?;
-        let Some(range) = index.entry_range(key.as_ref()) else {
-            return Ok(Vec::new());
-        };
         let mut trees = Vec::new();
-        for entry in &index.entries()[range] {
-            let mut components = key.split(|byte| *byte == b'/').rev();
-            let Some(name) = components.next() else {
+        for path in paths {
+            let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
+            let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative));
+            let Some(range) = index.entry_range(key.as_ref()) else {
                 continue;
             };
-            let mut id = repo
-                .write_object(gix::objs::Tree {
-                    entries: vec![Entry {
-                        mode: EntryKind::Blob.into(),
-                        filename: name.into(),
-                        oid: entry.id,
-                    }],
-                })
-                .map_err(|e| backend(&e))?
-                .detach();
-            for dir in components {
-                id = repo
+            for entry in &index.entries()[range] {
+                let mut components = key.split(|byte| *byte == b'/').rev();
+                let Some(name) = components.next() else {
+                    continue;
+                };
+                let mut id = repo
                     .write_object(gix::objs::Tree {
                         entries: vec![Entry {
-                            mode: EntryKind::Tree.into(),
-                            filename: dir.into(),
-                            oid: id,
+                            mode: EntryKind::Blob.into(),
+                            filename: name.into(),
+                            oid: entry.id,
                         }],
                     })
                     .map_err(|e| backend(&e))?
                     .detach();
+                for dir in components {
+                    id = repo
+                        .write_object(gix::objs::Tree {
+                            entries: vec![Entry {
+                                mode: EntryKind::Tree.into(),
+                                filename: dir.into(),
+                                oid: id,
+                            }],
+                        })
+                        .map_err(|e| backend(&e))?
+                        .detach();
+                }
+                trees.push(id.to_string());
             }
-            trees.push(id.to_string());
         }
         Ok(trees)
     }

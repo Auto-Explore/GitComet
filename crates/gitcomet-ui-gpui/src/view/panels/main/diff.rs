@@ -17,6 +17,50 @@ fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool
     has_file && !cache_active
 }
 
+/// At most two distinct content versions; identical sides share a lookup.
+fn annex_card_keys(
+    old: Option<&gitcomet_core::large_files::LargeFileSide>,
+    new: Option<&gitcomet_core::large_files::LargeFileSide>,
+    missing_only: bool,
+) -> Vec<String> {
+    use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer};
+    let mut keys = Vec::new();
+    for side in [old, new].into_iter().flatten() {
+        if missing_only && side.content == LargeFileContent::Available {
+            continue;
+        }
+        if let LargeFilePointer::Annex(key) = &side.pointer
+            && !keys.iter().any(|raw: &String| raw == key.raw.as_ref())
+        {
+            keys.push(key.raw.to_string());
+        }
+    }
+    keys
+}
+
+fn annex_whereis_lines(
+    loaded: &Loadable<std::sync::Arc<gitcomet_core::large_files::AnnexWhereis>>,
+) -> Vec<String> {
+    match loaded {
+        Loadable::Ready(whereis) if whereis.copies.is_empty() && whereis.untrusted.is_empty() => {
+            vec!["No known copies.".to_string()]
+        }
+        Loadable::Ready(whereis) => whereis
+            .copies
+            .iter()
+            .map(|copy| (copy, false))
+            .chain(whereis.untrusted.iter().map(|copy| (copy, true)))
+            .map(|(copy, untrusted)| {
+                let trust = if untrusted { " (untrusted)" } else { "" };
+                let here = if copy.here { " · this clone" } else { "" };
+                format!("{}{here}{trust}", copy.description)
+            })
+            .collect(),
+        Loadable::Error(error) => vec![error.clone()],
+        Loadable::Loading | Loadable::NotLoaded => vec!["Looking up copies…".to_string()],
+    }
+}
+
 /// Inset between an image/SVG preview column and its artwork.
 const IMAGE_PREVIEW_CELL_PADDING_PX: f32 = 16.0;
 
@@ -94,8 +138,6 @@ impl MainPaneView {
         }
     }
 
-    /// "Download content" for an LFS file whose content is not here; `None`
-    /// for annex files (their commands come later) or without a repo.
     /// Buttons under the large-file card, and for git-annex the list of
     /// repositories holding the content once "Where is it?" has run.
     /// `content_shown`: the real diff is below, so only lookups make sense.
@@ -107,19 +149,20 @@ impl MainPaneView {
         content_shown: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
-        use gitcomet_core::large_files::{LargeFileCommand, LargeFileContent, LargeFilePointer};
+        use gitcomet_core::large_files::{LargeFileCommand, LargeFileContent};
         if self.is_inline_submodule_diff_active() {
             return None;
         }
         let repo = self.active_repo()?;
         let repo_id = repo.id;
         let target = self.rendered_diff_target()?.clone();
-        let sides: Vec<_> = [old, new].into_iter().flatten().collect();
+        let sides = [old, new];
         let mut buttons = div().flex().flex_wrap().gap_2();
         let mut any = false;
 
         let missing_lfs = sides
             .iter()
+            .flatten()
             .any(|side| side.pointer.is_lfs() && side.content == LargeFileContent::MissingLocally);
         if missing_lfs && !content_shown {
             let tool_missing = self.large_file_tools().git_lfs.is_not_found();
@@ -148,17 +191,7 @@ impl MainPaneView {
         }
 
         let annex_missing_tool = self.large_file_tools().git_annex.is_not_found();
-        let annex_keys: Vec<String> = sides
-            .iter()
-            .filter(|side| side.content != LargeFileContent::Available)
-            .filter_map(|side| match &side.pointer {
-                LargeFilePointer::Annex(key) => Some(key.raw.to_string()),
-                LargeFilePointer::Lfs(_) => None,
-            })
-            .collect();
-        let has_annex = sides
-            .iter()
-            .any(|side| matches!(side.pointer, LargeFilePointer::Annex(_)));
+        let annex_keys = annex_card_keys(old, new, true);
         if !annex_keys.is_empty() && !content_shown {
             any = true;
             buttons = buttons.child(
@@ -182,37 +215,17 @@ impl MainPaneView {
                 }),
             );
         }
-        let path = match &target {
-            gitcomet_core::domain::DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
-            gitcomet_core::domain::DiffTarget::Commit { path, .. }
-            | gitcomet_core::domain::DiffTarget::CommitRange { path, .. } => path.clone(),
-        };
-        let mut whereis_lines = None;
-        if has_annex && let Some(path) = path {
-            let path = path
-                .strip_prefix(&repo.spec.workdir)
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or(path);
-            whereis_lines = repo.annex_whereis_for(&path).map(|loaded| match loaded {
-                Loadable::Ready(whereis) if whereis.copies.is_empty() => {
-                    vec!["No known copies.".to_string()]
+        let annex_keys = annex_card_keys(old, new, false);
+        let mut whereis_lines = Vec::new();
+        if !annex_keys.is_empty() {
+            for key in &annex_keys {
+                if let Some(loaded) = repo.annex_whereis_for(key) {
+                    if annex_keys.len() > 1 {
+                        whereis_lines.push(format!("{key}:"));
+                    }
+                    whereis_lines.extend(annex_whereis_lines(loaded));
                 }
-                Loadable::Ready(whereis) => whereis
-                    .copies
-                    .iter()
-                    .map(|copy| {
-                        let trust = if whereis.untrusted.iter().any(|u| u.uuid == copy.uuid) {
-                            " (untrusted)"
-                        } else {
-                            ""
-                        };
-                        let here = if copy.here { " · this clone" } else { "" };
-                        format!("{}{here}{trust}", copy.description)
-                    })
-                    .collect(),
-                Loadable::Error(error) => vec![error.clone()],
-                Loadable::Loading | Loadable::NotLoaded => vec!["Looking up copies…".to_string()],
-            });
+            }
             any = true;
             buttons = buttons.child(
                 components::Button::new("large_file_card_annex_whereis", "Where is it?")
@@ -221,7 +234,7 @@ impl MainPaneView {
                     .on_click(theme, cx, move |this, _e, _w, _cx| {
                         this.store.dispatch(Msg::LoadAnnexWhereis {
                             repo_id,
-                            path: path.clone(),
+                            keys: annex_keys.clone(),
                         });
                     }),
             );
@@ -230,7 +243,7 @@ impl MainPaneView {
             return None;
         }
         let mut column = div().flex().flex_col().gap_1().child(buttons);
-        if let Some(lines) = whereis_lines {
+        if !whereis_lines.is_empty() {
             let mut list = div()
                 .debug_selector(|| "large_file_card_whereis".to_string())
                 .flex()
@@ -238,7 +251,7 @@ impl MainPaneView {
                 .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Copies git-annex knows about:");
-            for line in lines {
+            for line in whereis_lines {
                 list = list.child(div().pl_2().child(line));
             }
             column = column.child(list);
@@ -1289,6 +1302,71 @@ impl MainPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annex_locations_use_both_displayed_keys_and_deduplicate_identical_sides() {
+        use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+        let old = LargeFileSide {
+            pointer: LargeFilePointer::Annex(
+                gitcomet_core::annex::parse_key("SHA256E-s3--old.bin").unwrap(),
+            ),
+            content: LargeFileContent::Available,
+        };
+        let new = LargeFileSide {
+            pointer: LargeFilePointer::Annex(
+                gitcomet_core::annex::parse_key("SHA256E-s4--new.bin").unwrap(),
+            ),
+            content: LargeFileContent::MissingLocally,
+        };
+        assert_eq!(
+            annex_card_keys(Some(&old), Some(&new), false),
+            ["SHA256E-s3--old.bin", "SHA256E-s4--new.bin"]
+        );
+        assert_eq!(
+            annex_card_keys(Some(&old), Some(&new), true),
+            ["SHA256E-s4--new.bin"]
+        );
+        assert_eq!(
+            annex_card_keys(Some(&old), Some(&old), false),
+            ["SHA256E-s3--old.bin"]
+        );
+        assert_eq!(
+            annex_card_keys(Some(&old), None, false),
+            ["SHA256E-s3--old.bin"]
+        );
+    }
+
+    #[test]
+    fn annex_location_lines_include_untrusted_copies_even_without_trusted_ones() {
+        use gitcomet_core::large_files::{AnnexLocation, AnnexWhereis};
+        let mut whereis = AnnexWhereis {
+            key: "key".into(),
+            copies: vec![AnnexLocation {
+                uuid: "here".into(),
+                description: "laptop".into(),
+                here: true,
+            }],
+            untrusted: vec![AnnexLocation {
+                uuid: "backup".into(),
+                description: "backup".into(),
+                here: false,
+            }],
+        };
+        assert_eq!(
+            annex_whereis_lines(&Loadable::Ready(std::sync::Arc::new(whereis.clone()))),
+            ["laptop · this clone", "backup (untrusted)"]
+        );
+        whereis.copies.clear();
+        assert_eq!(
+            annex_whereis_lines(&Loadable::Ready(std::sync::Arc::new(whereis.clone()))),
+            ["backup (untrusted)"]
+        );
+        whereis.untrusted.clear();
+        assert_eq!(
+            annex_whereis_lines(&Loadable::Ready(std::sync::Arc::new(whereis))),
+            ["No known copies."]
+        );
+    }
 
     #[test]
     fn file_diff_ready_state_prefers_processing_when_cache_is_stale() {

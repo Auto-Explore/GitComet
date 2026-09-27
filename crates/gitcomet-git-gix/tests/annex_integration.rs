@@ -183,8 +183,9 @@ fn copy_drop_get_and_refused_drop() {
         },
     )
     .unwrap();
+    let key = git(&repo, &["annex", "lookupkey", "big.bin"]);
     let whereis = open(&repo)
-        .annex_whereis_cancellable(Path::new("big.bin"), &CancellationToken::new())
+        .annex_whereis_cancellable(key.trim(), &CancellationToken::new())
         .unwrap();
     let places: Vec<_> = whereis
         .copies
@@ -667,11 +668,28 @@ fn special_remote_types_come_from_the_annex_branch() {
     for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com")] {
         git(&clone, &["config", key, value]);
     }
-    git(&clone, &["annex", "init", "-q", "desktop"]);
-
-    let support = open(&clone)
+    let opened = open(&clone);
+    let fresh = opened
         .large_file_support_cancellable(&CancellationToken::new())
         .unwrap();
+    assert!(
+        fresh.annex.in_use(),
+        "remote-tracking git-annex identifies fresh clones"
+    );
+    assert!(fresh.annex.has_annex_branch);
+    assert!(!fresh.annex.initialized());
+    assert!(!fresh.annex.has_annex_dir);
+    opened
+        .run_large_file_command(&LargeFileCommand::AnnexInit)
+        .unwrap();
+
+    let support = opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert!(
+        support.annex.uuid.is_some(),
+        "initialization is visible on the existing handle"
+    );
     let backup = support
         .annex
         .repositories
@@ -696,7 +714,7 @@ fn special_remote_types_come_from_the_annex_branch() {
         dir.path().join("store").display()
     )])
     .unwrap();
-    let enabled = open(&clone)
+    let enabled = opened
         .large_file_support_cancellable(&CancellationToken::new())
         .unwrap();
     assert!(enabled.annex.repositories.iter().any(|repo| {
@@ -1256,4 +1274,135 @@ fn repositories_read_from_logs_match_git_annex_info() {
     }
     assert_eq!(ours, theirs);
     assert_eq!(support.annex.numcopies, Some(3));
+}
+
+#[test]
+fn support_refresh_sees_new_special_remote_on_the_same_handle() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let opened = open(&repo);
+    let storage = dir.path().join("My Backup");
+    fs::create_dir(&storage).unwrap();
+    opened
+        .run_large_file_command(&LargeFileCommand::AnnexInitRemote {
+            name: "other".into(),
+            special_type: "directory".into(),
+            params: vec![
+                format!("directory={}", storage.display()),
+                "encryption=none".into(),
+            ],
+        })
+        .unwrap();
+    let support = opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert!(support.annex.repositories.iter().any(|repository| {
+        repository.remote_name.as_deref() == Some("other")
+            && repository.special_type.as_deref() == Some("directory")
+    }));
+}
+
+#[test]
+fn all_annex_trust_levels_apply() {
+    use gitcomet_core::large_files::AnnexTrust;
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let opened = open(&repo);
+    for trust in [
+        AnnexTrust::Trusted,
+        AnnexTrust::Untrusted,
+        AnnexTrust::Semitrusted,
+    ] {
+        opened
+            .run_large_file_command(&LargeFileCommand::AnnexTrust {
+                repository: "backup".into(),
+                trust,
+            })
+            .unwrap();
+        let support = opened
+            .large_file_support_cancellable(&CancellationToken::new())
+            .unwrap();
+        assert_eq!(
+            support
+                .annex
+                .repositories
+                .iter()
+                .find(|r| r.remote_name.as_deref() == Some("backup"))
+                .unwrap()
+                .trust,
+            trust
+        );
+    }
+}
+
+#[test]
+fn whereis_preserves_untrusted_and_empty_locations() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let opened = open(&repo);
+    let key = git(&repo, &["annex", "lookupkey", "big.bin"]);
+    git(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
+    git(&repo, &["annex", "drop", "big.bin"]);
+    git(&repo, &["annex", "untrust", "backup"]);
+    let locations = opened
+        .annex_whereis_cancellable(key.trim(), &CancellationToken::new())
+        .unwrap();
+    assert_eq!(locations.key, key.trim());
+    assert!(locations.copies.is_empty());
+    assert_eq!(locations.untrusted.len(), 1);
+    assert!(locations.untrusted[0].description.contains("backup"));
+
+    git(
+        &repo,
+        &["annex", "drop", "--force", "--from", "backup", "big.bin"],
+    );
+    let locations = opened
+        .annex_whereis_cancellable(key.trim(), &CancellationToken::new())
+        .unwrap();
+    assert!(locations.copies.is_empty() && locations.untrusted.is_empty());
+    assert!(
+        opened
+            .annex_whereis_cancellable("--invalid", &CancellationToken::new())
+            .is_err()
+    );
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(
+        opened
+            .annex_whereis_cancellable(key.trim(), &cancelled)
+            .is_err()
+    );
+}
+
+#[test]
+fn whereis_uses_historical_keys_after_the_path_is_deleted() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let old = git(&repo, &["annex", "lookupkey", "big.bin"]);
+    git(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
+    git(&repo, &["annex", "unlock", "big.bin"]);
+    fs::write(repo.join("big.bin"), b"a new version").unwrap();
+    git(&repo, &["annex", "add", "big.bin"]);
+    git(&repo, &["commit", "-qm", "new version"]);
+    let new = git(&repo, &["annex", "lookupkey", "big.bin"]);
+    git(&repo, &["rm", "big.bin"]);
+    git(&repo, &["commit", "-qm", "remove path"]);
+    let opened = open(&repo);
+    for (key, in_backup) in [(old.trim(), true), (new.trim(), false)] {
+        let locations = opened
+            .annex_whereis_cancellable(key, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(locations.key, key);
+        assert_eq!(
+            locations
+                .copies
+                .iter()
+                .any(|c| c.description.contains("backup")),
+            in_backup
+        );
+    }
 }

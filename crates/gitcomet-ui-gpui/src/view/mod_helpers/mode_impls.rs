@@ -481,6 +481,9 @@ pub(crate) enum AnnexPrompt {
     Numcopies {
         current: Option<u32>,
     },
+    Trust {
+        repository: String,
+    },
     ForceDrop {
         paths: Vec<std::path::PathBuf>,
     },

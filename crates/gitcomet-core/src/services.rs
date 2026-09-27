@@ -781,10 +781,10 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    /// Where an annexed file's content is, per git-annex's location log.
+    /// Where this content key is, including historical or deleted versions.
     fn annex_whereis_cancellable(
         &self,
-        _path: &Path,
+        _key: &str,
         _cancellation: &CancellationToken,
     ) -> Result<crate::large_files::AnnexWhereis> {
         Err(Error::new(ErrorKind::Unsupported(

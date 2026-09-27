@@ -2,8 +2,9 @@
 //! numcopies checks and special remotes all apply.
 
 use crate::util::{
-    run_git_background_capture, run_git_parsed_stdout_until_done, run_git_with_output,
-    run_git_with_output_until_done, validate_ref_like_arg,
+    git_command_failed_error, run_git_background_capture, run_git_background_output,
+    run_git_parsed_stdout_until_done, run_git_with_output, run_git_with_output_until_done,
+    validate_ref_like_arg,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::git_operation::{GitOperationEvent, TransferProgress};
@@ -468,6 +469,20 @@ fn parse_whereis(json: &str) -> Result<AnnexWhereis> {
         .find(|line| !line.trim().is_empty())
         .and_then(|line| serde_json::from_str(line).ok())
         .ok_or_else(|| backend("git annex whereis: no result"))?;
+    // A valid negative lookup still includes location arrays, but a fatal
+    // command error can also be JSON. Do not turn that into "no copies".
+    if value.get("command").and_then(|v| v.as_str()) != Some("whereis")
+        || value
+            .get("key")
+            .and_then(|v| v.as_str())
+            .is_none_or(str::is_empty)
+        || !value.get("whereis").is_some_and(|v| v.is_array())
+        || value
+            .get("error-messages")
+            .is_some_and(|v| !v.as_array().is_some_and(Vec::is_empty))
+    {
+        return Err(backend("git annex whereis: invalid location result"));
+    }
     let locations = |key: &str| -> Vec<AnnexLocation> {
         value
             .get(key)
@@ -748,7 +763,13 @@ impl super::GixRepo {
             }
             C::AnnexTrust { repository, trust } => {
                 validate_name(repository, "repository")?;
-                self.run_annex_plain(&[trust.as_arg()], &[repository.as_str()], "git annex trust")
+                // The UI confirms the data-loss risk before submitting Trusted.
+                let args: &[&str] = if *trust == AnnexTrust::Trusted {
+                    &["trust", "--force"]
+                } else {
+                    &[trust.as_arg()]
+                };
+                self.run_annex_plain(args, &[repository.as_str()], "git annex trust")
             }
             C::AnnexDescribe {
                 repository,
@@ -860,16 +881,27 @@ impl super::GixRepo {
 
     pub(super) fn annex_whereis_impl(
         &self,
-        path: &Path,
+        key: &str,
         cancellation: &CancellationToken,
     ) -> Result<AnnexWhereis> {
         let mut cmd = self.git_annex(&["whereis", "--json"]);
-        cmd.arg("--").arg(path);
-        parse_whereis(&run_git_background_capture(
-            cmd,
-            "git annex whereis",
-            cancellation,
-        )?)
+        validate_name(key, "annex key")?;
+        cmd.arg(format!("--key={key}"));
+        let output = run_git_background_output(cmd, "git annex whereis", cancellation)?;
+        let parsed = parse_whereis(&String::from_utf8_lossy(&output.stdout));
+        if output.status.success() {
+            return parsed;
+        }
+        // whereis exits 1 when it knows of no trusted/semitrusted copy, even
+        // if untrusted locations are available. Other failures stay errors.
+        if output.status.code() == Some(1)
+            && let Ok(whereis) = parsed
+            && whereis.key == key
+            && whereis.copies.is_empty()
+        {
+            return Ok(whereis);
+        }
+        Err(git_command_failed_error("git annex whereis", output))
     }
 }
 
@@ -1015,6 +1047,21 @@ mod tests {
             !assistant_running(dir.path()),
             "left behind by a killed assistant"
         );
+    }
+
+    #[test]
+    fn whereis_rejects_error_json_instead_of_reporting_no_copies() {
+        for json in [
+            r#"{"command":"whereis","key":"K","whereis":[],"error-messages":["failed to read location log"]}"#,
+            r#"{"command":"whereis","success":false,"error-messages":[]}"#,
+            r#"{"command":"whereis","key":"K","success":false}"#,
+            "not JSON",
+        ] {
+            assert!(parse_whereis(json).is_err(), "{json}");
+        }
+        let negative = parse_whereis(r#"{"command":"whereis","key":"K","success":false,"error-messages":[],"whereis":[],"untrusted":[{"uuid":"backup","description":"backup","here":false}]}"#).unwrap();
+        assert!(negative.copies.is_empty());
+        assert_eq!(negative.untrusted.len(), 1);
     }
 
     #[test]

@@ -4,6 +4,8 @@ pub struct RepoExternalChange {
     pub index: bool,
     pub git_state: bool,
     pub tags: bool,
+    /// Attributes changed; ordinary worktree edits do not need support detection.
+    pub large_file_support: bool,
     /// Configuration/watch-policy inputs changed. A routine full refresh does
     /// not imply a changed verification context.
     pub verification_context: bool,
@@ -25,6 +27,7 @@ impl RepoExternalChange {
             index: false,
             git_state: false,
             tags: false,
+            large_file_support: false,
             verification_context: false,
         }
     }
@@ -35,6 +38,7 @@ impl RepoExternalChange {
             index: true,
             git_state: false,
             tags: false,
+            large_file_support: false,
             verification_context: false,
         }
     }
@@ -45,6 +49,7 @@ impl RepoExternalChange {
             index: false,
             git_state: true,
             tags: false,
+            large_file_support: false,
             verification_context: false,
         }
     }
@@ -55,11 +60,17 @@ impl RepoExternalChange {
             index: true,
             git_state: true,
             tags: true,
+            large_file_support: true,
             verification_context: false,
         }
     }
 
     pub const fn is_empty(self) -> bool {
-        !self.worktree && !self.index && !self.git_state && !self.tags && !self.verification_context
+        !self.worktree
+            && !self.index
+            && !self.git_state
+            && !self.tags
+            && !self.verification_context
+            && !self.large_file_support
     }
 }

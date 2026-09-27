@@ -533,6 +533,7 @@ fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalCha
         git_state: a.git_state || b.git_state,
         tags: a.tags || b.tags,
         verification_context: a.verification_context || b.verification_context,
+        large_file_support: a.large_file_support || b.large_file_support,
     }
 }
 

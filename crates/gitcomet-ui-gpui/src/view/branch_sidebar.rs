@@ -1015,7 +1015,10 @@ pub(super) fn branch_sidebar_rows(
                     if !matches_branch_filter(&branch.name, &filter) {
                         continue;
                     }
-                    if repo.annex_refs_hidden && gitcomet_core::annex::is_annex_ref(&branch.name) {
+                    if repo.annex_refs_hidden
+                        && head != Some(branch.name.as_str())
+                        && gitcomet_core::annex::is_annex_ref(&branch.name)
+                    {
                         continue;
                     }
                     local_leaf_meta.push(SlashTreeLeafMeta {
@@ -2344,6 +2347,28 @@ mod tests {
             shown_source, hidden_source,
             "cached rows must not be reused"
         );
+    }
+
+    #[test]
+    fn checked_out_annex_bookkeeping_branch_stays_visible() {
+        for head in ["git-annex", "synced/main"] {
+            let mut repo = annex_repo();
+            repo.annex_refs_hidden = true;
+            repo.head_branch = Loadable::Ready(head.into());
+            let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+            let labels = branch_labels(&rows);
+            assert!(labels.iter().any(|name| name == head), "{head}: {labels:?}");
+            let other = if head == "git-annex" {
+                "synced/main"
+            } else {
+                "git-annex"
+            };
+            assert!(
+                !labels.iter().any(|name| name == other),
+                "{head}: {labels:?}"
+            );
+            assert!(!labels.iter().any(|name| name == "origin/git-annex"));
+        }
     }
 
     #[test]

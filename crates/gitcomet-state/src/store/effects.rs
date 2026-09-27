@@ -507,10 +507,10 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadAnnexWhereis { repo_id, path } => {
+        Effect::LoadAnnexWhereis { repo_id, key } => {
             send(Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
                 repo_id,
-                path,
+                key,
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
@@ -2003,7 +2003,7 @@ pub(super) fn schedule_effect(
                 );
             }
         }
-        Effect::LoadAnnexWhereis { repo_id, path } => {
+        Effect::LoadAnnexWhereis { repo_id, key } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
@@ -2012,7 +2012,7 @@ pub(super) fn schedule_effect(
                     repos,
                     msg_tx,
                     repo_id,
-                    path,
+                    key,
                     cancellation,
                 );
             }

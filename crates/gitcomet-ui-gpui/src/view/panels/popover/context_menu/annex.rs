@@ -59,6 +59,35 @@ fn prompt_entry(
     }
 }
 
+fn trust_entry(
+    repo_id: RepoId,
+    repository: String,
+    trust: AnnexTrust,
+    missing: bool,
+) -> ContextMenuItem {
+    if trust == AnnexTrust::Trusted {
+        prompt_entry(
+            "Mark as trusted…",
+            "icons/check.svg",
+            missing,
+            repo_id,
+            AnnexPrompt::Trust { repository },
+        )
+    } else {
+        entry(
+            if trust == AnnexTrust::Semitrusted {
+                "Mark as semitrusted"
+            } else {
+                "Mark as untrusted"
+            },
+            "icons/check.svg",
+            missing,
+            repo_id,
+            LargeFileCommand::AnnexTrust { repository, trust },
+        )
+    }
+}
+
 fn support(repo: &RepoState) -> Option<&LargeFileSupport> {
     match &repo.large_file_support {
         Loadable::Ready(support) => Some(support.as_ref()),
@@ -516,22 +545,13 @@ pub(super) fn repository_model(
     } else {
         target.uuid.clone()
     };
-    for (text, trust) in [
-        ("Mark as trusted", AnnexTrust::Trusted),
-        ("Mark as semitrusted", AnnexTrust::Semitrusted),
-        ("Mark as untrusted", AnnexTrust::Untrusted),
+    for trust in [
+        AnnexTrust::Trusted,
+        AnnexTrust::Semitrusted,
+        AnnexTrust::Untrusted,
     ] {
         if trust != target.trust {
-            items.push(entry(
-                text,
-                "icons/check.svg",
-                missing,
-                repo_id,
-                LargeFileCommand::AnnexTrust {
-                    repository: repository.clone(),
-                    trust,
-                },
-            ));
+            items.push(trust_entry(repo_id, repository.clone(), trust, missing));
         }
     }
     items.push(prompt_entry(
@@ -545,4 +565,52 @@ pub(super) fn repository_model(
         },
     ));
     ContextMenuModel::new(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_menu_action_requires_confirmation_but_other_trust_levels_run_directly() {
+        let repo_id = RepoId(1);
+        for trust in [
+            AnnexTrust::Trusted,
+            AnnexTrust::Semitrusted,
+            AnnexTrust::Untrusted,
+        ] {
+            let ContextMenuItem::Entry {
+                action, disabled, ..
+            } = trust_entry(repo_id, "backup".into(), trust, false)
+            else {
+                panic!("expected menu entry");
+            };
+            assert!(!disabled);
+            match *action {
+                ContextMenuAction::OpenPopover { kind } => {
+                    assert_eq!(trust, AnnexTrust::Trusted);
+                    assert_eq!(
+                        kind,
+                        PopoverKind::annex(
+                            repo_id,
+                            AnnexPopoverKind::Prompt(AnnexPrompt::Trust {
+                                repository: "backup".into()
+                            })
+                        )
+                    );
+                }
+                ContextMenuAction::RunLargeFileCommand { command, .. } => {
+                    assert_ne!(trust, AnnexTrust::Trusted);
+                    assert_eq!(
+                        command,
+                        LargeFileCommand::AnnexTrust {
+                            repository: "backup".into(),
+                            trust
+                        }
+                    );
+                }
+                _ => panic!("unexpected trust action"),
+            }
+        }
+    }
 }

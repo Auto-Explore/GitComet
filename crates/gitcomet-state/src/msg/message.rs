@@ -786,10 +786,10 @@ pub enum Msg {
     LoadLfsLocks {
         repo_id: RepoId,
     },
-    /// Ask git-annex where the content of `path` is.
+    /// Ask git-annex where the displayed content keys are.
     LoadAnnexWhereis {
         repo_id: RepoId,
-        path: PathBuf,
+        keys: Vec<String>,
     },
     /// List local annexed content no file uses any more.
     LoadAnnexUnused {
@@ -1336,7 +1336,7 @@ pub enum InternalMsg {
     },
     AnnexWhereisLoaded {
         repo_id: RepoId,
-        path: PathBuf,
+        key: String,
         result: Result<gitcomet_core::large_files::AnnexWhereis, Error>,
     },
     AnnexUnusedLoaded {

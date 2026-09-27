@@ -154,7 +154,7 @@ pub enum Effect {
     },
     LoadAnnexWhereis {
         repo_id: RepoId,
-        path: PathBuf,
+        key: String,
     },
     LoadAnnexUnused {
         repo_id: RepoId,

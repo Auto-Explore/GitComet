@@ -1210,3 +1210,94 @@ fn timing_commit_details_of_a_large_plain_commit() {
         samples[0], samples[2]
     );
 }
+
+#[test]
+fn support_refresh_reads_external_config_and_attribute_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    let opened = GixBackend.open(repo).unwrap();
+    assert!(
+        !opened
+            .large_file_support_cancellable(&CancellationToken::new())
+            .unwrap()
+            .lfs
+            .in_use()
+    );
+    git(repo, &["config", "filter.lfs.clean", "git-lfs clean -- %f"]);
+    git(repo, &["config", "lfs.storage", "custom-lfs"]);
+    fs::write(repo.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
+    let support = opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert!(support.lfs.filter_configured);
+    assert!(support.lfs.storage_dir.ends_with("custom-lfs"));
+    assert_eq!(support.lfs.tracked_patterns.len(), 1);
+    assert_eq!(support.lfs.tracked_patterns[0].pattern, "*.bin");
+    fs::write(
+        repo.join(".gitattributes"),
+        "*.psd filter=lfs -text lockable\n",
+    )
+    .unwrap();
+    let support = opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert_eq!(support.lfs.tracked_patterns[0].pattern, "*.psd");
+    assert!(support.lfs.has_lockable_patterns());
+}
+
+#[test]
+fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    git(repo, &["commit", "--allow-empty", "-qm", "initial"]);
+    let opened = GixBackend.open(repo).unwrap();
+    assert!(
+        !opened
+            .large_file_support_cancellable(&CancellationToken::new())
+            .unwrap()
+            .annex
+            .in_use()
+    );
+    git(
+        repo,
+        &["update-ref", "refs/remotes/origin/git-annex", "HEAD"],
+    );
+    for packed in [false, true] {
+        if packed {
+            git(repo, &["pack-refs", "--all", "--prune"]);
+        }
+        let support = opened
+            .large_file_support_cancellable(&CancellationToken::new())
+            .unwrap();
+        assert!(support.annex.has_annex_branch, "packed={packed}");
+        assert!(support.annex.in_use());
+        assert!(!support.annex.initialized());
+    }
+}
+
+#[test]
+fn lfs_status_download_fetches_staged_content_and_preserves_staged_blobs() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = clone_lfs_history(dir.path());
+    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    let index_before = git(&repo, &["ls-files", "--stage"]);
+    let pointer = fs::read(repo.join("a.bin")).unwrap();
+    assert!(gitcomet_core::lfs::parse_pointer(&pointer).is_some());
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsPull {
+            paths: vec![repo.join("a.bin")],
+        },
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a.bin")).unwrap(),
+        "current version\n"
+    );
+    assert_eq!(git(&repo, &["ls-files", "--stage"]), index_before);
+}

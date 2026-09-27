@@ -1389,11 +1389,19 @@ pub(super) fn repo_command_finished(
         extra_effects.push(effect);
     }
     if command_succeeded
-        && matches!(&command, RepoCommandKind::LargeFile { command } if command.is_annex() && command.changes_object_store())
-        && let Some((path, _)) = repo_state.annex_whereis.clone()
+        && let RepoCommandKind::LargeFile { command } = &command
+        && command.is_annex()
+        && (command.changes_object_store()
+            || matches!(
+                command,
+                gitcomet_core::large_files::LargeFileCommand::AnnexTrust { .. }
+                    | gitcomet_core::large_files::LargeFileCommand::AnnexDescribe { .. }
+            ))
     {
-        repo_state.set_annex_whereis(Some((path.clone(), Loadable::Loading)));
-        extra_effects.push(Effect::LoadAnnexWhereis { repo_id, path });
+        for key in repo_state.annex_whereis.keys().cloned().collect::<Vec<_>>() {
+            repo_state.set_annex_whereis(key.clone(), Loadable::Loading);
+            extra_effects.push(Effect::LoadAnnexWhereis { repo_id, key });
+        }
     }
     // A listing that was shown is stale once content moved.
     if matches!(&command, RepoCommandKind::LargeFile { command } if command.is_annex() && command.changes_object_store())

@@ -263,6 +263,7 @@ fn merge_change_coalesces_to_both() {
             git_state: true,
             tags: false,
             verification_context: false,
+            large_file_support: false,
         }
     );
     assert_eq!(
@@ -273,6 +274,7 @@ fn merge_change_coalesces_to_both() {
             git_state: true,
             tags: false,
             verification_context: false,
+            large_file_support: false,
         }
     );
     assert_eq!(
@@ -339,6 +341,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             git_state: true,
             tags: false,
             verification_context: false,
+            large_file_support: false,
         })
     );
 }
@@ -1130,4 +1133,65 @@ fn annex_bookkeeping_writes_cannot_schedule_another_refresh() {
             );
         }
     }
+}
+
+#[test]
+fn attribute_events_request_support_without_scanning_on_ordinary_edits() {
+    let dir = unique_temp_dir("gitcomet-monitor-attributes");
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    for path in [".gitattributes", "sub/.gitattributes", "file.txt"] {
+        for kind in [
+            EventKind::Any,
+            EventKind::Remove(notify::event::RemoveKind::File),
+        ] {
+            let event = notify::Event {
+                kind,
+                paths: vec![root.join(path)],
+                attrs: Default::default(),
+            };
+            let change = classify_change(
+                root,
+                Some(&root.join(".git")),
+                &mut TestRules::default(),
+                &event,
+            )
+            .unwrap();
+            assert!(change.worktree);
+            assert_eq!(change.large_file_support, path.ends_with(".gitattributes"));
+            assert_eq!(
+                merge_change(change, RepoExternalChange::Worktree).large_file_support,
+                change.large_file_support
+            );
+        }
+    }
+    let event = notify::Event {
+        kind: EventKind::Any,
+        paths: vec![root.join(".git/info/attributes")],
+        attrs: Default::default(),
+    };
+    assert!(
+        classify_change(
+            root,
+            Some(&root.join(".git")),
+            &mut TestRules::default(),
+            &event
+        )
+        .unwrap()
+        .git_state
+    );
+}
+
+#[test]
+fn ignored_attributes_file_still_refreshes_support() {
+    let dir = unique_temp_dir("gitcomet-ignored-attributes");
+    let workdir = dir.path();
+    init_repo_for_ignore_tests(workdir);
+    fs::write(workdir.join(".gitignore"), ".gitattributes\n").unwrap();
+    let mut rules = load_gitignore_rules(workdir);
+    let event = notify::Event::new(EventKind::Any).add_path(workdir.join(".gitattributes"));
+    let change = summarize_event(workdir, Some(&workdir.join(".git")), &mut rules, &event)
+        .change
+        .unwrap();
+    assert!(change.large_file_support);
 }

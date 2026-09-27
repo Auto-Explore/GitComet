@@ -455,7 +455,10 @@ impl super::GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<LargeFileSupport> {
-        let repo = self.repo();
+        cancellation.check_cancelled()?;
+        // Commands and external tools can change configuration on the same
+        // open handle (annex init/enableremote, LFS install, custom storage).
+        let repo = self.reopen_repo()?;
         let config = repo.config_snapshot();
         let storage_dir = lfs_storage_dir(&repo);
         let skip_flag = |key: &str| {
@@ -483,7 +486,16 @@ impl super::GixRepo {
                 .try_find_reference("refs/heads/git-annex")
                 .ok()
                 .flatten()
-                .is_some(),
+                .is_some()
+                || repo.references().ok().is_some_and(|refs| {
+                    refs.remote_branches().ok().is_some_and(|mut refs| {
+                        refs.any(|reference| {
+                            reference.is_ok_and(|reference| {
+                                reference.name().as_bstr().ends_with(b"/git-annex")
+                            })
+                        })
+                    })
+                }),
             uuid: config
                 .string("annex.uuid")
                 .map(|value| value.to_str_lossy().into_owned())

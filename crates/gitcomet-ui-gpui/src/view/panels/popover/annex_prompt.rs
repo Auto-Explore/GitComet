@@ -1,6 +1,6 @@
 //! The one git-annex prompt: a single text field for adding or enabling a
 //! special remote, describing a repository or setting numcopies, and plain
-//! confirmations for dropping content, dropping unused content and starting
+//! confirmations for trusting a repository, dropping content and starting
 //! the webapp.
 
 use super::*;
@@ -16,6 +16,7 @@ pub(super) fn title(prompt: &AnnexPrompt) -> &'static str {
         AnnexPrompt::EnableSpecialRemote { .. } => "Enable special remote",
         AnnexPrompt::Describe { .. } => "Describe repository",
         AnnexPrompt::Numcopies { .. } => "Number of copies",
+        AnnexPrompt::Trust { .. } => "Trust this repository?",
         AnnexPrompt::ForceDrop { .. } => "Drop without verified copies?",
         AnnexPrompt::Unused => "Unused annexed content",
         AnnexPrompt::Webapp => "Open the git-annex webapp?",
@@ -32,7 +33,10 @@ fn field_label(prompt: &AnnexPrompt) -> Option<&'static str> {
         }
         AnnexPrompt::Describe { .. } => Some("Description"),
         AnnexPrompt::Numcopies { .. } => Some("Copies git-annex keeps before allowing a drop"),
-        AnnexPrompt::ForceDrop { .. } | AnnexPrompt::Unused | AnnexPrompt::Webapp => None,
+        AnnexPrompt::Trust { .. }
+        | AnnexPrompt::ForceDrop { .. }
+        | AnnexPrompt::Unused
+        | AnnexPrompt::Webapp => None,
     }
 }
 
@@ -43,6 +47,7 @@ pub(super) fn initial_text(prompt: &AnnexPrompt) -> String {
         AnnexPrompt::Describe { current, .. } => current.clone(),
         AnnexPrompt::Numcopies { current } => current.unwrap_or(1).to_string(),
         AnnexPrompt::AddSpecialRemote
+        | AnnexPrompt::Trust { .. }
         | AnnexPrompt::ForceDrop { .. }
         | AnnexPrompt::Unused
         | AnnexPrompt::Webapp => String::new(),
@@ -57,30 +62,31 @@ pub(super) fn prompt_command(
     let text = text.trim();
     match prompt {
         AnnexPrompt::AddSpecialRemote => {
-            let mut parts = text.split_whitespace();
+            let mut parts = shlex::split(text)
+                .ok_or("Close quotes and complete escapes in the parameters")?
+                .into_iter();
             let name = parts.next().ok_or("Enter a name and a type")?;
             let special_type = parts.next().ok_or("Enter the remote type after the name")?;
-            let params: Vec<String> = parts.map(str::to_string).collect();
+            let params: Vec<String> = parts.collect();
             if params.iter().any(|param| !param.contains('=')) {
                 return Err("Parameters after the type are key=value pairs");
             }
             Ok(LargeFileCommand::AnnexInitRemote {
-                name: name.to_string(),
-                special_type: special_type.to_string(),
+                name,
+                special_type,
                 params,
             })
         }
         AnnexPrompt::EnableSpecialRemote { .. } => {
-            let mut parts = text.split_whitespace();
+            let mut parts = shlex::split(text)
+                .ok_or("Close quotes and complete escapes in the parameters")?
+                .into_iter();
             let name = parts.next().ok_or("Enter the special remote name")?;
-            let params: Vec<String> = parts.map(str::to_string).collect();
+            let params: Vec<String> = parts.collect();
             if params.iter().any(|param| !param.contains('=')) {
                 return Err("Settings after the name are key=value pairs");
             }
-            Ok(LargeFileCommand::AnnexEnableRemote {
-                name: name.to_string(),
-                params,
-            })
+            Ok(LargeFileCommand::AnnexEnableRemote { name, params })
         }
         AnnexPrompt::Describe { repository, .. } => {
             if text.is_empty() {
@@ -95,6 +101,10 @@ pub(super) fn prompt_command(
             Ok(copies) if copies > 0 => Ok(LargeFileCommand::AnnexNumcopies { copies }),
             _ => Err("Enter a whole number of at least 1"),
         },
+        AnnexPrompt::Trust { repository } => Ok(LargeFileCommand::AnnexTrust {
+            repository: repository.clone(),
+            trust: gitcomet_core::large_files::AnnexTrust::Trusted,
+        }),
         AnnexPrompt::ForceDrop { paths } => Ok(LargeFileCommand::AnnexDrop {
             paths: paths.clone(),
             from: None,
@@ -225,6 +235,11 @@ pub(super) fn panel(
         ));
     }
     match prompt {
+        AnnexPrompt::Trust { repository } => {
+            body = body.child(super::popover_detail(theme, format!(
+                "Trust {repository} to keep its copies? git-annex will count them without verifying they still exist. If that repository loses content, dropping other copies can cause data loss."
+            )));
+        }
         AnnexPrompt::Unused => body = unused_body(theme, repo, body),
         AnnexPrompt::Webapp => {
             body = body.child(super::popover_detail(
@@ -253,6 +268,7 @@ pub(super) fn panel(
         }
     }
     let submit_label = match prompt {
+        AnnexPrompt::Trust { .. } => "Trust repository",
         AnnexPrompt::ForceDrop { .. } => "Drop anyway",
         AnnexPrompt::Unused => "Drop",
         AnnexPrompt::Webapp => "Open webapp",
@@ -309,6 +325,63 @@ pub(super) fn panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn special_remote_prompts_parse_quotes_and_escapes_without_shell_expansion() {
+        let add = AnnexPrompt::AddSpecialRemote;
+        let enable = AnnexPrompt::EnableSpecialRemote {
+            name: "backup".into(),
+        };
+        for value in [
+            r#""/Volumes/My Backup""#,
+            "'/Volumes/My Backup'",
+            r"/Volumes/My\ Backup",
+        ] {
+            let param = format!("directory={value}");
+            assert!(
+                matches!(prompt_command(&add, &format!("backup directory {param} encryption=none")),
+                Ok(LargeFileCommand::AnnexInitRemote { name, special_type, params })
+                if name == "backup" && special_type == "directory" && params == ["directory=/Volumes/My Backup", "encryption=none"])
+            );
+            assert!(
+                matches!(prompt_command(&enable, &format!("backup {param}")),
+                Ok(LargeFileCommand::AnnexEnableRemote { params, .. }) if params == ["directory=/Volumes/My Backup"])
+            );
+        }
+        for prompt in [&add, &enable] {
+            for text in [
+                "backup directory directory=\"unfinished",
+                "backup directory directory='unfinished",
+                "backup directory directory=trailing\\",
+            ] {
+                assert!(prompt_command(prompt, text).is_err(), "{text:?}");
+            }
+        }
+        assert!(
+            matches!(prompt_command(&enable, r#"backup directory='$HOME/$(command)'"#),
+            Ok(LargeFileCommand::AnnexEnableRemote { params, .. }) if params == ["directory=$HOME/$(command)"])
+        );
+        assert!(
+            matches!(prompt_command(&enable, r#"backup directory='C:\My Backup'"#),
+            Ok(LargeFileCommand::AnnexEnableRemote { params, .. }) if params == [r"directory=C:\My Backup"])
+        );
+    }
+
+    #[test]
+    fn trust_prompt_has_no_text_field_and_submits_only_trusted() {
+        let prompt = AnnexPrompt::Trust {
+            repository: "backup".into(),
+        };
+        assert!(field_label(&prompt).is_none());
+        assert!(initial_text(&prompt).is_empty());
+        assert_eq!(
+            prompt_command(&prompt, ""),
+            Ok(LargeFileCommand::AnnexTrust {
+                repository: "backup".into(),
+                trust: gitcomet_core::large_files::AnnexTrust::Trusted,
+            })
+        );
+    }
 
     #[test]
     fn prompts_build_commands_or_explain_what_is_missing() {

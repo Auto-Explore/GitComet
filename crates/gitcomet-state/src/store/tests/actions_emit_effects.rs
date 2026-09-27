@@ -5737,39 +5737,96 @@ fn only_commands_that_can_change_support_reload_it() {
 }
 
 #[test]
-fn whereis_replies_for_a_superseded_path_are_dropped() {
+fn whereis_caches_both_displayed_keys_and_ignores_superseded_replies() {
     let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
-    let load = |path: &str| Msg::LoadAnnexWhereis {
+    let load = |keys: &[&str]| Msg::LoadAnnexWhereis {
         repo_id,
-        path: PathBuf::from(path),
+        keys: keys.iter().map(|key| key.to_string()).collect(),
     };
-    let effects = reduce(&mut repos, &id_alloc, &mut state, load("a.bin"));
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::LoadAnnexWhereis { .. }]
-    ));
-    reduce(&mut repos, &id_alloc, &mut state, load("b.bin"));
-
-    let loaded = |path: &str| {
+    let loaded = |key: &str| {
         Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
             repo_id,
-            path: PathBuf::from(path),
+            key: key.into(),
             result: Ok(gitcomet_core::large_files::AnnexWhereis {
-                key: path.into(),
+                key: key.into(),
                 ..Default::default()
             }),
         })
     };
-    reduce(&mut repos, &id_alloc, &mut state, loaded("a.bin"));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        load(&["old", "new", "old"]),
+    );
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::LoadAnnexWhereis { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        reduce(&mut repos, &id_alloc, &mut state, load(&["old", "new"])).is_empty(),
+        "in-flight lookups coalesce"
+    );
+    reduce(&mut repos, &id_alloc, &mut state, loaded("new"));
+    reduce(&mut repos, &id_alloc, &mut state, loaded("old"));
+    for key in ["old", "new"] {
+        assert!(
+            matches!(state.repos[0].annex_whereis_for(key), Some(Loadable::Ready(whereis)) if whereis.key == key)
+        );
+    }
+    let effects = reduce(&mut repos, &id_alloc, &mut state, load(&["new", "latest"]));
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::LoadAnnexWhereis { .. }))
+            .count(),
+        2,
+        "an explicit lookup refreshes locations changed by external tools"
+    );
+    reduce(&mut repos, &id_alloc, &mut state, loaded("old"));
+    assert!(state.repos[0].annex_whereis_for("old").is_none());
     assert!(matches!(
-        state.repos[0].annex_whereis_for(std::path::Path::new("b.bin")),
+        state.repos[0].annex_whereis_for("latest"),
         Some(Loadable::Loading)
     ));
-    reduce(&mut repos, &id_alloc, &mut state, loaded("b.bin"));
-    assert!(matches!(
-        state.repos[0].annex_whereis_for(std::path::Path::new("b.bin")),
-        Some(Loadable::Ready(whereis)) if whereis.key == "b.bin"
-    ));
+    use gitcomet_core::large_files::{AnnexTrust, LargeFileCommand};
+    for command in [
+        LargeFileCommand::AnnexGetKeys {
+            keys: vec!["new".into()],
+        },
+        LargeFileCommand::AnnexTrust {
+            repository: "backup".into(),
+            trust: AnnexTrust::Trusted,
+        },
+        LargeFileCommand::AnnexDescribe {
+            repository: "backup".into(),
+            description: "archive".into(),
+        },
+    ] {
+        reduce(&mut repos, &id_alloc, &mut state, loaded("new"));
+        reduce(&mut repos, &id_alloc, &mut state, loaded("latest"));
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile { command },
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::LoadAnnexWhereis { .. }))
+                .count(),
+            2,
+            "content transfers, trust and descriptions refresh both displayed versions"
+        );
+    }
 }
 
 #[test]

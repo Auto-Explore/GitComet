@@ -1124,17 +1124,21 @@ pub(crate) fn run_git_background_capture(
     label: &str,
     cancellation: &CancellationToken,
 ) -> Result<String> {
-    let output = run_command_with_timeout_auth(
-        cmd,
-        label,
-        git_command_timeout(),
-        Some(cancellation),
-        false,
-    )?;
+    let output = run_git_background_output(cmd, label, cancellation)?;
     if !output.status.success() {
         return Err(git_command_failed_error(label, output));
     }
     Ok(bytes_to_text_preserving_utf8(&output.stdout))
+}
+
+/// Like the background capture, but lets callers interpret expected nonzero
+/// statuses before turning genuine command failures into errors.
+pub(crate) fn run_git_background_output(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Output> {
+    run_command_with_timeout_auth(cmd, label, git_command_timeout(), Some(cancellation), false)
 }
 
 fn run_command_with_timeout_auth(

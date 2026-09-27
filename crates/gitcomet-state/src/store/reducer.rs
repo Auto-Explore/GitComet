@@ -2023,32 +2023,42 @@ fn reduce_inner(
                 auth: None,
             }]
         }
-        Msg::LoadAnnexWhereis { repo_id, path } => {
-            match state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                Some(repo) => {
-                    repo.set_annex_whereis(Some((path.clone(), Loadable::Loading)));
-                    vec![Effect::LoadAnnexWhereis { repo_id, path }]
-                }
-                None => Vec::new(),
+        Msg::LoadAnnexWhereis { repo_id, keys } => {
+            let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+                return Vec::new();
+            };
+            // Retain shared sides when switching revisions, without accumulating
+            // a repository-wide cache. Replies for discarded keys are ignored.
+            let before = repo.annex_whereis.len();
+            repo.annex_whereis.retain(|key, _| keys.contains(key));
+            if repo.annex_whereis.len() != before {
+                repo.annex_whereis_rev = repo.annex_whereis_rev.wrapping_add(1);
             }
+            let mut effects = Vec::new();
+            for key in keys {
+                // This is an explicit lookup: allow reloading locations changed
+                // by other tools, while coalescing duplicate/in-flight keys.
+                if matches!(repo.annex_whereis_for(&key), Some(Loadable::Loading)) {
+                    continue;
+                }
+                repo.set_annex_whereis(key.clone(), Loadable::Loading);
+                effects.push(Effect::LoadAnnexWhereis { repo_id, key });
+            }
+            effects
         }
         Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
             repo_id,
-            path,
+            key,
             result,
         }) => {
             if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
-                // A newer request for another path supersedes this reply.
-                && repo
-                    .annex_whereis
-                    .as_ref()
-                    .is_some_and(|(loaded, _)| *loaded == path)
+                && repo.annex_whereis.contains_key(&key)
             {
                 let loaded = match result {
                     Ok(whereis) => Loadable::Ready(Arc::new(whereis)),
                     Err(error) => Loadable::Error(error.to_string()),
                 };
-                repo.set_annex_whereis(Some((path, loaded)));
+                repo.set_annex_whereis(key, loaded);
             }
             Vec::new()
         }

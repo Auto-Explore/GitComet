@@ -11,7 +11,7 @@ Showing what is annexed never runs git-annex: file rows, presence and the sideba
 | Where | What |
 | --- | --- |
 | Changed-file rows and commit details | An **annex** chip. It turns to the warning colour when the content is not in this clone. |
-| Diff pane | A card with the key and size of each side. When the content is here, the real diff sits below the card, including images and older versions of unlocked files. **Where is it?** lists the repositories git-annex has recorded as holding the content. It reads git-annex's location log and does not contact the remotes. |
+| Diff pane | A card with the key and size of each side. When the content is here, the real diff sits below the card, including images and older versions of unlocked files. **Where is it?** lists the repositories git-annex has recorded as holding each displayed version, including historical or deleted files. Untrusted copies are labelled. It reads git-annex's location log and does not contact the remotes. |
 | Sidebar | A **git-annex** section with this clone, other repositories and special remotes, their type and trust level, and the numcopies setting or adjusted-branch mode. The section appears only in repositories that use git-annex. With the sidebar collapsed, the same section opens from its icon in the rail. |
 | Branch lists | The `git-annex` and `synced/*` branches are hidden, locally and on remotes: in the sidebar, the branch badge's picker, the delete, rebase-onto and branch-from lists, and the upstream picker. A checked-out bookkeeping branch stays listed. |
 | Branch badge | An adjusted branch reads as its base branch, for example **main · adjusted (unlocked)**. |
@@ -37,6 +37,8 @@ Showing what is annexed never runs git-annex: file rows, presence and the sideba
 
 git-annex refuses to drop content when it cannot verify enough copies elsewhere. GitComet shows that refusal with git-annex's reason and suggests copying first or using **Move to**. **Drop even without other copies…** passes `--force` only after you confirm.
 
+**Mark as trusted…** asks you to confirm before trusting a repository. git-annex then counts its recorded copies without checking that they still exist, which can cause data loss if those copies disappear. Semitrusted and untrusted changes apply immediately.
+
 GitComet never lets git-annex commit. Sync runs with `--no-commit`, so your changes stay in the working tree until you commit them. The one exception is the webapp, which you start on purpose: it runs the git-annex assistant, which adds and commits changes by itself until you stop it. GitComet asks before starting it.
 
 **Find unused content…** lists old versions no branch or tag uses any more, corrupt copies `fsck` set aside, and partial downloads, with their sizes. **Drop** keeps anything git-annex cannot verify in another repository; **Drop without verified copies** deletes it anyway. Both refresh the list first, so they drop what is unused at that moment.
@@ -46,6 +48,8 @@ To add a special remote, enter the name, the type and its `key=value` parameters
 ```
 backup directory directory=/mnt/usb encryption=none
 ```
+
+Quote values that contain spaces, for example `directory="/Volumes/My Backup"`. Both add and enable prompts accept single or double quotes and backslash escapes. Values are passed directly to git-annex without shell expansion.
 
 A special remote another clone added is listed with its type but is not usable here until you enable it. Right-click it and choose **Enable *name* in this clone…**. Most types need only the name; a `directory` remote needs its path on this computer again:
 

@@ -104,7 +104,7 @@ impl LfsRepoInfo {
 pub struct AnnexRepoInfo {
     /// `.git/annex` exists.
     pub has_annex_dir: bool,
-    /// A local `git-annex` branch exists (e.g. a fresh clone of an annex repo).
+    /// A local or remote-tracking `git-annex` branch exists.
     pub has_annex_branch: bool,
     /// `annex.uuid`: this clone has run `git annex init`.
     pub uuid: Option<String>,

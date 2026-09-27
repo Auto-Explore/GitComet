@@ -1830,11 +1830,9 @@ pub struct RepoState {
     pub large_files_rev: u64,
     pub lfs_locks: Loadable<Arc<Vec<gitcomet_core::large_files::LfsLock>>>,
     pub lfs_locks_rev: u64,
-    /// `git annex whereis` for one path, loaded on demand by the diff card.
-    pub annex_whereis: Option<(
-        PathBuf,
-        Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>,
-    )>,
+    /// Location results keyed by content, bounded to the last requested sides.
+    pub annex_whereis:
+        std::collections::BTreeMap<String, Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>>,
     pub annex_whereis_rev: u64,
     /// `git annex unused`, loaded when its prompt opens.
     pub annex_unused: Loadable<Arc<gitcomet_core::large_files::AnnexUnused>>,
@@ -1957,7 +1955,7 @@ impl RepoState {
             large_files_rev: 0,
             lfs_locks: Loadable::NotLoaded,
             lfs_locks_rev: 0,
-            annex_whereis: None,
+            annex_whereis: Default::default(),
             annex_whereis_rev: 0,
             annex_unused: Loadable::NotLoaded,
             annex_unused_rev: 0,
@@ -2254,15 +2252,13 @@ impl RepoState {
 
     pub(crate) fn set_annex_whereis(
         &mut self,
-        whereis: Option<(
-            PathBuf,
-            Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>,
-        )>,
+        key: String,
+        whereis: Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>,
     ) {
-        if self.annex_whereis == whereis {
+        if self.annex_whereis.get(&key) == Some(&whereis) {
             return;
         }
-        self.annex_whereis = whereis;
+        self.annex_whereis.insert(key, whereis);
         self.annex_whereis_rev = self.annex_whereis_rev.wrapping_add(1);
     }
 
@@ -2277,15 +2273,12 @@ impl RepoState {
         self.annex_unused_rev = self.annex_unused_rev.wrapping_add(1);
     }
 
-    /// Where the content of `path` is, when that was loaded for it.
+    /// Locations for this exact content, independent of its current path.
     pub fn annex_whereis_for(
         &self,
-        path: &std::path::Path,
+        key: &str,
     ) -> Option<&Loadable<Arc<gitcomet_core::large_files::AnnexWhereis>>> {
-        self.annex_whereis
-            .as_ref()
-            .filter(|(loaded, _)| loaded == path)
-            .map(|(_, whereis)| whereis)
+        self.annex_whereis.get(key)
     }
 
     /// The adjusted branch HEAD is on, as `(base, mode)`, in an annex repo.
