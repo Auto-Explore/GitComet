@@ -620,13 +620,24 @@ pub fn lfs_include_pattern(path: &std::path::Path) -> Option<String> {
     let text = path.to_str()?;
     #[cfg(windows)]
     let text = text.replace('\\', "/");
-    if text.contains(',') || text.is_empty() {
+    if text.contains(',') || text.is_empty() || text.ends_with('/') {
         return None;
     }
     let mut escaped = String::with_capacity(text.len() + 1);
     // Anchor at the root so `a.bin` does not also fetch `dir/a.bin`.
     escaped.push('/');
-    for ch in text.chars() {
+    for (offset, ch) in text.char_indices() {
+        // git-lfs trims whitespace and one trailing slash/backslash before
+        // compiling the glob. End in a character class to preserve that byte.
+        if offset + ch.len_utf8() == text.len() && (ch.is_whitespace() || ch == '\\') {
+            escaped.push('[');
+            if ch == '\\' {
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+            escaped.push(']');
+            continue;
+        }
         if matches!(ch, '*' | '?' | '[' | ']' | '\\' | '!' | '#') {
             escaped.push('\\');
         }
@@ -651,6 +662,19 @@ mod command_tests {
             Some("/art/\\[v2\\] \\*.psd")
         );
         assert_eq!(lfs_include_pattern(Path::new("a,b.bin")), None);
+        assert_eq!(
+            lfs_include_pattern(Path::new("clip ")).as_deref(),
+            Some("/clip[ ]")
+        );
+        assert_eq!(
+            lfs_include_pattern(Path::new("clip\t")).as_deref(),
+            Some("/clip[\t]")
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            lfs_include_pattern(Path::new("clip\\")).as_deref(),
+            Some(r"/clip[\\]")
+        );
         #[cfg(unix)]
         assert_eq!(
             lfs_include_pattern(Path::new(r"a\b.bin")).as_deref(),

@@ -365,6 +365,14 @@ pub(super) fn summarize(
             PathClass::Git { tags } => {
                 change.git_state = true;
                 change.tags |= tags;
+                change.large_file_support |= snapshot.git_roots.iter().any(|root| {
+                    path.strip_prefix(root).is_ok_and(|relative| {
+                        relative == Path::new("info/attributes")
+                            || relative == Path::new("packed-refs")
+                            || (relative.starts_with("refs")
+                                && relative.file_name().is_some_and(|name| name == "git-annex"))
+                    })
+                });
             }
             PathClass::Worktree => {
                 let relative = path.strip_prefix(&snapshot.workdir).unwrap();

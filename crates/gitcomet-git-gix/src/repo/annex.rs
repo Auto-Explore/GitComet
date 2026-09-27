@@ -587,14 +587,29 @@ impl super::GixRepo {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         );
-        // A nonzero exit without per-file results (no such remote, not
-        // initialized) keeps Git's own error and stderr.
-        if let Err(error) = run
-            && !items.iter().any(|item| !item.success)
-        {
+        let failed: Vec<&AnnexItem> = items.iter().filter(|item| !item.success).collect();
+        if let Err(error) = run {
+            // SSH diagnostics and askpass markers in stderr drive credential
+            // recovery. Add the file details without replacing that failure
+            // or changing non-Git errors such as cancellation.
+            if let ErrorKind::Git(failure) = error.kind()
+                && !failed.is_empty()
+            {
+                let mut detail = failure_detail(&failed);
+                if let Some(original) = failure.detail() {
+                    detail = format!("{original}\n\n{detail}");
+                }
+                return Err(Error::new(ErrorKind::Git(GitFailure::new(
+                    failure.command(),
+                    failure.id(),
+                    failure.exit_code(),
+                    failure.stdout().to_vec(),
+                    failure.stderr().to_vec(),
+                    Some(detail),
+                ))));
+            }
             return Err(error);
         }
-        let failed: Vec<&AnnexItem> = items.iter().filter(|item| !item.success).collect();
         if !failed.is_empty() {
             let detail = failure_detail(&failed);
             return Err(Error::new(ErrorKind::Git(GitFailure::new(
@@ -651,9 +666,6 @@ impl super::GixRepo {
     }
 
     pub(super) fn run_annex_command(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
-        if let Some(operation) = gitcomet_core::git_operation::current() {
-            operation.emit(GitOperationEvent::CommandStarted);
-        }
         let result = crate::util::with_shared_git_auth(|| self.run_annex_command_inner(command));
         if command.restages_after() {
             // Also after a failure or a cancel, which kill git-annex before its
@@ -684,13 +696,53 @@ impl super::GixRepo {
                 self.run_annex_json(&args, paths, "git annex get")
             }
             C::AnnexGetKeys { keys } => {
-                let mut outputs = Vec::new();
                 for key in keys {
                     gitcomet_core::annex::parse_key(key)
                         .ok_or_else(|| backend(format!("not a git-annex key: {key}")))?;
+                }
+                let mut outputs = Vec::new();
+                let mut failures = Vec::new();
+                for key in keys {
                     let mut args = os(&["get", "--json-progress"]);
                     args.push(format!("--key={key}").into());
-                    outputs.push(self.run_annex_json(&args, &[], "git annex get")?.stdout);
+                    match self.run_annex_json(&args, &[], "git annex get") {
+                        Ok(output) => outputs.push(output.stdout),
+                        Err(error) => match error.kind() {
+                            ErrorKind::Git(failure) => failures.push((key, failure.clone())),
+                            // Cancellation must stop the whole batch immediately.
+                            _ => return Err(error),
+                        },
+                    }
+                }
+                if let Some((_, first)) = failures.first() {
+                    let detail = failures
+                        .iter()
+                        .map(|(key, failure)| {
+                            format!("{key}: {}", failure.detail().unwrap_or("download failed"))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let stderr = failures
+                        .iter()
+                        .flat_map(|(_, failure)| {
+                            failure
+                                .stderr()
+                                .iter()
+                                .copied()
+                                .chain(std::iter::once(b'\n'))
+                        })
+                        .collect();
+                    return Err(Error::new(ErrorKind::Git(GitFailure::new(
+                        first.command(),
+                        first.id(),
+                        first.exit_code(),
+                        failures
+                            .iter()
+                            .flat_map(|(_, failure)| failure.stdout().iter().copied())
+                            .collect(),
+                        stderr,
+                        Some(detail),
+                    ))));
                 }
                 Ok(CommandOutput {
                     command: "git annex get".to_string(),

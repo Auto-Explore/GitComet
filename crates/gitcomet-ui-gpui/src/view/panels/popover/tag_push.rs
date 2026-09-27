@@ -16,12 +16,14 @@ impl PopoverHost {
         if repo.detached_head_commit.is_some() {
             return Some("HEAD is detached — check out a branch first");
         }
-        match push_request(repo) {
+        match push_request(repo, &self.state.large_file_settings) {
             PushRequest::NotReady => Some("The repository is still loading"),
             PushRequest::NoRemotes => Some("Add a remote to push to first"),
-            PushRequest::Push | PushRequest::SetUpstream { .. } => request(repo, mode)
-                .is_none()
-                .then_some("The current branch cannot be pushed"),
+            PushRequest::Push | PushRequest::SetUpstream { .. } => {
+                request(repo, mode, &self.state.large_file_settings)
+                    .is_none()
+                    .then_some("The current branch cannot be pushed")
+            }
         }
     }
 
@@ -41,7 +43,7 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
             return true;
         };
-        let Some(request) = request(repo, mode) else {
+        let Some(request) = request(repo, mode, &self.state.large_file_settings) else {
             return true;
         };
         if request.set_upstream {
@@ -64,7 +66,11 @@ impl PopoverHost {
     }
 }
 
-pub(super) fn request(repo: &RepoState, mode: TagPushMode) -> Option<TagPushRequest> {
+pub(super) fn request(
+    repo: &RepoState,
+    mode: TagPushMode,
+    settings: &gitcomet_state::model::LargeFileSettings,
+) -> Option<TagPushRequest> {
     if repo.detached_head_commit.is_some() {
         return None;
     }
@@ -77,7 +83,7 @@ pub(super) fn request(repo: &RepoState, mode: TagPushMode) -> Option<TagPushRequ
     let (remote, target, set_upstream) = match &branch.upstream {
         Some(upstream) => (upstream.remote.clone(), upstream.branch.clone(), false),
         None => {
-            let PushRequest::SetUpstream { remote } = push_request(repo) else {
+            let PushRequest::SetUpstream { remote } = push_request(repo, settings) else {
                 return None;
             };
             (remote, local.clone(), true)
@@ -168,7 +174,7 @@ impl PopoverHost {
                     repo.id,
                     TagPushMode::ALL
                         .into_iter()
-                        .filter_map(|mode| request(repo, mode))
+                        .filter_map(|mode| request(repo, mode, &self.state.large_file_settings))
                         .collect(),
                 ))
             }
@@ -179,7 +185,7 @@ impl PopoverHost {
             } => {
                 let mode = self.push_upstream_tag_mode?;
                 let repo = self.state.repos.iter().find(|repo| repo.id == *repo_id)?;
-                let mut request = request(repo, mode)?;
+                let mut request = request(repo, mode, &self.state.large_file_settings)?;
                 request.remote = self.selected_push_upstream_remote()?;
                 request.branch = self
                     .push_upstream_branch_input

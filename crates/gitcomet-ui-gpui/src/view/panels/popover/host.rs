@@ -2264,7 +2264,8 @@ impl PopoverHost {
             let Some(repo) = self.state.repos.iter().find(|repo| repo.id == *repo_id) else {
                 return;
             };
-            let Some(mut request) = tag_push::request(repo, mode) else {
+            let Some(mut request) = tag_push::request(repo, mode, &self.state.large_file_settings)
+            else {
                 return;
             };
             request.remote = remote;

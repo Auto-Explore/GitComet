@@ -417,6 +417,13 @@ fn render_status_rows_for_section(
         .is_some_and(|selection| selection.explicit_section.is_some())
         || !selected_paths.is_empty();
     let submodule_statuses = submodule_status_lookup(repo);
+    // Build once for the visible batch, instead of scanning all locks per row.
+    let locked_paths: FxHashSet<&std::path::Path> = repo
+        .lfs_locks
+        .ready()
+        .into_iter()
+        .flat_map(|locks| locks.iter().map(|lock| lock.path.as_path()))
+        .collect();
     let theme = this.theme;
     let ui_scale = this.ui_scale();
     let visible_signature = this.status_visible_signature(repo, section, &range, entries.len());
@@ -549,7 +556,7 @@ fn render_status_rows_for_section(
                     large_file: repo
                         .large_file_state(section.diff_area(), &entry.path)
                         .cloned(),
-                    locked: repo.lfs_lock_for(&entry.path).is_some(),
+                    locked: locked_paths.contains(entry.path.as_path()),
                 },
                 entry,
                 path_display,

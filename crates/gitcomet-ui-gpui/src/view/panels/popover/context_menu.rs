@@ -1,5 +1,6 @@
 use super::*;
 use crate::kit::interaction::ControlInteractionExt as _;
+use gitcomet_core::domain::Upstream;
 
 mod annex;
 mod branch;
@@ -121,26 +122,19 @@ pub(super) fn push_copy_path_entries(
     });
 }
 
-fn active_branch_tracking_upstream_name(host: &PopoverHost) -> Option<String> {
-    let repo_id = host.active_repo_id()?;
-    let repo = host.state.repos.iter().find(|repo| repo.id == repo_id)?;
-    let Loadable::Ready(head) = &repo.head_branch else {
-        return None;
-    };
-    let Loadable::Ready(branches) = &repo.branches else {
-        return None;
-    };
-
-    branches
+fn active_branch_tracking_upstream(host: &PopoverHost) -> Option<&Upstream> {
+    let repo = host.active_repo()?;
+    let head = repo.head_branch.ready()?;
+    repo.branches
+        .ready()?
         .iter()
         .find(|branch| branch.name == *head)
         .and_then(|branch| branch.upstream.as_ref())
-        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
 }
 
-fn action_menu_title(base: &'static str, tracking_branch_name: Option<&str>) -> SharedString {
-    match tracking_branch_name {
-        Some(name) => format!("{base} {name}").into(),
+fn action_menu_title(base: &'static str, upstream: Option<&Upstream>) -> SharedString {
+    match upstream {
+        Some(upstream) => format!("{base} {}/{}", upstream.remote, upstream.branch).into(),
         None => base.into(),
     }
 }
@@ -1401,7 +1395,7 @@ impl PopoverHost {
                     .repos
                     .iter()
                     .find(|repo| repo.id == repo_id)
-                    .map(push_request)
+                    .map(|repo| push_request(repo, &self.state.large_file_settings))
                     .unwrap_or(PushRequest::NotReady);
                 match request {
                     PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),

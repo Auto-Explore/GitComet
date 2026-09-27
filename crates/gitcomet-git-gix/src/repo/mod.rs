@@ -453,6 +453,8 @@ pub(crate) struct GixRepo {
     _repo: gix::ThreadSafeRepository,
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
+    /// Shared by row, diff and preview readers; refreshed with support metadata.
+    large_file_scan: std::sync::Mutex<Option<Arc<large_files::CommittedPointerScan>>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
     history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
@@ -479,6 +481,7 @@ impl GixRepo {
             _repo: repo,
             gitlink_status_capability: std::sync::Mutex::new(None),
             branch_tracking_config: std::sync::Mutex::new(None),
+            large_file_scan: Default::default(),
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
             history_authors_cache: Default::default(),
@@ -512,10 +515,10 @@ impl GixRepo {
         self._repo.to_thread_local()
     }
 
-    /// For index-vs-worktree status: never starts git-annex (see
-    /// [`large_files::strip_annex_filter`]).
+    /// For index-vs-worktree status: use the refreshed filter configuration,
+    /// but never start git-annex (see [`large_files::strip_annex_filter`]).
     pub(super) fn status_repo(&self) -> gix::Repository {
-        let mut repo = self.repo();
+        let mut repo = self.large_file_read_repo();
         large_files::strip_annex_filter(&mut repo);
         repo
     }

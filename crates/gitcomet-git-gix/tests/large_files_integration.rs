@@ -56,14 +56,7 @@ fn init_repo(repo: &Path) {
 /// A repository whose `*.bin` files go through the real LFS filter.
 fn init_lfs_repo(repo: &Path) {
     init_repo(repo);
-    for (key, value) in [
-        ("filter.lfs.process", "git-lfs filter-process"),
-        ("filter.lfs.clean", "git-lfs clean -- %f"),
-        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
-        ("filter.lfs.required", "true"),
-    ] {
-        git(repo, &["config", key, value]);
-    }
+    configure_lfs_filters(repo);
     fs::write(
         repo.join(".gitattributes"),
         "*.bin filter=lfs diff=lfs merge=lfs -text\n*.psd filter=lfs diff=lfs merge=lfs -text lockable\n",
@@ -183,6 +176,43 @@ fn plain_repository_is_not_active() {
 }
 
 #[test]
+fn plain_pointer_text_diff_regression() {
+    use gitcomet_core::domain::{CommitId, DiffPreviewTextSide};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    let pointer = format!(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+        "1".repeat(64)
+    );
+    fs::write(repo.join("example.png"), &pointer).unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-qm", "pointer example"]);
+    let opened = GixBackend.open(repo).unwrap();
+    let target = DiffTarget::Commit {
+        commit_id: CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
+        path: Some("example.png".into()),
+    };
+    let text = opened.diff_file_text(&target).unwrap().unwrap();
+    assert!(
+        text.new_large.is_none(),
+        "ordinary text must remain diffable"
+    );
+    assert_eq!(
+        source_text(text.new_source.as_ref()).as_deref(),
+        Some(pointer.as_str())
+    );
+    let preview = opened
+        .diff_preview_text_file(&target, DiffPreviewTextSide::New)
+        .unwrap()
+        .unwrap();
+    assert!(preview.large_file.is_none());
+    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    assert!(image.new_large.is_none());
+    assert_eq!(image.new.as_deref(), Some(pointer.as_bytes()));
+}
+
+#[test]
 fn lfs_rows_report_pointer_worktree_and_presence() {
     if !git_lfs_available() {
         eprintln!("skipping: git-lfs is not installed");
@@ -265,7 +295,7 @@ fn annex_locked_and_unlocked_rows_are_recognised() {
     fs::write(object_dir.join(ANNEX_KEY), b"hello").unwrap();
     let link_target = format!(".git/annex/objects/{ANNEX_KEY_MIXED_DIR}/{ANNEX_KEY}/{ANNEX_KEY}");
     symlink(&link_target, repo.join("present.bin")).unwrap();
-    let missing_target = link_target.replace(ANNEX_KEY_MIXED_DIR, "Zz/Zz");
+    let missing_target = link_target.replace(ANNEX_KEY, &ANNEX_KEY.replace("2cf", "0cf"));
     symlink(&missing_target, repo.join("absent.bin")).unwrap();
     fs::write(
         repo.join("unlocked.bin"),
@@ -760,6 +790,62 @@ fn lfs_explicit_download_overrides_fetch_exclusions() {
 }
 
 #[test]
+fn lfs_positional_fetch_preserves_default_remote_selection() {
+    use gitcomet_core::large_files::LargeFileCommand;
+    if !git_lfs_available() {
+        return;
+    }
+    for selection in ["single", "lfsdefault", "branch"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, middle) = clone_lfs_history(dir.path());
+        git(&repo, &["remote", "rename", "origin", "upstream"]);
+        git(&repo, &["config", "--unset", "branch.main.remote"]);
+        if selection != "single" {
+            git(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "decoy",
+                    &file_url(&dir.path().join("absent.git")),
+                ],
+            );
+            git(
+                &repo,
+                &[
+                    "config",
+                    "remote.lfsdefault",
+                    if selection == "branch" {
+                        "decoy"
+                    } else {
+                        "upstream"
+                    },
+                ],
+            );
+        }
+        if selection == "branch" {
+            git(&repo, &["config", "branch.main.remote", "upstream"]);
+        }
+        let opened = GixBackend.open(&repo).unwrap();
+        let target = DiffTarget::Commit {
+            commit_id: gitcomet_core::domain::CommitId(middle.into()),
+            path: Some("a.bin".into()),
+        };
+        opened
+            .run_large_file_command(&LargeFileCommand::LfsFetchForDiff {
+                target: target.clone(),
+            })
+            .unwrap();
+        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        assert_eq!(
+            source_text(diff.new_source.as_ref()).as_deref(),
+            Some("middle version\n"),
+            "{selection}"
+        );
+    }
+}
+
+#[test]
 fn lfs_diff_download_fetches_both_historical_sides_without_checkout() {
     if !git_lfs_available() {
         return;
@@ -969,50 +1055,59 @@ fn lfs_named_checkout_treats_glob_characters_literally() {
     if !git_lfs_available() {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
-    init_lfs_repo(&repo);
-    for name in ["a[1].bin", "a1.bin"] {
-        fs::write(repo.join(name), format!("{name} content\n")).unwrap();
+    for (selected, other) in [
+        ("a[1].bin", "a1.bin"),
+        ("clip.bin ", "clip.bin"),
+        ("clip.bin\t", "clip.bin"),
+        #[cfg(unix)]
+        ("clip.bin\\", "clip.bin"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        init_lfs_repo(&repo);
+        fs::write(repo.join(".gitattributes"), "*.bin* filter=lfs\n").unwrap();
+        for name in [selected, other] {
+            fs::write(repo.join(name), format!("{name} content\n")).unwrap();
+        }
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "named files"]);
+        let remote = dir.path().join("remote.git");
+        git(
+            dir.path(),
+            &["init", "-q", "--bare", remote.to_str().unwrap()],
+        );
+        git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+        git(&repo, &["push", "-q", "-u", "origin", "HEAD:main"]);
+        run_lfs(
+            &repo,
+            gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
+                remote: "origin".into(),
+            },
+        );
+        for name in [selected, other] {
+            fs::write(
+                repo.join(name),
+                git(&repo, &["show", &format!("HEAD:{name}")]),
+            )
+            .unwrap();
+        }
+        run_lfs(
+            &repo,
+            gitcomet_core::large_files::LargeFileCommand::LfsPull {
+                paths: vec![selected.into()],
+            },
+        );
+        assert_eq!(
+            fs::read_to_string(repo.join(selected)).unwrap(),
+            format!("{selected} content\n")
+        );
+        assert!(
+            fs::read_to_string(repo.join(other))
+                .unwrap()
+                .starts_with("version https://git-lfs"),
+            "only the named file may be checked out"
+        );
     }
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "named files"]);
-    let remote = dir.path().join("remote.git");
-    git(
-        dir.path(),
-        &["init", "-q", "--bare", remote.to_str().unwrap()],
-    );
-    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
-    git(&repo, &["push", "-q", "-u", "origin", "HEAD:main"]);
-    run_lfs(
-        &repo,
-        gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
-            remote: "origin".into(),
-        },
-    );
-    for name in ["a[1].bin", "a1.bin"] {
-        fs::write(
-            repo.join(name),
-            git(&repo, &["show", &format!("HEAD:{name}")]),
-        )
-        .unwrap();
-    }
-    run_lfs(
-        &repo,
-        gitcomet_core::large_files::LargeFileCommand::LfsPull {
-            paths: vec!["a[1].bin".into()],
-        },
-    );
-    assert_eq!(
-        fs::read_to_string(repo.join("a[1].bin")).unwrap(),
-        "a[1].bin content\n"
-    );
-    assert!(
-        fs::read_to_string(repo.join("a1.bin"))
-            .unwrap()
-            .starts_with("version https://git-lfs"),
-        "only the named file may be checked out"
-    );
 }
 
 /// Where `git annex contentlocation` puts `ANNEX_KEY` in a non-bare repo
@@ -1119,6 +1214,10 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
     for (path, range) in [
         ("a.bin", false),
         ("nested/a [1].bin", false),
+        ("clip ", false),
+        ("clip\t", false),
+        #[cfg(unix)]
+        ("clip\\", false),
         ("a.bin", true),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -1254,12 +1353,14 @@ fn annex_locked_worktree_image_resolves_through_its_symlink() {
     };
     let (old_key, new_key) = (key(&before, 'a'), key(&after, 'b'));
     let link = |key: &str, bytes: &[u8]| {
-        let object_dir = repo.join(format!(".git/annex/objects/Xk/Wq/{key}"));
-        fs::create_dir_all(&object_dir).unwrap();
-        fs::write(object_dir.join(key), bytes).unwrap();
+        let relative =
+            Path::new(".git/annex/objects").join(&gitcomet_core::annex::object_paths(key, 2)[0]);
+        let object = repo.join(&relative);
+        fs::create_dir_all(object.parent().unwrap()).unwrap();
+        fs::write(object, bytes).unwrap();
         let path = repo.join("pic.png");
         let _ = fs::remove_file(&path);
-        symlink(format!(".git/annex/objects/Xk/Wq/{key}/{key}"), &path).unwrap();
+        symlink(relative, &path).unwrap();
     };
     link(&old_key, &before);
     git(&repo, &["add", "pic.png"]);
@@ -1423,6 +1524,75 @@ fn support_refresh_reads_external_config_and_attribute_changes() {
 }
 
 #[test]
+fn support_refresh_updates_worktree_filter_configuration() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    // Override any global LFS installation with a pass-through filter until
+    // the repository is open, so user configuration cannot mask stale reads.
+    for (key, value) in [
+        ("filter.lfs.process", ""),
+        ("filter.lfs.clean", "cat"),
+        ("filter.lfs.smudge", "cat"),
+        ("filter.lfs.required", "false"),
+    ] {
+        git(repo, &["config", key, value]);
+    }
+    fs::write(repo.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+    fs::write(
+        repo.join("a.bin"),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+            "1".repeat(64)
+        ),
+    )
+    .unwrap();
+    git(repo, &["add", "."]);
+    git(
+        repo,
+        &["commit", "-qm", "pointer before enabling LFS filters"],
+    );
+    let opened = GixBackend.open(repo).unwrap();
+    opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    configure_lfs_filters(repo);
+    fs::write(repo.join("a.bin"), "new content\n").unwrap();
+    opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    assert!(
+        diff.new_large.is_some(),
+        "the new filter config must clean the worktree content to its LFS pointer"
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("new content\n")
+    );
+
+    git(repo, &["add", "a.bin"]);
+    git(repo, &["commit", "-qm", "content tracked with LFS"]);
+    // Invalidate the cached stat without changing the content, forcing status
+    // to compare through the newly installed clean filter.
+    fs::write(repo.join("a.bin"), "new content\n").unwrap();
+    opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert!(git(repo, &["--no-optional-locks", "status", "--porcelain"]).is_empty());
+    let fresh_status = GixBackend.open(repo).unwrap().status().unwrap();
+    assert!(fresh_status.staged.is_empty() && fresh_status.unstaged.is_empty());
+    assert_eq!(
+        opened.status().unwrap(),
+        fresh_status,
+        "status on the existing handle must also use the refreshed LFS filters"
+    );
+}
+
+#[test]
 fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -1450,6 +1620,71 @@ fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
         assert!(support.annex.has_annex_branch, "packed={packed}");
         assert!(support.annex.in_use());
         assert!(!support.annex.initialized());
+    }
+}
+
+#[test]
+fn annex_remote_tracking_detection_matches_the_complete_branch_name() {
+    for (remotes, reference, annex) in [
+        (
+            vec!["origin"],
+            "refs/remotes/origin/feature/git-annex",
+            false,
+        ),
+        (
+            vec!["team", "team/alice"],
+            "refs/remotes/team/alice/git-annex",
+            true,
+        ),
+        (
+            vec!["team", "team/alice"],
+            "refs/remotes/team/alice/feature/git-annex",
+            false,
+        ),
+        (vec!["team"], "refs/remotes/team/alice/git-annex", false),
+        (vec![], "refs/remotes/origin/feature/git-annex", false),
+        (vec![], "refs/heads/feature/git-annex", false),
+        (vec![], "refs/heads/git-annex", true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_repo(repo);
+        git(repo, &["commit", "--allow-empty", "-qm", "initial"]);
+        for remote in remotes {
+            // Configure overlapping namespaces directly: `remote add` rejects
+            // them even though existing config can contain both names.
+            git(
+                repo,
+                &[
+                    "config",
+                    &format!("remote.{remote}.url"),
+                    "https://example.invalid/repo.git",
+                ],
+            );
+            git(
+                repo,
+                &[
+                    "config",
+                    &format!("remote.{remote}.fetch"),
+                    &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+                ],
+            );
+        }
+        let opened = GixBackend.open(repo).unwrap();
+        git(repo, &["update-ref", reference, "HEAD"]);
+        for packed in [false, true] {
+            if packed {
+                git(repo, &["pack-refs", "--all", "--prune"]);
+            }
+            let support = opened
+                .large_file_support_cancellable(&CancellationToken::new())
+                .unwrap();
+            assert_eq!(
+                support.annex.has_annex_branch, annex,
+                "{reference}, packed={packed}"
+            );
+            assert_eq!(support.is_active(), annex, "{reference}, packed={packed}");
+        }
     }
 }
 
@@ -1659,4 +1894,127 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
         assert!(state.pointer.is_lfs());
         assert_eq!(state.in_local_store, Some(false));
     }
+}
+
+#[cfg(unix)]
+fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
+    use std::os::unix::fs::PermissionsExt;
+    const CHILD: &str = "GITCOMET_LFS_TEST_ROOT";
+    let Some(root) = std::env::var_os(CHILD) else {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let shim = bin.join("git-lfs");
+        fs::write(&shim, script).unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        test_git_env::apply(&mut child);
+        let result = child
+            .args(["--exact", name, "--nocapture"])
+            .env(CHILD, root.path())
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "1")
+            .status()
+            .unwrap();
+        assert!(result.success());
+        return;
+    };
+    let repo = PathBuf::from(root).join("repo");
+    init_repo(&repo);
+    test(&repo);
+}
+
+#[cfg(unix)]
+fn silent_lfs_commands() -> [gitcomet_core::large_files::LargeFileCommand; 3] {
+    use gitcomet_core::large_files::LargeFileCommand;
+    [
+        LargeFileCommand::LfsFsck,
+        LargeFileCommand::LfsPrune,
+        LargeFileCommand::LfsTrack {
+            patterns: vec!["*.slow".into()],
+            filename: false,
+            lockable: false,
+            renormalize: vec!["file.slow".into()],
+        },
+    ]
+}
+
+#[cfg(unix)]
+fn prepare_slow_clean_filter(repo: &Path, clean: &str) {
+    fs::write(repo.join("file.slow"), "content\n").unwrap();
+    git(repo, &["add", "file.slow"]);
+    git(repo, &["config", "filter.slow.clean", clean]);
+    fs::write(repo.join(".gitattributes"), "*.slow filter=slow\n").unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn lfs_silent_local_commands_outlive_the_silence_deadline() {
+    with_lfs_shim(
+        "lfs_silent_local_commands_outlive_the_silence_deadline",
+        "#!/bin/sh\ncase \"$1\" in fsck|prune) sleep 3 ;; track) ;; *) exit 91 ;; esac\n",
+        |repo| {
+            prepare_slow_clean_filter(repo, "sleep 3; cat");
+            let opened = GixBackend.open(repo).unwrap();
+            for command in silent_lfs_commands() {
+                opened.run_large_file_command(&command).unwrap();
+            }
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lfs_silent_commands_announce_activity_and_can_be_cancelled() {
+    use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    with_lfs_shim(
+        "lfs_silent_commands_announce_activity_and_can_be_cancelled",
+        "#!/bin/sh\ncase \"$1\" in fsck|prune) printf started > started; exec sleep 30 ;; track) ;; *) exit 91 ;; esac\n",
+        |repo| {
+            prepare_slow_clean_filter(repo, "printf started > started; exec sleep 30");
+            let opened = GixBackend.open(repo).unwrap();
+            for command in silent_lfs_commands() {
+                let (tx, rx) = mpsc::channel();
+                let context = GitOperationContext::new("LFS test", move |_, event| {
+                    let _ = tx.send(event);
+                });
+                let operation = context.clone();
+                let opened = opened.clone();
+                let worker = std::thread::spawn(move || {
+                    let _scope = git_operation::attach(&operation);
+                    opened.run_large_file_command(&command)
+                });
+                let first = rx.recv_timeout(Duration::from_secs(5));
+                // Cancel even if the assertion will fail, so a regression
+                // cannot leave a silent worker blocking the test suite.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !repo.join("started").exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(git_operation::cancel(context.id()));
+                let cancelled_at = Instant::now();
+                let result = worker.join().unwrap();
+                assert_eq!(first, Ok(GitOperationEvent::CommandStarted));
+                assert!(matches!(
+                    result.unwrap_err().kind(),
+                    gitcomet_core::error::ErrorKind::Cancelled
+                ));
+                assert!(cancelled_at.elapsed() < Duration::from_secs(5));
+                assert!(
+                    repo.join("started").exists(),
+                    "must cancel a running subprocess"
+                );
+                assert!(
+                    !rx.try_iter()
+                        .any(|event| event == GitOperationEvent::CommandStarted),
+                    "announce the operation only once"
+                );
+                fs::remove_file(repo.join("started")).unwrap();
+            }
+        },
+    );
 }

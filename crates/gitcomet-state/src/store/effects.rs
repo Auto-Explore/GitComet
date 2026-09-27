@@ -1994,13 +1994,7 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
-                repo_load::schedule_load_lfs_locks(
-                    metadata_executor,
-                    repos,
-                    msg_tx,
-                    repo_id,
-                    cancellation,
-                );
+                repo_load::schedule_load_lfs_locks(executor, repos, msg_tx, repo_id, cancellation);
             }
         }
         Effect::LoadAnnexWhereis { repo_id, key } => {
@@ -2022,7 +2016,7 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_annex_unused(
-                    metadata_executor,
+                    executor,
                     repos,
                     msg_tx,
                     repo_id,

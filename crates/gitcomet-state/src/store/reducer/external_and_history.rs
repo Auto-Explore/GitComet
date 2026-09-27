@@ -244,10 +244,9 @@ pub(super) fn repo_externally_changed(
     };
 
     effects.extend(file_browser_effect);
-    // Config, refs and index changes may introduce LFS/annex without moving
-    // to a different branch. Worktree edits only rescan when attributes changed.
-    if change.large_file_support || change.git_state || change.index || change.verification_context
-    {
+    // The watcher identifies attributes/config/annex-ref changes explicitly.
+    // Ordinary index and HEAD updates do not change large-file capabilities.
+    if change.large_file_support || change.verification_context {
         effects.extend(super::effects::request_large_file_support_effect(
             repo_state,
         ));

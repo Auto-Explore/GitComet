@@ -1068,7 +1068,7 @@ fn tag_file_changes_refresh_tags() {
         "tag ref file should produce tags: true"
     );
 
-    // packed-refs → tags: true
+    // packed-refs may also change whether a git-annex bookkeeping ref exists.
     let packed_event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
         paths: vec![git_dir.join("packed-refs")],
@@ -1080,6 +1080,7 @@ fn tag_file_changes_refresh_tags() {
         Some(RepoExternalChange {
             git_state: true,
             tags: true,
+            large_file_support: true,
             ..Default::default()
         }),
         "packed-refs should produce tags: true"
@@ -1194,4 +1195,29 @@ fn ignored_attributes_file_still_refreshes_support() {
         .change
         .unwrap();
     assert!(change.large_file_support);
+}
+
+#[test]
+fn annex_ref_and_local_attributes_changes_refresh_support_selectively() {
+    let dir = unique_temp_dir("gitcomet-annex-support-events");
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    for (path, expected) in [
+        (".git/index", false),
+        (".git/HEAD", false),
+        (".git/refs/heads/main", false),
+        (".git/refs/heads/git-annex", true),
+        (".git/refs/remotes/origin/git-annex", true),
+        (".git/info/attributes", true),
+    ] {
+        let event = notify::Event::new(EventKind::Any).add_path(root.join(path));
+        let change = classify_change(
+            root,
+            Some(&root.join(".git")),
+            &mut TestRules::default(),
+            &event,
+        )
+        .unwrap();
+        assert_eq!(change.large_file_support, expected, "{path}");
+    }
 }

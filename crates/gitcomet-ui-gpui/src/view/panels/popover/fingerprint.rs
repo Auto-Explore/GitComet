@@ -128,6 +128,10 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         _ => {
             if let Some(repo) = repo_for_popover(state, popover) {
                 hash_repo_for_popover(repo, popover, &mut hasher);
+                if matches!(popover, PopoverKind::PullPicker | PopoverKind::PushPicker) {
+                    repo.annex_takes_over_pull_push(&state.large_file_settings)
+                        .hash(&mut hasher);
+                }
             } else {
                 state.active_repo.hash(&mut hasher);
             }
@@ -1287,6 +1291,33 @@ mod tests {
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn pull_and_push_picker_fingerprints_follow_annex_takeover() {
+        for popover in [PopoverKind::PullPicker, PopoverKind::PushPicker] {
+            let repo_id = RepoId(9);
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: "/tmp/repo".into(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+            let mut state = AppState {
+                active_repo: Some(repo_id),
+                repos: vec![repo],
+                ..AppState::test_default()
+            };
+            let before = notify_fingerprint(&state, &popover);
+            let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+            support.annex.uuid = Some("u".into());
+            state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+            let detected = notify_fingerprint(&state, &popover);
+            assert_ne!(before, detected);
+            state.large_file_settings.annex_pull_push = false;
+            assert_ne!(detected, notify_fingerprint(&state, &popover));
+        }
     }
 
     #[test]

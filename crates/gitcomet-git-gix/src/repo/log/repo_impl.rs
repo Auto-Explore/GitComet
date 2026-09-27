@@ -828,7 +828,7 @@ impl GixRepo {
     }
 
     pub(in super::super) fn commit_details_impl(&self, id: &CommitId) -> Result<CommitDetails> {
-        let repo = self.reopen_repo()?;
+        let repo = self.repo();
         let spec = id.as_ref();
         let commit = find_commit_by_id(&repo, id)?;
 
@@ -856,7 +856,7 @@ impl GixRepo {
             .iter()
             .map(|parent| CommitId(oid_to_arc_str(parent)))
             .collect::<Vec<_>>();
-        let files = commit_file_changes(&repo, &commit, &parent_oids)?;
+        let files = commit_file_changes(self, &repo, &commit, &parent_oids)?;
 
         Ok(CommitDetails {
             id: id.clone(),
@@ -906,8 +906,8 @@ impl GixRepo {
     ) -> Result<Vec<CommitFileChange>> {
         match to {
             Some(to) => {
-                let repo = self.reopen_repo()?;
-                diff_range_files(&repo, from, to)
+                let repo = self.repo();
+                diff_range_files(self, &repo, from, to)
             }
             // Working-tree tip: the newer side is the live worktree, which has no
             // tree object, so shell out to `git diff <from>` for the file list

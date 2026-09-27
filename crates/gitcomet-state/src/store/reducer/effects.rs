@@ -2521,6 +2521,12 @@ pub(super) fn large_file_support_loaded(
         return effects;
     };
     let was_active = repo_state.large_file_support_active();
+    let support_changed = result.as_ref().is_ok_and(|support| {
+        repo_state
+            .large_file_support
+            .ready()
+            .is_none_or(|old| old.as_ref() != support)
+    });
     match result {
         Ok(support) => {
             repo_state.set_large_file_support(Loadable::Ready(support));
@@ -2550,11 +2556,28 @@ pub(super) fn large_file_support_loaded(
     {
         effects.push(effect);
     }
-    // Rows computed before the repo was known to use LFS/annex carry no
-    // state; recount them once.
-    if !was_active && repo_state.large_file_support_active() {
+    // Rows and diffs may have used the previous backend support snapshot.
+    // Re-resolve them after capabilities/storage change, including when a
+    // formerly managed pointer becomes ordinary text. Invalidating the scan's
+    // generation also discards an old result that arrives after this refresh.
+    if support_changed && (was_active || repo_state.large_file_support_active()) {
         repo_state.loads_in_flight.invalidate_line_stats();
         super::util::append_ready_line_stats_effect(repo_state, &mut effects);
+        if let Some(target) = repo_state.diff_state.diff_target.clone() {
+            let plan = super::util::selected_diff_load_plan(repo_state, &target);
+            super::util::apply_selected_diff_load_plan_state_with_reload_mode(
+                repo_state,
+                plan,
+                super::util::DiffReloadMode::KeepLoaded,
+            );
+            repo_state.bump_diff_state_rev();
+            effects.extend(super::util::diff_reload_effects(
+                repo_state, repo_id, target,
+            ));
+        }
+        if let Some(commit_id) = repo_state.history_state.selected_commit.clone() {
+            effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
+        }
     }
     effects
 }

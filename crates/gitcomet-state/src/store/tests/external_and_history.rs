@@ -4591,8 +4591,8 @@ fn external_support_refresh_is_targeted_and_coalesced_without_branch_changes() {
     use crate::msg::{InternalMsg, RepoExternalChange};
     for (change, expected) in [
         (RepoExternalChange::Worktree, 0),
-        (RepoExternalChange::Index, 1),
-        (RepoExternalChange::GitState, 1),
+        (RepoExternalChange::Index, 0),
+        (RepoExternalChange::GitState, 0),
         (
             RepoExternalChange {
                 large_file_support: true,

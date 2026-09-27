@@ -365,7 +365,7 @@ fn push_request_uses_configured_upstream_without_claiming_it_is_live() {
         Loadable::Loading,
     );
 
-    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
     assert!(!head_branch_has_live_upstream(&repo));
 }
 
@@ -388,7 +388,8 @@ fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
     }]));
 
     assert!(head_branch_has_live_upstream(&repo));
-    assert_eq!(pull_request(&repo), PullRequest::Pull);
+    assert!(pull_enabled(&repo, &Default::default()));
+    assert_eq!(pull_request(&repo, &Default::default()), PullRequest::Pull);
 }
 
 #[test]
@@ -405,10 +406,11 @@ fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
     );
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
-    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
     assert!(!head_branch_has_live_upstream(&repo));
+    assert!(!pull_enabled(&repo, &Default::default()));
     assert_eq!(
-        pull_request(&repo),
+        pull_request(&repo, &Default::default()),
         PullRequest::NotReady,
         "Pull must stay disabled until the configured branch exists remotely"
     );
@@ -431,7 +433,7 @@ fn push_request_offers_standard_remote_for_untracked_branch() {
     );
 
     assert_eq!(
-        push_request(&repo),
+        push_request(&repo, &Default::default()),
         PushRequest::SetUpstream {
             remote: "origin".to_string()
         }
@@ -450,7 +452,7 @@ fn push_request_uses_first_remote_when_origin_is_absent() {
     );
 
     assert_eq!(
-        push_request(&repo),
+        push_request(&repo, &Default::default()),
         PushRequest::SetUpstream {
             remote: "upstream".to_string()
         }
@@ -480,7 +482,30 @@ fn push_request_on_an_annex_adjusted_branch_never_offers_set_upstream() {
     support.annex.uuid = Some("u".into());
     repo.large_file_support = Loadable::Ready(Arc::new(support));
 
-    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
+    let settings = gitcomet_state::model::LargeFileSettings {
+        annex_pull_push: false,
+        ..Default::default()
+    };
+    assert_eq!(
+        push_request(&repo, &settings),
+        PushRequest::SetUpstream {
+            remote: "origin".into()
+        }
+    );
+    for support in [
+        Loadable::NotLoaded,
+        Loadable::Loading,
+        Loadable::Error("failed".into()),
+    ] {
+        repo.large_file_support = support;
+        assert_eq!(
+            push_request(&repo, &Default::default()),
+            PushRequest::SetUpstream {
+                remote: "origin".into()
+            }
+        );
+    }
 }
 
 #[test]
@@ -488,8 +513,14 @@ fn push_request_distinguishes_no_remotes_from_loading_data() {
     let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
     let loading = repo_with_push_state(None, Loadable::Loading);
 
-    assert_eq!(push_request(&no_remotes), PushRequest::NoRemotes);
-    assert_eq!(push_request(&loading), PushRequest::NotReady);
+    assert_eq!(
+        push_request(&no_remotes, &Default::default()),
+        PushRequest::NoRemotes
+    );
+    assert_eq!(
+        push_request(&loading, &Default::default()),
+        PushRequest::NotReady
+    );
 }
 
 #[test]
@@ -532,8 +563,9 @@ fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
     );
 
     assert!(!head_branch_has_live_upstream(&repo));
+    assert!(!pull_enabled(&repo, &Default::default()));
     assert_eq!(
-        pull_request(&repo),
+        pull_request(&repo, &Default::default()),
         PullRequest::Pull,
         "the backend pulls from the preferred remote and sets the upstream"
     );
@@ -544,10 +576,16 @@ fn pull_request_allows_a_detached_head_and_reports_a_repo_without_remotes() {
     let mut detached = repo_with_push_state(None, Loadable::Loading);
     detached.head_branch = Loadable::Ready("HEAD".to_string());
     assert!(head_is_detached(&detached));
-    assert_eq!(pull_request(&detached), PullRequest::Pull);
+    assert_eq!(
+        pull_request(&detached, &Default::default()),
+        PullRequest::Pull
+    );
 
     let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
-    assert_eq!(pull_request(&no_remotes), PullRequest::NoRemotes);
+    assert_eq!(
+        pull_request(&no_remotes, &Default::default()),
+        PullRequest::NoRemotes
+    );
 }
 
 #[test]

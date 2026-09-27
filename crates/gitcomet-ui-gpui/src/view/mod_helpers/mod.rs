@@ -98,12 +98,27 @@ pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
         .any(|candidate| candidate.remote == upstream.remote && candidate.name == upstream.branch)
 }
 
+/// The toolbar and menu can pull through annex on adjusted branches, or
+/// through Git when the current branch has a live remote-tracking upstream.
+pub(in crate::view) fn pull_enabled(
+    repo: &RepoState,
+    settings: &gitcomet_state::model::LargeFileSettings,
+) -> bool {
+    repo.annex_takes_over_pull_push(settings) || head_branch_has_live_upstream(repo)
+}
+
 /// Decide whether Pull can run. A configured upstream is actionable only when
 /// its exact remote-tracking ref exists; a future upstream configured by
 /// "Create new" must be pushed before Pull is offered. For a branch with no
 /// configured upstream, the backend can still use the preferred remote, while
 /// detached HEAD falls back to Git's own diagnostics.
-pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
+pub(in crate::view) fn pull_request(
+    repo: &RepoState,
+    settings: &gitcomet_state::model::LargeFileSettings,
+) -> PullRequest {
+    if pull_enabled(repo, settings) {
+        return PullRequest::Pull;
+    }
     let Loadable::Ready(head) = &repo.head_branch else {
         return PullRequest::NotReady;
     };
@@ -118,11 +133,7 @@ pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
         .find(|branch| branch.name == *head)
         .is_some_and(|branch| branch.upstream.is_some())
     {
-        return if head_branch_has_live_upstream(repo) {
-            PullRequest::Pull
-        } else {
-            PullRequest::NotReady
-        };
+        return PullRequest::NotReady;
     }
 
     let Loadable::Ready(remotes) = &repo.remotes else {
@@ -156,7 +167,10 @@ pub(in crate::view) fn active_sequencer_state(
 /// Decide whether an interactive Push can run immediately or first needs the
 /// existing set-upstream prompt. A configured upstream can name a branch that
 /// has not been pushed yet; that still gives Push an exact destination.
-pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
+pub(in crate::view) fn push_request(
+    repo: &RepoState,
+    settings: &gitcomet_state::model::LargeFileSettings,
+) -> PushRequest {
     let Loadable::Ready(head) = &repo.head_branch else {
         return PushRequest::NotReady;
     };
@@ -171,9 +185,9 @@ pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
     let Some(branch) = branches.iter().find(|branch| branch.name == *head) else {
         return PushRequest::NotReady;
     };
-    // An annex adjusted branch is local by design and never has an upstream:
-    // offering one would publish it. Push goes through `git annex push`.
-    if branch.upstream.is_some() || repo.annex_adjusted_branch().is_some() {
+    // When the annex integration handles Push it does not need an upstream
+    // on the adjusted branch. Plain Git still needs the upstream prompt.
+    if branch.upstream.is_some() || repo.annex_takes_over_pull_push(settings) {
         return PushRequest::Push;
     }
 

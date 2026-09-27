@@ -2292,8 +2292,8 @@ impl RepoState {
         let adjusted = gitcomet_core::annex::adjusted_branch(head)?;
         match &self.large_file_support {
             // Outside an annex repo the name is an ordinary branch.
-            Loadable::Ready(support) if !support.annex.in_use() => None,
-            _ => Some(adjusted),
+            Loadable::Ready(support) if support.annex.in_use() => Some(adjusted),
+            _ => None,
         }
     }
 

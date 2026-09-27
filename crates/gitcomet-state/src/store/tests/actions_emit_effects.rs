@@ -5327,6 +5327,33 @@ fn lfs_download_reloads_a_selected_historical_diff() {
         )),
         "the commit details chips must refresh too"
     );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LargeFile {
+                command: LargeFileCommand::AnnexGetKeys {
+                    keys: vec!["WORM-s1-m1--missing".into(), "WORM-s1-m1--available".into()],
+                },
+            },
+            result: Err(Error::new(ErrorKind::Backend(
+                "first key unavailable".into(),
+            ))),
+        }),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiffFile { target: got, .. } if got == &target)),
+        "partial downloads must refresh the displayed sides too"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadCommitDetails { .. }))
+    );
 }
 
 #[test]
@@ -5378,6 +5405,174 @@ fn lockable_patterns_load_locks_once_and_failures_stay_quiet() {
             .iter()
             .any(|e| matches!(e, Effect::LoadLfsLocks { .. }))
     );
+}
+
+#[test]
+fn support_changes_refresh_selected_content_but_unchanged_support_does_not() {
+    use crate::msg::InternalMsg;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let commit_id = CommitId("abc123".into());
+    let target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some("a.bin".into()),
+    };
+    state.repos[0].history_state.selected_commit = Some(commit_id);
+    state.repos[0].diff_state.diff_target = Some(target.clone());
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support
+        .lfs
+        .tracked_patterns
+        .push(gitcomet_core::large_files::LfsTrackedPattern {
+            pattern: "*.bin".into(),
+            source: ".gitattributes".into(),
+        });
+    for (support, refresh) in [
+        (support.clone(), true),
+        (support, false),
+        (Default::default(), true),
+    ] {
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(InternalMsg::LargeFileSupportLoaded {
+                repo_id,
+                result: Ok(support),
+            }),
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadDiffFile { target: got, .. } if got == &target)),
+            refresh
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadCommitDetails { .. })),
+            refresh
+        );
+    }
+}
+
+#[test]
+fn support_storage_changes_reclassify_rows_before_or_after_an_old_scan_finishes() {
+    use crate::msg::InternalMsg;
+    use gitcomet_core::domain::{FileStatus, FileStatusKind};
+    use gitcomet_core::large_files::{
+        LargeFilePointer, LargeFileState, LargeFileSupport, UncommittedLargeFiles,
+    };
+
+    for old_scan_finishes_first in [true, false] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        let mut support = LargeFileSupport::default();
+        support.lfs.has_local_store = true;
+        support.lfs.storage_dir = "/tmp/repo/old-lfs".into();
+        state.repos[0].set_large_file_support(Loadable::Ready(support.clone()));
+        let status = Arc::new(RepoStatus {
+            staged: Arc::new(vec![FileStatus {
+                path: "a.bin".into(),
+                kind: FileStatusKind::Added,
+                conflict: None,
+            }]),
+            unstaged: Arc::default(),
+        });
+        state.repos[0].set_status(Loadable::Ready(status.clone()));
+        let completed = |generation, present| {
+            let mut rows = UncommittedLargeFiles::default();
+            rows.staged.insert(
+                "a.bin".into(),
+                LargeFileState {
+                    pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer {
+                        oid: gitcomet_core::lfs::LfsOid([1; 32]),
+                        size: 12,
+                    }),
+                    in_local_store: Some(present),
+                    worktree: None,
+                    lockable: false,
+                },
+            );
+            Msg::Internal(InternalMsg::UncommittedLineStatsLoaded {
+                repo_id,
+                generation,
+                result: Ok(Default::default()),
+                large_files: Some(Ok(rows)),
+            })
+        };
+        state.repos[0].loads_in_flight.invalidate_line_stats();
+        let old_generation = state.repos[0]
+            .loads_in_flight
+            .start_line_stats(true)
+            .unwrap();
+        if old_scan_finishes_first {
+            assert!(
+                reduce(
+                    &mut repos,
+                    &id_alloc,
+                    &mut state,
+                    completed(old_generation, false),
+                )
+                .is_empty()
+            );
+            assert!(
+                state.repos[0].uncommitted_large_files.staged[Path::new("a.bin")].content_missing()
+            );
+        }
+
+        // LFS remains active; only the object store changes.
+        support.lfs.storage_dir = "/tmp/repo/new-lfs".into();
+        let loaded = || {
+            Msg::Internal(InternalMsg::LargeFileSupportLoaded {
+                repo_id,
+                result: Ok(support.clone()),
+            })
+        };
+        let mut effects = reduce(&mut repos, &id_alloc, &mut state, loaded());
+        if !old_scan_finishes_first {
+            assert!(effects.is_empty(), "the old scan still holds the lane");
+            let previous = state.repos[0].uncommitted_large_files.clone();
+            effects = reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                completed(old_generation, false),
+            );
+            assert_eq!(
+                state.repos[0].uncommitted_large_files, previous,
+                "discard the stale classification"
+            );
+        }
+        let [
+            Effect::LoadUncommittedLineStats {
+                generation,
+                status: replay_status,
+                large_files: true,
+                ..
+            },
+        ] = effects.as_slice()
+        else {
+            panic!("expected one row classification replay: {effects:?}");
+        };
+        assert_eq!(replay_status, &status);
+        assert_ne!(*generation, old_generation);
+        assert!(
+            reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                completed(*generation, true),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.repos[0].uncommitted_large_files.staged[Path::new("a.bin")].in_local_store,
+            Some(true)
+        );
+        assert!(
+            reduce(&mut repos, &id_alloc, &mut state, loaded()).is_empty(),
+            "unchanged support must not start another scan"
+        );
+    }
 }
 
 #[test]
@@ -5449,6 +5644,87 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
             .any(|e| matches!(e, Effect::RunLargeFileCommand { .. })),
         "turning the setting off restores plain push"
     );
+}
+
+#[test]
+fn adjusted_branch_name_requires_confirmed_annex_support() {
+    for support in [
+        Loadable::NotLoaded,
+        Loadable::Loading,
+        Loadable::Error("failed".into()),
+        Loadable::Ready(Arc::default()),
+    ] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        annex_repo_on(&mut state, "adjusted/main(unlocked)");
+        state.repos[0].large_file_support = support;
+        assert!(state.repos[0].annex_adjusted_branch().is_none());
+        for message in [
+            Msg::Pull {
+                repo_id,
+                mode: PullMode::Default,
+            },
+            Msg::Push { repo_id },
+        ] {
+            let effects = reduce(&mut repos, &id_alloc, &mut state, message);
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::RunLargeFileCommand { .. })),
+                "{effects:?}"
+            );
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Push { .. } | Effect::Pull { .. })),
+                "{effects:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn command_without_hooks_logs_its_operation_id() {
+    use crate::msg::InternalMsg;
+    use gitcomet_core::git_operation::GitOperationId;
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let operation_id = GitOperationId(4242);
+    for message in [
+        InternalMsg::GitOperationStarted {
+            repo_id,
+            operation_id,
+            label: "Get content".into(),
+            context: None,
+            time: std::time::SystemTime::UNIX_EPOCH,
+        },
+        InternalMsg::GitOperationFinished {
+            repo_id,
+            operation_id,
+            outer_outcome: crate::model::GitOperationOuterOutcome::Succeeded,
+            duration: std::time::Duration::from_millis(1),
+            message: Box::new(InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile {
+                    command: gitcomet_core::large_files::LargeFileCommand::AnnexGetKeys {
+                        keys: vec!["WORM-s1-m1--file".into()],
+                    },
+                },
+                result: Ok(gitcomet_core::services::CommandOutput {
+                    command: "git annex get".into(),
+                    stdout: "file".into(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                }),
+            }),
+        },
+    ] {
+        reduce(&mut repos, &id_alloc, &mut state, Msg::Internal(message));
+    }
+    let repo = &state.repos[0];
+    assert_eq!(
+        repo.feedback.command_log.last().unwrap().hook_operation_id,
+        Some(operation_id)
+    );
+    assert_eq!(repo.feedback.command_log_operation_id, None);
 }
 
 /// An annex repo whose support was loaded while HEAD was on `main`.

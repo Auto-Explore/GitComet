@@ -1549,7 +1549,11 @@ pub fn human_readable_bytes(bytes: u64) -> String {
     if unit == 0 {
         return format!("{bytes} B");
     }
-    let rounded = (value * 10.0).round() / 10.0;
+    let mut rounded = (value * 10.0).round() / 10.0;
+    if rounded >= 1000.0 && unit + 1 < UNITS.len() {
+        rounded /= 1000.0;
+        unit += 1;
+    }
     if rounded.fract() == 0.0 {
         format!("{rounded:.0} {}", UNITS[unit])
     } else {
@@ -1567,6 +1571,9 @@ mod human_readable_bytes_tests {
         assert_eq!(human_readable_bytes(999), "999 B");
         assert_eq!(human_readable_bytes(1_000), "1 KB");
         assert_eq!(human_readable_bytes(1_536), "1.5 KB");
+        assert_eq!(human_readable_bytes(999_949), "999.9 KB");
+        assert_eq!(human_readable_bytes(999_950), "1 MB");
+        assert_eq!(human_readable_bytes(999_950_000), "1 GB");
         assert_eq!(human_readable_bytes(12_345_678), "12.3 MB");
         assert_eq!(human_readable_bytes(1_200_000_000), "1.2 GB");
         assert_eq!(human_readable_bytes(5_000_000_000_000_000), "5000 TB");

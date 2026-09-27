@@ -1295,8 +1295,7 @@ fn reduce_inner(
                         .map(|repo| repo.feedback.diagnostics.len())
                 })
                 .flatten();
-            if has_hooks && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
-            {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
                 repo.feedback.command_log_operation_id = Some(operation_id);
             }
 

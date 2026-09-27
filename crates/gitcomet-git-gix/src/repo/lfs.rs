@@ -2,11 +2,12 @@
 //! user's transfer configuration all apply.
 
 use crate::util::{
-    run_git_background_capture, run_git_with_input_output, run_git_with_output,
+    run_git_background_capture, run_git_with_output, run_git_with_output_until_done,
     validate_ref_like_arg,
 };
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::git_operation::{self, GitOperationEvent};
 use gitcomet_core::large_files::{LargeFileCommand, LfsLock, lfs_include_pattern};
 use gitcomet_core::lfs;
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
@@ -45,6 +46,11 @@ impl super::GixRepo {
         &self,
         command: &LargeFileCommand,
     ) -> Result<CommandOutput> {
+        // Explicit LFS/annex commands need a Cancel control even when they
+        // produce no hook events, output or transfer progress.
+        if let Some(operation) = git_operation::current() {
+            operation.emit(GitOperationEvent::CommandStarted);
+        }
         match command {
             LargeFileCommand::LfsPull { paths } => self.lfs_pull(paths),
             LargeFileCommand::LfsFetchForDiff { target } => self.lfs_fetch_for_diff(target),
@@ -58,10 +64,10 @@ impl super::GixRepo {
                 run_git_with_output(cmd, "git lfs push --all")
             }
             LargeFileCommand::LfsPrune => {
-                run_git_with_output(self.git_lfs(&["prune"]), "git lfs prune")
+                run_git_with_output_until_done(self.git_lfs(&["prune"]), "git lfs prune")
             }
             LargeFileCommand::LfsFsck => {
-                run_git_with_output(self.git_lfs(&["fsck"]), "git lfs fsck")
+                run_git_with_output_until_done(self.git_lfs(&["fsck"]), "git lfs fsck")
             }
             LargeFileCommand::LfsInstall => run_git_with_output(
                 self.git_lfs(&["install", "--local"]),
@@ -100,7 +106,7 @@ impl super::GixRepo {
                 let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
                 lfs_include_pattern(relative).ok_or_else(|| {
                     Error::new(ErrorKind::Backend(format!(
-                        "cannot download `{}` by name: Git LFS patterns cannot contain commas",
+                        "cannot select `{}` with a Git LFS include pattern",
                         path.display()
                     )))
                 })
@@ -157,8 +163,7 @@ impl super::GixRepo {
             }
             _ => return Err(paths_arg_error("git lfs fetch for diff")),
         };
-        // Resolve to object ids before writing the line-delimited stdin protocol.
-        // Git LFS chooses the remote itself, just as for its ordinary fetch.
+        // Resolve refs before passing them as positional arguments.
         let repo = self.repo();
         for revision in &mut revisions {
             validate_ref_like_arg(revision, "revision")?;
@@ -188,13 +193,36 @@ impl super::GixRepo {
         if revisions.is_empty() {
             return Err(paths_arg_error("git lfs fetch"));
         }
-        let mut cmd = self.git_lfs(&["fetch", "--stdin", "--exclude="]);
-        cmd.arg(format!("--include={}", patterns.join(",")));
-        run_git_with_input_output(
-            cmd,
-            "git lfs fetch",
-            format!("{}\n", revisions.join("\n")).as_bytes(),
-        )
+        // Positional refs work on git-lfs versions before 3.8 (--stdin does
+        // not). Match git-lfs's default download-remote precedence.
+        let repo = self.reopen_repo()?;
+        let config = repo.config_snapshot();
+        let branch_remote = repo.head_name().ok().flatten().and_then(|head| {
+            config
+                .string(&format!("branch.{}.remote", head.shorten()))
+                .map(|value| value.to_string())
+        });
+        let remote = branch_remote
+            .or_else(|| {
+                config
+                    .string("remote.lfsdefault")
+                    .map(|value| value.to_string())
+            })
+            .or_else(|| {
+                let remotes = repo.remote_names();
+                (remotes.len() == 1).then(|| remotes.iter().next().unwrap().to_string())
+            })
+            .unwrap_or_else(|| "origin".into());
+        validate_ref_like_arg(&remote, "remote")?;
+        let mut outputs = Vec::new();
+        // Bound the argument list on platforms with small command-line limits.
+        for refs in revisions.chunks(128) {
+            let mut cmd = self.git_lfs(&["fetch", "--exclude="]);
+            cmd.arg(format!("--include={}", patterns.join(",")));
+            cmd.arg("--").arg(&remote).args(refs);
+            outputs.push(run_git_with_output(cmd, "git lfs fetch")?);
+        }
+        Ok(combine("git lfs fetch", outputs))
     }
 
     /// One tree per index stage and, when displayed, the worktree pointer, so
@@ -284,11 +312,19 @@ impl super::GixRepo {
             // --renormalize implies -u and cannot add a new .gitattributes.
             let mut attributes = self.git_workdir_cmd();
             attributes.args(["add", "--", ".gitattributes"]);
-            outputs.push(run_git_with_output(attributes, "git add .gitattributes")?);
+            // Updating the index can refresh other tracked files too, invoking
+            // their clean filters before the explicit renormalization below.
+            outputs.push(run_git_with_output_until_done(
+                attributes,
+                "git add .gitattributes",
+            )?);
             let mut add = self.git_workdir_cmd();
             add.args(["--literal-pathspecs", "add", "--renormalize", "--"])
                 .args(renormalize);
-            outputs.push(run_git_with_output(add, "git add --renormalize")?);
+            outputs.push(run_git_with_output_until_done(
+                add,
+                "git add --renormalize",
+            )?);
         }
         Ok(combine("git lfs track", outputs))
     }

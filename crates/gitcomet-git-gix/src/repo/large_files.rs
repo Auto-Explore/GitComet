@@ -108,10 +108,9 @@ fn backend_error(context: &str, error: impl std::fmt::Display) -> Error {
     Error::new(ErrorKind::Backend(format!("{context}: {error}")))
 }
 
-/// A pointer read from git, plus the link text when it came from a symlink.
+/// A pointer read from git. Content identity is independent of the link's path.
 struct Classified {
     pointer: LargeFilePointer,
-    link_target: Option<Vec<u8>>,
 }
 
 fn classify_bytes(bytes: &[u8], is_symlink: bool) -> Option<Classified> {
@@ -119,16 +118,12 @@ fn classify_bytes(bytes: &[u8], is_symlink: bool) -> Option<Classified> {
         let key = annex::key_from_symlink_target(bytes)?;
         return Some(Classified {
             pointer: LargeFilePointer::Annex(key),
-            link_target: Some(bytes.to_vec()),
         });
     }
     let pointer = lfs::parse_pointer(bytes)
         .map(LargeFilePointer::Lfs)
         .or_else(|| annex::key_from_pointer(bytes).map(LargeFilePointer::Annex))?;
-    Some(Classified {
-        pointer,
-        link_target: None,
-    })
+    Some(Classified { pointer })
 }
 
 fn classify_blob(
@@ -200,10 +195,17 @@ fn has_annex_branch(repo: &gix::Repository) -> bool {
         .flatten()
         .is_some()
         || repo.references().ok().is_some_and(|refs| {
-            refs.remote_branches().ok().is_some_and(|mut refs| {
-                refs.any(|reference| {
+            refs.remote_branches().ok().is_some_and(|refs| {
+                refs.flatten().any(|reference| {
+                    let Some(prefix) = reference.name().shorten().strip_suffix(b"/git-annex")
+                    else {
+                        return false;
+                    };
+                    // Remote names can contain slashes too. A branch such as
+                    // origin/feature/git-annex is not the bookkeeping branch.
                     reference
-                        .is_ok_and(|reference| reference.name().as_bstr().ends_with(b"/git-annex"))
+                        .remote_name(gix::remote::Direction::Fetch)
+                        .is_some_and(|remote| remote.as_bstr().as_bytes() == prefix)
                 })
             })
         })
@@ -212,14 +214,14 @@ fn has_annex_branch(repo: &gix::Repository) -> bool {
 /// Commit rows are classified only in repositories that use either tool, and
 /// only blobs small enough to be a pointer of the tools in use are read.
 pub(super) struct CommittedPointerScan {
+    repo: gix::ThreadSafeRepository,
     stores: LocalStores,
-    workdir: Option<PathBuf>,
-    max_pointer_bytes: u64,
+    lfs: bool,
+    annex: bool,
 }
 
 impl CommittedPointerScan {
-    /// `None` when neither tool is in use: then no blob is read at all.
-    pub(super) fn of(repo: &gix::Repository) -> Option<Self> {
+    fn of(repo: &gix::Repository) -> Self {
         let config = repo.config_snapshot();
         let annex = repo.common_dir().join("annex").is_dir()
             || config
@@ -229,23 +231,24 @@ impl CommittedPointerScan {
         let stores = LocalStores::of(repo);
         // Global filter config only means LFS is installed. Use the same
         // attribute sources as the support summary, including nested ones.
-        let max_pointer_bytes = if annex {
-            MAX_POINTER_BYTES
-        } else if stores.lfs.join("objects").is_dir()
+        let lfs = stores.lfs.join("objects").is_dir()
             || scan_lfs_attributes(repo, &CancellationToken::new(), |pattern, _| {
                 pattern.is_some()
             })
-            .unwrap_or(false)
-        {
-            MAX_LFS_POINTER_BYTES
-        } else {
-            return None;
-        };
-        Some(Self {
-            workdir: repo.workdir().map(Path::to_path_buf),
+            .unwrap_or(false);
+        Self {
+            repo: repo.clone().into_sync(),
             stores,
-            max_pointer_bytes,
-        })
+            lfs,
+            annex,
+        }
+    }
+
+    fn supports(&self, pointer: &LargeFilePointer) -> bool {
+        match pointer {
+            LargeFilePointer::Lfs(_) => self.lfs,
+            LargeFilePointer::Annex(_) => self.annex,
+        }
     }
 
     /// Large-file state of a committed blob, for commit file rows. `None` for
@@ -255,13 +258,19 @@ impl CommittedPointerScan {
         repo: &gix::Repository,
         id: gix::ObjectId,
         is_symlink: bool,
-        logical_path: &Path,
     ) -> Option<LargeFileState> {
-        let classified = classify_blob_up_to(repo, id, is_symlink, self.max_pointer_bytes)?;
-        let in_local_store = self
-            .workdir
-            .as_deref()
-            .and_then(|workdir| in_local_store(&classified, &self.stores, workdir, logical_path));
+        let max_bytes = if self.annex {
+            MAX_POINTER_BYTES
+        } else if self.lfs {
+            MAX_LFS_POINTER_BYTES
+        } else {
+            return None;
+        };
+        let classified = classify_blob_up_to(repo, id, is_symlink, max_bytes)?;
+        if !self.supports(&classified.pointer) {
+            return None;
+        }
+        let in_local_store = in_local_store(&classified, &self.stores);
         Some(LargeFileState {
             pointer: classified.pointer,
             in_local_store,
@@ -272,25 +281,15 @@ impl CommittedPointerScan {
 }
 
 /// Whether the content is here.
-fn in_local_store(
-    classified: &Classified,
-    stores: &LocalStores,
-    workdir: &Path,
-    path: &Path,
-) -> Option<bool> {
-    match (&classified.pointer, &classified.link_target) {
-        (LargeFilePointer::Lfs(pointer), _) => Some(
+fn in_local_store(classified: &Classified, stores: &LocalStores) -> Option<bool> {
+    match &classified.pointer {
+        LargeFilePointer::Lfs(pointer) => Some(
             stores
                 .lfs
                 .join(lfs::object_relative_path(&pointer.oid))
                 .is_file(),
         ),
-        (LargeFilePointer::Annex(_), Some(target)) => {
-            let target = gix::path::try_from_byte_slice(target).ok()?;
-            let link_dir = workdir.join(path);
-            Some(link_dir.parent()?.join(target).is_file())
-        }
-        (LargeFilePointer::Annex(key), None) => Some(stores.annex_object(&key.raw).is_some()),
+        LargeFilePointer::Annex(key) => Some(stores.annex_object(&key.raw).is_some()),
     }
 }
 
@@ -397,6 +396,27 @@ fn scan_lfs_attributes(
 }
 
 impl super::GixRepo {
+    /// Reuse the handle loaded with support metadata, including its refreshed
+    /// filter config. No config parse or cold index per click.
+    pub(super) fn large_file_read_repo(&self) -> gix::Repository {
+        self.large_file_scan
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map_or_else(|| self.repo(), |scan| scan.repo.to_thread_local())
+    }
+
+    pub(super) fn committed_pointer_scan(
+        &self,
+        repo: &gix::Repository,
+    ) -> std::sync::Arc<CommittedPointerScan> {
+        self.large_file_scan
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(|| std::sync::Arc::new(CommittedPointerScan::of(repo)))
+            .clone()
+    }
+
     /// Describe one side of a text diff whose git form is a pointer, and point
     /// it at the real content when that is here and small enough to diff.
     /// `worktree` sides may find content in the working tree itself.
@@ -407,7 +427,14 @@ impl super::GixRepo {
         logical_path: &Path,
         worktree: bool,
     ) -> Option<(LargeFileSide, Option<FileDiffTextSource>)> {
+        let scan = self.committed_pointer_scan(repo);
+        if !scan.lfs && !scan.annex {
+            return None;
+        }
         let classified = classify_git_form(&read_pointer_candidate(&source.path)?)?;
+        if !scan.supports(&classified.pointer) {
+            return None;
+        }
         let full = self.spec.workdir.join(logical_path);
         let worktree_content = worktree
             .then(|| match std::fs::symlink_metadata(&full) {
@@ -424,23 +451,19 @@ impl super::GixRepo {
             .flatten();
         let (content_path, identity) = match worktree_content {
             Some(path) => (Some(path), None),
-            None => match (&classified.pointer, &classified.link_target) {
-                (LargeFilePointer::Lfs(pointer), _) => {
-                    let path = lfs_storage_dir(repo).join(lfs::object_relative_path(&pointer.oid));
+            None => match &classified.pointer {
+                LargeFilePointer::Lfs(pointer) => {
+                    let path = scan
+                        .stores
+                        .lfs
+                        .join(lfs::object_relative_path(&pointer.oid));
                     (
                         path.is_file().then_some(path),
                         Some(format!("lfs:{}", pointer.oid)),
                     )
                 }
-                (LargeFilePointer::Annex(key), Some(target)) => {
-                    let path = gix::path::try_from_byte_slice(target)
-                        .ok()
-                        .and_then(|target| Some(full.parent()?.join(target)))
-                        .filter(|path| path.is_file());
-                    (path, Some(format!("annex:{}", key.raw)))
-                }
-                (LargeFilePointer::Annex(key), None) => (
-                    LocalStores::of(repo).annex_object(&key.raw),
+                LargeFilePointer::Annex(key) => (
+                    scan.stores.annex_object(&key.raw),
                     Some(format!("annex:{}", key.raw)),
                 ),
             },
@@ -478,37 +501,33 @@ impl super::GixRepo {
         &self,
         repo: &gix::Repository,
         git_form: &[u8],
-        logical_path: &Path,
         max_bytes: u64,
     ) -> Option<(LargeFileSide, Option<Vec<u8>>)> {
         if git_form.len() as u64 > MAX_POINTER_BYTES || !may_be_pointer(git_form) {
             return None;
         }
         let classified = classify_git_form(git_form)?;
-        let path = match (&classified.pointer, &classified.link_target) {
-            (LargeFilePointer::Lfs(pointer), _) => {
-                lfs_storage_dir(repo).join(lfs::object_relative_path(&pointer.oid))
-            }
-            (LargeFilePointer::Annex(_), Some(target)) => self
-                .spec
-                .workdir
-                .join(logical_path)
-                .parent()?
-                .join(gix::path::try_from_byte_slice(target).ok()?),
-            (LargeFilePointer::Annex(key), None) => {
-                match LocalStores::of(repo).annex_object(&key.raw) {
-                    Some(path) => path,
-                    None => {
-                        return Some((
-                            LargeFileSide {
-                                pointer: classified.pointer,
-                                content: LargeFileContent::MissingLocally,
-                            },
-                            None,
-                        ));
-                    }
+        let scan = self.committed_pointer_scan(repo);
+        if !scan.supports(&classified.pointer) {
+            return None;
+        }
+        let path = match &classified.pointer {
+            LargeFilePointer::Lfs(pointer) => scan
+                .stores
+                .lfs
+                .join(lfs::object_relative_path(&pointer.oid)),
+            LargeFilePointer::Annex(key) => match scan.stores.annex_object(&key.raw) {
+                Some(path) => path,
+                None => {
+                    return Some((
+                        LargeFileSide {
+                            pointer: classified.pointer,
+                            content: LargeFileContent::MissingLocally,
+                        },
+                        None,
+                    ));
                 }
-            }
+            },
         };
         let (content, bytes) = match std::fs::metadata(&path) {
             Ok(meta) if meta.len() > max_bytes => {
@@ -589,6 +608,15 @@ impl super::GixRepo {
             cancellation.check_cancelled()?;
             (annex.repositories, annex.numcopies) = self.annex_repositories(&repo);
         }
+        *self
+            .large_file_scan
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(CommittedPointerScan {
+            repo: repo.clone().into_sync(),
+            stores: LocalStores::of(&repo),
+            lfs: lfs.in_use(),
+            annex: annex.in_use(),
+        }));
         Ok(LargeFileSupport { lfs, annex })
     }
 
@@ -601,12 +629,14 @@ impl super::GixRepo {
         if status.staged.len() + status.unstaged.len() > LARGE_FILE_STATUS_ROW_LIMIT {
             return Ok(result);
         }
-        let repo = self.reopen_repo()?;
+        let repo = self.large_file_read_repo();
+        let scan = self.committed_pointer_scan(&repo);
+        if !scan.lfs && !scan.annex {
+            return Ok(result);
+        }
         let index = repo
             .index_or_empty()
             .map_err(|e| backend_error("read index for large files", e))?;
-        let stores = LocalStores::of(&repo);
-        let workdir = self.spec.workdir.clone();
         let mut lockable = LockableLookup {
             stack: repo
                 .attributes_only(
@@ -620,7 +650,7 @@ impl super::GixRepo {
                       worktree: Option<LargeFileWorktree>,
                       path: &Path,
                       lockable: &mut LockableLookup<'_>| {
-            let in_store = in_local_store(&classified, &stores, &workdir, path);
+            let in_store = in_local_store(&classified, &scan.stores);
             let is_lfs = classified.pointer.is_lfs();
             LargeFileState {
                 pointer: classified.pointer,
@@ -635,14 +665,18 @@ impl super::GixRepo {
             if entry.kind == FileStatusKind::Deleted {
                 continue;
             }
-            if let Some(classified) = index_classified(&repo, &index, &entry.path) {
+            if let Some(classified) = index_classified(&repo, &index, &entry.path)
+                && scan.supports(&classified.pointer)
+            {
                 let state = finish(classified, None, &entry.path, &mut lockable);
                 result.staged.insert(entry.path.clone(), state);
             }
         }
         for entry in status.unstaged.iter() {
             cancellation.check_cancelled()?;
-            if let Some((classified, worktree)) = self.classify_unstaged_row(&repo, &index, entry) {
+            if let Some((classified, worktree)) = self.classify_unstaged_row(&repo, &index, entry)
+                && scan.supports(&classified.pointer)
+            {
                 let state = finish(classified, Some(worktree), &entry.path, &mut lockable);
                 result.unstaged.insert(entry.path.clone(), state);
             }

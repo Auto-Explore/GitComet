@@ -183,7 +183,7 @@ pub(crate) fn commit_file_change_from_diff(
     let large_file = pointers
         .filter(|_| !is_submodule)
         .zip(new_id.or(old_id))
-        .and_then(|(pointers, id)| pointers.state(repo, id, link, &path));
+        .and_then(|(pointers, id)| pointers.state(repo, id, link));
     Ok(Some(CommitFileChange {
         path,
         kind,
@@ -198,6 +198,7 @@ pub(crate) fn commit_file_change_from_diff(
 /// `new_tree` is an addition) into the flat `CommitFileChange` list used by both
 /// commit details (parent → commit) and range comparisons (from → to).
 pub(crate) fn tree_diff_file_changes(
+    owner: &GixRepo,
     repo: &gix::Repository,
     old_tree: Option<&gix::Tree<'_>>,
     new_tree: &gix::Tree<'_>,
@@ -206,8 +207,11 @@ pub(crate) fn tree_diff_file_changes(
         .diff_tree_to_tree(old_tree, new_tree, None)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
 
+    if changes.is_empty() {
+        return Ok(Vec::new());
+    }
     let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
-    let pointers = CommittedPointerScan::of(repo);
+    let pointers = owner.committed_pointer_scan(repo);
     let mut scratch = CommitStatsScratch::default();
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
@@ -215,7 +219,7 @@ pub(crate) fn tree_diff_file_changes(
             repo,
             change,
             compute_stats,
-            pointers.as_ref(),
+            Some(&pointers),
             &mut scratch,
         )? {
             files.push(file);
@@ -225,6 +229,7 @@ pub(crate) fn tree_diff_file_changes(
 }
 
 pub(crate) fn commit_file_changes(
+    owner: &GixRepo,
     repo: &gix::Repository,
     commit: &gix::Commit<'_>,
     parent_ids: &[gix::ObjectId],
@@ -256,12 +261,13 @@ pub(crate) fn commit_file_changes(
         }
     };
 
-    tree_diff_file_changes(repo, parent_tree.as_ref(), &commit_tree)
+    tree_diff_file_changes(owner, repo, parent_tree.as_ref(), &commit_tree)
 }
 
 /// List the files that differ between two commits (`from` → `to`), for the
 /// compare-selected-commits feature. `from` is the base/older side.
 pub(crate) fn diff_range_files(
+    owner: &GixRepo,
     repo: &gix::Repository,
     from: &CommitId,
     to: &CommitId,
@@ -273,7 +279,7 @@ pub(crate) fn diff_range_files(
         .then(|| commit_tree_for_id(repo, from, "gix range from"))
         .transpose()?;
     let to_tree = commit_tree_for_id(repo, to, "gix range to")?;
-    tree_diff_file_changes(repo, from_tree.as_ref(), &to_tree)
+    tree_diff_file_changes(owner, repo, from_tree.as_ref(), &to_tree)
 }
 
 /// Resolve a comparison endpoint to the tree it names. Peels to a tree rather

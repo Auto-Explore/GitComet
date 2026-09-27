@@ -1418,12 +1418,11 @@ pub(super) fn repo_command_finished(
     }
     // Object-store changes do not modify Git history, but do change the
     // contents and presence metadata of an already selected historical diff.
-    if command_succeeded
-        && matches!(
-            &command,
-            RepoCommandKind::LargeFile { command } if command.changes_object_store()
-        )
-    {
+    // A batch can fetch some keys and still fail overall.
+    if matches!(
+        &command,
+        RepoCommandKind::LargeFile { command } if command.changes_object_store()
+    ) {
         if let Some(target) = repo_state.diff_state.diff_target.clone() {
             let load_plan = selected_diff_load_plan(repo_state, &target);
             apply_selected_diff_load_plan_state_with_reload_mode(

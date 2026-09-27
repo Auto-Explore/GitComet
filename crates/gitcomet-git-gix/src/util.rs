@@ -1834,31 +1834,6 @@ pub(crate) fn run_git_with_output_until_done(cmd: Command, label: &str) -> Resul
     Ok(command_output(label, output))
 }
 
-/// Feed a small request through a file so the ordinary authenticated command
-/// runner retains its cancellation, output and LFS-progress monitoring.
-pub(crate) fn run_git_with_input_output(
-    cmd: Command,
-    label: &str,
-    input: &[u8],
-) -> Result<CommandOutput> {
-    use std::io::{Seek as _, Write as _};
-    let mut file = tempfile::tempfile().map_err(io_err)?;
-    file.write_all(input).map_err(io_err)?;
-    file.rewind().map_err(io_err)?;
-    let output = run_command_with_timeout_auth_stdin(
-        cmd,
-        label,
-        git_command_timeout(),
-        None,
-        true,
-        Some(Stdio::from(file)),
-    )?;
-    if !output.status.success() {
-        return Err(git_command_failed_error(label, output));
-    }
-    Ok(command_output(label, output))
-}
-
 fn command_output(label: &str, output: Output) -> CommandOutput {
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);

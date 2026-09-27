@@ -218,6 +218,8 @@ impl ActionBarView {
             repo.branches_rev.hash(&mut hasher);
             repo.remotes_rev.hash(&mut hasher);
             repo.remote_branches_rev.hash(&mut hasher);
+            repo.annex_takes_over_pull_push(&state.large_file_settings)
+                .hash(&mut hasher);
             repo.upstream_divergence_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
@@ -479,10 +481,6 @@ impl Render for ActionBarView {
             .active_repo()
             .and_then(|repo| head_branch_tracking_upstream_name(&repo.head_branch, &repo.branches));
         let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
-        let pull_default_enabled = self
-            .active_repo()
-            .is_some_and(head_branch_has_live_upstream);
-
         let can_stash = self
             .active_repo()
             .map(|repo| {
@@ -729,9 +727,9 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
-        let pull_request_enabled = self
+        let pull_available = self
             .active_repo()
-            .is_some_and(|repo| matches!(pull_request(repo), PullRequest::Pull));
+            .is_some_and(|repo| pull_enabled(repo, &self.state.large_file_settings));
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -748,7 +746,7 @@ impl Render for ActionBarView {
             .debug_selector(|| "pull".to_string())
             .child(
                 components::SplitButton::action_menu(
-                    pull_main.disabled(!pull_default_enabled || !pull_request_enabled),
+                    pull_main.disabled(!pull_available),
                     pull_menu,
                     theme,
                     cx,
@@ -757,7 +755,7 @@ impl Render for ActionBarView {
                             return;
                         };
                         let repo_id = repo.id;
-                        match pull_request(repo) {
+                        match pull_request(repo, &this.state.large_file_settings) {
                             PullRequest::Pull => this.store.dispatch(Msg::Pull {
                                 repo_id,
                                 mode: PullMode::Default,
@@ -836,9 +834,12 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
         let push_tracking_branch_name = tracking_branch_name.clone();
-        let push_request_ready = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(push_request(repo), PushRequest::NotReady));
+        let push_request_ready = self.active_repo().is_some_and(|repo| {
+            !matches!(
+                push_request(repo, &self.state.large_file_settings),
+                PushRequest::NotReady
+            )
+        });
         let push_menu_icon_color = if push_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -864,7 +865,7 @@ impl Render for ActionBarView {
                             return;
                         };
                         let repo_id = repo.id;
-                        match push_request(repo) {
+                        match push_request(repo, &this.state.large_file_settings) {
                             PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
                             PushRequest::SetUpstream { remote } => this.open_popover_at(
                                 PopoverKind::PushSetUpstreamPrompt {
@@ -1337,6 +1338,31 @@ mod tests {
         let after = ActionBarView::notify_fingerprint(&state);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn notify_fingerprint_changes_when_annex_pull_availability_changes() {
+        let repo_id = RepoId(1);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: "/tmp/repo".into(),
+            },
+        );
+        repo.head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+        let mut state = AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        let before = ActionBarView::notify_fingerprint(&state);
+        let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+        support.annex.uuid = Some("u".into());
+        state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+        let detected = ActionBarView::notify_fingerprint(&state);
+        assert_ne!(before, detected);
+        state.large_file_settings.annex_pull_push = false;
+        assert_ne!(detected, ActionBarView::notify_fingerprint(&state));
     }
 
     #[test]

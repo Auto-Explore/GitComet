@@ -509,6 +509,91 @@ fn get_by_key_restores_a_dropped_historical_version() {
     );
 }
 
+#[test]
+fn get_multiple_keys_attempts_later_keys_after_failure_regression() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let key = git(&repo, &["annex", "lookupkey", "big.bin"])
+        .trim()
+        .to_string();
+    git(&repo, &["annex", "copy", "-q", "--to=backup", "big.bin"]);
+    git(&repo, &["annex", "drop", "-q", "big.bin"]);
+    let missing = format!("SHA256E-s1--{}.bin", "0".repeat(64));
+    let result = open(&repo).run_large_file_command(&LargeFileCommand::AnnexGetKeys {
+        keys: vec![missing, key],
+    });
+    assert!(result.is_err(), "partial failure must still be reported");
+    assert!(
+        repo.join("big.bin").is_file(),
+        "the later available key must be fetched"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn moved_locked_annex_content_is_found_by_key_regression() {
+    use gitcomet_core::domain::DiffPreviewTextSide;
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    // Git preserves link text when moving a directory to another depth.
+    fs::create_dir(repo.join("sub")).unwrap();
+    fs::write(repo.join("sub/pic.png"), b"\x89PNG\r\n\x1a\ncontent").unwrap();
+    git(&repo, &["annex", "add", "-q", "sub/pic.png"]);
+    git(&repo, &["commit", "-qm", "nested annex file"]);
+    // A plain Git move can be committed without git-annex repairing links.
+    git(&repo, &["config", "core.hooksPath", "no-hooks"]);
+    fs::create_dir(repo.join("moved")).unwrap();
+    git(&repo, &["mv", "sub", "moved/sub"]);
+    git(&repo, &["commit", "-qm", "move directory"]);
+    assert!(!repo.join("moved/sub/pic.png").is_file());
+    let opened = open(&repo);
+    let head = CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let target = DiffTarget::Commit {
+        commit_id: head.clone(),
+        path: Some("moved/sub/pic.png".into()),
+    };
+    let rows = opened.commit_details(&head).unwrap().files;
+    let state = rows
+        .iter()
+        .find(|r| r.path == Path::new("moved/sub/pic.png"))
+        .unwrap()
+        .large_file
+        .as_ref()
+        .unwrap();
+    assert_eq!(state.in_local_store, Some(true));
+    let status = opened
+        .uncommitted_large_files_for_status_cancellable(
+            &staged_row("moved/sub/pic.png"),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        status.staged[Path::new("moved/sub/pic.png")].in_local_store,
+        Some(true)
+    );
+    let text = opened.diff_file_text(&target).unwrap().unwrap();
+    assert_eq!(text.new_large.unwrap().content, LargeFileContent::Available);
+    let preview = opened
+        .diff_preview_text_file(&target, DiffPreviewTextSide::New)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        preview.large_file.unwrap().content,
+        LargeFileContent::Available
+    );
+    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    assert_eq!(
+        image.new_large.unwrap().content,
+        LargeFileContent::Available
+    );
+    assert_eq!(
+        image.new.as_deref(),
+        Some(b"\x89PNG\r\n\x1a\ncontent".as_slice())
+    );
+}
+
 /// git-annex's own bookkeeping must not look like repository changes to the
 /// file watcher, or reading it (line stats, `git annex find`) refreshes forever.
 #[test]
@@ -1579,6 +1664,91 @@ fn with_annex_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
 
 #[cfg(unix)]
 #[test]
+fn annex_failed_items_preserve_auth_diagnostics_and_allow_retry() {
+    use gitcomet_core::auth::{
+        GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, ScopedStagedGitAuth, StagedGitAuth,
+    };
+    use gitcomet_core::error::{ErrorKind, GitFailureId};
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$*" in *restage*) exit 0 ;; esac
+secret=$("$SSH_ASKPASS" "Enter passphrase for key '/tmp/annex-test-key':")
+if [ "$secret" = "annex-test-secret" ]; then
+  printf '{"command":"get","file":"big.bin","success":true}\n'
+else
+  printf '{"command":"get","file":"big.bin","success":false,"error-messages":["Transfer failed"]}\n'
+  echo 'git@annex.invalid: Permission denied (publickey).' >&2
+  exit 42
+fi
+"#;
+    with_annex_shim(
+        "annex_failed_items_preserve_auth_diagnostics_and_allow_retry",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let opened = open(repo);
+            let command = LargeFileCommand::AnnexGet {
+                paths: paths("big.bin"),
+                from: None,
+            };
+            let error = opened.run_large_file_command(&command).unwrap_err();
+            let ErrorKind::Git(failure) = error.kind() else {
+                panic!("{error:?}")
+            };
+            assert_eq!(failure.command(), "git annex get");
+            assert_eq!(failure.id(), GitFailureId::CommandFailed);
+            assert_eq!(failure.exit_code(), Some(42));
+            let stderr = String::from_utf8_lossy(failure.stderr());
+            assert!(stderr.contains("Permission denied (publickey)"), "{stderr}");
+            assert!(stderr.contains(SSH_PASSPHRASE_PROMPT_MARKER), "{stderr}");
+            assert!(
+                stderr.contains("Enter passphrase for key '/tmp/annex-test-key':"),
+                "{stderr}"
+            );
+            let detail = failure.detail().unwrap();
+            assert!(detail.contains("Permission denied (publickey)"), "{detail}");
+            assert!(detail.contains("big.bin: Transfer failed"), "{detail}");
+
+            let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                kind: GitAuthKind::Passphrase,
+                username: None,
+                secret: "annex-test-secret".into(),
+            });
+            assert_eq!(
+                opened.run_large_file_command(&command).unwrap().stdout,
+                "big.bin"
+            );
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn annex_failed_items_are_errors_even_with_a_successful_exit() {
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$*" in *restage*) exit 0 ;; esac
+printf '{"command":"get","file":"big.bin","success":false,"error-messages":["Transfer failed"]}\n'
+"#;
+    with_annex_shim(
+        "annex_failed_items_are_errors_even_with_a_successful_exit",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let error = open(repo)
+                .run_large_file_command(&LargeFileCommand::AnnexGet {
+                    paths: paths("big.bin"),
+                    from: None,
+                })
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("big.bin: Transfer failed"),
+                "{error}"
+            );
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn annex_credentials_survive_fallback_and_multiple_keys_without_leaking() {
     use gitcomet_core::auth::{GitAuthKind, ScopedStagedGitAuth, StagedGitAuth};
     const SCRIPT: &str = r#"#!/bin/sh
@@ -1637,7 +1807,14 @@ fn silent_annex_commands_announce_activity_before_they_can_stall() {
     use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
     use std::sync::mpsc;
     use std::time::Duration;
-    const SCRIPT: &str = "#!/bin/sh\ncase \"$*\" in *restage*) exit 0 ;; esac\nprintf started > \"$GITCOMET_ANNEX_TEST_ROOT/started\"\nexec sleep 30\n";
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$*" in
+  *restage*) exit 0 ;;
+  *get*) printf '{"command":"get","file":"big.bin","success":false}\n' ;;
+esac
+printf started > "$GITCOMET_ANNEX_TEST_ROOT/started"
+exec sleep 30
+"#;
     with_annex_shim(
         "silent_annex_commands_announce_activity_before_they_can_stall",
         SCRIPT,
@@ -1649,6 +1826,10 @@ fn silent_annex_commands_announce_activity_before_they_can_stall() {
                 LargeFileCommand::AnnexPush { content: true },
                 LargeFileCommand::AnnexSync { content: true },
                 LargeFileCommand::AnnexFsck,
+                LargeFileCommand::AnnexGet {
+                    paths: paths("big.bin"),
+                    from: None,
+                },
             ] {
                 let (tx, rx) = mpsc::channel();
                 let context = GitOperationContext::new("annex test", move |_, event| {

@@ -57,6 +57,57 @@ fn open_repo(workdir: &Path) -> GixRepo {
 }
 
 #[test]
+fn pointer_support_scan_is_lazy_reused_and_refreshed_with_support() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path();
+    init_test_repo(workdir);
+    git_success(workdir, &["commit", "--allow-empty", "-m", "empty"]);
+    let repo = open_repo(workdir);
+    let head = || CommitId(git_stdout(workdir, &["rev-parse", "HEAD"]).into());
+    assert!(repo.commit_details_impl(&head()).unwrap().files.is_empty());
+    assert!(
+        repo.large_file_scan.lock().unwrap().is_none(),
+        "empty changes must not scan attributes, refs or the index"
+    );
+    commit_file(
+        workdir,
+        "example.bin",
+        &format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+            "1".repeat(64)
+        ),
+        "example",
+    );
+    assert!(
+        repo.commit_details_impl(&head()).unwrap().files[0]
+            .large_file
+            .is_none()
+    );
+    let cached = repo.large_file_scan.lock().unwrap().clone().unwrap();
+    assert!(
+        repo.commit_details_impl(&head()).unwrap().files[0]
+            .large_file
+            .is_none()
+    );
+    assert!(Arc::ptr_eq(
+        &cached,
+        repo.large_file_scan.lock().unwrap().as_ref().unwrap()
+    ));
+    write_file(workdir, ".gitattributes", "*.bin filter=lfs\n");
+    repo.large_file_support_impl(&CancellationToken::new())
+        .unwrap();
+    assert!(
+        repo.commit_details_impl(&head()).unwrap().files[0]
+            .large_file
+            .is_some()
+    );
+    assert!(!Arc::ptr_eq(
+        &cached,
+        repo.large_file_scan.lock().unwrap().as_ref().unwrap()
+    ));
+}
+
+#[test]
 fn cursor_gate_skips_until_after_last_seen() {
     let cursor = LogCursor {
         last_seen: CommitId("c2".into()),

@@ -614,7 +614,7 @@ impl GitCometView {
                     return;
                 };
                 let repo_id = repo.id;
-                match pull_request(repo) {
+                match pull_request(repo, &self.state.large_file_settings) {
                     PullRequest::Pull => self.store.dispatch(Msg::Pull {
                         repo_id,
                         mode: PullMode::Default,
@@ -632,7 +632,7 @@ impl GitCometView {
                     return;
                 };
                 let repo_id = repo.id;
-                match push_request(repo) {
+                match push_request(repo, &self.state.large_file_settings) {
                     PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
                     PushRequest::SetUpstream { remote } => {
                         if let Some(window) = window {

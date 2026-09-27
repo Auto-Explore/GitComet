@@ -454,7 +454,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self.reopen_repo()?;
+                let repo = self.large_file_read_repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -535,7 +535,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.reopen_repo()?;
+                let repo = self.large_file_read_repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -567,7 +567,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.reopen_repo()?;
+                let repo = self.large_file_read_repo();
                 let old = self.file_diff_source_from_revision_path(
                     &repo,
                     from_commit_id.as_ref(),
@@ -636,13 +636,17 @@ impl GixRepo {
             );
         cancellation.check_cancelled()?;
         let source = FileDiffTextSource::new(path.clone());
-        let (large_file, path) =
-            match self.large_file_side(&self.reopen_repo()?, &source, logical_path, worktree) {
-                Some((large, replacement)) => {
-                    (Some(large), replacement.map_or(path, |source| source.path))
-                }
-                None => (None, path),
-            };
+        let (large_file, path) = match self.large_file_side(
+            &self.large_file_read_repo(),
+            &source,
+            logical_path,
+            worktree,
+        ) {
+            Some((large, replacement)) => {
+                (Some(large), replacement.map_or(path, |source| source.path))
+            }
+            None => (None, path),
+        };
         Ok(Some(DiffPreviewTextFile {
             path,
             side,
@@ -668,7 +672,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self.repo();
+                let repo = self.large_file_read_repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
@@ -710,7 +714,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
+                let repo = self.large_file_read_repo();
                 let blob_id = match side {
                     DiffPreviewTextSide::New => {
                         gix_revision_path_blob_object_id_optional(&repo, commit_id.as_ref(), path)?
@@ -740,7 +744,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
+                let repo = self.large_file_read_repo();
                 // Working-tree tip + New side: the preview is the live worktree file.
                 if matches!(side, DiffPreviewTextSide::New) && to_commit_id.is_none() {
                     let repo_path = to_repo_path(path, &self.spec.workdir)?;
@@ -779,7 +783,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Option<std::path::PathBuf>> {
         cancellation.check_cancelled()?;
-        let repo = self.repo();
+        let repo = self.large_file_read_repo();
         if !gix_object_id_is_blob(&repo, blob_id)? {
             return Ok(None);
         }
@@ -816,15 +820,14 @@ impl GixRepo {
         };
         // Git LFS / git-annex sides hold pointer text; show the real image
         // when it is here, so both sides decode.
-        let repo = self.reopen_repo()?;
-        let logical = to_repo_path(&image.path, &self.spec.workdir)?;
+        let repo = self.large_file_read_repo();
         for (side, metadata) in [
             (&mut image.old, &mut image.old_large),
             (&mut image.new, &mut image.new_large),
         ] {
             cancellation.check_cancelled()?;
             if let Some((large, bytes)) = side.as_deref().and_then(|git_form| {
-                self.large_file_image_side(&repo, git_form, &logical, MAX_IMAGE_DIFF_SIDE_BYTES)
+                self.large_file_image_side(&repo, git_form, MAX_IMAGE_DIFF_SIDE_BYTES)
             }) {
                 *side = bytes;
                 *metadata = Some(large);
@@ -850,7 +853,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self.repo();
+                let repo = self.large_file_read_repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -913,7 +916,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
+                let repo = self.large_file_read_repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -941,7 +944,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
+                let repo = self.large_file_read_repo();
                 let old = gix_revision_path_image_blob_bytes_optional(
                     &repo,
                     from_commit_id.as_ref(),
@@ -987,7 +990,7 @@ impl GixRepo {
             return Ok(None);
         }
 
-        let repo = self.repo();
+        let repo = self.large_file_read_repo();
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
         Ok(Some(conflict_file_stages_from_stage_data(
             &repo_path,
@@ -997,7 +1000,7 @@ impl GixRepo {
 
     pub(super) fn conflict_session_impl(&self, path: &Path) -> Result<Option<ConflictSession>> {
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-        let repo = self.repo();
+        let repo = self.large_file_read_repo();
         let stage_data = gix_index_conflict_stage_data(&repo, &repo_path)?;
         let Some(conflict_kind) = stage_data.conflict_kind else {
             return Ok(None);
@@ -1053,7 +1056,7 @@ impl GixRepo {
     }
 
     fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
-        let repo = self.repo();
+        let repo = self.large_file_read_repo();
         let Some((path, old_revision, new_revision)) = commit_path_diff_revisions(target, &repo)?
         else {
             return Ok(None);
