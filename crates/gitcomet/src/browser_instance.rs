@@ -7,8 +7,6 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(test)]
-use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -22,69 +20,6 @@ const IO_TIMEOUT: Duration = Duration::from_secs(1);
 const CLAIM_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_WIRE_BYTES: usize = 1024 * 1024;
 const INSTANCE_FILE_ENV: &str = "GITCOMET_BROWSER_INSTANCE_FILE";
-
-#[cfg(test)]
-struct DescriptorPublishGate {
-    entered: (Mutex<bool>, Condvar),
-    released: (Mutex<bool>, Condvar),
-}
-
-#[cfg(test)]
-impl DescriptorPublishGate {
-    fn new() -> Self {
-        Self {
-            entered: (Mutex::new(false), Condvar::new()),
-            released: (Mutex::new(false), Condvar::new()),
-        }
-    }
-
-    fn wait_until_entered(&self) {
-        let (entered, wake) = &self.entered;
-        let entered = entered.lock().unwrap_or_else(|error| error.into_inner());
-        let _entered = wake
-            .wait_while(entered, |entered| !*entered)
-            .unwrap_or_else(|error| error.into_inner());
-    }
-
-    fn enter_and_wait(&self) {
-        let (entered, wake) = &self.entered;
-        *entered.lock().unwrap_or_else(|error| error.into_inner()) = true;
-        wake.notify_all();
-
-        let (released, wake) = &self.released;
-        let released = released.lock().unwrap_or_else(|error| error.into_inner());
-        let _released = wake
-            .wait_while(released, |released| !*released)
-            .unwrap_or_else(|error| error.into_inner());
-    }
-
-    fn release(&self) {
-        let (released, wake) = &self.released;
-        *released.lock().unwrap_or_else(|error| error.into_inner()) = true;
-        wake.notify_all();
-    }
-}
-
-#[cfg(test)]
-fn descriptor_publish_gate_slot()
--> &'static Mutex<Option<(PathBuf, u16, Arc<DescriptorPublishGate>)>> {
-    static GATE: OnceLock<Mutex<Option<(PathBuf, u16, Arc<DescriptorPublishGate>)>>> =
-        OnceLock::new();
-    GATE.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(test)]
-fn wait_before_descriptor_publish_for_test(path: &Path, port: u16) {
-    let gate = descriptor_publish_gate_slot()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .as_ref()
-        .filter(|(gate_path, gate_port, _)| gate_path == path && *gate_port == port)
-        .map(|(_, _, gate)| Arc::clone(gate));
-    if let Some(gate) = gate {
-        gate.enter_and_wait();
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstanceDescriptor {
@@ -315,7 +250,9 @@ fn acquire_browser_instance_claim(
     loop {
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(BrowserInstanceClaim::Acquired(file)),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            // Windows reports ERROR_LOCK_VIOLATION, not WouldBlock. Use fs2's
+            // platform-specific error so simultaneous launches retry there too.
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
                 // The primary retains the claim for its lifetime. Keep looking
                 // for its descriptor while publication is in progress instead
                 // of waiting on the lock and missing the moment forwarding
@@ -353,8 +290,6 @@ fn start_primary(
         token: Uuid::new_v4().simple().to_string(),
         pid: std::process::id(),
     };
-    #[cfg(test)]
-    wait_before_descriptor_publish_for_test(descriptor_path, port);
     write_descriptor(descriptor_path, &descriptor)?;
 
     let (requests_tx, requests_rx) = smol::channel::unbounded();
@@ -730,80 +665,94 @@ mod tests {
     fn review_regression_followup_broker_claim_serializes_descriptor_publication() {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor_path = dir.path().join("instance.json");
-        let first_port = first_candidate_port(&descriptor_path);
-        let gate = Arc::new(DescriptorPublishGate::new());
-        *descriptor_publish_gate_slot()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) =
-            Some((descriptor_path.clone(), first_port, Arc::clone(&gate)));
-
-        let (first_ready_tx, first_ready_rx) = std::sync::mpsc::channel();
-        let (first_stop_tx, first_stop_rx) = std::sync::mpsc::channel();
-        let first_descriptor = descriptor_path.clone();
-        let first = thread::spawn(move || {
-            let result = start_or_forward_at(
-                &first_descriptor,
-                request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
-                CLAIM_WAIT_TIMEOUT,
-            )
-            .expect("first broker start");
-            let primary = match result {
-                StartResult::Primary(primary) => primary,
-                StartResult::Forwarded => panic!("first broker unexpectedly forwarded"),
-            };
-            first_ready_tx.send(()).expect("publish first readiness");
-            let _ = first_stop_rx.recv();
-            drop(primary);
-        });
-        gate.wait_until_entered();
+        let BrowserInstanceClaim::Acquired(claim) = acquire_browser_instance_claim(
+            &descriptor_path,
+            &request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
+        )
+        .expect("first broker claim") else {
+            panic!("first broker unexpectedly forwarded");
+        };
+        // Hold the actual lock and bound socket before publishing, just as a
+        // primary preempted during startup would. No global test gate is needed.
+        let listener =
+            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("bind primary");
+        let port = listener.local_addr().unwrap().port();
 
         let (second_result_tx, second_result_rx) = std::sync::mpsc::channel();
-        let (second_stop_tx, second_stop_rx) = std::sync::mpsc::channel();
         let second_descriptor = descriptor_path.clone();
         let second = thread::spawn(move || {
-            let result = start_or_forward_at(
+            let _ = second_result_tx.send(start_or_forward_at(
                 &second_descriptor,
                 request(PathBuf::from("second"), BrowserOpenTarget::ExistingWindow),
                 CLAIM_WAIT_TIMEOUT,
-            )
-            .expect("second broker start");
-            match result {
-                StartResult::Forwarded => {
-                    second_result_tx.send(false).expect("publish forwarding");
-                }
-                StartResult::Primary(primary) => {
-                    second_result_tx
-                        .send(true)
-                        .expect("publish duplicate ownership");
-                    let _ = second_stop_rx.recv();
-                    drop(primary);
-                }
-            }
+            ));
         });
 
-        // Keep the first paused before its descriptor rename long enough for an
-        // unserialized contender to pick another port (well under the claim wait).
-        thread::sleep(Duration::from_millis(350));
-        gate.release();
-        first_ready_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("first primary should finish publishing");
-        let second_became_primary = second_result_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("second broker should resolve after publication");
-
-        let _ = second_stop_tx.send(());
-        let _ = first_stop_tx.send(());
-        second.join().expect("join second broker thread");
-        first.join().expect("join first broker thread");
-        *descriptor_publish_gate_slot()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
-
         assert!(
-            !second_became_primary,
-            "a delayed descriptor must not allow two browser primaries"
+            matches!(
+                second_result_rx.recv_timeout(Duration::from_millis(100)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "lock contention must wait for publication, including on Windows"
         );
+        assert!(!descriptor_path.exists());
+
+        let StartResult::Primary(primary) =
+            start_primary(&descriptor_path, listener, port, claim).expect("publish primary")
+        else {
+            panic!("publishing unexpectedly forwarded");
+        };
+        assert!(matches!(
+            second_result_rx
+                .recv_timeout(CLAIM_WAIT_TIMEOUT)
+                .expect("second broker should resolve after publication")
+                .expect("second broker should forward"),
+            StartResult::Forwarded
+        ));
+        second.join().expect("join second broker thread");
+        let received = primary.requests().try_recv().expect("forwarded request");
+        assert_eq!(received.path, Some(PathBuf::from("second")));
+        assert_eq!(received.target, BrowserOpenTarget::ExistingWindow);
+    }
+
+    #[test]
+    fn contended_claim_waits_until_timeout_then_can_be_reclaimed_after_release() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let descriptor_path = dir.path().join("instance.json");
+        let request = request(PathBuf::from("repo"), BrowserOpenTarget::NewWindow);
+        let BrowserInstanceClaim::Acquired(claim) =
+            acquire_browser_instance_claim(&descriptor_path, &request, CLAIM_WAIT_TIMEOUT)
+                .expect("first broker claim")
+        else {
+            panic!("first broker unexpectedly forwarded");
+        };
+
+        // Separate file handles produce the native fs2 contention error here:
+        // EWOULDBLOCK on Unix, ERROR_LOCK_VIOLATION on Windows.
+        let wait = Duration::from_millis(50);
+        let started = Instant::now();
+        let result = start_or_forward_at(&descriptor_path, request.clone(), wait);
+        match result {
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
+            Ok(_) => panic!("a held claim must not allow another primary"),
+        }
+        assert!(
+            started.elapsed() >= wait,
+            "contention must retry until the deadline"
+        );
+        assert!(!descriptor_path.exists());
+
+        drop(claim);
+        let StartResult::Primary(primary) =
+            start_or_forward_at(&descriptor_path, request, Duration::ZERO)
+                .expect("reclaim released lock")
+        else {
+            panic!("no primary exists to forward to");
+        };
+        assert!(descriptor_path.exists());
+        drop(primary);
+        assert!(!descriptor_path.exists());
     }
 
     // Guards against a launch spinning forever when a live primary holds the

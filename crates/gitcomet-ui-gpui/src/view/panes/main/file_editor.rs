@@ -938,10 +938,23 @@ impl MainPaneView {
         });
     }
 
-    pub(in crate::view) fn has_pending_file_editor_saves(&self, only_repo: Option<RepoId>) -> bool {
+    /// Discard releases close and quit, but cannot cancel an already dispatched
+    /// write. Moves must still wait so the destination reads the final contents.
+    pub(in crate::view) fn file_editor_saves_block_action(
+        &self,
+        action: &UnsavedFileEditsAction,
+    ) -> bool {
         self.file_editor_pending_saves
-            .keys()
-            .any(|(repo_id, _)| only_repo.is_none_or(|only| only == *repo_id))
+            .iter()
+            .any(|((repo_id, _), save)| match action {
+                UnsavedFileEditsAction::MoveRepo {
+                    repo_id: moving_repo,
+                    ..
+                } => repo_id == moving_repo,
+                UnsavedFileEditsAction::CloseWindow(_) | UnsavedFileEditsAction::QuitApp => {
+                    !save.discarded
+                }
+            })
     }
 
     /// A clean indicator is optimistic; only the completion for the exact write

@@ -834,7 +834,7 @@ impl GitCometView {
             }
             // Include writes dispatched before this request, even though their
             // buffers already look clean. A queued write is still pending.
-            pane.has_pending_file_editor_saves(moving_repo)
+            pane.file_editor_saves_block_action(&action)
         });
         if writes_pending {
             self.retry_once_file_edit_writes_drain(action, cx);
@@ -866,9 +866,9 @@ impl GitCometView {
 
     /// Save or discard the unsaved buffers, then retry what the user asked for.
     ///
-    /// Discarding can retry immediately, but saving cannot: the writes go
-    /// through the store's command executor, and `cx.quit()` on the next flush
-    /// would race them — the app would exit with some files still unwritten.
+    /// Discarding lets close and quit proceed immediately; moves still wait for
+    /// dispatched writes. Saving must also wait for the store's command executor
+    /// so the app cannot exit with files still unwritten.
     /// Each save has a completion receipt, including ones already dispatched
     /// before the prompt. The wait is bounded: a
     /// wedged command brings this dialog back instead of trapping the user.
@@ -933,7 +933,7 @@ impl GitCometView {
                 let Ok(pending) = view.update(cx, |this, cx| {
                     this.main_pane.update(cx, |pane, cx| {
                         pane.settle_file_editor_saves(cx);
-                        pane.has_pending_file_editor_saves(action.moving_repo())
+                        pane.file_editor_saves_block_action(&action)
                     })
                 }) else {
                     return;
