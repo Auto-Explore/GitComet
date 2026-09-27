@@ -1958,6 +1958,7 @@ pub(super) fn toggle_file_browser_dir(
         let path = Arc::new(path);
         if repo_state.file_browser.expanded_dirs.contains(&path) {
             repo_state.file_browser.expanded_dirs.remove(&path);
+            repo_state.file_browser.cancel_pending_expansions(&path);
         } else {
             repo_state.file_browser.expanded_dirs.insert(path);
         }
@@ -1972,10 +1973,7 @@ pub(super) fn toggle_file_browser_dir(
 
 /// Expand or collapse `path` and every directory under it.
 ///
-/// The backend enumerates the whole tree in one pass, so every descendant is
-/// already in `entries` and this needs no loading. `starts_with` on the flat
-/// list also covers `path` itself, which is what makes "Expand all under here"
-/// open the folder it was invoked on.
+/// Tracked descendants are already listed; ignored subtrees need another walk.
 pub(super) fn set_file_browser_dir_expanded_recursive(
     state: &mut AppState,
     repo_id: RepoId,
@@ -1999,30 +1997,45 @@ pub(super) fn set_file_browser_dir_expanded_recursive(
     let Loadable::Ready(entries) = &repo_state.file_browser.entries else {
         return Vec::new();
     };
-
-    // Cloning the Arc releases the borrow on `file_browser` so `expanded_dirs`
-    // can be written while the entry list is walked.
-    let entries = Arc::clone(entries);
-    let mut changed = false;
-    for entry in entries.iter() {
-        if entry.kind != gitcomet_core::domain::FileEntryKind::Directory
-            || !entry.path.starts_with(&path)
-        {
-            continue;
-        }
-        // Each entry already owns its path as an `Arc`, so expanding reuses it
-        // rather than allocating a second copy per directory.
-        changed |= if expanded {
-            repo_state
-                .file_browser
-                .expanded_dirs
-                .insert(Arc::clone(&entry.path))
-        } else {
-            repo_state.file_browser.expanded_dirs.remove(&entry.path)
-        };
+    if !entries.iter().any(|entry| {
+        entry.kind == gitcomet_core::domain::FileEntryKind::Directory
+            && entry.path.as_ref() == &path
+    }) {
+        return Vec::new();
     }
 
-    if changed {
+    let previous_len = repo_state.file_browser.expanded_dirs.len();
+    if expanded {
+        repo_state.file_browser.expanded_dirs.extend(
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry.kind == gitcomet_core::domain::FileEntryKind::Directory
+                        && entry.path.starts_with(&path)
+                })
+                .map(|entry| Arc::clone(&entry.path)),
+        );
+        if repo_state.file_browser.show_ignored
+            && repo_state.file_browser.source == FileSource::WorkingDirectory
+        {
+            repo_state
+                .file_browser
+                .pending_recursive_expansions
+                .insert(path);
+            repo_state.file_browser.stale = true;
+            repo_state.file_browser.bump_rev();
+            return request_file_browser_load(repo_state).into_iter().collect();
+        }
+    } else {
+        // Include remembered descendants that a lazy listing no longer contains.
+        repo_state
+            .file_browser
+            .expanded_dirs
+            .retain(|p| !p.starts_with(&path));
+        repo_state.file_browser.cancel_pending_expansions(&path);
+    }
+
+    if repo_state.file_browser.expanded_dirs.len() != previous_len {
         repo_state.file_browser.bump_rev();
     }
     Vec::new()
@@ -2075,6 +2088,7 @@ pub(super) fn retarget_file_browser(repo_state: &mut RepoState, source: FileSour
     }
     repo_state.file_browser.pending_reopen = browse_open_content_path(repo_state);
     repo_state.file_browser.source = source;
+    repo_state.file_browser.pending_recursive_expansions.clear();
     if matches!(repo_state.file_browser.entries, Loadable::Ready(_)) {
         repo_state.file_browser.stale = true;
     } else {
@@ -2309,9 +2323,24 @@ pub(super) fn file_browser_loaded(
 
         let mut reopen = None;
         if repo_state.file_browser.source == source {
+            // A queued walk will include the latest expansion requests. An
+            // earlier, partial listing must not consume them.
+            let expansions = if has_pending {
+                Default::default()
+            } else {
+                std::mem::take(&mut repo_state.file_browser.pending_recursive_expansions)
+            };
             let pending = repo_state.file_browser.pending_reopen.take();
             repo_state.file_browser.entries = match result {
                 Ok(v) => {
+                    repo_state.file_browser.expanded_dirs.extend(
+                        v.iter()
+                            .filter(|entry| {
+                                entry.kind == gitcomet_core::domain::FileEntryKind::Directory
+                                    && expansions.iter().any(|root| entry.path.starts_with(root))
+                            })
+                            .map(|entry| Arc::clone(&entry.path)),
+                    );
                     let entries = Arc::new(v);
                     reopen = pending.map(|pending| (Arc::clone(&entries), pending));
                     Loadable::Ready(entries)

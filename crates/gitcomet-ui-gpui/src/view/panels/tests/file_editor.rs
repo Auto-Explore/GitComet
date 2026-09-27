@@ -501,29 +501,41 @@ fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
 
 #[gpui::test]
 fn save_acknowledgments_release_clean_stashes_but_keep_newer_edits(cx: &mut gpui::TestAppContext) {
+    save_completion_after_navigation(cx, false);
+}
+
+#[gpui::test]
+fn autosave_completion_saves_newer_edits_after_navigating_away(cx: &mut gpui::TestAppContext) {
+    save_completion_after_navigation(cx, true);
+}
+
+fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: bool) {
     let _visual_guard = lock_visual_test();
+    cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
     let directory = tempfile::tempdir().unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
     let repo_id = gitcomet_state::model::RepoId(1942);
     let first = PathBuf::from("first.txt");
     let second = PathBuf::from("second.txt");
     for relative in [&first, &second] {
-        std::fs::write(directory.path().join(relative), "original").unwrap();
+        std::fs::write(workdir.join(relative), "original").unwrap();
     }
     let pane = cx.update(|_, app| view.read(app).main_pane.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            push_test_state(view, editor_state(repo_id, directory.path(), &first), cx);
-            pane.update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+            push_test_state(view, editor_state(repo_id, &workdir, &first), cx);
         })
     });
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
     cx.run_until_parked();
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
-            pane.auto_save_file_edits = false;
+            pane.auto_save_file_edits = autosave;
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..input.text().len(), "first save", cx);
             });
@@ -541,36 +553,53 @@ fn save_acknowledgments_release_clean_stashes_but_keep_newer_edits(cx: &mut gpui
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..input.text().len(), "newer edits", cx);
             });
-            // Explicitly stash before the save acknowledgment can land.
-            pane.stash_current_file_editor_buffer(cx);
             key
         })
     });
-    finish_editor_saves(&view, cx);
+    // Publish navigation without a save acknowledgment or replacing the
+    // worker's snapshot. The navigation flush still sees the first write pending.
     cx.update(|_, app| {
-        view.update(app, |view, cx| {
-            push_test_state(view, editor_state(repo_id, directory.path(), &second), cx);
-            pane.update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        view.read(app).ui_model.clone().update(app, |model, cx| {
+            model.set_state(editor_state(repo_id, &workdir, &second), cx);
+        });
+    });
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.ensure_file_editor_loaded(cx);
+            assert_eq!(pane.file_editor_saves.len(), 1);
+            assert_eq!(
+                pane.file_editor_key.as_ref().unwrap().0,
+                workdir.join(&second)
+            );
+            assert_eq!(pane.file_editor_stash[&key].text.as_ref(), "newer edits");
         })
     });
-    assert_eq!(
-        std::fs::read_to_string(directory.path().join(&first)).unwrap(),
-        "first save"
-    );
-    cx.update(|_, app| {
-        let stashed = &pane.read(app).file_editor_stash[&key];
-        assert_eq!(stashed.text.as_ref(), "newer edits");
-        assert!(stashed.is_dirty());
-    });
-    cx.update(|_, app| pane.update(app, |pane, cx| pane.save_all_file_edits(cx)));
     finish_editor_saves(&view, cx);
+    if !autosave {
+        assert_eq!(
+            std::fs::read_to_string(workdir.join(&first)).unwrap(),
+            "first save"
+        );
+        cx.update(|_, app| {
+            let stashed = &pane.read(app).file_editor_stash[&key];
+            assert_eq!(stashed.text.as_ref(), "newer edits");
+            assert!(stashed.is_dirty());
+        });
+        cx.update(|_, app| pane.update(app, |pane, cx| pane.save_all_file_edits(cx)));
+        finish_editor_saves(&view, cx);
+    }
     assert_eq!(
-        std::fs::read_to_string(directory.path().join(&first)).unwrap(),
+        std::fs::read_to_string(workdir.join(&first)).unwrap(),
         "newer edits"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(&second)).unwrap(),
+        "original"
     );
     cx.update(|_, app| {
         assert!(pane.read(app).file_editor_stash.is_empty());
         assert!(pane.read(app).unsaved_file_edit_labels().is_empty());
+        assert!(pane.read(app).file_editor_error.is_none());
     });
 }
 

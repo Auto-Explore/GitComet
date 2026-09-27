@@ -2110,17 +2110,7 @@ pub(super) fn schedule_effect(
                         .repos
                         .iter()
                         .find(|r| r.id == repo_id)
-                        .map(|r| repo_load::explorer_listing::Options {
-                            ignored: r.file_browser.show_ignored,
-                            expanded: r
-                                .file_browser
-                                .expanded_dirs
-                                .iter()
-                                .map(|p| (**p).clone())
-                                .collect(),
-                            revealed: r.file_browser.revealed_paths.iter().cloned().collect(),
-                            search: !r.file_browser.search_query.trim().is_empty(),
-                        })
+                        .map(|r| repo_load::explorer_listing::Options::from(&r.file_browser))
                         .unwrap_or_default()
                 };
                 repo_load::schedule_load_file_browser(

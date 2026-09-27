@@ -1102,6 +1102,9 @@ fn reduce_inner(
             if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo.file_browser.show_hidden = hidden;
                 repo.file_browser.show_ignored = ignored;
+                if !ignored {
+                    repo.file_browser.pending_recursive_expansions.clear();
+                }
                 repo.file_browser.stale = true;
                 repo.file_browser.bump_rev();
                 return vec![Effect::LoadFileBrowser {

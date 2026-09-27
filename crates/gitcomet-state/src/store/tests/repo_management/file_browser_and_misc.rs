@@ -188,7 +188,7 @@ fn recursive_expand_opens_the_folder_and_every_directory_under_it() {
 #[test]
 fn recursive_collapse_closes_exactly_the_subtree_it_opened() {
     let (mut repos, id_alloc, mut state, repo_id) = state_with_file_browser_tree();
-    for path in ["other", "src", "src/nested"] {
+    for path in ["other", "src", "src/nested", "src/no-longer-listed/deep"] {
         state.repos[0]
             .file_browser
             .expanded_dirs

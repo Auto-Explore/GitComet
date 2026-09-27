@@ -2,6 +2,101 @@ use super::*;
 use crate::view::test_support::TestBackend;
 
 #[gpui::test]
+fn pending_document_reads_restart_after_file_renames(cx: &mut gpui::TestAppContext) {
+    rename_during_document_load(cx, false, false);
+}
+
+#[gpui::test]
+fn pending_document_reads_restart_after_parent_directory_renames(cx: &mut gpui::TestAppContext) {
+    rename_during_document_load(cx, true, false);
+}
+
+#[gpui::test]
+fn pending_document_reads_wait_for_all_filesystem_pauses_before_restarting(
+    cx: &mut gpui::TestAppContext,
+) {
+    rename_during_document_load(cx, true, true);
+}
+
+fn rename_during_document_load(cx: &mut gpui::TestAppContext, parent: bool, overlapping: bool) {
+    let _guard = crate::test_support::lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let original = workdir.join("before/file.txt");
+    let renamed = workdir.join(if parent {
+        "after/file.txt"
+    } else {
+        "before/renamed.txt"
+    });
+    std::fs::create_dir(original.parent().unwrap()).unwrap();
+    std::fs::write(&original, "document contents").unwrap();
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    let other_pause = OperationId::allocate();
+    let buffer = cx.update(|_, app| {
+        docs.update(app, |docs, cx| {
+            docs.open(original.clone(), true, cx);
+            let buffer = docs.buffers[&docs.active.unwrap()].clone();
+            assert!(buffer.read(cx).loading);
+            let request = Request::new(Operation::Rename {
+                source: if parent {
+                    original.parent().unwrap().into()
+                } else {
+                    original.clone()
+                },
+                name: if parent { "after" } else { "renamed.txt" }.into(),
+            });
+            docs.filesystem_pause(request.id, cx);
+            if overlapping {
+                docs.filesystem_pause(other_pause, cx);
+            }
+            let result = gitcomet_core::filesystem::Filesystem::default().execute(request, |_| {});
+            assert!(result.succeeded(), "{:?}", result.items);
+            // A successful read of the obsolete path must also be rejected.
+            std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+            std::fs::write(&original, "obsolete contents").unwrap();
+            docs.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+            assert_eq!(buffer.read(cx).identity.0, renamed);
+            buffer
+        })
+    });
+    cx.run_until_parked();
+    if overlapping {
+        cx.update(|_, app| {
+            assert!(buffer.read(app).loading);
+            assert!(buffer.read(app).input.read(app).text().is_empty());
+            docs.update(app, |docs, cx| {
+                docs.filesystem_finish(other_pause, &[], &BTreeMap::new(), cx);
+            });
+        });
+    }
+    drain(&root, cx);
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            assert!(!b.loading && !b.dirty && b.error.is_none());
+            assert_eq!(b.input.read(cx).text(), "document contents");
+            b.editing = true;
+            b.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("edited document", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| buffer.update(app, |b, cx| b.save(None, false, cx)));
+    drain(&root, cx);
+    assert_eq!(std::fs::read_to_string(renamed).unwrap(), "edited document");
+    assert_eq!(
+        std::fs::read_to_string(original).unwrap(),
+        "obsolete contents"
+    );
+}
+
+#[gpui::test]
 fn transfer_completion_releases_all_windows_and_native_receipts_without_rendering(
     cx: &mut gpui::TestAppContext,
 ) {

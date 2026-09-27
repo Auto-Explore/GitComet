@@ -57,6 +57,12 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
                 .iter()
                 .filter_map(|p| retarget(p).map(Arc::new))
                 .collect();
+            for paths in [
+                &mut repo.file_browser.revealed_paths,
+                &mut repo.file_browser.pending_recursive_expansions,
+            ] {
+                *paths = paths.iter().filter_map(|p| retarget(p)).collect();
+            }
             if let Some(DiffTarget::WorkingTree { path, .. }) = &mut repo.diff_state.diff_target
                 && let Some(next) = retarget(path)
             {
@@ -114,6 +120,14 @@ mod tests {
         repo.file_browser.expanded_dirs = ["folder", "folder/nested", "unrelated"]
             .into_iter()
             .map(|path| Arc::new(PathBuf::from(path)))
+            .collect();
+        repo.file_browser.revealed_paths = ["folder/nested/file", "keep.txt"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        repo.file_browser.pending_recursive_expansions = ["folder", "unrelated"]
+            .into_iter()
+            .map(PathBuf::from)
             .collect();
         state.repos.push(repo);
         state
@@ -179,6 +193,14 @@ mod tests {
             assert!(browser.selection.focused.is_none());
             assert!(browser.selection.anchor.is_none());
             assert_eq!(
+                browser.revealed_paths,
+                [PathBuf::from("keep.txt")].into_iter().collect()
+            );
+            assert_eq!(
+                browser.pending_recursive_expansions,
+                [PathBuf::from("unrelated")].into_iter().collect()
+            );
+            assert_eq!(
                 browser.expanded_dirs,
                 [Arc::new(PathBuf::from("unrelated"))].into_iter().collect()
             );
@@ -214,6 +236,20 @@ mod tests {
             }],
         );
         let browser = &state.repos[0].file_browser;
+        assert_eq!(
+            browser.revealed_paths,
+            ["renamed/nested/file", "keep.txt"]
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
+        );
+        assert_eq!(
+            browser.pending_recursive_expansions,
+            ["renamed", "unrelated"]
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
+        );
         assert_eq!(
             browser.selection.paths,
             ["renamed", "renamed/nested/file", "keep.txt"]

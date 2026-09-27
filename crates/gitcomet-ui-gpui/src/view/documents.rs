@@ -263,7 +263,9 @@ impl DocumentsView {
                 b.path_input.update(cx, |input, cx| {
                     input.set_text(b.identity.0.display().to_string(), cx)
                 });
-                b.pauses.remove(&id);
+                if b.pauses.remove(&id) && b.pauses.is_empty() && b.loading {
+                    b.reload(cx);
+                }
                 cx.notify();
             });
         }

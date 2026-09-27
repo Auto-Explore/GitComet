@@ -1138,6 +1138,12 @@ impl MainPaneView {
                     if self.file_editor_dirty && self.auto_save_file_edits {
                         self.schedule_file_editor_autosave(cx);
                     }
+                } else if self.auto_save_file_edits
+                    && let Some(stashed) = self.file_editor_stash.get(&key).cloned()
+                {
+                    // Navigation may have tried to flush newer edits while
+                    // this write was pending. Save them against its new baseline.
+                    self.enqueue_file_editor_save(key.clone(), &stashed, false, cx);
                 }
                 if let Some(relative) = self
                     .active_repo()

@@ -1,3 +1,4 @@
+use crate::model::FileBrowserState;
 use gitcomet_core::domain::{FileEntry, FileEntryKind};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
@@ -7,10 +8,31 @@ use std::sync::Arc;
 
 #[derive(Clone, Default)]
 pub(in crate::store::effects) struct Options {
-    pub(in crate::store::effects) ignored: bool,
-    pub(in crate::store::effects) expanded: BTreeSet<PathBuf>,
-    pub(in crate::store::effects) revealed: BTreeSet<PathBuf>,
-    pub(in crate::store::effects) search: bool,
+    ignored: bool,
+    expanded: BTreeSet<PathBuf>,
+    recursive: BTreeSet<PathBuf>,
+    revealed: BTreeSet<PathBuf>,
+    search: bool,
+}
+
+impl From<&FileBrowserState> for Options {
+    fn from(browser: &FileBrowserState) -> Self {
+        Self {
+            ignored: browser.show_ignored,
+            expanded: browser
+                .expanded_dirs
+                .iter()
+                .map(|p| (**p).clone())
+                .collect(),
+            recursive: browser
+                .pending_recursive_expansions
+                .iter()
+                .cloned()
+                .collect(),
+            revealed: browser.revealed_paths.iter().cloned().collect(),
+            search: !browser.search_query.trim().is_empty(),
+        }
+    }
 }
 
 pub(super) fn augment(
@@ -68,7 +90,10 @@ pub(super) fn augment(
             if kind.is_dir()
                 && (original.contains(&path)
                     || revealed
-                    || (options.ignored && (options.expanded.contains(&path) || options.search)))
+                    || (options.ignored
+                        && (options.expanded.contains(&path)
+                            || options.search
+                            || options.recursive.iter().any(|root| path.starts_with(root)))))
             {
                 pending.push(path);
             }
@@ -106,3 +131,6 @@ pub(super) fn augment(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests;

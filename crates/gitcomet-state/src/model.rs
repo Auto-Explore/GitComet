@@ -472,6 +472,8 @@ pub struct FileBrowserState {
     pub source: FileSource,
     pub entries: Loadable<Arc<Vec<FileEntry>>>,
     pub expanded_dirs: FxHashSet<Arc<PathBuf>>,
+    /// Subtrees to expand after their ignored descendants have been loaded.
+    pub pending_recursive_expansions: FxHashSet<PathBuf>,
     pub search_query: String,
     pub file_browser_rev: u64,
     /// The rows on screen are not the current truth: the worktree moved under
@@ -496,6 +498,7 @@ impl Default for FileBrowserState {
             source: FileSource::default(),
             entries: Loadable::NotLoaded,
             expanded_dirs: FxHashSet::default(),
+            pending_recursive_expansions: FxHashSet::default(),
             search_query: String::new(),
             file_browser_rev: 0,
             stale: false,
@@ -506,6 +509,11 @@ impl Default for FileBrowserState {
 }
 
 impl FileBrowserState {
+    pub(crate) fn cancel_pending_expansions(&mut self, path: &std::path::Path) {
+        self.pending_recursive_expansions
+            .retain(|root| !root.starts_with(path) && !path.starts_with(root));
+    }
+
     pub(crate) fn set_active(&mut self, active: bool) {
         if self.active != active {
             self.active = active;
