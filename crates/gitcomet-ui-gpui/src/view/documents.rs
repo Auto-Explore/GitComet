@@ -52,7 +52,7 @@ pub(crate) struct DocumentsView {
     search: Entity<TextInput>,
     scroll: gpui::ScrollHandle,
     row_menu: Option<(PathBuf, gpui::Point<Pixels>)>,
-    subscriptions: Vec<gpui::Subscription>,
+    _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl DocumentsView {
@@ -112,7 +112,7 @@ impl DocumentsView {
             search,
             scroll: gpui::ScrollHandle::new(),
             row_menu: None,
-            subscriptions,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -140,8 +140,12 @@ impl DocumentsView {
                 cx,
             )
         });
-        self.subscriptions
-            .push(cx.observe(&buffer, |_, _, cx| cx.notify()));
+        let subscription = cx.observe(&buffer, |this, _, cx| {
+            this.prune_clean_buffers(cx);
+            cx.notify();
+        });
+        // The observer is released together with the buffer it watches.
+        buffer.update(cx, |buffer, _| buffer.subscriptions.push(subscription));
         let id = buffer.entity_id();
         self.buffers.insert(id, buffer);
         id
@@ -149,6 +153,10 @@ impl DocumentsView {
 
     pub(super) fn open(&mut self, path: PathBuf, display: bool, cx: &mut gpui::Context<Self>) {
         update_recent(path.clone(), false, cx);
+        // Background opens are history entries until the user selects one.
+        if !display {
+            return;
+        }
         let existing = self
             .buffers
             .iter()
@@ -165,11 +173,28 @@ impl DocumentsView {
         } else {
             self.insert_buffer(path, None, cx)
         };
-        if display {
-            self.active = Some(id);
-            self.picker = false;
+        self.activate_buffer(id, cx);
+    }
+
+    fn activate_buffer(&mut self, id: gpui::EntityId, cx: &mut gpui::Context<Self>) {
+        if !self.buffers.contains_key(&id) {
+            return;
         }
+        self.active = Some(id);
+        self.picker = false;
+        self.prune_clean_buffers(cx);
         cx.notify();
+    }
+
+    fn prune_clean_buffers(&mut self, cx: &gpui::App) {
+        self.buffers.retain(|id, buffer| {
+            let buffer = buffer.read(cx);
+            Some(*id) == self.active
+                || buffer.dirty
+                || buffer.saving.is_some()
+                // An input notification may still be queued when navigation occurs.
+                || buffer.has_edits(cx)
+        });
     }
 
     pub(in crate::view) fn adopt(
@@ -339,9 +364,7 @@ impl DocumentsView {
                 move |this, ix, _, _, cx| {
                     if let Some((path, buffer)) = open_entries.get(ix) {
                         if let Some(id) = buffer {
-                            this.active = Some(*id);
-                            this.picker = false;
-                            cx.notify();
+                            this.activate_buffer(*id, cx);
                         } else {
                             let path = path.clone();
                             let _ = this
@@ -463,21 +486,29 @@ struct StandaloneBuffer {
     syntax_task: Option<gpui::Task<()>>,
     path_input: Entity<TextInput>,
     version: Option<DiskVersion>,
-    saved: SharedString,
     saved_fingerprint: Option<u64>,
     load_generation: u64,
+    load_task: Option<gpui::Task<()>>,
     dirty: bool,
     editing: bool,
     loading: bool,
     image: bool,
     error: Option<String>,
-    saving: Option<(OperationId, PathBuf, SharedString, u64)>,
+    saving: Option<(OperationId, PathBuf, u64)>,
     failed_destination: Option<PathBuf>,
     pauses: std::collections::BTreeSet<OperationId>,
     subscriptions: Vec<gpui::Subscription>,
 }
 
 impl StandaloneBuffer {
+    fn has_edits(&self, cx: &gpui::App) -> bool {
+        self.editing
+            && !self.loading
+            && Some(file_editor_text_fingerprint(
+                &self.input.read(cx).text_snapshot(),
+            )) != self.saved_fingerprint
+    }
+
     fn new(
         path: PathBuf,
         theme: AppTheme,
@@ -515,18 +546,15 @@ impl StandaloneBuffer {
             input
         });
         let subscriptions = vec![
-            cx.observe(&input, |this, input, cx| {
+            cx.observe(&input, |this, _, cx| {
                 if !this.loading {
-                    this.dirty = this.editing
-                        && Some(file_editor_text_fingerprint(
-                            &input.read(cx).text_snapshot(),
-                        )) != this.saved_fingerprint;
+                    this.dirty = this.has_edits(cx);
                     this.refresh_syntax(cx);
                 }
                 cx.notify();
             }),
             cx.observe(&ui_model, |this, model, cx| {
-                let Some((id, _, _, _)) = &this.saving else {
+                let Some((id, _, _)) = &this.saving else {
                     return;
                 };
                 let Some(result) = model
@@ -540,7 +568,7 @@ impl StandaloneBuffer {
                 else {
                     return;
                 };
-                let (_, path, saved, fingerprint) = this.saving.take().unwrap();
+                let (_, path, fingerprint) = this.saving.take().unwrap();
                 this.store
                     .dispatch(Msg::AcknowledgeFilesystemResults(vec![result.id]));
                 if result.succeeded() {
@@ -548,10 +576,9 @@ impl StandaloneBuffer {
                     this.path_input.update(cx, |input, cx| {
                         input.set_text(this.identity.0.display().to_string(), cx)
                     });
-                    this.saved = saved;
                     this.version = result.saved_version.clone();
                     this.saved_fingerprint = Some(fingerprint);
-                    this.dirty = this.input.read(cx).text() != this.saved.as_ref();
+                    this.dirty = this.has_edits(cx);
                     this.error = None;
                     this.failed_destination = None;
                     update_recent(this.identity.0.clone(), false, cx);
@@ -591,9 +618,9 @@ impl StandaloneBuffer {
             syntax_task: None,
             path_input,
             version: None,
-            saved: SharedString::default(),
             saved_fingerprint: None,
             load_generation: 0,
+            load_task: None,
             dirty: false,
             editing: initial.is_some(),
             loading: false,
@@ -609,6 +636,7 @@ impl StandaloneBuffer {
             buffer.saved_fingerprint = Some(edit.saved_fingerprint);
             buffer.dirty = true;
             buffer.input.update(cx, |input, cx| {
+                input.set_line_ending(TextInput::detect_line_ending(&edit.text));
                 input.set_text(edit.text, cx);
                 input.set_cursor_offset(edit.cursor, cx);
             });
@@ -630,7 +658,7 @@ impl StandaloneBuffer {
         let path = self.identity.0.clone();
         let identity = self.identity.clone();
         let image = self.image;
-        cx.spawn(async move |view, cx| {
+        self.load_task = Some(cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
                 preflight_worktree_file_for_editing(&path)?;
                 let _guard = gitcomet_core::filesystem::global()
@@ -660,8 +688,8 @@ impl StandaloneBuffer {
                 match result {
                     Ok((version, text)) => {
                         this.version = Some(version);
-                        this.saved = text.clone();
                         this.input.update(cx, |input, cx| {
+                            input.set_line_ending(TextInput::detect_line_ending(&text));
                             input.set_text(text, cx);
                             input.set_read_only(!this.editing, cx);
                         });
@@ -676,8 +704,7 @@ impl StandaloneBuffer {
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
         cx.notify();
     }
 
@@ -696,11 +723,10 @@ impl StandaloneBuffer {
             return;
         }
         let path = destination.unwrap_or_else(|| self.identity.0.clone());
-        let contents: SharedString = self.input.read(cx).text().to_string().into();
         let request = Request::new(Operation::Save {
             path: path.clone(),
             worktree: None,
-            contents: Arc::from(contents.as_bytes()),
+            contents: Arc::from(self.input.read(cx).text().as_bytes()),
             expected: if path == self.identity.0 {
                 self.version.clone()
             } else {
@@ -711,7 +737,6 @@ impl StandaloneBuffer {
         self.saving = Some((
             request.id,
             path,
-            contents,
             file_editor_text_fingerprint(&self.input.read(cx).text_snapshot()),
         ));
         self.store.dispatch(Msg::FilesystemRequest(request));

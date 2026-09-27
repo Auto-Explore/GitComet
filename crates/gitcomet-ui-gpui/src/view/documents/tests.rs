@@ -2,6 +2,251 @@ use super::*;
 use crate::view::test_support::TestBackend;
 
 #[gpui::test]
+fn background_document_opens_defer_loading_and_clean_navigation_releases_buffers(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let paths: Vec<_> = (0..session::MAX_RECENT_DOCUMENTS + 5)
+        .map(|i| directory.path().join(format!("{i}.txt")))
+        .collect();
+    for path in &paths {
+        std::fs::write(path, "document contents").unwrap();
+    }
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    cx.update(|_, app| {
+        docs.update(app, |docs, cx| {
+            for path in &paths {
+                docs.open(path.clone(), false, cx);
+            }
+            assert!(
+                docs.buffers.is_empty(),
+                "undisplayed documents must not allocate or load buffers"
+            );
+            assert!(docs.active.is_none());
+            assert_eq!(
+                docs.recents.read(cx).paths.len(),
+                session::MAX_RECENT_DOCUMENTS
+            );
+        })
+    });
+    cx.run_until_parked();
+    let mut previous: Option<WeakEntity<StandaloneBuffer>> = None;
+    for (i, path) in paths.iter().take(5).enumerate() {
+        cx.update(|_, app| docs.update(app, |docs, cx| docs.open(path.clone(), true, cx)));
+        if i % 2 == 0 {
+            // Also navigate away while an initial read is still pending.
+            drain(&root, cx);
+        }
+        cx.update(|_, app| {
+            assert_eq!(docs.read(app).buffers.len(), 1);
+            if let Some(previous) = &previous {
+                assert!(
+                    previous.upgrade().is_none(),
+                    "eviction must release the entity and its observers"
+                );
+            }
+            let docs = docs.read(app);
+            previous = Some(docs.buffers[&docs.active.unwrap()].downgrade());
+        });
+    }
+    drain(&root, cx);
+    cx.update(|_, app| {
+        let docs = docs.read(app);
+        assert_eq!(
+            docs.buffers[&docs.active.unwrap()]
+                .read(app)
+                .input
+                .read(app)
+                .text(),
+            "document contents"
+        );
+    });
+}
+
+#[gpui::test]
+fn document_eviction_preserves_dirty_and_saving_buffers_until_acknowledged_clean(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let [first, second, third] =
+        ["first.txt", "second.txt", "third.txt"].map(|p| directory.path().join(p));
+    let copy = directory.path().join("copy.txt");
+    for path in [&first, &second, &third] {
+        std::fs::write(path, "original").unwrap();
+    }
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    cx.update(|_, app| docs.update(app, |docs, cx| docs.open(first.clone(), true, cx)));
+    drain(&root, cx);
+    let dirty = cx.update(|_, app| {
+        let view = docs.read(app);
+        view.buffers[&view.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        dirty.update(app, |buffer, cx| {
+            buffer.editing = true;
+            buffer.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("unsaved edits", cx);
+            });
+        });
+        // Navigate before the input observer has updated the dirty flag.
+        docs.update(app, |docs, cx| docs.open(second.clone(), true, cx));
+    });
+    drain(&root, cx);
+    let (saving, saving_id) = cx.update(|_, app| {
+        docs.update(app, |docs, cx| {
+            update_recent(first.clone(), true, cx);
+            for i in 0..session::MAX_RECENT_DOCUMENTS + 1 {
+                docs.open(
+                    directory.path().join(format!("background-{i}.txt")),
+                    false,
+                    cx,
+                );
+            }
+            assert!(docs.buffers.contains_key(&dirty.entity_id()));
+            assert!(dirty.read(cx).dirty);
+            let id = docs.active.unwrap();
+            let buffer = docs.buffers[&id].clone();
+            buffer.update(cx, |buffer, cx| buffer.save(Some(copy.clone()), false, cx));
+            assert!(!buffer.read(cx).dirty && buffer.read(cx).saving.is_some());
+            docs.open(third.clone(), true, cx);
+            assert!(
+                docs.buffers.contains_key(&id),
+                "a clean Save As still needs its pending buffer"
+            );
+            (buffer.downgrade(), id)
+        })
+    });
+    drain(&root, cx);
+    assert_eq!(std::fs::read_to_string(copy).unwrap(), "original");
+    cx.update(|_, app| {
+        docs.update(app, |docs, cx| {
+            assert!(!docs.buffers.contains_key(&saving_id));
+            assert!(saving.upgrade().is_none());
+            let active = docs.active;
+            // A picker row rendered before the save acknowledgment may still be clicked.
+            docs.activate_buffer(saving_id, cx);
+            assert_eq!(docs.active, active);
+            assert_eq!(docs.buffers.len(), 2);
+        })
+    });
+    cx.update(|_, app| {
+        dirty.update(app, |buffer, cx| {
+            buffer.save(None, false, cx);
+            buffer
+                .input
+                .update(cx, |input, cx| input.set_text("newer edits", cx));
+        })
+    });
+    drain(&root, cx);
+    cx.update(|_, app| {
+        assert!(dirty.read(app).dirty);
+        assert!(docs.read(app).buffers.contains_key(&dirty.entity_id()));
+        dirty.update(app, |buffer, cx| buffer.save(None, false, cx));
+    });
+    drain(&root, cx);
+    assert_eq!(std::fs::read_to_string(first).unwrap(), "newer edits");
+    cx.update(|_, app| assert_eq!(docs.read(app).buffers.len(), 1));
+}
+
+#[gpui::test]
+fn loaded_documents_keep_their_line_endings_when_enter_is_pressed(cx: &mut gpui::TestAppContext) {
+    check_document_line_endings(cx, false);
+}
+
+#[gpui::test]
+fn adopted_documents_keep_their_line_endings_when_enter_is_pressed(cx: &mut gpui::TestAppContext) {
+    check_document_line_endings(cx, true);
+}
+
+fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    cx.update(|_, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        root.update(app, |root, cx| {
+            root.documents_active = true;
+            cx.notify();
+        });
+    });
+    for (name, ending) in [("crlf.txt", "\r\n"), ("lf.txt", "\n")] {
+        let path = directory.path().join(name);
+        let text = format!("alpha{ending}beta");
+        std::fs::write(&path, &text).unwrap();
+        let buffer = cx.update(|_, app| {
+            root.read(app).documents.clone().update(app, |docs, cx| {
+                if adopted {
+                    docs.adopt(
+                        DocumentIdentity(path.clone()),
+                        StashedFileEdit {
+                            text: text.clone().into(),
+                            cursor: text.len(),
+                            text_fingerprint: 1,
+                            saved_fingerprint: 2,
+                            first_dirty_line: None,
+                            disk: Default::default(),
+                        },
+                        Some(DiskVersion::read(&path).unwrap()),
+                        cx,
+                    );
+                    let id = docs
+                        .buffers
+                        .iter()
+                        .find(|(_, buffer)| buffer.read(cx).identity.0 == path)
+                        .unwrap()
+                        .0;
+                    docs.activate_buffer(*id, cx);
+                } else {
+                    docs.open(path.clone(), true, cx);
+                }
+                docs.buffers[&docs.active.unwrap()].clone()
+            })
+        });
+        drain(&root, cx);
+        cx.update(|window, app| {
+            buffer.update(app, |buffer, cx| {
+                buffer.editing = true;
+                buffer.input.update(cx, |input, cx| {
+                    input.set_read_only(false, cx);
+                    input.set_cursor_offset(text.len(), cx);
+                });
+                window.focus(&buffer.input.read(cx).focus_handle(), cx);
+            });
+            let _ = window.draw(app);
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let expected = format!("{text}{ending}");
+        cx.update(|_, app| {
+            buffer.update(app, |buffer, cx| {
+                assert_eq!(buffer.input.read(cx).text(), expected);
+                assert!(buffer.dirty);
+                buffer.save(None, false, cx);
+            })
+        });
+        drain(&root, cx);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    }
+}
+
+#[gpui::test]
 fn pending_document_reads_restart_after_file_renames(cx: &mut gpui::TestAppContext) {
     rename_during_document_load(cx, false, false);
 }

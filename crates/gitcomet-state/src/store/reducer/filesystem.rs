@@ -1,6 +1,6 @@
 use crate::model::{AppState, Loadable};
 use crate::msg::Effect;
-use gitcomet_core::domain::{DiffTarget, FileSource};
+use gitcomet_core::domain::{DiffArea, DiffTarget, FileSource};
 use gitcomet_core::filesystem::PathChange;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,6 +18,7 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
         }) {
             continue;
         }
+        let mut diff_target = repo.diff_state.diff_target.clone();
         for change in changes {
             let retarget = |path: &Path| -> Option<PathBuf> {
                 let absolute = root.join(path);
@@ -63,11 +64,6 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
             ] {
                 *paths = paths.iter().filter_map(|p| retarget(p)).collect();
             }
-            if let Some(DiffTarget::WorkingTree { path, .. }) = &mut repo.diff_state.diff_target
-                && let Some(next) = retarget(path)
-            {
-                *path = next;
-            }
             for entry in &mut repo.navigation.view_history.entries {
                 if entry.source == FileSource::WorkingDirectory
                     && let Some(next) = retarget(&entry.path)
@@ -75,8 +71,27 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
                     entry.path = next;
                 }
             }
-            for entry in &mut repo.navigation.main_history.entries {
-                if let Some(DiffTarget::WorkingTree { path, .. }) = &mut entry.diff_target
+            for target in diff_target
+                .iter_mut()
+                .chain(
+                    repo.diff_state
+                        .edit_return_view
+                        .iter_mut()
+                        .map(|view| &mut view.target),
+                )
+                .chain(
+                    repo.navigation
+                        .main_history
+                        .entries
+                        .iter_mut()
+                        .filter_map(|entry| entry.diff_target.as_mut()),
+                )
+            {
+                // Filesystem moves change the checkout, not the index or history.
+                if let DiffTarget::WorkingTree {
+                    path,
+                    area: DiffArea::Unstaged,
+                } = target
                     && let Some(next) = retarget(path)
                 {
                     *path = next;
@@ -85,7 +100,16 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
         }
         repo.file_browser.stale = true;
         repo.file_browser.bump_rev();
-        repo.diff_state.diff_target_rev = repo.diff_state.diff_target_rev.wrapping_add(1);
+        if diff_target != repo.diff_state.diff_target {
+            repo.set_diff_target(diff_target.clone());
+            if let Some(target) = diff_target {
+                let plan = super::util::selected_diff_load_plan(repo, &target);
+                super::util::apply_selected_diff_load_plan_state(repo, plan);
+                repo.diff_state.inline_submodule_diff = None;
+                repo.bump_diff_state_rev();
+                effects.extend(super::util::diff_reload_effects(repo, repo.id, target));
+            }
+        }
         if !matches!(repo.file_browser.entries, Loadable::NotLoaded) {
             effects.push(Effect::LoadFileBrowser {
                 repo_id: repo.id,
@@ -131,6 +155,114 @@ mod tests {
             .collect();
         state.repos.push(repo);
         state
+    }
+
+    #[test]
+    fn filesystem_moves_retarget_only_live_views_in_history_and_editor_returns() {
+        use crate::model::ViewHistoryEntry;
+        use gitcomet_core::domain::CommitId;
+        let old = PathBuf::from("folder/nested/file");
+        let live = DiffTarget::WorkingTree {
+            path: old.clone(),
+            area: DiffArea::Unstaged,
+        };
+        let targets = [
+            live.clone(),
+            DiffTarget::WorkingTree {
+                path: old.clone(),
+                area: DiffArea::Staged,
+            },
+            DiffTarget::Commit {
+                commit_id: CommitId("abc".into()),
+                path: Some(old.clone()),
+            },
+            DiffTarget::CommitRange {
+                from_commit_id: CommitId("abc".into()),
+                to_commit_id: Some(CommitId("def".into())),
+                path: Some(old.clone()),
+            },
+        ];
+        for original in &targets {
+            for edit in [false, true] {
+                for parent in [false, true] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let new = PathBuf::from(if parent {
+                        "renamed/nested/file"
+                    } else {
+                        "folder/nested/new"
+                    });
+                    let new_live = DiffTarget::WorkingTree {
+                        path: new.clone(),
+                        area: DiffArea::Unstaged,
+                    };
+                    let mut state = selected_repo(root);
+                    let repo = &mut state.repos[0];
+                    repo.diff_state.content_preview = original == &live;
+                    for target in &targets {
+                        repo.diff_state.diff_target = Some(target.clone());
+                        repo.navigation
+                            .main_history
+                            .record(repo.main_view_snapshot());
+                    }
+                    for source in [
+                        FileSource::WorkingDirectory,
+                        FileSource::Commit(CommitId("abc".into())),
+                    ] {
+                        repo.navigation.view_history.record(ViewHistoryEntry {
+                            source,
+                            path: old.clone(),
+                        });
+                    }
+                    repo.diff_state.diff_target = Some(original.clone());
+                    let repos = Default::default();
+                    if edit {
+                        super::super::diff_selection::open_file_editor(
+                            &repos,
+                            &mut state,
+                            RepoId(1),
+                            old.clone(),
+                        );
+                    }
+                    paths_changed(
+                        &mut state,
+                        &[PathChange {
+                            old: Some(root.join(if parent { Path::new("folder") } else { &old })),
+                            new: Some(root.join(if parent { Path::new("renamed") } else { &new })),
+                        }],
+                    );
+                    let repo = &state.repos[0];
+                    assert_eq!(repo.navigation.view_history.entries[0].path, new);
+                    assert_eq!(repo.navigation.view_history.entries[1].path, old);
+                    for (entry, target) in repo.navigation.main_history.entries.iter().zip(&targets)
+                    {
+                        assert_eq!(
+                            entry.diff_target.as_ref(),
+                            Some(if target == &live { &new_live } else { target })
+                        );
+                    }
+                    if edit {
+                        assert_eq!(repo.diff_state.diff_target, Some(new_live.clone()));
+                        super::super::diff_selection::exit_diff_edit_mode(
+                            &repos,
+                            &mut state,
+                            RepoId(1),
+                        );
+                    }
+                    let repo = &state.repos[0];
+                    assert_eq!(
+                        repo.diff_state.diff_target.as_ref(),
+                        Some(if original == &live {
+                            &new_live
+                        } else {
+                            original
+                        })
+                    );
+                    assert_eq!(repo.diff_state.content_preview, original == &live);
+                    assert!(!repo.diff_state.edit_mode);
+                }
+            }
+        }
     }
 
     #[test]
