@@ -10,6 +10,188 @@ fn success(result: &OperationResult) {
 }
 
 #[test]
+fn public_filesystem_paths_match_repository_identities_through_save_move_and_undo() {
+    let directory = tempfile::tempdir().unwrap();
+    // canonicalize supplies verbatim-prefixed input on Windows, while the
+    // backend publishes repository workdirs without that prefix.
+    let canonical = fs::canonicalize(directory.path()).unwrap();
+    let worktree = crate::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let source = worktree.join("note.txt");
+    fs::write(&source, b"contents").unwrap();
+    fs::create_dir(worktree.join("folder")).unwrap();
+    let identity = DocumentIdentity::resolve(&canonical.join("note.txt")).unwrap();
+    assert_eq!(identity.0, source);
+    assert_eq!(
+        identity.0.strip_prefix(&worktree).unwrap(),
+        Path::new("note.txt")
+    );
+    assert_eq!(
+        absolute_identity(&canonical.join("new.txt")).unwrap(),
+        worktree.join("new.txt")
+    );
+    let mut service = Filesystem::default();
+    let saved = run(
+        &mut service,
+        Operation::Save {
+            path: canonical.join("note.txt"),
+            worktree: None,
+            contents: Arc::from(&b"saved contents"[..]),
+            expected: Some(DiskVersion::read(&source).unwrap()),
+            overwrite: false,
+        },
+    );
+    success(&saved);
+    assert_eq!(saved.changes[0].new.as_ref(), Some(&source));
+    let moved = run(
+        &mut service,
+        Operation::Transfer {
+            sources: vec![canonical.join("note.txt")],
+            destination: canonical.join("folder"),
+            intent: TransferIntent::Move,
+        },
+    );
+    success(&moved);
+    let destination = worktree.join("folder/note.txt");
+    assert_eq!(moved.changes[0].old.as_ref(), Some(&source));
+    assert_eq!(moved.changes[0].new.as_ref(), Some(&destination));
+    assert_eq!(identity.retarget(&moved.changes).0, destination);
+    assert!(moved.moved_versions.contains_key(&destination));
+    let undone = run(&mut service, Operation::Undo);
+    success(&undone);
+    assert_eq!(undone.changes[0].new.as_ref(), Some(&source));
+    assert_eq!(fs::read(&source).unwrap(), b"saved contents");
+    success(&run(&mut service, Operation::Redo));
+    assert_eq!(fs::read(destination).unwrap(), b"saved contents");
+    let created = worktree.join("created.txt");
+    success(&run(
+        &mut service,
+        Operation::CreateFile {
+            path: canonical.join("created.txt"),
+        },
+    ));
+    let entry = service.undo.back().unwrap();
+    for step in &entry.steps {
+        assert_eq!(absolute_identity(&step.from).unwrap(), step.from);
+        assert_eq!(absolute_identity(&step.to).unwrap(), step.to);
+    }
+    success(&run(&mut service, Operation::Undo));
+    assert!(!created.exists());
+    success(&run(&mut service, Operation::Redo));
+    assert!(created.is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_trash_ancestors_preserve_receipts_through_undo_and_redo() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_path(directory.path()).unwrap();
+    let data = root.join("data");
+    let alias = root.join("alias");
+    fs::create_dir(&data).unwrap();
+    std::os::unix::fs::symlink(&data, &alias).unwrap();
+    let source = root.join("notes.txt");
+    fs::write(&source, b"restore these contents").unwrap();
+    for trash_root in [alias.join("Trash"), alias.join("nested/share/Trash")] {
+        fs::create_dir_all(trash_root.parent().unwrap()).unwrap();
+        let receipt = super::super::trash::prepare_in(&source, &trash_root).unwrap();
+        assert_eq!(receipt.item, absolute_identity(&receipt.item).unwrap());
+        assert_eq!(receipt.info, absolute_identity(&receipt.info).unwrap());
+        assert!(receipt.item.starts_with(&data));
+        let info = fs::read(&receipt.info).unwrap();
+        let request = Request::new(Operation::Trash {
+            sources: vec![source.clone()],
+        });
+        let mut journal = JournalEntry::default();
+        assert!(matches!(
+            trash_with_receipt(&source, &receipt, &request, &mut journal).unwrap(),
+            ItemOutcome::Completed
+        ));
+        assert!(!source.exists());
+        let mut service = Filesystem::default();
+        service.undo.push_back(journal);
+        for _ in 0..2 {
+            success(&run(&mut service, Operation::Undo));
+            assert_eq!(fs::read(&source).unwrap(), b"restore these contents");
+            assert!(!receipt.item.exists() && !receipt.info.exists());
+            success(&run(&mut service, Operation::Redo));
+            assert!(!source.exists());
+            assert_eq!(fs::read(&receipt.item).unwrap(), b"restore these contents");
+            assert_eq!(fs::read(&receipt.info).unwrap(), info);
+        }
+        success(&run(&mut service, Operation::Undo));
+    }
+}
+
+#[test]
+fn cancelling_during_a_collision_hash_stops_reading_without_a_conflict_or_mutation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_path(directory.path()).unwrap();
+    let destination = root.join("destination");
+    fs::create_dir(&destination).unwrap();
+    for is_directory in [false, true] {
+        let source = root.join(if is_directory { "folder" } else { "file" });
+        let target = destination.join(source.file_name().unwrap());
+        let (source_file, target_file) = if is_directory {
+            fs::create_dir(&source).unwrap();
+            fs::create_dir(&target).unwrap();
+            (source.join("child"), target.join("child"))
+        } else {
+            (source.clone(), target.clone())
+        };
+        let payload = vec![b'x'; 256 * 1024];
+        fs::write(&source_file, b"source contents").unwrap();
+        fs::write(&target_file, &payload).unwrap();
+        for intent in [TransferIntent::Copy, TransferIntent::Move] {
+            let request = Request::new(Operation::Transfer {
+                sources: vec![source.clone()],
+                destination: destination.clone(),
+                intent,
+            });
+            CONTENT_BYTES_HASHED.set(0);
+            CANCEL_DURING_HASH.set(Some((target_file.clone(), request.cancellation.clone())));
+            let mut service = Filesystem::default();
+            let result = service.execute(request, |_| {});
+            assert!(
+                CANCEL_DURING_HASH.take().is_none(),
+                "the request must reach the collision read"
+            );
+            assert!(
+                matches!(result.items[0].outcome, ItemOutcome::Cancelled),
+                "{:?}",
+                result.items
+            );
+            assert!(
+                CONTENT_BYTES_HASHED.get() < payload.len() as u64,
+                "cancellation must interrupt hashing"
+            );
+            assert!(result.changes.is_empty() && !result.undo_available);
+            assert_eq!(fs::read(&source_file).unwrap(), b"source contents");
+            assert_eq!(fs::read(&target_file).unwrap(), payload);
+        }
+    }
+}
+
+#[test]
+fn collecting_moved_editor_versions_stops_mid_file_when_cancelled() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("moved.txt");
+    fs::write(&path, vec![b'x'; 256 * 1024]).unwrap();
+    let cancellation = Cancellation::default();
+    CONTENT_BYTES_HASHED.set(0);
+    CANCEL_DURING_HASH.set(Some((path.clone(), cancellation.clone())));
+    let versions = moved_versions(
+        &[PathChange {
+            old: Some(directory.path().join("old.txt")),
+            new: Some(path),
+        }],
+        &cancellation,
+    );
+    assert!(CANCEL_DURING_HASH.take().is_none());
+    assert!(versions.is_empty());
+    assert!(CONTENT_BYTES_HASHED.get() < 256 * 1024);
+}
+
+#[test]
 fn retargeted_file_paths_can_be_read_without_a_trailing_directory_separator() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("before.txt");

@@ -117,7 +117,7 @@ impl JournalEntry {
         let area = tempfile::Builder::new()
             .prefix(".gitcomet-operation-")
             .tempdir_in(storage)?;
-        let path = fs::canonicalize(area.path())?.join("item");
+        let path = absolute_identity(&area.path().join("item"))?;
         self.areas.push(area);
         Ok(path)
     }
@@ -374,18 +374,26 @@ impl Filesystem {
                 } else {
                     path.clone()
                 };
+                let target = absolute_identity(&target)?;
                 self.save(&target, contents, expected.as_ref(), *overwrite)
+                    .map(|version| (target, version))
             });
-            let (outcome, saved_version, changes) = match saved {
-                Ok(version) => (
+            let (target, outcome, saved_version, changes) = match saved {
+                Ok((target, version)) => (
+                    target.clone(),
                     ItemOutcome::Completed,
                     Some(version),
                     vec![PathChange {
                         old: None,
-                        new: Some(path.clone()),
+                        new: Some(target),
                     }],
                 ),
-                Err(error) => (ItemOutcome::Failed(error.to_string()), None, vec![]),
+                Err(error) => (
+                    path.clone(),
+                    ItemOutcome::Failed(error.to_string()),
+                    None,
+                    vec![],
+                ),
             };
             progress(Progress {
                 id: request.id,
@@ -399,8 +407,8 @@ impl Filesystem {
                 saved_version,
                 changes,
                 items: vec![ItemResult {
-                    source: path.clone(),
-                    destination: Some(path.clone()),
+                    source: target.clone(),
+                    destination: Some(target),
                     outcome,
                 }],
                 undo_available: !self.undo.is_empty(),
@@ -553,34 +561,7 @@ impl Filesystem {
                 #[cfg(not(any(windows, target_os = "macos")))]
                 {
                     let receipt = super::trash::prepare(source)?;
-                    let staged_info = journal.reserve(receipt.info.parent().unwrap())?;
-                    // Info is already reserved atomically in the native trash. Its
-                    // inverse parks it here after the original has been restored.
-                    journal.steps.push(Step::new(
-                        staged_info,
-                        receipt.info.clone(),
-                        DiskVersion::read(&receipt.info)?,
-                        None,
-                    )?);
-                    journal.applied = journal.steps.len();
-                    return transfer(
-                        source,
-                        &receipt.item,
-                        TransferIntent::Move,
-                        request,
-                        journal,
-                    )
-                    .map(|outcome| {
-                        if matches!(outcome, ItemOutcome::Completed)
-                            && let Some(last) = journal.steps.last_mut()
-                        {
-                            last.change = Some(PathChange {
-                                old: Some(source.to_path_buf()),
-                                new: None,
-                            });
-                        }
-                        outcome
-                    });
+                    return trash_with_receipt(source, &receipt, request, journal);
                 }
             }
             Operation::DeletePermanently { confirmed, .. } => {
@@ -781,12 +762,47 @@ fn moved_versions(
             }
         } else if metadata.is_file()
             && !versions.contains_key(&path)
-            && let Ok(version) = DiskVersion::read(&path)
+            && let Ok(version) = DiskVersion::read_cancellable(&path, cancellation)
         {
             versions.insert(path, version);
         }
     }
     versions
+}
+
+#[cfg(any(not(any(windows, target_os = "macos")), all(test, unix)))]
+fn trash_with_receipt(
+    source: &Path,
+    receipt: &super::trash::Receipt,
+    request: &Request,
+    journal: &mut JournalEntry,
+) -> io::Result<ItemOutcome> {
+    let staged_info = journal.reserve(receipt.info.parent().unwrap())?;
+    // Info is already reserved atomically in Trash. Undo parks it here after
+    // restoring the original; Redo reinstalls the same receipt.
+    journal.steps.push(Step::new(
+        staged_info,
+        receipt.info.clone(),
+        DiskVersion::read(&receipt.info)?,
+        None,
+    )?);
+    journal.applied = journal.steps.len();
+    let outcome = transfer(
+        source,
+        &receipt.item,
+        TransferIntent::Move,
+        request,
+        journal,
+    )?;
+    if matches!(outcome, ItemOutcome::Completed)
+        && let Some(last) = journal.steps.last_mut()
+    {
+        last.change = Some(PathChange {
+            old: Some(source.to_path_buf()),
+            new: None,
+        });
+    }
+    Ok(outcome)
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -807,7 +823,9 @@ fn native_trash(
     journal.record_intent(source, &backup)?;
     check_cancel(&request.cancellation)?;
     let result = (|| {
-        let receipt = gitcomet_filesystem_native::trash_item(source)?;
+        let mut receipt = gitcomet_filesystem_native::trash_item(source)?;
+        receipt.item = absolute_identity(&receipt.item)?;
+        receipt.info = receipt.info.as_deref().map(absolute_identity).transpose()?;
         let version = DiskVersion::read(&receipt.item)?;
         if exists(source)? {
             return Err(invalid(
@@ -905,7 +923,7 @@ fn jobs(operation: &Operation) -> io::Result<Vec<(PathBuf, Option<PathBuf>)>> {
             });
             let destination = match operation {
                 Operation::Transfer { destination, .. } => {
-                    let destination = fs::canonicalize(destination)?;
+                    let destination = canonical_path(destination)?;
                     if !destination.is_dir() {
                         return Err(invalid("The destination must be a folder"));
                     }
@@ -995,21 +1013,22 @@ fn transfer_inner(
     }
     protect(&destination, true, &request.cancellation)?;
     if exists(&destination)? {
-        let version = DiskVersion::read(&destination)?;
+        let version = DiskVersion::read_cancellable(&destination, &request.cancellation)?;
         // Case-insensitive volumes resolve the new spelling to the same entry.
         // Use an intermediate name so the directory entry adopts that spelling.
         if intent == TransferIntent::Move
             && source.parent() == destination.parent()
-            && version == DiskVersion::read(source)?
+            && version == DiskVersion::read_cancellable(source, &request.cancellation)?
             && !children(destination.parent().unwrap())?
                 .iter()
                 .any(|entry| entry.file_name() == destination.file_name())
         {
             let parked = journal.reserve(source.parent().unwrap())?;
-            journal.move_entry(source.to_path_buf(), parked.clone(), None)?;
-            journal.move_entry(
+            journal.move_known(source.to_path_buf(), parked.clone(), version.clone(), None)?;
+            journal.move_known(
                 parked,
                 destination.clone(),
+                version,
                 Some(PathChange {
                     old: Some(source.to_path_buf()),
                     new: Some(destination),
@@ -1019,6 +1038,7 @@ fn transfer_inner(
         }
         let can_merge =
             fs::symlink_metadata(source)?.is_dir() && fs::symlink_metadata(&destination)?.is_dir();
+        check_cancel(&request.cancellation)?;
         let Some(resolution) = request
             .resolutions
             .get(&destination)
@@ -1052,7 +1072,10 @@ fn transfer_inner(
                             next.resolutions.insert(
                                 destination.clone(),
                                 ConflictResolution {
-                                    expected: DiskVersion::read(&destination)?,
+                                    expected: DiskVersion::read_cancellable(
+                                        &destination,
+                                        &request.cancellation,
+                                    )?,
                                     choice: ConflictChoice::Merge,
                                 },
                             );
@@ -1063,7 +1086,10 @@ fn transfer_inner(
                                 continuation.resolutions.insert(
                                     target.clone(),
                                     ConflictResolution {
-                                        expected: DiskVersion::read(&target)?,
+                                        expected: DiskVersion::read_cancellable(
+                                            &target,
+                                            &request.cancellation,
+                                        )?,
                                         choice: ConflictChoice::Skip,
                                     },
                                 );

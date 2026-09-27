@@ -162,8 +162,15 @@ impl MainPaneView {
         }
         self.filesystem_pauses.remove(&id);
         self.prune_orphaned_file_editor_stash(cx);
-        if self.filesystem_pauses.is_empty() && self.file_editor_dirty {
-            self.schedule_file_editor_autosave(cx);
+        if self.filesystem_pauses.is_empty() {
+            if self.file_editor_loading {
+                // The old read belongs to its original path. Reissue it under
+                // the current key once every operation has released its pause;
+                // the read sequence also prevents the old result from landing.
+                self.reread_file_editor_from_disk(cx);
+            } else if self.file_editor_dirty {
+                self.schedule_file_editor_autosave(cx);
+            }
         }
         self.sync_unsaved_file_edits_rev(cx);
         cx.notify();

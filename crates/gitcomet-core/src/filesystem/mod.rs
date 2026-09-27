@@ -2,6 +2,7 @@
 //! changes. Call it on a worker; saves and journal operations share its lock.
 mod engine;
 mod io;
+#[cfg(any(not(any(windows, target_os = "macos")), all(test, unix)))]
 mod trash;
 
 pub use engine::{Filesystem, global};

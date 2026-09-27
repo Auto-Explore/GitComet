@@ -333,11 +333,11 @@ impl GitCometView {
                 match item.outcome {
                     ItemOutcome::Completed => {}
                     ItemOutcome::Skipped => {}
-                    ItemOutcome::Conflict(conflict) => self.file_operations.conflicts.push_back((
-                        request.clone(),
-                        conflict,
-                        ownership,
-                    )),
+                    ItemOutcome::Conflict(conflict) if !request.cancellation.is_cancelled() => self
+                        .file_operations
+                        .conflicts
+                        .push_back((request.clone(), conflict, ownership)),
+                    ItemOutcome::Conflict(_) => {}
                     ItemOutcome::Failed(message) => {
                         self.push_toast(components::ToastKind::Error, message, cx)
                     }

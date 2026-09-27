@@ -120,6 +120,38 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_move_mappings_match_repository_paths_and_retarget_selections() {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+        std::fs::create_dir_all(root.join("folder/nested")).unwrap();
+        std::fs::write(root.join("folder/nested/file"), b"contents").unwrap();
+        let mut state = selected_repo(&root);
+        let result = Filesystem::default().execute(
+            Request::new(Operation::Rename {
+                // On Windows, this input has a verbatim prefix and RepoSpec does not.
+                source: std::fs::canonicalize(root.join("folder")).unwrap(),
+                name: "renamed".into(),
+            }),
+            |_| {},
+        );
+        assert!(result.succeeded(), "{:?}", result.items);
+        paths_changed(&mut state, &result.changes);
+        let selection = &state.repos[0].file_browser.selection;
+        assert_eq!(
+            selection.paths,
+            ["renamed", "renamed/nested/file", "keep.txt"]
+                .map(PathBuf::from)
+                .into()
+        );
+        assert_eq!(
+            selection.focused.as_deref(),
+            Some(Path::new("renamed/nested/file"))
+        );
+        assert_eq!(selection.anchor.as_deref(), Some(Path::new("renamed")));
+    }
+
+    #[test]
     fn removing_a_parent_clears_selection_before_the_next_toggle_and_operation() {
         for move_out in [false, true] {
             let directory = tempfile::tempdir().unwrap();

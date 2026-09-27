@@ -16,7 +16,12 @@ pub fn absolute_identity(path: &Path) -> io::Result<PathBuf> {
         .file_name()
         .ok_or_else(|| invalid("A filesystem root is not a file"))?;
     validate_name(name)?;
-    Ok(fs::canonicalize(absolute.parent().ok_or_else(|| invalid("Missing parent"))?)?.join(name))
+    Ok(canonical_path(absolute.parent().ok_or_else(|| invalid("Missing parent"))?)?.join(name))
+}
+
+/// Use the same Windows drive/UNC spelling as repository workdirs.
+pub(super) fn canonical_path(path: &Path) -> io::Result<PathBuf> {
+    fs::canonicalize(path).map(crate::path_utils::strip_windows_verbatim_prefix)
 }
 
 pub fn validate_name(name: &OsStr) -> io::Result<()> {
@@ -218,7 +223,14 @@ fn hash_entry(
                 return Err(invalid("File grew beyond the size limit while reading"));
             }
             #[cfg(test)]
-            CONTENT_BYTES_HASHED.with(|counted| counted.set(counted.get() + len as u64));
+            {
+                CONTENT_BYTES_HASHED.with(|counted| counted.set(counted.get() + len as u64));
+                CANCEL_DURING_HASH.with_borrow_mut(|pending| {
+                    if pending.as_ref().is_some_and(|(target, _)| target == path) {
+                        pending.take().unwrap().1.cancel();
+                    }
+                });
+            }
             hasher.update(&buffer[..len]);
         }
     } else if m.is_dir() {
@@ -252,13 +264,13 @@ pub(super) fn children(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-/// Bytes of file content hashed, so tests can pin how many full passes an
-/// operation makes over the trees it touches. Thread-local: `execute` hashes on
-/// its caller's thread, and a process-wide counter would pick up every other
-/// test hashing in parallel.
+// Thread-local: execute hashes on its caller's thread, so parallel tests cannot
+// affect these counters or cancellation points.
 #[cfg(test)]
 thread_local! {
     pub(super) static CONTENT_BYTES_HASHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    // Cancel after one content chunk without relying on timing or huge files.
+    pub(super) static CANCEL_DURING_HASH: std::cell::RefCell<Option<(PathBuf, Cancellation)>> = const { std::cell::RefCell::new(None) };
 }
 
 pub(super) fn protect(path: &Path, recursive: bool, cancellation: &Cancellation) -> io::Result<()> {

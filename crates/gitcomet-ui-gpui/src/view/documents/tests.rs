@@ -21,6 +21,13 @@ fn cancelled_transfer_releases_its_native_receipt_without_rendering(cx: &mut gpu
 }
 
 #[gpui::test]
+fn cancelling_before_a_conflict_is_delivered_releases_the_receipt_without_prompting(
+    cx: &mut gpui::TestAppContext,
+) {
+    transfer_without_rendering(cx, TransferOutcome::CancelledAfterConflict);
+}
+
+#[gpui::test]
 fn transfer_conflicts_release_editors_before_rendering_and_cancel_releases_the_receipt(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -32,6 +39,7 @@ enum TransferOutcome {
     Completed,
     Failed,
     Cancelled,
+    CancelledAfterConflict,
     Conflict,
 }
 
@@ -46,14 +54,18 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
-    let workdir = std::fs::canonicalize(directory.path()).unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
     let source = workdir.join("source.txt");
     let other_file = workdir.join("other.txt");
     let destination = workdir.join("destination");
     std::fs::write(&source, "source contents").unwrap();
     std::fs::write(&other_file, "other contents").unwrap();
     std::fs::create_dir(&destination).unwrap();
-    if outcome == TransferOutcome::Conflict {
+    if matches!(
+        outcome,
+        TransferOutcome::Conflict | TransferOutcome::CancelledAfterConflict
+    ) {
         std::fs::write(destination.join("source.txt"), "existing destination").unwrap();
     }
     for (view, path) in [(&root, &source), (&other, &other_file)] {
@@ -121,6 +133,36 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
             }
         })
     });
+    if outcome == TransferOutcome::CancelledAfterConflict {
+        // Hold the completed conflict on the store side, then cancel before
+        // its notification reaches the UI. No render or prompt is involved.
+        let mut reached_conflict = false;
+        for _ in 0..400 {
+            reached_conflict = cx.update(|_, app| {
+                root.read(app)
+                    .store
+                    .snapshot()
+                    .filesystem
+                    .completed
+                    .iter()
+                    .any(|result| {
+                        result.id == id
+                            && result.items.iter().any(|item| {
+                                matches!(
+                                    item.outcome,
+                                    gitcomet_core::filesystem::ItemOutcome::Conflict(_)
+                                )
+                            })
+                    })
+            });
+            if reached_conflict {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(reached_conflict);
+        cx.update(|_, app| root.update(app, |root, cx| root.cancel_filesystem_operations(cx)));
+    }
     // Deliver only model notifications. An occluded Wayland window may never
     // get a compositor frame, so neither draw nor render may finish the move.
     for _ in 0..400 {
@@ -350,12 +392,19 @@ fn repository_document_routes_record_absolute_paths_for_foreground_and_backgroun
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
-    let repository = directory.path().to_path_buf();
+    let repository =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
     let first = repository.join("first.txt");
     let second = repository.join("second.txt");
     for path in [&first, &second] {
         std::fs::write(path, "text").unwrap();
     }
+    // Filesystem identities must route into the backend's workdir spelling,
+    // even when canonicalize supplies a verbatim-prefixed Windows path.
+    let resolved_first =
+        DocumentIdentity::resolve(&std::fs::canonicalize(&first).unwrap()).unwrap();
+    let resolved_second =
+        DocumentIdentity::resolve(&std::fs::canonicalize(&second).unwrap()).unwrap();
     cx.update(|_, app| {
         root.update(app, |root, cx| {
             let mut state = (*root.state).clone();
@@ -367,8 +416,8 @@ fn repository_document_routes_record_absolute_paths_for_foreground_and_backgroun
             );
             state.repos.push(repo);
             root.state = Arc::new(state);
-            root.queue_repository_document(repository.clone(), first.clone(), true, cx);
-            root.queue_repository_document(repository.clone(), second.clone(), false, cx);
+            root.queue_repository_document(repository.clone(), resolved_first.0, true, cx);
+            root.queue_repository_document(repository.clone(), resolved_second.0, false, cx);
             assert!(!shared_recents(cx).read(cx).paths.contains(&first));
             let mut state = (*root.state).clone();
             state.repos.last_mut().unwrap().open = Loadable::Ready(());

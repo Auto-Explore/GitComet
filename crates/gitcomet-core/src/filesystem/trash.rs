@@ -1,5 +1,5 @@
 //! Exact native trash destinations. Failure never falls back to deletion.
-use super::io::{encoded_path, invalid};
+use super::io::{canonical_path, encoded_path, invalid};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -47,17 +47,16 @@ pub(super) fn prepare_in(source: &Path, root: &Path) -> io::Result<Receipt> {
             }
         }
     }
-    let unique = tempfile::Builder::new()
+    let files = canonical_path(&root.join("files"))?;
+    let info = canonical_path(&root.join("info"))?;
+    let mut unique = tempfile::Builder::new()
         .prefix("gitcomet-")
         .suffix(".trashinfo")
-        .tempfile_in(root.join("info"))?;
-    let mut name = unique.path().file_stem().unwrap().to_os_string();
+        .tempfile_in(info)?;
     // tempfile reserves the info name atomically; the corresponding item name
     // is committed with a no-replace rename by the service.
-    let item = root.join("files").join(&name);
-    name.push(".trashinfo");
-    let info = root.join("info").join(name);
-    let mut unique = unique;
+    let item = files.join(unique.path().file_stem().unwrap());
+    let info = unique.path().to_path_buf();
     writeln!(
         unique,
         "[Trash Info]\nPath={}\nDeletionDate={}",

@@ -61,6 +61,144 @@ fn finish_editor_saves(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualT
 }
 
 #[gpui::test]
+fn pending_editor_reads_restart_after_file_renames(cx: &mut gpui::TestAppContext) {
+    rename_during_editor_load(cx, false, false);
+}
+
+#[gpui::test]
+fn pending_editor_reads_restart_after_parent_directory_renames(cx: &mut gpui::TestAppContext) {
+    rename_during_editor_load(cx, true, false);
+}
+
+#[gpui::test]
+fn pending_editor_reads_wait_for_all_filesystem_pauses_before_restarting(
+    cx: &mut gpui::TestAppContext,
+) {
+    rename_during_editor_load(cx, true, true);
+}
+
+fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overlapping: bool) {
+    use gitcomet_core::filesystem::{
+        DocumentIdentity, Filesystem, Operation, OperationId, Request,
+    };
+    let _guard = lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let original = workdir.join("before/file.rs");
+    let relative = Path::new(if parent {
+        "after/file.rs"
+    } else {
+        "before/renamed.rs"
+    });
+    let renamed = workdir.join(relative);
+    std::fs::create_dir(original.parent().unwrap()).unwrap();
+    std::fs::write(&original, "fn renamed_file() {}\n").unwrap();
+    let repo_id = gitcomet_state::model::RepoId(998);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(
+                view,
+                editor_state(repo_id, &workdir, Path::new("before/file.rs")),
+                cx,
+            );
+        })
+    });
+    let other_pause = OperationId::allocate();
+    let initial_sequence = cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.auto_save_file_edits = false;
+            pane.ensure_file_editor_loaded(cx);
+            assert!(pane.file_editor_loading);
+            let sequence = pane.file_editor_reread_seq;
+            let request = Request::new(Operation::Rename {
+                source: if parent {
+                    original.parent().unwrap().to_path_buf()
+                } else {
+                    original.clone()
+                },
+                name: if parent { "after" } else { "renamed.rs" }.into(),
+            });
+            pane.filesystem_pause(request.id, cx);
+            if overlapping {
+                pane.filesystem_pause(other_pause, cx);
+            }
+            let result = Filesystem::default().execute(request, |_| {});
+            assert!(result.succeeded(), "{:?}", result.items);
+            // Make the obsolete read succeed with different contents. Its result
+            // must never replace the restarted read from the renamed identity.
+            std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+            std::fs::write(&original, "obsolete path contents\n").unwrap();
+            pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+            assert_eq!(
+                pane.file_editor_key,
+                Some(DocumentIdentity(renamed.clone()))
+            );
+            if overlapping {
+                assert_eq!(pane.file_editor_reread_seq, sequence);
+            } else {
+                assert!(pane.file_editor_reread_seq > sequence);
+            }
+            sequence
+        })
+    });
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, &workdir, relative), cx);
+        })
+    });
+    cx.run_until_parked();
+    if overlapping {
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                assert!(pane.file_editor_loading);
+                assert!(pane.file_editor_input.read(cx).text().is_empty());
+                pane.ensure_file_editor_loaded(cx);
+                assert_eq!(pane.file_editor_reread_seq, initial_sequence);
+                pane.filesystem_finish(other_pause, &[], &Default::default(), cx);
+                assert!(pane.file_editor_reread_seq > initial_sequence);
+            })
+        });
+        cx.run_until_parked();
+    }
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.ensure_file_editor_loaded(cx);
+            assert!(!pane.file_editor_loading);
+            assert!(pane.file_editor_error.is_none());
+            assert!(!pane.file_editor_dirty);
+            assert_eq!(
+                pane.file_editor_input.read(cx).text(),
+                "fn renamed_file() {}\n"
+            );
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// edit\n", cx)
+            });
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .clone()
+            .update(app, |pane, cx| pane.save_file_editor_buffer(cx))
+    });
+    finish_editor_saves(&view, cx);
+    assert_eq!(
+        std::fs::read_to_string(renamed).unwrap(),
+        "// edit\nfn renamed_file() {}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(original).unwrap(),
+        "obsolete path contents\n"
+    );
+}
+
+#[gpui::test]
 fn replacing_a_clean_active_destination_preserves_dirty_source_edits(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -82,7 +220,8 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
-    let workdir = std::fs::canonicalize(directory.path()).unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
     let source = workdir.join("a.txt");
     let destination = workdir.join("b.txt");
     std::fs::write(&source, "source\n").unwrap();
