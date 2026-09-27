@@ -2,6 +2,204 @@ use super::*;
 use crate::view::test_support::TestBackend;
 
 #[gpui::test]
+fn transfer_completion_releases_all_windows_and_native_receipts_without_rendering(
+    cx: &mut gpui::TestAppContext,
+) {
+    transfer_without_rendering(cx, TransferOutcome::Completed);
+}
+
+#[gpui::test]
+fn failed_transfer_releases_all_windows_and_native_receipts_without_rendering(
+    cx: &mut gpui::TestAppContext,
+) {
+    transfer_without_rendering(cx, TransferOutcome::Failed);
+}
+
+#[gpui::test]
+fn cancelled_transfer_releases_its_native_receipt_without_rendering(cx: &mut gpui::TestAppContext) {
+    transfer_without_rendering(cx, TransferOutcome::Cancelled);
+}
+
+#[gpui::test]
+fn transfer_conflicts_release_editors_before_rendering_and_cancel_releases_the_receipt(
+    cx: &mut gpui::TestAppContext,
+) {
+    transfer_without_rendering(cx, TransferOutcome::Conflict);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TransferOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Conflict,
+}
+
+fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOutcome) {
+    use gitcomet_core::filesystem::TransferIntent;
+    let _guard = crate::test_support::lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (other, _) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = std::fs::canonicalize(directory.path()).unwrap();
+    let source = workdir.join("source.txt");
+    let other_file = workdir.join("other.txt");
+    let destination = workdir.join("destination");
+    std::fs::write(&source, "source contents").unwrap();
+    std::fs::write(&other_file, "other contents").unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    if outcome == TransferOutcome::Conflict {
+        std::fs::write(destination.join("source.txt"), "existing destination").unwrap();
+    }
+    for (view, path) in [(&root, &source), (&other, &other_file)] {
+        cx.update(|_, app| {
+            view.read(app)
+                .documents
+                .clone()
+                .update(app, |docs, cx| docs.open(path.clone(), true, cx))
+        });
+        drain(view, cx);
+    }
+    let other_buffer = cx.update(|_, app| {
+        let docs = other.read(app).documents.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        other_buffer.update(app, |buffer, cx| {
+            buffer.editing = true;
+            buffer.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("unsaved edits in another window", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    let request = Request::new(Operation::Transfer {
+        sources: vec![source.clone()],
+        destination: if outcome == TransferOutcome::Failed {
+            destination.join("missing/parent")
+        } else {
+            destination.clone()
+        },
+        intent: TransferIntent::Move,
+    });
+    let id = request.id;
+    if outcome == TransferOutcome::Cancelled {
+        request.cancellation.cancel();
+    }
+    let completions = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let completed = completions.clone();
+    cx.update(|window, app| {
+        root.update(app, |root, cx| {
+            root.submit_filesystem_drop(
+                request,
+                gpui::FileDropTransfer {
+                    operation: gpui::FileTransferOperation::Move,
+                    source_owns_move: false,
+                    completion: gpui::FilePaste::new(move |operation| {
+                        completed.lock().unwrap().push(operation)
+                    }),
+                },
+                TransferIntent::Move,
+                window,
+                cx,
+            );
+            if outcome != TransferOutcome::Cancelled {
+                for view in [&root.main_pane, &other.read(cx).main_pane] {
+                    assert!(view.read(cx).filesystem_pauses.contains(&id));
+                }
+                other_buffer.update(cx, |buffer, cx| {
+                    assert!(buffer.dirty && buffer.pauses.contains(&id));
+                    buffer.save(None, false, cx);
+                    assert!(buffer.saving.is_none(), "saves must wait for the transfer");
+                });
+            }
+        })
+    });
+    // Deliver only model notifications. An occluded Wayland window may never
+    // get a compositor frame, so neither draw nor render may finish the move.
+    for _ in 0..400 {
+        cx.run_until_parked();
+        let released = cx.update(|_, app| {
+            root.update(app, |root, cx| {
+                crate::view::test_support::sync_store_snapshot(root, cx)
+            });
+            root.read(app)
+                .main_pane
+                .read(app)
+                .filesystem_pauses
+                .is_empty()
+        });
+        if released {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    cx.update(|_, app| {
+        for view in [&root, &other] {
+            let view = view.read(app);
+            assert!(view.main_pane.read(app).filesystem_pauses.is_empty());
+            let docs = view.documents.read(app);
+            assert!(
+                docs.buffers
+                    .values()
+                    .all(|buffer| buffer.read(app).pauses.is_empty())
+            );
+        }
+        let docs = root.read(app).documents.read(app);
+        let buffer = docs.buffers[&docs.active.unwrap()].read(app);
+        assert_eq!(
+            buffer.identity.0,
+            if outcome == TransferOutcome::Completed {
+                destination.join("source.txt")
+            } else {
+                source.clone()
+            }
+        );
+    });
+    if outcome == TransferOutcome::Conflict {
+        assert!(
+            completions.lock().unwrap().is_empty(),
+            "the native receipt must wait for a conflict decision"
+        );
+        assert!(
+            !cx.has_pending_prompt(),
+            "only rendering should display the conflict prompt"
+        );
+        cx.update(|_, app| root.update(app, |root, cx| root.cancel_filesystem_operations(cx)));
+        assert_eq!(
+            std::fs::read_to_string(destination.join("source.txt")).unwrap(),
+            "existing destination"
+        );
+    }
+    cx.update(|_, app| assert!(!root.read(app).file_operations.has_pending()));
+    assert_eq!(
+        *completions.lock().unwrap(),
+        vec![(outcome == TransferOutcome::Completed).then_some(gpui::FileTransferOperation::Move)]
+    );
+    assert_eq!(source.exists(), outcome != TransferOutcome::Completed);
+    cx.update(|_, app| {
+        other_buffer.update(app, |buffer, cx| {
+            buffer.save(None, false, cx);
+            assert!(
+                buffer.saving.is_some(),
+                "the other window must be able to save without rendering the origin"
+            );
+        })
+    });
+    drain(&other, cx);
+    assert_eq!(
+        std::fs::read_to_string(other_file).unwrap(),
+        "unsaved edits in another window"
+    );
+}
+
+#[gpui::test]
 fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
     cx: &mut gpui::TestAppContext,
 ) {

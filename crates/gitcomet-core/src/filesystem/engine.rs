@@ -352,6 +352,7 @@ impl Filesystem {
         }
         if let Operation::Save {
             path,
+            worktree,
             contents,
             expected,
             overwrite,
@@ -363,8 +364,18 @@ impl Filesystem {
                 total_items: 1,
                 current_path: path.clone(),
             });
-            let saved = check_cancel(&request.cancellation)
-                .and_then(|_| self.save(path, contents, expected.as_ref(), *overwrite));
+            let saved = check_cancel(&request.cancellation).and_then(|_| {
+                let target = if let Some(root) = worktree {
+                    let relative = path
+                        .strip_prefix(root)
+                        .map_err(|_| invalid("Save path is outside the repository worktree"))?;
+                    let relative = crate::path_utils::validated_repo_relative_path(relative)?;
+                    crate::path_utils::symlink_free_write_target(root, &relative)?
+                } else {
+                    path.clone()
+                };
+                self.save(&target, contents, expected.as_ref(), *overwrite)
+            });
             let (outcome, saved_version, changes) = match saved {
                 Ok(version) => (
                     ItemOutcome::Completed,
@@ -448,13 +459,6 @@ impl Filesystem {
             }
             if matches!(outcome, ItemOutcome::Completed) {
                 match &request.operation {
-                    Operation::Save { .. } => {
-                        result.saved_version = DiskVersion::read(&source).ok();
-                        result.changes.push(PathChange {
-                            old: None,
-                            new: Some(source.clone()),
-                        });
-                    }
                     Operation::DeletePermanently { .. } => result.changes.push(PathChange {
                         old: Some(source.clone()),
                         new: None,
@@ -513,14 +517,6 @@ impl Filesystem {
     ) -> io::Result<ItemOutcome> {
         protect(source, true, &request.cancellation)?;
         match &request.operation {
-            Operation::Save {
-                contents,
-                expected,
-                overwrite,
-                ..
-            } => {
-                self.save(source, contents, expected.as_ref(), *overwrite)?;
-            }
             Operation::CreateFile { .. } | Operation::CreateDirectory { .. } => {
                 if exists(source)? {
                     return Err(io::Error::new(
@@ -599,7 +595,10 @@ impl Filesystem {
                     new: None,
                 }]);
             }
-            Operation::Undo | Operation::Redo | Operation::CompleteOutbound { .. } => {
+            Operation::Save { .. }
+            | Operation::Undo
+            | Operation::Redo
+            | Operation::CompleteOutbound { .. } => {
                 unreachable!()
             }
         }

@@ -1312,7 +1312,7 @@ pub(crate) fn finish_filesystem_editors(
         .unwrap_or_default();
     for view in views {
         let changes = changes.to_vec();
-        // The originating view may be rendering; defer to avoid updating it
+        // The originating view is already being updated; defer to avoid updating it
         // re-entrantly while broadcasting a cross-window path change.
         cx.defer(move |cx| {
             let _ = view.update(cx, |view, cx| {

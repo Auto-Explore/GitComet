@@ -77,6 +77,9 @@ pub enum Operation {
     },
     Save {
         path: PathBuf,
+        /// Repository editor saves must stay under this worktree without
+        /// traversing symlinks. Standalone documents have no worktree boundary.
+        worktree: Option<PathBuf>,
         contents: Arc<[u8]>,
         expected: Option<DiskVersion>,
         overwrite: bool,
@@ -197,10 +200,13 @@ pub struct PathChange {
 
 impl PathChange {
     pub fn retarget(&self, path: &std::path::Path) -> Option<PathBuf> {
-        self.new
-            .as_ref()
-            .zip(self.old.as_ref())
-            .and_then(|(new, old)| path.strip_prefix(old).ok().map(|suffix| new.join(suffix)))
+        let new = self.new.as_ref()?;
+        let suffix = path.strip_prefix(self.old.as_ref()?).ok()?;
+        Some(if suffix.as_os_str().is_empty() {
+            new.clone()
+        } else {
+            new.join(suffix)
+        })
     }
 }
 

@@ -1148,6 +1148,7 @@ impl GitCometView {
             let next = Arc::clone(&model.read(cx).state);
             let should_quit = crate::startup_probe::observe_app_state(next.as_ref());
             let should_notify = this.apply_state_snapshot(next, cx);
+            this.process_filesystem_results(cx);
             if should_notify {
                 cx.notify();
             }

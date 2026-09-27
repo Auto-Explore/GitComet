@@ -92,6 +92,11 @@ impl MainPaneView {
         versions: &std::collections::BTreeMap<PathBuf, DiskVersion>,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.stash_current_file_editor_buffer(cx);
+        let active = self
+            .file_editor_key
+            .as_ref()
+            .map(|key| key.retarget(changes));
         let old_versions = std::mem::take(&mut self.file_editor_disk_versions);
         let retarget_version = |key: &DocumentIdentity, version: DiskVersion| {
             versions
@@ -100,31 +105,40 @@ impl MainPaneView {
                 .cloned()
                 .unwrap_or(version)
         };
+        let active_version = self
+            .file_editor_key
+            .as_ref()
+            .and_then(|key| old_versions.get(key))
+            .zip(active.as_ref())
+            .map(|(version, key)| retarget_version(key, version.clone()));
         let mut entries: Vec<_> = std::mem::take(&mut self.file_editor_stash)
             .into_iter()
             .collect();
-        // Choose deterministically if a move replaces a path with an existing
-        // buffer: active, dirty, then moved buffers take precedence. Every
-        // displaced dirty buffer retains its own disk baseline in Documents.
-        entries.sort_by_key(|(key, buffer)| {
-            (
-                self.file_editor_key.as_ref() == Some(key),
-                buffer.is_dirty(),
-                key.retarget(changes) != *key,
-            )
-        });
+        // The active identity owns its slot even when its clean/loading buffer
+        // has no stash. Other collisions prefer dirty, then moved buffers.
+        // Every displaced dirty buffer keeps its own baseline in Documents.
+        entries.sort_by_key(|(key, buffer)| (buffer.is_dirty(), key.retarget(changes) != *key));
         let mut stashes = FxHashMap::default();
         let mut mapped_versions = FxHashMap::default();
         for (key, buffer) in entries {
             let next = key.retarget(changes);
+            let version = old_versions
+                .get(&key)
+                .map(|version| retarget_version(&next, version.clone()));
+            if active.as_ref() == Some(&next) && self.file_editor_key.as_ref() != Some(&key) {
+                if buffer.is_dirty() {
+                    self.detach_file_edit(next, buffer, version, cx);
+                }
+                continue;
+            }
             if let Some(existing) = stashes.remove(&next)
                 && StashedFileEdit::is_dirty(&existing)
             {
                 let version = mapped_versions.remove(&next);
                 self.detach_file_edit(next.clone(), existing, version, cx);
             }
-            if let Some(version) = old_versions.get(&key) {
-                mapped_versions.insert(next.clone(), retarget_version(&next, version.clone()));
+            if let Some(version) = version {
+                mapped_versions.insert(next.clone(), version);
             }
             stashes.insert(next, buffer);
         }
@@ -135,8 +149,14 @@ impl MainPaneView {
                 .or_insert_with(|| retarget_version(&next, version));
         }
         self.file_editor_stash = stashes;
+        if let Some(key) = &active {
+            mapped_versions.remove(key);
+            if let Some(version) = active_version {
+                mapped_versions.insert(key.clone(), version);
+            }
+        }
         self.file_editor_disk_versions = mapped_versions;
-        self.file_editor_key = self.file_editor_key.take().map(|key| key.retarget(changes));
+        self.file_editor_key = active;
         for (key, _) in self.file_editor_saves.values_mut() {
             *key = key.retarget(changes);
         }
@@ -1043,9 +1063,21 @@ impl MainPaneView {
         {
             return;
         }
+        let Some(worktree) = self
+            .state
+            .repos
+            .iter()
+            .filter(|repo| key.0.starts_with(&repo.spec.workdir))
+            .max_by_key(|repo| repo.spec.workdir.components().count())
+            .map(|repo| repo.spec.workdir.clone())
+        else {
+            self.prune_orphaned_file_editor_stash(cx);
+            return;
+        };
         let request =
             gitcomet_core::filesystem::Request::new(gitcomet_core::filesystem::Operation::Save {
                 path: key.0.clone(),
+                worktree: Some(worktree),
                 contents: Arc::from(buffer.text.as_bytes()),
                 expected: self.file_editor_disk_versions.get(&key).cloned(),
                 overwrite,

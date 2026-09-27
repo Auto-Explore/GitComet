@@ -9,6 +9,108 @@ fn success(result: &OperationResult) {
     assert!(result.succeeded(), "{:#?}", result.items);
 }
 
+#[test]
+fn retargeted_file_paths_can_be_read_without_a_trailing_directory_separator() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("before.txt");
+    let destination = directory.path().join("after.txt");
+    fs::write(&destination, b"moved contents").unwrap();
+    let change = PathChange {
+        old: Some(source.clone()),
+        new: Some(destination.clone()),
+    };
+    let retargeted = change.retarget(&source).unwrap();
+    assert_eq!(retargeted.as_os_str(), destination.as_os_str());
+    assert_eq!(fs::read(retargeted).unwrap(), b"moved contents");
+}
+
+#[test]
+fn repository_saves_require_a_path_inside_the_worktree() {
+    let directory = tempfile::tempdir().unwrap();
+    let worktree = directory.path().join("repo");
+    fs::create_dir(&worktree).unwrap();
+    let outside = directory.path().join("outside.txt");
+    fs::write(&outside, b"external contents").unwrap();
+    let mut service = Filesystem::default();
+    for path in [outside.clone(), worktree.join("../outside.txt")] {
+        let result = run(
+            &mut service,
+            Operation::Save {
+                path,
+                worktree: Some(worktree.clone()),
+                contents: Arc::from(&b"replacement"[..]),
+                expected: DiskVersion::read(&outside).ok(),
+                overwrite: true,
+            },
+        );
+        assert!(!result.succeeded());
+        assert!(result.saved_version.is_none());
+        assert_eq!(fs::read(&outside).unwrap(), b"external contents");
+    }
+    let path = worktree.join("inside.txt");
+    success(&run(
+        &mut service,
+        Operation::Save {
+            path: path.clone(),
+            worktree: Some(worktree),
+            contents: Arc::from(&b"allowed"[..]),
+            expected: None,
+            overwrite: false,
+        },
+    ));
+    assert_eq!(fs::read(path).unwrap(), b"allowed");
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_saves_recheck_symlinks_when_the_queued_request_executes() {
+    let directory = tempfile::tempdir().unwrap();
+    let worktree = directory.path().join("repo");
+    let parent = worktree.join("folder");
+    let outside = directory.path().join("outside");
+    fs::create_dir_all(&parent).unwrap();
+    fs::create_dir(&outside).unwrap();
+    fs::write(parent.join("file.txt"), b"original").unwrap();
+    fs::write(outside.join("file.txt"), b"external contents").unwrap();
+    let path = parent.join("file.txt");
+    let mut request = Request::new(Operation::Save {
+        path: path.clone(),
+        worktree: Some(worktree.clone()),
+        contents: Arc::from(&b"replacement"[..]),
+        expected: DiskVersion::read(&path).ok(),
+        overwrite: true,
+    });
+    fs::rename(&parent, worktree.join("original-folder")).unwrap();
+    std::os::unix::fs::symlink(&outside, &parent).unwrap();
+    let mut service = Filesystem::default();
+    // Even an explicit Replace must enforce the boundary at execution time.
+    assert!(!service.execute(request.clone(), |_| {}).succeeded());
+    // A historical-tree editor can have loaded this external file already,
+    // so a matching disk baseline alone cannot protect the worktree boundary.
+    if let Operation::Save {
+        expected,
+        overwrite,
+        ..
+    } = &mut request.operation
+    {
+        *expected = Some(DiskVersion::read(&path).unwrap());
+        *overwrite = false;
+    }
+    assert!(!service.execute(request.clone(), |_| {}).succeeded());
+    assert_eq!(fs::read(&path).unwrap(), b"external contents");
+    assert_eq!(
+        fs::read(worktree.join("original-folder/file.txt")).unwrap(),
+        b"original"
+    );
+
+    // Standalone documents intentionally accept arbitrary absolute paths.
+    if let Operation::Save { worktree, .. } = &mut request.operation {
+        *worktree = None;
+    }
+    success(&service.execute(request, |_| {}));
+    assert_eq!(fs::read(outside.join("file.txt")).unwrap(), b"replacement");
+}
+
 #[cfg(windows)]
 #[test]
 fn exclusive_rename_preserves_identity_and_existing_destinations() {

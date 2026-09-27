@@ -61,6 +61,202 @@ fn finish_editor_saves(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualT
 }
 
 #[gpui::test]
+fn replacing_a_clean_active_destination_preserves_dirty_source_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    replace_active_destination(cx, false);
+}
+
+#[gpui::test]
+fn replacing_a_dirty_active_destination_preserves_both_buffers(cx: &mut gpui::TestAppContext) {
+    replace_active_destination(cx, true);
+}
+
+fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: bool) {
+    use gitcomet_core::filesystem::{
+        ConflictChoice, ConflictResolution, DiskVersion, DocumentIdentity, Filesystem, Operation,
+        Request,
+    };
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = std::fs::canonicalize(directory.path()).unwrap();
+    let source = workdir.join("a.txt");
+    let destination = workdir.join("b.txt");
+    std::fs::write(&source, "source\n").unwrap();
+    std::fs::write(&destination, "destination\n").unwrap();
+    let destination_version = DiskVersion::read(&destination).unwrap();
+    let repo_id = gitcomet_state::model::RepoId(996);
+    for name in ["a.txt", "b.txt"] {
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                push_test_state(view, editor_state(repo_id, &workdir, Path::new(name)), cx);
+                view.main_pane.update(cx, |pane, cx| {
+                    pane.auto_save_file_edits = false;
+                    pane.ensure_file_editor_loaded(cx);
+                });
+            })
+        });
+        cx.run_until_parked();
+        if name == "a.txt" || dirty_destination {
+            cx.update(|_, app| {
+                view.read(app).main_pane.clone().update(app, |pane, cx| {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(0..0, "unsaved ", cx);
+                    });
+                })
+            });
+            cx.run_until_parked();
+        }
+    }
+    let mut request = Request::new(Operation::Rename {
+        source: source.clone(),
+        name: "b.txt".into(),
+    });
+    request.resolutions.insert(
+        destination.clone(),
+        ConflictResolution {
+            expected: destination_version.clone(),
+            choice: ConflictChoice::Replace,
+        },
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.filesystem_pause(request.id, cx);
+        })
+    });
+    let result = Filesystem::default().execute(request, |_| {});
+    assert!(result.succeeded(), "{:?}", result.items);
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+            assert_eq!(pane.file_editor_dirty, dirty_destination);
+            assert_eq!(
+                pane.file_editor_input.read(cx).text(),
+                if dirty_destination {
+                    "unsaved destination\n"
+                } else {
+                    "destination\n"
+                }
+            );
+            assert_eq!(
+                pane.file_editor_disk_versions
+                    .get(&DocumentIdentity(destination.clone())),
+                Some(&destination_version),
+                "the active destination must keep its own baseline"
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).documents.clone().update(app, |docs, cx| {
+            assert_eq!(
+                docs.unsaved_labels(cx),
+                vec![SharedString::from(destination.display().to_string())]
+            );
+            docs.save_all(cx);
+        })
+    });
+    for _ in 0..200 {
+        cx.run_until_parked();
+        let drained = cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                crate::view::test_support::sync_store_snapshot(view, cx)
+            });
+            view.read(app).documents.read(app).saves_drained(app)
+        });
+        if drained {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.update(|_, app| {
+        let docs = view.read(app).documents.read(app);
+        assert!(docs.saves_drained(app));
+        assert!(
+            docs.unsaved_labels(app).is_empty(),
+            "the recovered source must use its moved disk baseline"
+        );
+        assert_eq!(
+            view.read(app).main_pane.read(app).file_editor_dirty,
+            dirty_destination
+        );
+    });
+    assert!(!source.exists());
+    assert_eq!(
+        std::fs::read_to_string(destination).unwrap(),
+        "unsaved source\n"
+    );
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let repository = directory.path().join("repo");
+    let external = directory.path().join("external");
+    std::fs::create_dir(&repository).unwrap();
+    std::fs::create_dir(&external).unwrap();
+    std::fs::write(external.join("file.txt"), "external contents\n").unwrap();
+    std::os::unix::fs::symlink(&external, repository.join("historical-folder")).unwrap();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(
+                view,
+                editor_state(
+                    gitcomet_state::model::RepoId(997),
+                    &repository,
+                    Path::new("historical-folder/file.txt"),
+                ),
+                cx,
+            );
+            view.main_pane.update(cx, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert_eq!(
+                pane.file_editor_input.read(cx).text(),
+                "external contents\n"
+            );
+            pane.file_editor_input
+                .update(cx, |input, cx| input.replace_utf8_range(0..0, "edit ", cx));
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .clone()
+            .update(app, |pane, cx| pane.save_file_editor_buffer(cx))
+    });
+    finish_editor_saves(&view, cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.file_editor_dirty);
+        assert!(pane.file_editor_error.is_some());
+        assert_eq!(
+            pane.file_editor_input.read(app).text(),
+            "edit external contents\n"
+        );
+    });
+    assert_eq!(
+        std::fs::read_to_string(external.join("file.txt")).unwrap(),
+        "external contents\n"
+    );
+}
+
+#[gpui::test]
 async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

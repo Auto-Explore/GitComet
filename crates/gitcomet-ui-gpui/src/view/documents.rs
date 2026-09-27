@@ -697,6 +697,7 @@ impl StandaloneBuffer {
         let contents: SharedString = self.input.read(cx).text().to_string().into();
         let request = Request::new(Operation::Save {
             path: path.clone(),
+            worktree: None,
             contents: Arc::from(contents.as_bytes()),
             expected: if path == self.identity.0 {
                 self.version.clone()

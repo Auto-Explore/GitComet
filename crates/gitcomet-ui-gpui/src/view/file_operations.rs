@@ -54,6 +54,7 @@ impl GitCometView {
             request.cancellation.cancel();
         }
         self.file_operations.conflicts.clear();
+        self.finish_filesystem_pastes(cx);
         cx.notify();
     }
 
@@ -76,6 +77,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         if request.cancellation.is_cancelled() {
+            self.finish_filesystem_pastes(cx);
             return;
         }
         if let Operation::DeletePermanently {
@@ -97,8 +99,11 @@ impl GitCometView {
             );
             cx.spawn_in(window, async move |view, cx| {
                 let choice = answer.await.ok();
-                let _ = view.update(cx, |this, _| {
+                let _ = view.update(cx, |this, cx| {
                     this.file_operations.confirmations.remove(&request.id);
+                    if choice != Some(1) || request.cancellation.is_cancelled() {
+                        this.finish_filesystem_pastes(cx);
+                    }
                 });
                 if choice == Some(1) && !request.cancellation.is_cancelled() {
                     if let Operation::DeletePermanently { confirmed, .. } = &mut request.operation {
@@ -141,8 +146,11 @@ impl GitCometView {
             );
             cx.spawn_in(window, async move |view, cx| {
                 let choice = answer.await.ok();
-                let _ = view.update(cx, |this, _| {
+                let _ = view.update(cx, |this, cx| {
                     this.file_operations.confirmations.remove(&request.id);
+                    if !matches!(choice, Some(1 | 2)) || request.cancellation.is_cancelled() {
+                        this.finish_filesystem_pastes(cx);
+                    }
                 });
                 if request.cancellation.is_cancelled() {
                     return;
@@ -186,7 +194,11 @@ impl GitCometView {
                 .await;
             for _ in 0..300 {
                 if request.cancellation.is_cancelled() {
-                    let _ = view.update(cx, |this, cx| { this.file_operations.confirmations.remove(&request.id); cx.notify(); });
+                    let _ = view.update(cx, |this, cx| {
+                        this.file_operations.confirmations.remove(&request.id);
+                        this.finish_filesystem_pastes(cx);
+                        cx.notify();
+                    });
                     return;
                 }
                 let ready = cx
@@ -204,6 +216,7 @@ impl GitCometView {
                                 cx,
                             );
                         }
+                        this.finish_filesystem_pastes(cx);
                     });
                     return;
                 }
@@ -213,6 +226,7 @@ impl GitCometView {
             }
             let _ = view.update(cx, |this, cx| {
                 this.file_operations.confirmations.remove(&request.id);
+                this.finish_filesystem_pastes(cx);
                 this.push_toast(components::ToastKind::Error, "Still waiting for editor saves. The file operation was cancelled; files were preserved.".into(), cx);
             });
         })
@@ -266,11 +280,7 @@ impl GitCometView {
         cx.notify();
     }
 
-    pub(super) fn process_filesystem_results(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(super) fn process_filesystem_results(&mut self, cx: &mut gpui::Context<Self>) {
         let completed: Vec<_> = self
             .state
             .filesystem
@@ -347,7 +357,12 @@ impl GitCometView {
             {
                 crate::clipboard::complete_file_move(cx, ownership, &moved);
             }
+            cx.notify();
         }
+        self.finish_filesystem_pastes(cx);
+    }
+
+    fn finish_filesystem_pastes(&mut self, cx: &mut gpui::Context<Self>) {
         if self.file_operations.prompting || !self.file_operations.confirmations.is_empty() {
             return;
         }
@@ -373,6 +388,16 @@ impl GitCometView {
             if let Some(paste) = self.file_operations.pastes.remove(&id) {
                 paste.finish(cx);
             }
+        }
+    }
+
+    pub(super) fn prompt_filesystem_conflict(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_operations.prompting || !self.file_operations.confirmations.is_empty() {
+            return;
         }
         let Some((mut request, conflict, ownership)) = self.file_operations.conflicts.pop_front()
         else {
@@ -451,6 +476,7 @@ impl GitCometView {
                     );
                     this.submit_filesystem_operation(request, ownership, window, cx);
                 }
+                this.finish_filesystem_pastes(cx);
                 cx.notify();
             });
         })
