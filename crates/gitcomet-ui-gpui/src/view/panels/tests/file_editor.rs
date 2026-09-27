@@ -61,6 +61,277 @@ fn finish_editor_saves(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualT
 }
 
 #[gpui::test]
+fn navigation_during_filesystem_pauses_hides_the_outgoing_buffer(cx: &mut gpui::TestAppContext) {
+    navigate_during_filesystem_pause(cx, "original B");
+}
+
+#[gpui::test]
+fn an_empty_file_loaded_after_a_filesystem_pause_becomes_editable(cx: &mut gpui::TestAppContext) {
+    navigate_during_filesystem_pause(cx, "");
+}
+
+fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_contents: &str) {
+    use gitcomet_core::filesystem::{DocumentIdentity, OperationId};
+    let _guard = lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let repo_id = gitcomet_state::model::RepoId(997);
+    let first = Path::new("first.txt");
+    let second = Path::new("second.txt");
+    std::fs::write(workdir.join(first), "original A").unwrap();
+    std::fs::write(workdir.join(second), second_contents).unwrap();
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, &workdir, first), cx);
+        });
+    });
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.auto_save_file_edits = false;
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), "unsaved A", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let pauses = [OperationId::allocate(), OperationId::allocate()];
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            for id in pauses {
+                pane.filesystem_pause(id, cx);
+            }
+        });
+    });
+    // Going back to A restores its own stash while paused; every visit to B
+    // must hide A and refuse input until B's disk read can actually run.
+    for relative in [second, first, second] {
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                push_test_state(view, editor_state(repo_id, &workdir, relative), cx);
+            });
+        });
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.ensure_file_editor_loaded(cx);
+                assert_eq!(
+                    pane.file_editor_key,
+                    Some(DocumentIdentity(workdir.join(relative)))
+                );
+                if relative == first {
+                    assert!(!pane.file_editor_loading);
+                    assert!(pane.file_editor_dirty);
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        assert_eq!(input.text(), "unsaved A");
+                        input.replace_utf8_range(input.text().len()..input.text().len(), "!", cx);
+                        assert_eq!(input.text(), "unsaved A!");
+                    });
+                } else {
+                    assert!(pane.file_editor_loading);
+                    assert!(!pane.file_editor_dirty);
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        assert!(input.text().is_empty());
+                        input.replace_utf8_range(0..0, "wrong file edit", cx);
+                        assert!(
+                            input.text().is_empty(),
+                            "the loading input must reject edits"
+                        );
+                    });
+                    pane.save_file_editor_buffer(cx);
+                    assert!(pane.file_editor_saves.is_empty());
+                }
+            });
+        });
+        cx.run_until_parked();
+    }
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            assert!(pane.file_editor_loading);
+            pane.filesystem_finish(pauses[0], &[], &Default::default(), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            assert!(
+                pane.file_editor_loading,
+                "one operation still holds a pause"
+            );
+            assert!(pane.file_editor_input.read(cx).text().is_empty());
+            pane.filesystem_finish(pauses[1], &[], &Default::default(), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            assert!(!pane.file_editor_loading);
+            assert!(pane.file_editor_error.is_none());
+            assert_eq!(
+                pane.file_editor_stash[&DocumentIdentity(workdir.join(first))]
+                    .text
+                    .as_ref(),
+                "unsaved A!"
+            );
+            pane.file_editor_input.update(cx, |input, cx| {
+                assert_eq!(input.text(), second_contents);
+                input.replace_utf8_range(0..input.text().len(), "edited B", cx);
+                assert_eq!(input.text(), "edited B");
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(first)).unwrap(),
+        "original A"
+    );
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.save_all_file_edits(cx)));
+    finish_editor_saves(&view, cx);
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(first)).unwrap(),
+        "unsaved A!"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(second)).unwrap(),
+        "edited B"
+    );
+}
+
+#[gpui::test]
+fn renaming_the_active_editor_refreshes_its_language_without_replacing_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::filesystem::{DocumentIdentity, Filesystem, Operation, Request};
+    let _guard = lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let repo_id = gitcomet_state::model::RepoId(996);
+    let mut relative = PathBuf::from("before.txt");
+    std::fs::write(
+        workdir.join(&relative),
+        "fn original() { let value = 42; }\n",
+    )
+    .unwrap();
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, &workdir, &relative), cx);
+        });
+    });
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.auto_save_file_edits = false;
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// retained edit\n", cx);
+                input.set_cursor_offset(input.text().find('{').unwrap(), cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let (snapshot, cursor, saved) = cx.update(|_, app| {
+        let pane = pane.read(app);
+        let input = pane.file_editor_input.read(app);
+        (
+            input.text_snapshot(),
+            input.cursor_offset(),
+            pane.file_editor_saved_fingerprint,
+        )
+    });
+    // Exercise plain text, two grammars, and the heuristic provider. The last
+    // two transitions have the same text revision and no live syntax document.
+    for name in [
+        "file.rs",
+        "renamed.rs",
+        "file.py",
+        "file.txt",
+        "file.conf",
+        "after.txt",
+    ] {
+        let language = rows::diff_syntax_language_for_path(Path::new(name));
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                let old_language = pane.file_editor_language;
+                let old_version = pane
+                    .file_editor_live_syntax
+                    .as_ref()
+                    .map(|doc| doc.version());
+                let request = Request::new(Operation::Rename {
+                    source: workdir.join(&relative),
+                    name: name.into(),
+                });
+                pane.filesystem_pause(request.id, cx);
+                let result = Filesystem::default().execute(request, |_| {});
+                assert!(result.succeeded(), "{:?}", result.items);
+                pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+                assert_eq!(
+                    pane.file_editor_key,
+                    Some(DocumentIdentity(workdir.join(name)))
+                );
+                assert_eq!(pane.file_editor_language, language);
+                if language == old_language {
+                    assert_eq!(
+                        pane.file_editor_live_syntax
+                            .as_ref()
+                            .map(|doc| doc.version()),
+                        old_version
+                    );
+                }
+            });
+        });
+        relative = PathBuf::from(name);
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                push_test_state(view, editor_state(repo_id, &workdir, &relative), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.ensure_file_editor_loaded(cx);
+                assert!(!pane.file_editor_loading);
+                assert!(pane.file_editor_dirty);
+                assert_eq!(pane.file_editor_saved_fingerprint, saved);
+                let input = pane.file_editor_input.read(cx);
+                assert_eq!(input.text_snapshot().model_id(), snapshot.model_id());
+                assert_eq!(input.text_snapshot().revision(), snapshot.revision());
+                assert_eq!(input.cursor_offset(), cursor);
+                let highlights = pane.file_editor_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..snapshot.len())
+                });
+                if let Some(language) = language.filter(|&language| {
+                    rows::live_syntax_document_supported(language, snapshot.len())
+                }) {
+                    let document = pane
+                        .file_editor_live_syntax
+                        .as_ref()
+                        .expect("renamed grammar");
+                    assert_eq!(document.language(), language);
+                    assert!(!highlights.is_empty());
+                } else {
+                    assert!(pane.file_editor_live_syntax.is_none());
+                    assert!(pane.file_editor_syntax_pair.is_none());
+                    assert!(pane.file_editor_occurrences.is_empty());
+                    assert_eq!(highlights.is_empty(), language.is_none(), "{name}");
+                }
+            });
+        });
+    }
+}
+
+#[gpui::test]
 fn pending_editor_reads_restart_after_file_renames(cx: &mut gpui::TestAppContext) {
     rename_during_editor_load(cx, false, false);
 }
@@ -501,15 +772,25 @@ fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
 
 #[gpui::test]
 fn save_acknowledgments_release_clean_stashes_but_keep_newer_edits(cx: &mut gpui::TestAppContext) {
-    save_completion_after_navigation(cx, false);
+    save_completion_after_navigation(cx, false, false);
 }
 
 #[gpui::test]
 fn autosave_completion_saves_newer_edits_after_navigating_away(cx: &mut gpui::TestAppContext) {
-    save_completion_after_navigation(cx, true);
+    save_completion_after_navigation(cx, true, false);
 }
 
-fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: bool) {
+#[gpui::test]
+fn stashed_autosaves_resume_after_the_final_filesystem_pause(cx: &mut gpui::TestAppContext) {
+    save_completion_after_navigation(cx, true, true);
+}
+
+#[gpui::test]
+fn releasing_filesystem_pauses_keeps_manual_stashed_edits_unsaved(cx: &mut gpui::TestAppContext) {
+    save_completion_after_navigation(cx, false, true);
+}
+
+fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: bool, paused: bool) {
     let _visual_guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -526,6 +807,10 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
         std::fs::write(workdir.join(relative), "original").unwrap();
     }
     let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pauses = [
+        gitcomet_core::filesystem::OperationId::allocate(),
+        gitcomet_core::filesystem::OperationId::allocate(),
+    ];
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(repo_id, &workdir, &first), cx);
@@ -572,9 +857,30 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
                 workdir.join(&second)
             );
             assert_eq!(pane.file_editor_stash[&key].text.as_ref(), "newer edits");
+            if paused {
+                for id in pauses {
+                    pane.filesystem_pause(id, cx);
+                }
+            }
         })
     });
     finish_editor_saves(&view, cx);
+    if paused {
+        assert_eq!(
+            std::fs::read_to_string(workdir.join(&first)).unwrap(),
+            "first save"
+        );
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                assert!(pane.file_editor_stash[&key].is_dirty());
+                pane.filesystem_finish(pauses[0], &[], &Default::default(), cx);
+                assert!(pane.file_editor_saves.is_empty());
+                pane.filesystem_finish(pauses[1], &[], &Default::default(), cx);
+                assert_eq!(pane.file_editor_saves.len(), usize::from(autosave));
+            });
+        });
+        finish_editor_saves(&view, cx);
+    }
     if !autosave {
         assert_eq!(
             std::fs::read_to_string(workdir.join(&first)).unwrap(),

@@ -157,6 +157,15 @@ impl MainPaneView {
         }
         self.file_editor_disk_versions = mapped_versions;
         self.file_editor_key = active;
+        let language = self
+            .file_editor_key
+            .as_ref()
+            .and_then(|key| rows::diff_syntax_language_for_path(&key.0));
+        if self.file_editor_language != language {
+            self.reset_file_editor_syntax(language);
+            let snapshot = self.file_editor_input.read(cx).text_snapshot();
+            self.refresh_file_editor_syntax(&snapshot, None, cx);
+        }
         for (key, _) in self.file_editor_saves.values_mut() {
             *key = key.retarget(changes);
         }
@@ -170,6 +179,16 @@ impl MainPaneView {
                 self.reread_file_editor_from_disk(cx);
             } else if self.file_editor_dirty {
                 self.schedule_file_editor_autosave(cx);
+            }
+            if self.auto_save_file_edits {
+                // Navigation and save acknowledgments can leave newer edits
+                // waiting behind a pause. The active buffer uses its debounce;
+                // inactive buffers have no timer to resume them.
+                for (key, stashed) in self.file_editor_stash.clone() {
+                    if self.file_editor_key.as_ref() != Some(&key) && stashed.is_dirty() {
+                        self.enqueue_file_editor_save(key, &stashed, false, cx);
+                    }
+                }
             }
         }
         self.sync_unsaved_file_edits_rev(cx);
@@ -318,6 +337,7 @@ pub(in crate::view) fn file_editor_provider_binding_key(
 /// collide on a buffer that switches arms.
 pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
     revision: (u64, u64),
+    language: Option<rows::DiffSyntaxLanguage>,
     theme_epoch: u64,
     search_overlay: &[Range<usize>],
 ) -> u64 {
@@ -326,6 +346,7 @@ pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
     let mut hasher = FxHasher::default();
     "file-editor-heuristic".hash(&mut hasher);
     revision.hash(&mut hasher);
+    language.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
     search_overlay.hash(&mut hasher);
     hasher.finish()
@@ -623,9 +644,6 @@ impl MainPaneView {
     /// Load the file into the buffer when the target changed, or restore the
     /// stashed edit if there is one. Idempotent — called from render.
     pub(in crate::view) fn ensure_file_editor_loaded(&mut self, cx: &mut gpui::Context<Self>) {
-        if !self.filesystem_pauses.is_empty() {
-            return;
-        }
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
@@ -646,6 +664,9 @@ impl MainPaneView {
         // keep the unsaved text so coming back does not silently drop it.
         self.flush_file_editor_buffer(cx);
 
+        // Invalidate outgoing reads even when a filesystem pause defers the
+        // incoming read, including navigation away from and back to one path.
+        self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
         self.file_editor_key = Some(identity.clone());
         // The outgoing file's disk identity says nothing about this one.
         self.file_editor_disk = DiskIdentity::default();
@@ -672,18 +693,10 @@ impl MainPaneView {
                 .set(kind, RenderedPreviewMode::Source);
         }
         self.file_editor_error = None;
-        self.file_editor_language = rows::diff_syntax_language_for_path(&path);
         // The incremental tree belongs to the outgoing file. A same-file
         // re-read (`reread_file_editor_from_disk`) keeps it: tearing it down
         // there cost a full-document parse on the next keystroke.
-        self.file_editor_syntax_pair = None;
-        self.file_editor_occurrences.clear();
-        self.file_editor_occurrences_version = None;
-        self.file_editor_live_syntax = None;
-        self.file_editor_live_syntax_source = None;
-        self.file_editor_live_syntax_building = None;
-        self.file_editor_live_syntax_build = None;
-        self.file_editor_live_syntax_reparse = None;
+        self.reset_file_editor_syntax(rows::diff_syntax_language_for_path(&path));
         self.file_editor_autosave = None;
 
         // Restore unsaved or in-flight buffers. A pending write can change the
@@ -703,9 +716,6 @@ impl MainPaneView {
                 self.file_editor_stash.remove(&identity);
                 self.file_editor_loading = false;
                 self.file_editor_disk = stashed.disk;
-                // A read of this file still in flight describes the disk, not
-                // the buffer being handed back; it must not land over it.
-                self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
                 self.apply_file_editor_text(
                     stashed.text,
                     Some(stashed.cursor),
@@ -732,9 +742,12 @@ impl MainPaneView {
         // to the incoming file.
         self.file_editor_loading = true;
         self.file_editor_input.update(cx, |input, cx| {
+            input.set_read_only(true, cx);
             input.set_text("", cx);
         });
-        self.reread_file_editor_from_disk(cx);
+        if self.filesystem_pauses.is_empty() {
+            self.reread_file_editor_from_disk(cx);
+        }
     }
 
     /// Read the file under `file_editor_key` and seat it.
@@ -821,7 +834,8 @@ impl MainPaneView {
                             .file_editor_input
                             .read_with(cx, |input, _| input.text() == text.as_ref());
                         if unchanged {
-                            let fingerprint = this.file_editor_input.read_with(cx, |input, _| {
+                            let fingerprint = this.file_editor_input.update(cx, |input, cx| {
+                                input.set_read_only(false, cx);
                                 file_editor_text_fingerprint(&input.text_snapshot())
                             });
                             this.file_editor_saved_fingerprint = Some(fingerprint);
@@ -917,6 +931,7 @@ impl MainPaneView {
         // nobody touched. The resolved-output buffer does the same.
         let line_ending = crate::kit::TextInput::detect_line_ending(text.as_ref());
         let snapshot = self.file_editor_input.update(cx, |input, cx| {
+            input.set_read_only(false, cx);
             input.set_line_ending(line_ending);
             input.set_text(text, cx);
             if let Some(cursor) = cursor {
@@ -1511,6 +1526,18 @@ impl MainPaneView {
         self.ensure_file_editor_loaded(cx);
     }
 
+    fn reset_file_editor_syntax(&mut self, language: Option<rows::DiffSyntaxLanguage>) {
+        self.file_editor_language = language;
+        self.file_editor_syntax_pair = None;
+        self.file_editor_occurrences.clear();
+        self.file_editor_occurrences_version = None;
+        self.file_editor_live_syntax = None;
+        self.file_editor_live_syntax_source = None;
+        self.file_editor_live_syntax_building = None;
+        self.file_editor_live_syntax_build = None;
+        self.file_editor_live_syntax_reparse = None;
+    }
+
     /// Bring the live tree up to date with `snapshot` and rebind the provider.
     ///
     /// `edit` is the coalesced `(replaced, inserted)` span, or `None` when the
@@ -1741,6 +1768,7 @@ impl MainPaneView {
             let rope = snapshot.rope();
             let binding_key = file_editor_heuristic_provider_binding_key(
                 (snapshot.model_id(), snapshot.revision()),
+                language,
                 self.file_editor_provider_theme_epoch,
                 &search_overlay,
             );
