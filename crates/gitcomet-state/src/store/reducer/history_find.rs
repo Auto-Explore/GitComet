@@ -71,6 +71,7 @@ mod tests {
     use gitcomet_core::history_find::HistoryFindQuery;
     use gitcomet_core::history_index::{HistoryIndexBuilder, HistoryIndexHandle};
     use gitcomet_core::services::{CancellationToken, HistorySnapshot};
+    use gitcomet_core::text_search::TextSearchOptions;
 
     fn fixture() -> AppState {
         AppState {
@@ -97,11 +98,20 @@ mod tests {
     }
 
     fn find(state: &mut AppState, query: &str, index: &HistoryIndexHandle) -> Vec<Effect> {
+        find_with(state, query, TextSearchOptions::default(), index)
+    }
+
+    fn find_with(
+        state: &mut AppState,
+        query: &str,
+        options: TextSearchOptions,
+        index: &HistoryIndexHandle,
+    ) -> Vec<Effect> {
         reduce(
             state,
             HistoryFindMsg::Find {
                 repo_id: RepoId(1),
-                query: HistoryFindQuery::new(query),
+                query: HistoryFindQuery::new(query, options),
                 index: Some(index.clone()),
             },
         )
@@ -142,7 +152,36 @@ mod tests {
         let mut state = fixture();
         let index = index(8);
         let _ = work(find(&mut state, "fix", &index));
-        assert!(find(&mut state, "FIX ", &index).is_empty());
+        assert!(find(&mut state, "fix", &index).is_empty());
+    }
+
+    /// The options are part of the query: toggling one searches again.
+    #[test]
+    fn a_changed_option_cancels_and_restarts_the_scan() {
+        let mut state = fixture();
+        let index = index(8);
+        let mut scan = work(find(&mut state, "fix", &index));
+        for options in [
+            TextSearchOptions {
+                match_case: true,
+                ..TextSearchOptions::default()
+            },
+            TextSearchOptions {
+                whole_word: true,
+                ..TextSearchOptions::default()
+            },
+            TextSearchOptions {
+                regex: true,
+                ..TextSearchOptions::default()
+            },
+        ] {
+            let restarted = work(find_with(&mut state, "fix", options, &index));
+            assert!(scan.cancellation.is_cancelled(), "{options:?}");
+            assert_ne!(restarted.seq, scan.seq);
+            assert_eq!(restarted.query.options(), options);
+            assert!(find_with(&mut state, "fix", options, &index).is_empty());
+            scan = restarted;
+        }
     }
 
     #[test]

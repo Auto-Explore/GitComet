@@ -51,7 +51,8 @@ impl HistoryFindState {
             .flat_map(|chunk| chunk.iter().map(|&row| row as usize))
     }
 
-    /// Whether these results answer `query` over `index`.
+    /// Whether these results answer `query` over `index`. The query's text and
+    /// options together identify it, so changing either needs a new search.
     pub fn is_for(&self, query: &HistoryFindQuery, index: &HistoryIndexHandle) -> bool {
         self.query.as_ref() == Some(query)
             && self

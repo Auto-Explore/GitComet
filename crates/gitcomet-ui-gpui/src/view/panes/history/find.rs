@@ -1,8 +1,11 @@
 //! The history list's find bar (Cmd-F): type to match commits by summary,
-//! author, or SHA prefix, then step the selection between the matches.
+//! author, or SHA prefix, then step the selection between the matches. The
+//! bar itself is the shared [`components::QuickSearchBar`].
 
 use super::*;
+use components::QuickSearchStatus;
 use gitcomet_core::history_find::HistoryFindQuery;
+use gitcomet_core::text_search::TextSearchOptions;
 use gitcomet_state::history_find::HistoryFindMsg;
 use std::rc::Rc;
 
@@ -18,6 +21,10 @@ const FIND_BAR_RIGHT_GAP_PX: f32 = 8.0;
 pub(in crate::view) struct HistoryFind {
     pub(in crate::view) input: Entity<components::TextInput>,
     pub(in crate::view) open: bool,
+    /// Match case, whole word and regex, for this session.
+    options: TextSearchOptions,
+    /// The query as typed, `None` when blank. It may be an invalid regex,
+    /// which is shown as such but never searched for.
     query: Option<HistoryFindQuery>,
     /// Set by each query edit: select the first match as soon as one is known.
     /// An indexed search reports matches as its scan reaches them.
@@ -26,10 +33,10 @@ pub(in crate::view) struct HistoryFind {
     /// while the reply is in flight.
     requested: Option<(HistoryFindQuery, usize)>,
     matches: Option<(FindMatchesKey, Rc<FindMatches>)>,
-    /// The count last shown for an answered query. Held while a new query's
+    /// The status last shown for an answered query. Held while a new query's
     /// scan has nothing to report yet, so the count does not blink on every
     /// keystroke.
-    label: Option<SharedString>,
+    status: Option<QuickSearchStatus>,
     /// Running while the user is still typing; see [`HISTORY_FIND_SETTLE_MS`].
     settling: Option<gpui::Task<()>>,
     _input_subscription: gpui::Subscription,
@@ -64,10 +71,11 @@ pub(in crate::view) struct FindMatches {
     pub(in crate::view) failed: bool,
 }
 
-/// Whether a commit row fades while the find bar has a query. Decided from
-/// the row's own text, which every drawn row has loaded, so a keystroke
-/// restyles the rows in the same frame instead of waiting on the scan. The
-/// selected row never fades, so the commit being looked at stays readable.
+/// Whether a commit row fades while the find bar has a searchable query (see
+/// [`HistoryView::history_find_query`]). Decided from the row's own text,
+/// which every drawn row has loaded, so a keystroke restyles the rows in the
+/// same frame instead of waiting on the scan. The selected row never fades,
+/// so the commit being looked at stays readable.
 pub(in crate::view) fn history_find_row_dimmed(
     query: Option<&HistoryFindQuery>,
     commit: &Commit,
@@ -81,12 +89,14 @@ impl HistoryView {
         self.find.as_ref().is_some_and(|find| find.open)
     }
 
-    /// The query rows are matched against while the bar is open.
+    /// The query rows are matched against while the bar is open: none for a
+    /// blank query or an invalid regex.
     pub(in crate::view) fn history_find_query(&self) -> Option<&HistoryFindQuery> {
         self.find
             .as_ref()
             .filter(|find| find.open)
             .and_then(|find| find.query.as_ref())
+            .filter(|query| query.regex_error().is_none())
     }
 
     /// Open the bar, or refocus it with the query selected when it is already
@@ -117,11 +127,12 @@ impl HistoryView {
             HistoryFind {
                 input,
                 open: false,
+                options: TextSearchOptions::default(),
                 query: None,
                 jump_to_first: false,
                 requested: None,
                 matches: None,
-                label: None,
+                status: None,
                 settling: None,
                 _input_subscription: subscription,
             }
@@ -189,10 +200,10 @@ impl HistoryView {
         }
         let text = input.read_with(cx, |input, _| input.text().to_owned());
         // TextInput also notifies for caret blinks and selection moves.
-        let query_changed = self
-            .find
-            .as_ref()
-            .is_some_and(|find| find.query != HistoryFindQuery::new(&text));
+        let query_changed = self.find.as_ref().is_some_and(|find| match &find.query {
+            Some(query) => query.text() != text,
+            None => !text.trim().is_empty(),
+        });
         if query_changed {
             self.set_history_find_query(&text, true);
             self.settle_history_find(cx);
@@ -218,9 +229,34 @@ impl HistoryView {
         let Some(find) = self.find.as_mut() else {
             return;
         };
-        find.query = HistoryFindQuery::new(text);
-        find.jump_to_first = jump_to_first && find.query.is_some();
+        find.query = HistoryFindQuery::new(text, find.options);
+        find.jump_to_first = jump_to_first
+            && find
+                .query
+                .as_ref()
+                .is_some_and(|query| query.regex_error().is_none());
         find.matches = None;
+    }
+
+    /// A toggle was clicked: search again with `options` at once, selecting
+    /// the first match as a query edit would, and keep typing in the input.
+    fn set_history_find_options(
+        &mut self,
+        options: TextSearchOptions,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(find) = self.find.as_mut().filter(|find| find.open) else {
+            return;
+        };
+        if find.options != options {
+            find.options = options;
+            find.settling = None;
+            let text = find.input.read(cx).text().to_owned();
+            self.set_history_find_query(&text, true);
+        }
+        self.focus_history_find_input(window, cx);
+        cx.notify();
     }
 
     fn settle_history_find(&mut self, cx: &mut gpui::Context<Self>) {
@@ -261,27 +297,28 @@ impl HistoryView {
             .as_ref()
             .filter(|shown| shown.key.repo_id == repo_id)
             .map(|shown| shown.graph.projection.index.clone());
-        let wanted = find
+        // An invalid regex is never searched; like a blank query it only
+        // stops a search already asked for.
+        let query = find
             .query
-            .clone()
+            .as_ref()
+            .filter(|query| query.regex_error().is_none());
+        let wanted = query
+            .cloned()
             .zip(index.clone())
             .map(|(query, index)| (query, Arc::as_ptr(&index) as usize));
         // The store drops an unfinished scan when repository loads are
         // cancelled (a tab switch, a finished action), so the request is
         // repeated whenever its answer is missing. The reducer ignores a
         // repeat of a search it already has.
-        let unanswered = find
-            .query
-            .as_ref()
-            .zip(index.as_ref())
-            .is_some_and(|(query, index)| {
-                self.active_repo()
-                    .is_some_and(|repo| !repo.history_state.find.is_for(query, index))
-            });
+        let unanswered = query.zip(index.as_ref()).is_some_and(|(query, index)| {
+            self.active_repo()
+                .is_some_and(|repo| !repo.history_state.find.is_for(query, index))
+        });
         if wanted != find.requested || unanswered {
             self.store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
                 repo_id,
-                query: find.query.clone(),
+                query: wanted.as_ref().map(|(query, _)| query.clone()),
                 index,
             }));
             if let Some(find) = self.find.as_mut() {
@@ -481,45 +518,49 @@ impl HistoryView {
         }
     }
 
-    pub(in crate::view) fn history_find_label(&mut self) -> SharedString {
-        let Some(matches) = self.history_find_matches() else {
-            return "0 results".into();
+    /// What the bar's match label reports.
+    pub(in crate::view) fn history_find_status(&mut self) -> QuickSearchStatus {
+        let Some(query) = self
+            .find
+            .as_ref()
+            .filter(|find| find.open)
+            .and_then(|find| find.query.as_ref())
+        else {
+            return QuickSearchStatus::Empty;
         };
-        // The scan reports only once it has matches or is done, so an empty,
-        // unfinished result means it has not answered yet.
-        let unanswered =
-            matches.pending || (matches.visible.is_empty() && !matches.complete && !matches.failed);
-        if unanswered {
+        if query.regex_error().is_some() {
+            return QuickSearchStatus::InvalidRegex;
+        }
+        // No matches without a loaded list or an answer from the store. The
+        // scan reports only once it has matches or is done, so an empty,
+        // unfinished result has not answered yet either.
+        let answered = self.history_find_matches().filter(|matches| {
+            !matches.pending && (!matches.visible.is_empty() || matches.complete)
+        });
+        let Some(matches) = answered else {
             return self
                 .find
                 .as_ref()
-                .and_then(|find| find.label.clone())
-                .unwrap_or_else(|| "Searching…".into());
-        }
-        let label = self.history_find_count_label(&matches);
+                .and_then(|find| find.status)
+                .unwrap_or(QuickSearchStatus::Searching);
+        };
+        let status = if matches.failed {
+            QuickSearchStatus::Failed
+        } else if matches.visible.is_empty() {
+            QuickSearchStatus::NoMatches
+        } else {
+            QuickSearchStatus::Position {
+                current: self
+                    .history_find_selected_visible_ix()
+                    .and_then(|selected| matches.visible.binary_search(&selected).ok()),
+                total: matches.visible.len(),
+                complete: matches.complete,
+            }
+        };
         if let Some(find) = self.find.as_mut() {
-            find.label = Some(label.clone());
+            find.status = Some(status);
         }
-        label
-    }
-
-    fn history_find_count_label(&self, matches: &FindMatches) -> SharedString {
-        if matches.failed {
-            return "Search failed".into();
-        }
-        let more = if matches.complete { "" } else { "+" };
-        let total = matches.visible.len();
-        if total == 0 {
-            return "0 results".into();
-        }
-        let current = self
-            .history_find_selected_visible_ix()
-            .and_then(|selected| matches.visible.binary_search(&selected).ok());
-        match current {
-            Some(ix) => format!("{} of {total}{more}", ix + 1).into(),
-            None if total == 1 && matches.complete => "1 result".into(),
-            None => format!("{total}{more} results").into(),
-        }
+        status
     }
 
     pub(super) fn render_history_find(
@@ -528,97 +569,36 @@ impl HistoryView {
         right_gutter: Pixels,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
-        let input = self.find.as_ref().filter(|find| find.open)?.input.clone();
+        let find = self.find.as_ref().filter(|find| find.open)?;
+        let (input, options) = (find.input.clone(), find.options);
         let theme = self.theme;
         let ui_scale =
             ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics);
-        let control_height = ui_scale.row_height(26.0, 32.0);
-        let icon_button_width = components::control_height(ui_scale);
-        let label = self.history_find_label();
-        let has_matches = self
+        let status = self.history_find_status();
+        let can_step = self
             .history_find_matches()
             .is_some_and(|matches| !matches.visible.is_empty());
-
-        let icon_button = |id: &'static str, icon: &'static str, size: f32| {
-            components::Button::new(id, "")
-                .start_slot(svg_icon(
-                    icon,
-                    theme.colors.foreground.primary,
-                    ui_scale.px(size),
-                ))
-                .borderless()
-                .style(components::ButtonStyle::Subtle)
+        let step = |forward: bool| {
+            move |this: &mut Self, window: &mut Window, cx: &mut gpui::Context<Self>| {
+                this.history_find_step(forward, cx);
+                this.focus_history_find_input(window, cx);
+            }
         };
 
-        let panel = div()
-            .flex()
-            .items_center()
-            .gap(ui_scale.px(2.0))
-            .px(ui_scale.px(4.0))
-            .py(ui_scale.px(2.0))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .border_color(theme.colors.stroke.default)
-            .bg(theme.colors.surface.raised)
-            .shadow(crate::theme::shadow_surface(theme))
+        let panel = components::QuickSearchBar::<Self>::new("history_find", status)
+            .input(input)
+            .options(options, |this, next, window, cx| {
+                this.set_history_find_options(next, window, cx);
+            })
+            .navigation(can_step, step(false), step(true))
+            .on_close(|this, window, cx| this.close_history_find(window, cx))
+            .render(theme, ui_scale, cx)
+            // The bar is shared and keyless; Shift-Enter in its input steps
+            // back through history matches only here.
             .key_context("HistoryFind")
             .on_action(cx.listener(|this, _: &HistoryFindPrevious, _window, cx| {
                 this.history_find_step(false, cx);
             }))
-            .child(
-                div()
-                    .w(ui_scale.px(220.0))
-                    .min_w(ui_scale.px(140.0))
-                    .debug_selector(|| "history_find_input_slot".to_string())
-                    .child(input),
-            )
-            .child(
-                div()
-                    .w(ui_scale.px(96.0))
-                    .h(control_height)
-                    .px(ui_scale.px(4.0))
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_size(theme.ui_text(12.0))
-                    .text_color(theme.colors.foreground.secondary)
-                    .debug_selector(|| "history_find_match_label".to_string())
-                    .child(label),
-            )
-            .child(
-                icon_button("history_find_prev", "icons/arrow_up.svg", 14.0)
-                    .disabled(!has_matches)
-                    .on_click(theme, cx, |this, _e, _window, cx| {
-                        this.history_find_step(false, cx);
-                    })
-                    .w(icon_button_width)
-                    .h(control_height)
-                    .gitcomet_tooltip(theme, "Previous match (Shift+Enter)".into())
-                    .debug_selector(|| "history_find_prev".to_string()),
-            )
-            .child(
-                icon_button("history_find_next", "icons/arrow_down.svg", 14.0)
-                    .disabled(!has_matches)
-                    .on_click(theme, cx, |this, _e, _window, cx| {
-                        this.history_find_step(true, cx);
-                    })
-                    .w(icon_button_width)
-                    .h(control_height)
-                    .gitcomet_tooltip(theme, "Next match (Enter)".into())
-                    .debug_selector(|| "history_find_next".to_string()),
-            )
-            .child(
-                icon_button("history_find_close", "icons/generic_close.svg", 12.0)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.close_history_find(window, cx);
-                    })
-                    .w(icon_button_width)
-                    .h(control_height)
-                    .gitcomet_tooltip(theme, "Close (Esc)".into())
-                    .debug_selector(|| "history_find_close".to_string()),
-            )
             .occlude()
             .with_animation(
                 "history_find_mount",
@@ -639,5 +619,12 @@ impl HistoryView {
                 .child(panel)
                 .into_any_element(),
         )
+    }
+
+    fn focus_history_find_input(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if let Some(find) = self.find.as_ref().filter(|find| find.open) {
+            let focus = find.input.read(cx).focus_handle();
+            window.focus(&focus, cx);
+        }
     }
 }

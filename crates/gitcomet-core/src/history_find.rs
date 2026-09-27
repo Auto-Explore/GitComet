@@ -1,14 +1,30 @@
 //! Matching for the history list's find bar.
+//!
+//! The text is matched with the shared quick search matcher
+//! ([`TextSearchMatcher`]), so the find bar honours the same match case, whole
+//! word and regex options as the diff and file search bars.
 
 use crate::domain::Commit;
+use crate::text_search::{TextSearchMatcher, TextSearchOptions};
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-/// A normalized find-bar query. Text matches the summary or author without
-/// regard to case; a query that could be an abbreviated SHA also matches the
-/// start of the commit id.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A compiled find-bar query. The text matches the summary or the author, each
+/// on its own; a plain-text query that could be an abbreviated SHA also
+/// matches the start of the commit id.
+///
+/// Two queries are equal when their text and options are, which is what
+/// identifies a search: changing either starts a new one. Cloning shares the
+/// compiled matcher, so a regex compiles once per query.
+#[derive(Clone)]
 pub struct HistoryFindQuery {
+    /// As typed: the matcher sees surrounding spaces too.
     text: String,
-    sha_prefix: bool,
+    options: TextSearchOptions,
+    matcher: Arc<TextSearchMatcher>,
+    /// The lowercased, trimmed text when it can be a SHA prefix.
+    sha_prefix: Option<String>,
 }
 
 /// Shortest hex query treated as a SHA prefix. Shorter hex runs such as "add"
@@ -17,20 +33,72 @@ const MIN_SHA_PREFIX_LEN: usize = 4;
 
 impl HistoryFindQuery {
     /// `None` for a blank query, which matches nothing rather than everything.
-    pub fn new(query: &str) -> Option<Self> {
-        let text = query.trim().to_lowercase();
-        if text.is_empty() {
+    /// An invalid regex still makes a query; see [`Self::regex_error`].
+    pub fn new(text: &str, options: TextSearchOptions) -> Option<Self> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
             return None;
         }
-        let sha_prefix =
-            text.len() >= MIN_SHA_PREFIX_LEN && text.bytes().all(|byte| byte.is_ascii_hexdigit());
-        Some(Self { text, sha_prefix })
+        // Regex queries are patterns, not ids. The SHA prefix ignores match
+        // case and whole word: ids are hex, and the prefix is a prefix.
+        let sha_prefix = (!options.regex
+            && trimmed.len() >= MIN_SHA_PREFIX_LEN
+            && trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| trimmed.to_ascii_lowercase());
+        Some(Self {
+            text: text.to_owned(),
+            options,
+            matcher: Arc::new(TextSearchMatcher::new(text, options)),
+            sha_prefix,
+        })
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn options(&self) -> TextSearchOptions {
+        self.options
+    }
+
+    /// Why the query, in regex mode, is not a valid pattern. Such a query
+    /// matches nothing and is not worth searching for.
+    pub fn regex_error(&self) -> Option<&str> {
+        self.matcher.regex_error()
     }
 
     pub fn matches(&self, commit: &Commit) -> bool {
-        (self.sha_prefix && starts_with_ignore_ascii_case(commit.id.as_ref(), &self.text))
-            || contains_lowercase(&commit.summary, &self.text)
-            || contains_lowercase(&commit.author, &self.text)
+        self.sha_prefix
+            .as_deref()
+            .is_some_and(|prefix| starts_with_ignore_ascii_case(commit.id.as_ref(), prefix))
+            || self.matcher.is_match(&commit.summary)
+            || self.matcher.is_match(&commit.author)
+    }
+}
+
+impl PartialEq for HistoryFindQuery {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.options == other.options
+    }
+}
+
+impl Eq for HistoryFindQuery {}
+
+impl Hash for HistoryFindQuery {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+        self.options.hash(state);
+    }
+}
+
+impl fmt::Debug for HistoryFindQuery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HistoryFindQuery")
+            .field("text", &self.text)
+            .field("options", &self.options)
+            .field("sha_prefix", &self.sha_prefix)
+            .field("regex_error", &self.regex_error())
+            .finish()
     }
 }
 
@@ -41,24 +109,11 @@ fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
 }
 
-/// `needle` is already lowercase. ASCII haystacks, the common case, avoid the
-/// allocation that a full Unicode lowercase conversion needs.
-fn contains_lowercase(haystack: &str, needle: &str) -> bool {
-    if haystack.is_ascii() {
-        let needle = needle.as_bytes();
-        return needle.len() <= haystack.len()
-            && haystack
-                .as_bytes()
-                .windows(needle.len())
-                .any(|window| window.eq_ignore_ascii_case(needle));
-    }
-    haystack.to_lowercase().contains(needle)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::{CommitId, CommitParentIds};
+    use std::collections::hash_map::DefaultHasher;
     use std::time::SystemTime;
 
     fn commit(id: &str, summary: &str, author: &str) -> Commit {
@@ -71,48 +126,162 @@ mod tests {
         }
     }
 
+    const PLAIN: TextSearchOptions = TextSearchOptions {
+        match_case: false,
+        whole_word: false,
+        regex: false,
+    };
+    const MATCH_CASE: TextSearchOptions = TextSearchOptions {
+        match_case: true,
+        ..PLAIN
+    };
+    const WHOLE_WORD: TextSearchOptions = TextSearchOptions {
+        whole_word: true,
+        ..PLAIN
+    };
+    const REGEX: TextSearchOptions = TextSearchOptions {
+        regex: true,
+        ..PLAIN
+    };
+
+    fn query(text: &str, options: TextSearchOptions) -> HistoryFindQuery {
+        HistoryFindQuery::new(text, options).expect("a non-blank query")
+    }
+
+    fn hash(query: &HistoryFindQuery) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        query.hash(&mut hasher);
+        hasher.finish()
+    }
+
     #[test]
     fn blank_query_matches_nothing() {
-        assert_eq!(HistoryFindQuery::new(""), None);
-        assert_eq!(HistoryFindQuery::new("   "), None);
+        assert_eq!(HistoryFindQuery::new("", PLAIN), None);
+        assert_eq!(HistoryFindQuery::new("   ", REGEX), None);
     }
 
     #[test]
-    fn summary_matches_ignore_case() {
-        let query = HistoryFindQuery::new("UPGRA").unwrap();
-        assert!(query.matches(&commit("d5bb3ab2", "upgrade gix to 0.88", "Havunen")));
-        assert!(!query.matches(&commit("c94afbcf", "fix markdown preview", "Havunen")));
+    fn text_matches_the_summary_or_the_author() {
+        let upgrade = commit("d5bb3ab2", "upgrade gix to 0.88", "Havunen");
+        let fix = commit("c94afbcf", "fix markdown preview", "Havunen");
+        assert!(query("UPGRA", PLAIN).matches(&upgrade));
+        assert!(!query("UPGRA", PLAIN).matches(&fix));
+        assert!(query("havu", PLAIN).matches(&fix));
     }
 
+    /// Each option narrows (or, for regex, reinterprets) the text match.
     #[test]
-    fn author_matches() {
-        let query = HistoryFindQuery::new("havu").unwrap();
-        assert!(query.matches(&commit("d5bb3ab2", "upgrade gix", "Havunen")));
+    fn options_change_what_the_text_matches() {
+        let render = commit("11111111", "Render the prerender cache", "Ann");
+        let prerender = commit("22222222", "prerender only", "Ann");
+        let digits = commit("33333333", "bump to v42", "Ann");
+        let cases: [(&str, TextSearchOptions, &Commit, bool); 10] = [
+            ("render", PLAIN, &render, true),
+            ("render", MATCH_CASE, &render, true),
+            ("RENDER", PLAIN, &render, true),
+            ("RENDER", MATCH_CASE, &render, false),
+            ("render", WHOLE_WORD, &prerender, false),
+            ("render", PLAIN, &prerender, true),
+            (r"v\d+", PLAIN, &digits, false),
+            (r"v\d+", REGEX, &digits, true),
+            (r"V\d+", REGEX, &digits, true),
+            (
+                r"V\d+",
+                TextSearchOptions {
+                    match_case: true,
+                    ..REGEX
+                },
+                &digits,
+                false,
+            ),
+        ];
+        for (text, options, commit, expected) in cases {
+            assert_eq!(
+                query(text, options).matches(commit),
+                expected,
+                "{text:?} with {options:?} against {:?}",
+                commit.summary
+            );
+        }
     }
 
     #[test]
     fn hex_query_matches_the_start_of_the_sha_only() {
-        let query = HistoryFindQuery::new("D5BB3").unwrap();
-        assert!(query.matches(&commit("d5bb3ab2", "upgrade gix", "Havunen")));
-        let middle = HistoryFindQuery::new("3ab2").unwrap();
-        assert!(!middle.matches(&commit("d5bb3ab2", "upgrade gix", "Havunen")));
+        let upgrade = commit("d5bb3ab2", "upgrade gix", "Havunen");
+        assert!(query("D5BB3", PLAIN).matches(&upgrade));
+        assert!(
+            query(" d5bb3 ", PLAIN).matches(&upgrade),
+            "trimmed for the SHA"
+        );
+        assert!(!query("3ab2", PLAIN).matches(&upgrade));
     }
 
     #[test]
     fn short_hex_words_match_text_not_every_sha() {
-        let query = HistoryFindQuery::new("add").unwrap();
-        assert!(!query.matches(&commit("add12345", "fix typo", "Havunen")));
-        assert!(query.matches(&commit("d5bb3ab2", "add copy commit sha", "Havunen")));
+        assert!(!query("add", PLAIN).matches(&commit("add12345", "fix typo", "Havunen")));
+        assert!(query("add", PLAIN).matches(&commit("d5bb3ab2", "add copy sha", "Havunen")));
     }
 
     #[test]
-    fn non_ascii_summaries_match_ignore_case() {
-        let query = HistoryFindQuery::new("ÜBER").unwrap();
-        assert!(query.matches(&commit("d5bb3ab2", "Fix über-long lines", "Jörg")));
-        assert!(
-            HistoryFindQuery::new("jö")
-                .unwrap()
-                .matches(&commit("d5bb3ab2", "summary", "Jörg"))
-        );
+    fn sha_prefix_ignores_match_case_and_whole_word() {
+        let upgrade = commit("d5bb3ab2", "upgrade gix", "Havunen");
+        assert!(query("D5BB3", MATCH_CASE).matches(&upgrade));
+        assert!(query("d5bb", WHOLE_WORD).matches(&upgrade));
+    }
+
+    #[test]
+    fn regex_queries_do_not_match_the_sha() {
+        let upgrade = commit("d5bb3ab2", "upgrade gix", "Havunen");
+        assert!(!query("d5bb3", REGEX).matches(&upgrade));
+        assert!(query("d5bb3", REGEX).matches(&commit("00000000", "revert d5bb3ab2", "A")));
+    }
+
+    /// The summary and the author are matched one at a time, so a match
+    /// never spans the two.
+    #[test]
+    fn summary_and_author_are_not_concatenated() {
+        let fix = commit("c94afbcf", "fix typo", "Alice");
+        assert!(!query("typo alice", PLAIN).matches(&fix));
+        assert!(!query("typoalice", PLAIN).matches(&fix));
+        assert!(query("^Alice$", REGEX).matches(&fix));
+        assert!(query("^fix typo$", REGEX).matches(&fix));
+        assert!(!query("typo.Alice", REGEX).matches(&fix));
+        assert!(query("alice", WHOLE_WORD).matches(&fix));
+    }
+
+    #[test]
+    fn an_invalid_regex_reports_its_error_and_matches_nothing() {
+        let invalid = query("fix(", REGEX);
+        assert!(invalid.regex_error().is_some());
+        assert!(!invalid.matches(&commit("c94afbcf", "fix( typo", "Alice")));
+        assert_eq!(query("fix(", PLAIN).regex_error(), None);
+        assert!(query("fix(", PLAIN).matches(&commit("c94afbcf", "fix( typo", "Alice")));
+    }
+
+    /// Plain-text matching folds ASCII case only, like the diff and file
+    /// search bars; regex mode folds Unicode case.
+    #[test]
+    fn plain_text_folds_ascii_case_and_regex_folds_unicode() {
+        let uber = commit("d5bb3ab2", "Fix über-long lines", "Jörg");
+        assert!(!query("ÜBER", PLAIN).matches(&uber));
+        assert!(query("über", PLAIN).matches(&uber));
+        assert!(query("jö", PLAIN).matches(&uber));
+        assert!(query("ÜBER", REGEX).matches(&uber));
+        assert!(query("JÖRG", REGEX).matches(&uber));
+    }
+
+    #[test]
+    fn identity_is_the_text_and_the_options() {
+        let fix = query("fix", PLAIN);
+        assert_eq!(fix, query("fix", PLAIN));
+        assert_eq!(hash(&fix), hash(&query("fix", PLAIN)));
+        assert_eq!(fix, fix.clone());
+        assert_ne!(fix, query("FIX", PLAIN), "the text is kept as typed");
+        assert_ne!(fix, query("fix ", PLAIN), "surrounding spaces count");
+        for options in [MATCH_CASE, WHOLE_WORD, REGEX] {
+            assert_ne!(fix, query("fix", options), "{options:?}");
+        }
+        assert_eq!(fix.text(), "fix");
+        assert_eq!(query("fix", REGEX).options(), REGEX);
     }
 }

@@ -4,6 +4,8 @@
 //! selections still round-trip through the store as `Msg::SelectCommit`.
 
 use super::*;
+use gitcomet_core::history_find::HistoryFindQuery;
+use gitcomet_core::text_search::TextSearchOptions;
 
 const FIND_REPO_ID: RepoId = RepoId(1);
 
@@ -75,9 +77,7 @@ fn mount_find_fixture(
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
+    draw_and_park(cx);
 
     let history_showing = repo.diff_state.diff_target.is_none();
     let state = Arc::new(AppState {
@@ -90,10 +90,7 @@ fn mount_find_fixture(
         let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| model.set_state(Arc::clone(&state), cx));
     });
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
+    draw_and_park(cx);
 
     if history_showing {
         ensure_history_cache_for_tests(cx, &view, state);
@@ -154,12 +151,28 @@ fn find_input(
     })
 }
 
+fn find_text(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) -> String {
+    find_input(cx, view).read_with(cx, |input, _| input.text().to_owned())
+}
+
 fn find_input_is_focused(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,
 ) -> bool {
     let input = find_input(cx, view);
     cx.update(|window, app| input.read(app).focus_handle().is_focused(window))
+}
+
+fn focus_history_panel(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+    cx.update(|window, app| {
+        let focus = history_view(view, app)
+            .read(app)
+            .history_panel_focus_handle
+            .clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
 }
 
 fn history_panel_is_focused(
@@ -227,64 +240,46 @@ fn wait_for_selection(
     });
 }
 
-/// What the match label is computed from: the matching visible rows, whether
-/// the scan finished, and the 1-based position of the selected commit among
-/// the matches (`k` in "k of N").
-#[derive(Debug, PartialEq, Eq)]
-struct FindStatus {
-    matches: Vec<usize>,
-    complete: bool,
-    current: Option<usize>,
+/// Lets any queued store dispatches land, then checks the selection held.
+fn assert_selection_settles_on(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    store: &AppStore,
+    expected: Option<&str>,
+    context: &str,
+) {
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_with_store(cx, view);
+        assert_eq!(store_selected(store).as_deref(), expected, "{context}");
+    }
+    assert_eq!(view_selected(cx, view).as_deref(), expected, "{context}");
+}
+
+/// The visible rows the current query matches (none without a query).
+fn find_matches(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) -> Vec<usize> {
+    cx.update(|_window, app| {
+        history_view(view, app).update(app, |history, _cx| {
+            history
+                .history_find_matches()
+                .map(|matches| matches.visible.clone())
+                .unwrap_or_default()
+        })
+    })
 }
 
 fn find_status(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,
-) -> Option<FindStatus> {
+) -> components::QuickSearchStatus {
     cx.update(|_window, app| {
-        history_view(view, app).update(app, |history, _cx| {
-            let matches = history.history_find_matches()?;
-            let selected = history
-                .active_repo()
-                .and_then(|repo| repo.history_state.selected_commit.clone());
-            let cache = history.history_cache.as_ref()?;
-            let selected_visible = selected.and_then(|selected| {
-                cache.base.visible_indices.iter().position(|commit_ix| {
-                    cache
-                        .page
-                        .commits
-                        .get(commit_ix)
-                        .is_some_and(|commit| commit.id == selected)
-                })
-            });
-            let current = selected_visible
-                .and_then(|visible| matches.visible.binary_search(&visible).ok())
-                .map(|ix| ix + 1);
-            Some(FindStatus {
-                matches: matches.visible.clone(),
-                complete: matches.complete,
-                current,
-            })
-        })
+        history_view(view, app).update(app, |history, _cx| history.history_find_status())
     })
 }
 
-fn assert_find_status(
-    cx: &mut gpui::VisualTestContext,
-    view: &gpui::Entity<GitCometView>,
-    matches: &[usize],
-    current: Option<usize>,
-    context: &str,
-) {
-    assert_eq!(
-        find_status(cx, view),
-        Some(FindStatus {
-            matches: matches.to_vec(),
-            complete: true,
-            current,
-        }),
-        "{context}"
-    );
+/// The text the bar's match label shows.
+fn find_label(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) -> String {
+    find_status(cx, view).label().to_string()
 }
 
 /// Opens the bar with Cmd-F from the focused history list.
@@ -317,28 +312,108 @@ fn retype_query(cx: &mut gpui::VisualTestContext, query: &str) {
     type_query(cx, query);
 }
 
-/// Lets any queued store dispatches land, then checks the selection held.
-fn assert_selection_settles_on(
+fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let at = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
+        .center();
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::default());
+    cx.simulate_click(at, gpui::Modifiers::default());
+    draw_and_park(cx);
+}
+
+/// Moves the selection one row down, the way the Down key on the list would.
+fn select_next_row(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+    cx.update(|_window, app| {
+        history_view(view, app).update(app, |history, cx| {
+            history.history_select_adjacent_commit(1, cx);
+        })
+    });
+    draw_and_park(cx);
+}
+
+/// Visible rows drawn faded, decided by the same rule the row renderer uses.
+fn dimmed_rows(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) -> Vec<usize> {
+    cx.update(|_window, app| {
+        history_view(view, app).update(app, |history, _cx| {
+            let query = history.history_find_query().cloned();
+            let selected = history
+                .active_repo()
+                .and_then(|repo| repo.history_state.selected_commit.clone());
+            let Some(cache) = history.history_cache.as_ref() else {
+                return Vec::new();
+            };
+            cache
+                .base
+                .visible_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(visible_ix, commit_ix)| {
+                    let commit = cache.page.commits.get(commit_ix)?;
+                    let is_selected = Some(&commit.id) == selected.as_ref();
+                    crate::view::panes::history::find::history_find_row_dimmed(
+                        query.as_ref(),
+                        commit,
+                        is_selected,
+                    )
+                    .then_some(visible_ix)
+                })
+                .collect()
+        })
+    })
+}
+
+const MATCH_CASE: &str = "history_find_match_case";
+const WHOLE_WORD: &str = "history_find_whole_word";
+const REGEX: &str = "history_find_regex";
+
+/// One user action in a [`run_script`] step.
+#[derive(Clone, Copy, Debug)]
+enum Act {
+    /// Replace the query and let typing settle.
+    Type(&'static str),
+    Key(&'static str),
+    Click(&'static str),
+    /// Move the selection one row down, as the Down key on the list does.
+    NextRow,
+}
+
+/// Plays `script` on an open bar. After each act it checks the matching
+/// visible rows, the selected commit and the match label, and that the input
+/// kept focus and the query text. An act expected to leave the selection
+/// alone is checked to keep leaving it alone.
+fn run_script(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,
     store: &AppStore,
-    expected: &str,
-    context: &str,
+    script: &[(Act, &[usize], &str, &str)],
 ) {
-    for _ in 0..15 {
-        std::thread::sleep(Duration::from_millis(10));
-        sync_view_with_store(cx, view);
-        assert_eq!(
-            store_selected(store).as_deref(),
-            Some(expected),
-            "{context}"
-        );
+    let mut text = find_text(cx, view);
+    for &(act, matches, selected, label) in script {
+        let before = view_selected(cx, view);
+        match act {
+            Act::Type(query) => {
+                retype_query(cx, query);
+                text = query.to_owned();
+            }
+            Act::Key(keys) => {
+                cx.simulate_keystrokes(keys);
+                draw_and_park(cx);
+            }
+            Act::Click(selector) => click(cx, selector),
+            Act::NextRow => select_next_row(cx, view),
+        }
+        let context = format!("after {act:?}");
+        if before.as_deref() == Some(selected) {
+            assert_selection_settles_on(cx, view, store, Some(selected), &context);
+        } else {
+            wait_for_selection(cx, view, store, selected);
+        }
+        assert_eq!(find_matches(cx, view), matches, "{context}");
+        assert_eq!(find_label(cx, view), label, "{context}");
+        assert!(find_input_is_focused(cx, view), "{context}: input focus");
+        assert_eq!(find_text(cx, view), text, "{context}: query text");
     }
-    assert_eq!(
-        view_selected(cx, view).as_deref(),
-        Some(expected),
-        "{context}"
-    );
 }
 
 #[gpui::test]
@@ -357,6 +432,9 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
     for selector in [
         "history_find",
         "history_find_input_slot",
+        MATCH_CASE,
+        WHOLE_WORD,
+        REGEX,
         "history_find_match_label",
         "history_find_prev",
         "history_find_next",
@@ -368,6 +446,10 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
         );
     }
     assert!(
+        cx.debug_bounds("history_find_newline").is_none(),
+        "the query is a single line"
+    );
+    assert!(
         find_input_is_focused(cx, &view),
         "opening the find bar must focus its input"
     );
@@ -375,11 +457,8 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
         !cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_active),
         "the history find bar is not the diff search"
     );
-    assert_eq!(
-        find_status(cx, &view),
-        None,
-        "an empty query matches nothing (the label reads \"0 results\")"
-    );
+    assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
+    assert_eq!(find_label(cx, &view), "Type to search");
 }
 
 #[gpui::test]
@@ -438,179 +517,105 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
     assert!(cx.debug_bounds("history_find").is_none());
 }
 
+/// Typing selects the first match; Enter/F3/↓ step down and Shift-Enter
+/// (`HistoryFindPrevious` inside the bar)/F2/↑ step up, wrapping at either
+/// end, without editing the query or leaving the input; × closes the bar.
 #[gpui::test]
-fn history_find_query_selects_the_first_match(cx: &mut gpui::TestAppContext) {
+fn history_find_selects_the_first_match_and_steps_with_keys_and_buttons(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     assert_eq!(store_selected(&store), None);
 
     open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-
-    assert_eq!(
-        find_input(cx, &view).read_with(cx, |input, _| input.text().to_owned()),
-        "fix"
-    );
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-    assert_find_status(
+    const FIX: &[usize] = &[0, 2, 4];
+    run_script(
         cx,
         &view,
-        &[0, 2, 4],
-        Some(1),
-        "\"fix\" matches three rows regardless of case, and the top one is selected (\"1 of 3\")",
+        &store,
+        &[
+            (Act::Type("fix"), FIX, "aaaa0000", "1/3"),
+            (Act::Key("enter"), FIX, "cccc2222", "2/3"),
+            (Act::Key("enter"), FIX, "eeee4444", "3/3"),
+            (Act::Key("enter"), FIX, "aaaa0000", "1/3"),
+            (Act::Key("shift-enter"), FIX, "eeee4444", "3/3"),
+            (Act::Key("shift-enter"), FIX, "cccc2222", "2/3"),
+            (Act::Key("f3"), FIX, "eeee4444", "3/3"),
+            (Act::Key("f3"), FIX, "aaaa0000", "1/3"),
+            (Act::Key("f2"), FIX, "eeee4444", "3/3"),
+            (Act::Key("f2"), FIX, "cccc2222", "2/3"),
+            (Act::Click("history_find_prev"), FIX, "aaaa0000", "1/3"),
+            (Act::Click("history_find_prev"), FIX, "eeee4444", "3/3"),
+            (Act::Click("history_find_next"), FIX, "aaaa0000", "1/3"),
+            (Act::Click("history_find_next"), FIX, "cccc2222", "2/3"),
+        ],
     );
+
+    click(cx, "history_find_close");
+    assert!(!find_is_open(cx, &view), "× must close the find bar");
+    assert!(cx.debug_bounds("history_find").is_none());
     assert!(
-        find_input_is_focused(cx, &view),
-        "selecting the first match must leave focus in the find input"
+        history_panel_is_focused(cx, &view),
+        "closing with × must return focus to the history list"
     );
 }
 
+/// The summary, the author (ignoring case) and a SHA prefix all match; off a
+/// match the label counts instead of placing; with no matches, stepping
+/// leaves the selection alone.
 #[gpui::test]
-fn history_find_enter_and_shift_enter_step_through_matches_and_wrap(cx: &mut gpui::TestAppContext) {
+fn history_find_matches_and_labels(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-
-    // Enter steps down through the matches and wraps back to the top.
-    for (expected, position) in [("cccc2222", 2), ("eeee4444", 3), ("aaaa0000", 1)] {
-        cx.simulate_keystrokes("enter");
-        draw_and_park(cx);
-        wait_for_selection(cx, &view, &store, expected);
-        assert_find_status(
-            cx,
-            &view,
-            &[0, 2, 4],
-            Some(position),
-            &format!("enter should move to match {position} of 3 ({expected})"),
-        );
-        assert!(find_input_is_focused(cx, &view));
-        assert_eq!(
-            find_input(cx, &view).read_with(cx, |input, _| input.text().to_owned()),
-            "fix",
-            "enter must not edit the single-line query"
-        );
-    }
-
-    // Shift-Enter resolves to `HistoryFindPrevious` inside the bar and steps
-    // back up, wrapping from the first match to the last.
-    for (expected, position) in [("eeee4444", 3), ("cccc2222", 2), ("aaaa0000", 1)] {
-        cx.simulate_keystrokes("shift-enter");
-        draw_and_park(cx);
-        wait_for_selection(cx, &view, &store, expected);
-        assert_find_status(
-            cx,
-            &view,
-            &[0, 2, 4],
-            Some(position),
-            &format!("shift-enter should move to match {position} of 3 ({expected})"),
-        );
-        assert!(find_input_is_focused(cx, &view));
-        assert_eq!(
-            find_input(cx, &view).read_with(cx, |input, _| input.text().to_owned()),
-            "fix",
-            "shift-enter must not insert a line break into the query"
-        );
-    }
-}
-
-#[gpui::test]
-fn history_find_f3_and_f2_step_through_matches(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-
-    cx.simulate_keystrokes("f3");
-    draw_and_park(cx);
-    wait_for_selection(cx, &view, &store, "cccc2222");
-
-    cx.simulate_keystrokes("f2");
-    draw_and_park(cx);
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-
-    cx.simulate_keystrokes("f2");
-    draw_and_park(cx);
-    wait_for_selection(cx, &view, &store, "eeee4444");
-    assert!(find_input_is_focused(cx, &view));
-}
-
-#[gpui::test]
-fn history_find_matches_sha_prefix_and_author(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-
-    open_find_with_shortcut(cx, &view);
-
-    // A hex query of four or more characters matches the start of the SHA.
-    type_query(cx, "DDDD3");
-    wait_for_selection(cx, &view, &store, "dddd3333");
-    assert_find_status(
-        cx,
-        &view,
-        &[3],
-        Some(1),
-        "a SHA prefix matches only the commit whose id starts with it (\"1 of 1\")",
-    );
-
-    // An author name matches every commit by that author.
-    retype_query(cx, "bob");
-    wait_for_selection(cx, &view, &store, "bbbb1111");
-    assert_find_status(
-        cx,
-        &view,
-        &[1, 5],
-        Some(1),
-        "an author query matches that author's commits (\"1 of 2\")",
-    );
-
-    retype_query(cx, "Carol");
-    wait_for_selection(cx, &view, &store, "cccc2222");
-    assert_find_status(cx, &view, &[2], Some(1), "author match is case-insensitive");
-}
-
-#[gpui::test]
-fn history_find_without_matches_reports_none_and_keeps_the_selection(
-    cx: &mut gpui::TestAppContext,
-) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "refactor");
-    wait_for_selection(cx, &view, &store, "dddd3333");
-
-    retype_query(cx, "zzz");
-    assert_find_status(
-        cx,
-        &view,
-        &[],
-        None,
-        "a query nothing matches has a complete, empty result (\"0 results\")",
-    );
-    assert_selection_settles_on(
+    run_script(
         cx,
         &view,
         &store,
-        "dddd3333",
-        "a query with no matches must leave the selection alone",
+        &[
+            (Act::Type("fix"), &[0, 2, 4], "aaaa0000", "1/3"),
+            (Act::NextRow, &[0, 2, 4], "bbbb1111", "3 matches"),
+            (Act::Type("bob"), &[1, 5], "bbbb1111", "1/2"),
+            (Act::Type("Carol"), &[2], "cccc2222", "1/1"),
+            (Act::Type("DDDD3"), &[3], "dddd3333", "1/1"),
+            (Act::NextRow, &[3], "eeee4444", "1 match"),
+            (Act::Type("zzz"), &[], "eeee4444", "No matches"),
+            (Act::Key("enter"), &[], "eeee4444", "No matches"),
+            (Act::Key("shift-enter"), &[], "eeee4444", "No matches"),
+        ],
     );
+    cx.simulate_keystrokes("secondary-a backspace");
+    settle_typing(cx);
+    assert_eq!(find_label(cx, &view), "Type to search");
+    assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
+}
 
-    // Nothing to step to: the keys fall through without moving the selection.
-    cx.simulate_keystrokes("enter");
-    draw_and_park(cx);
-    cx.simulate_keystrokes("shift-enter");
-    draw_and_park(cx);
-    assert_selection_settles_on(
+/// Each toggle rebuilds the query at once, selects its first match and keeps
+/// the input focused. The SHA prefix does not apply to a regex.
+#[gpui::test]
+fn history_find_option_toggles_change_the_matches(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
+
+    open_find_with_shortcut(cx, &view);
+    run_script(
         cx,
         &view,
         &store,
-        "dddd3333",
-        "stepping with no matches must leave the selection alone",
+        &[
+            (Act::Type("fix"), &[0, 2, 4], "aaaa0000", "1/3"),
+            (Act::Click(MATCH_CASE), &[2], "cccc2222", "1/1"),
+            (Act::Click(MATCH_CASE), &[0, 2, 4], "aaaa0000", "1/3"),
+            (Act::Type("ix"), &[0, 2, 4], "aaaa0000", "1/3"),
+            (Act::Click(WHOLE_WORD), &[], "aaaa0000", "No matches"),
+            (Act::Click(WHOLE_WORD), &[0, 2, 4], "aaaa0000", "1/3"),
+            (Act::Type("^(add|docs)"), &[], "aaaa0000", "No matches"),
+            (Act::Click(REGEX), &[1, 5], "bbbb1111", "1/2"),
+            (Act::Type("dddd3"), &[], "bbbb1111", "No matches"),
+            (Act::Click(REGEX), &[3], "dddd3333", "1/1"),
+        ],
     );
 }
 
@@ -627,50 +632,32 @@ fn history_find_escape_closes_and_secondary_f_restores_the_query(cx: &mut gpui::
     cx.simulate_keystrokes("escape");
     draw_and_park(cx);
     assert!(!find_is_open(cx, &view), "escape must close the find bar");
-    assert!(
-        cx.debug_bounds("history_find").is_none(),
-        "the closed bar must not be rendered"
-    );
+    assert!(cx.debug_bounds("history_find").is_none());
     assert!(
         history_panel_is_focused(cx, &view),
         "closing the find bar must return focus to the history list"
     );
-    assert_eq!(
-        find_status(cx, &view),
-        None,
-        "a closed bar reports no matches"
-    );
+    assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
 
     // Cmd-F brings the bar back with the previous query selected.
     open_find_with_shortcut(cx, &view);
     assert!(cx.debug_bounds("history_find").is_some());
     assert!(find_input_is_focused(cx, &view));
-    let input = find_input(cx, &view);
+    assert_eq!(find_text(cx, &view), "fix");
     assert_eq!(
-        input.read_with(cx, |input, _| input.text().to_owned()),
-        "fix"
-    );
-    assert_eq!(
-        input.read_with(cx, |input, _| input.selected_range()),
+        find_input(cx, &view).read_with(cx, |input, _| input.selected_range()),
         0..3,
         "reopening must select the whole previous query"
     );
     draw_and_park(cx);
     assert_eq!(
-        find_status(cx, &view).map(|status| status.matches),
-        Some(vec![0, 2, 4]),
+        find_matches(cx, &view),
+        vec![0, 2, 4],
         "the restored query must be searched again"
     );
 
     // Escape with the history list focused also closes the bar.
-    cx.update(|window, app| {
-        let focus = history_view(&view, app)
-            .read(app)
-            .history_panel_focus_handle
-            .clone();
-        window.focus(&focus, app);
-        let _ = window.draw(app);
-    });
+    focus_history_panel(cx, &view);
     assert!(find_is_open(cx, &view));
     cx.simulate_keystrokes("escape");
     draw_and_park(cx);
@@ -682,162 +669,38 @@ fn history_find_escape_closes_and_secondary_f_restores_the_query(cx: &mut gpui::
     assert!(history_panel_is_focused(cx, &view));
 }
 
+/// Rows fade with every keystroke, but the scan and the first-match jump
+/// wait for typing to settle, unless Enter asks for them at once.
 #[gpui::test]
-fn history_find_buttons_step_and_close(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-
-    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
-        let at = cx
-            .debug_bounds(selector)
-            .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
-            .center();
-        cx.simulate_mouse_move(at, None, gpui::Modifiers::default());
-        cx.simulate_click(at, gpui::Modifiers::default());
-        draw_and_park(cx);
-    };
-
-    click(cx, "history_find_prev");
-    wait_for_selection(cx, &view, &store, "eeee4444");
-    click(cx, "history_find_next");
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-    click(cx, "history_find_next");
-    wait_for_selection(cx, &view, &store, "cccc2222");
-
-    click(cx, "history_find_close");
-    assert!(!find_is_open(cx, &view), "× must close the find bar");
-    assert!(cx.debug_bounds("history_find").is_none());
-    assert!(
-        history_panel_is_focused(cx, &view),
-        "closing with × must return focus to the history list"
-    );
-}
-
-/// The text the bar's count label shows.
-fn find_label(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) -> String {
-    cx.update(|_window, app| {
-        history_view(view, app).update(app, |history, _cx| history.history_find_label().to_string())
-    })
-}
-
-/// Visible rows drawn faded, decided by the same rule the row renderer uses.
-fn dimmed_rows(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) -> Vec<usize> {
-    cx.update(|_window, app| {
-        history_view(view, app).update(app, |history, _cx| {
-            let query = history.history_find_query().cloned();
-            let selected = history
-                .active_repo()
-                .and_then(|repo| repo.history_state.selected_commit.clone());
-            let Some(cache) = history.history_cache.as_ref() else {
-                return Vec::new();
-            };
-            cache
-                .base
-                .visible_indices
-                .iter()
-                .enumerate()
-                .filter_map(|(visible_ix, commit_ix)| {
-                    let commit = cache.page.commits.get(commit_ix)?;
-                    let is_selected = Some(&commit.id) == selected.as_ref();
-                    crate::view::panes::history::find::history_find_row_dimmed(
-                        query.as_ref(),
-                        commit,
-                        is_selected,
-                    )
-                    .then_some(visible_ix)
-                })
-                .collect()
-        })
-    })
-}
-
-/// Moves the selection one row down, the way the Down key on the list would.
-fn select_next_row(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
-    cx.update(|_window, app| {
-        history_view(view, app).update(app, |history, cx| {
-            history.history_select_adjacent_commit(1, cx);
-        })
-    });
-    draw_and_park(cx);
-}
-
-#[gpui::test]
-fn history_find_selects_the_first_match_only_once_typing_settles(cx: &mut gpui::TestAppContext) {
+fn history_find_selects_the_first_match_once_typing_settles_or_on_enter(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
     cx.simulate_input("fix");
     draw_and_park(cx);
-    for _ in 0..10 {
-        std::thread::sleep(Duration::from_millis(10));
-        sync_view_with_store(cx, &view);
-        assert_eq!(
-            store_selected(&store),
-            None,
-            "nothing is selected while the query is still being typed"
-        );
-    }
+    assert_selection_settles_on(
+        cx,
+        &view,
+        &store,
+        None,
+        "nothing is selected while the query is still being typed",
+    );
     assert_eq!(
         dimmed_rows(cx, &view),
         vec![1, 3, 5],
         "rows fade with every keystroke, before the query settles"
     );
-
     settle_typing(cx);
     wait_for_selection(cx, &view, &store, "aaaa0000");
-}
 
-#[gpui::test]
-fn history_find_enter_while_typing_jumps_to_the_first_match(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-
-    open_find_with_shortcut(cx, &view);
-    cx.simulate_input("fix");
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("bob");
     cx.simulate_keystrokes("enter");
     draw_and_park(cx);
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-}
-
-#[gpui::test]
-fn history_find_label_reports_position_count_and_no_results(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-
-    open_find_with_shortcut(cx, &view);
-    assert_eq!(find_label(cx, &view), "0 results", "an empty query");
-
-    type_query(cx, "fix");
-    wait_for_selection(cx, &view, &store, "aaaa0000");
-    assert_eq!(find_label(cx, &view), "1 of 3");
-
-    cx.simulate_keystrokes("enter");
-    draw_and_park(cx);
-    wait_for_selection(cx, &view, &store, "cccc2222");
-    assert_eq!(find_label(cx, &view), "2 of 3");
-
-    // Off a match, the label counts the matches instead of placing one.
-    select_next_row(cx, &view);
-    wait_for_selection(cx, &view, &store, "dddd3333");
-    assert_eq!(find_label(cx, &view), "3 results");
-
-    retype_query(cx, "dddd3");
-    assert_eq!(
-        find_label(cx, &view),
-        "1 of 1",
-        "the only match is already selected"
-    );
-    select_next_row(cx, &view);
-    wait_for_selection(cx, &view, &store, "eeee4444");
-    assert_eq!(find_label(cx, &view), "1 result");
-
-    retype_query(cx, "zzz");
-    assert_eq!(find_label(cx, &view), "0 results");
+    wait_for_selection(cx, &view, &store, "bbbb1111");
 }
 
 #[gpui::test]
@@ -872,6 +735,32 @@ fn history_find_dims_misses_but_not_matches_or_the_selection(cx: &mut gpui::Test
         "with no matches everything but the selection fades"
     );
 
+    // An invalid regex is an error, not a query that misses every row.
+    click(cx, REGEX);
+    retype_query(cx, "fix(");
+    assert_eq!(find_label(cx, &view), "Invalid regex");
+    assert!(
+        find_status(cx, &view).is_error(),
+        "the label reads as an error"
+    );
+    assert_eq!(dimmed_rows(cx, &view), Vec::<usize>::new());
+    assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
+    assert!(
+        cx.update(|_window, app| {
+            history_view(&view, app).update(app, |history, cx| {
+                !history.history_find_step(true, cx) && !history.history_find_step(false, cx)
+            })
+        }),
+        "an invalid regex has nothing to step to"
+    );
+    assert_selection_settles_on(
+        cx,
+        &view,
+        &store,
+        Some("bbbb1111"),
+        "an invalid regex does not move the selection",
+    );
+
     cx.simulate_keystrokes("escape");
     draw_and_park(cx);
     assert!(!find_is_open(cx, &view));
@@ -885,9 +774,8 @@ fn history_find_dims_misses_but_not_matches_or_the_selection(cx: &mut gpui::Test
 #[test]
 fn row_dimming_follows_the_rows_own_text() {
     use crate::view::panes::history::find::history_find_row_dimmed;
-    use gitcomet_core::history_find::HistoryFindQuery;
 
-    let query = HistoryFindQuery::new("fix");
+    let query = HistoryFindQuery::new("fix", TextSearchOptions::default());
     let hit = authored("aaaa0000", "Fix login bug", "Alice");
     let miss = authored("bbbb1111", "Add feature", "Bob");
 
@@ -916,7 +804,6 @@ fn row_dimming_follows_the_rows_own_text() {
 // streaming scan can be looked at.
 
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::history_find::HistoryFindQuery;
 use gitcomet_core::history_index::{HistoryIndexBuilder, HistoryIndexHandle, HistoryRange};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot};
 use gitcomet_state::history_find::{HistoryFindChunk, HistoryFindMsg, HistoryFindState};
@@ -1036,10 +923,16 @@ fn on_find_scan_thread() -> bool {
         .is_none_or(|name| !name.starts_with("gitcomet-test-store"))
 }
 
-fn not_needed<T>() -> Result<T> {
-    Err(Error::new(ErrorKind::Unsupported(
-        "not needed by the history find tests",
-    )))
+/// Repository methods the find tests never reach.
+macro_rules! not_needed {
+    ($(fn $name:ident(&self $(, $arg:ident: $ty:ty)*) -> $ret:ty;)*) => {
+        $(fn $name(&self $(, $arg: $ty)*) -> Result<$ret> {
+            $(let _ = $arg;)*
+            Err(Error::new(ErrorKind::Unsupported(
+                "not needed by the history find tests",
+            )))
+        })*
+    };
 }
 
 impl GitRepository for IndexedFindRepo {
@@ -1086,80 +979,32 @@ impl GitRepository for IndexedFindRepo {
         })
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<Arc<LogPage>> {
-        not_needed()
-    }
-    fn commit_details(&self, _id: &CommitId) -> Result<gitcomet_core::domain::CommitDetails> {
-        not_needed()
-    }
-    fn reflog_head(&self, _limit: usize) -> Result<Vec<gitcomet_core::domain::ReflogEntry>> {
-        not_needed()
-    }
-    fn current_branch(&self) -> Result<String> {
-        not_needed()
-    }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        not_needed()
-    }
-    fn list_remotes(&self) -> Result<Vec<gitcomet_core::domain::Remote>> {
-        not_needed()
-    }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        not_needed()
-    }
-    fn status(&self) -> Result<gitcomet_core::domain::RepoStatus> {
-        not_needed()
-    }
-    fn diff_unified(&self, _target: &gitcomet_core::domain::DiffTarget) -> Result<String> {
-        not_needed()
-    }
-    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
-        not_needed()
-    }
-    fn delete_branch(&self, _name: &str) -> Result<()> {
-        not_needed()
-    }
-    fn checkout_branch(&self, _name: &str) -> Result<()> {
-        not_needed()
-    }
-    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-        not_needed()
-    }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        not_needed()
-    }
-    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
-        not_needed()
-    }
-    fn stash_list(&self) -> Result<Vec<gitcomet_core::domain::StashEntry>> {
-        not_needed()
-    }
-    fn stash_apply(&self, _index: usize) -> Result<()> {
-        not_needed()
-    }
-    fn stash_drop(&self, _index: usize) -> Result<()> {
-        not_needed()
-    }
-    fn stage(&self, _paths: &[&Path]) -> Result<()> {
-        not_needed()
-    }
-    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
-        not_needed()
-    }
-    fn commit(&self, _message: &str) -> Result<()> {
-        not_needed()
-    }
-    fn fetch_all(&self) -> Result<()> {
-        not_needed()
-    }
-    fn pull(&self, _mode: gitcomet_core::services::PullMode) -> Result<()> {
-        not_needed()
-    }
-    fn push(&self) -> Result<()> {
-        not_needed()
-    }
-    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
-        not_needed()
+    not_needed! {
+        fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Arc<LogPage>;
+        fn commit_details(&self, id: &CommitId) -> gitcomet_core::domain::CommitDetails;
+        fn reflog_head(&self, limit: usize) -> Vec<gitcomet_core::domain::ReflogEntry>;
+        fn current_branch(&self) -> String;
+        fn list_branches(&self) -> Vec<Branch>;
+        fn list_remotes(&self) -> Vec<gitcomet_core::domain::Remote>;
+        fn list_remote_branches(&self) -> Vec<RemoteBranch>;
+        fn status(&self) -> gitcomet_core::domain::RepoStatus;
+        fn diff_unified(&self, target: &gitcomet_core::domain::DiffTarget) -> String;
+        fn create_branch(&self, name: &str, target: &CommitId) -> ();
+        fn delete_branch(&self, name: &str) -> ();
+        fn checkout_branch(&self, name: &str) -> ();
+        fn checkout_commit(&self, id: &CommitId) -> ();
+        fn cherry_pick(&self, id: &CommitId) -> ();
+        fn stash_create(&self, message: &str, include_untracked: bool) -> ();
+        fn stash_list(&self) -> Vec<gitcomet_core::domain::StashEntry>;
+        fn stash_apply(&self, index: usize) -> ();
+        fn stash_drop(&self, index: usize) -> ();
+        fn stage(&self, paths: &[&Path]) -> ();
+        fn unstage(&self, paths: &[&Path]) -> ();
+        fn commit(&self, message: &str) -> ();
+        fn fetch_all(&self) -> ();
+        fn pull(&self, mode: gitcomet_core::services::PullMode) -> ();
+        fn push(&self) -> ();
+        fn discard_worktree_changes(&self, paths: &[&Path]) -> ();
     }
 }
 
@@ -1227,20 +1072,17 @@ fn mount_indexed_find_fixture(
             .as_ref()
             .is_some_and(|shown| Arc::ptr_eq(shown, &index))
     });
-    cx.update(|window, app| {
-        let focus = history_view(&view, app)
-            .read(app)
-            .history_panel_focus_handle
-            .clone();
-        window.focus(&focus, app);
-        let _ = window.draw(app);
-    });
-    cx.run_until_parked();
+    focus_history_panel(cx, &view);
     (view, store, cx, backend)
 }
 
 fn store_find(store: &AppStore) -> HistoryFindState {
     store.snapshot().repos[0].history_state.find.clone()
+}
+
+/// `text` with the default options, as the store would hold it.
+fn plain_query(text: &str) -> Option<HistoryFindQuery> {
+    HistoryFindQuery::new(text, TextSearchOptions::default())
 }
 
 /// Waits for the view's request for `query` to reach the store and returns
@@ -1249,14 +1091,25 @@ fn wait_for_find_request(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,
     store: &AppStore,
-    query: &str,
+    query: Option<HistoryFindQuery>,
 ) -> u64 {
-    let query = HistoryFindQuery::new(query);
     wait_until(cx, "the search request", |cx| {
         sync_view_with_store(cx, view);
         store_find(store).query == query
     });
     store_find(store).generation()
+}
+
+/// Opens the bar, types `text` and waits for the store to be asked for it.
+fn open_and_find(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    store: &AppStore,
+    text: &str,
+) -> u64 {
+    open_find_with_shortcut(cx, view);
+    type_query(cx, text);
+    wait_for_find_request(cx, view, store, plain_query(text))
 }
 
 /// Reports what a scan would, for the current search, and lets the view see it.
@@ -1297,6 +1150,9 @@ fn report_matches(
     );
 }
 
+/// Every raw row matching "fix", as a finished scan reports them.
+const ALL_FIX_ROWS: [usize; 4] = [0, 5, STASH_HELPER_ROW, FAR_FIX_ROW];
+
 #[derive(Debug, PartialEq, Eq)]
 struct IndexedFindStatus {
     matches: Vec<usize>,
@@ -1335,6 +1191,20 @@ fn found(matches: &[usize], complete: bool) -> Option<IndexedFindStatus> {
     })
 }
 
+fn failed(matches: &[usize]) -> Option<IndexedFindStatus> {
+    Some(IndexedFindStatus {
+        matches: matches.to_vec(),
+        complete: true,
+        pending: false,
+        failed: true,
+    })
+}
+
+/// The visible rows of every "fix" match.
+fn all_fix_visible() -> Vec<usize> {
+    vec![0, 5, indexed_visible(FAR_FIX_ROW)]
+}
+
 /// Loaded indexed rows in `rows` drawn faded, by the rule the row renderer uses.
 fn indexed_dimmed_rows(
     cx: &mut gpui::VisualTestContext,
@@ -1352,7 +1222,7 @@ fn indexed_dimmed_rows(
                 .window
                 .as_ref()
                 .expect("the indexed rows should be built");
-            let dimmed: Vec<usize> = window
+            window
                 .cache
                 .page
                 .commits
@@ -1360,17 +1230,16 @@ fn indexed_dimmed_rows(
                 .enumerate()
                 .filter(|(ix, _)| window.loaded.get(*ix).copied().unwrap_or(false))
                 .map(|(ix, commit)| (window.start + ix, commit))
-                .filter(|(visible_ix, _)| rows.contains(visible_ix))
-                .filter(|(_, commit)| {
-                    crate::view::panes::history::find::history_find_row_dimmed(
-                        query.as_ref(),
-                        commit,
-                        selected.as_ref() == Some(&commit.id),
-                    )
+                .filter(|(visible_ix, commit)| {
+                    rows.contains(visible_ix)
+                        && crate::view::panes::history::find::history_find_row_dimmed(
+                            query.as_ref(),
+                            commit,
+                            selected.as_ref() == Some(&commit.id),
+                        )
                 })
                 .map(|(visible_ix, _)| visible_ix)
-                .collect();
-            dimmed
+                .collect()
         })
     })
 }
@@ -1435,17 +1304,20 @@ fn assert_indexed_row_centred(
     );
 }
 
-/// Presses `keys` in the find input and waits for raw row `row` to be selected.
+/// Presses `keys` in the find input, waits for raw row `row` to be selected
+/// and checks the match label.
 fn step_to(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,
     store: &AppStore,
     keys: &str,
     row: usize,
+    label: &str,
 ) {
     cx.simulate_keystrokes(keys);
     draw_and_park(cx);
     wait_for_selection(cx, view, store, &indexed_find_id(row));
+    assert_eq!(find_label(cx, view), label, "after {keys} to row {row}");
 }
 
 #[gpui::test]
@@ -1467,15 +1339,15 @@ fn indexed_history_find_scans_the_whole_index_and_selects_the_first_match(
     assert!(results.error.is_none(), "{:?}", results.error);
     assert_eq!(
         results.match_rows().collect::<Vec<_>>(),
-        vec![0, 5, STASH_HELPER_ROW, FAR_FIX_ROW],
+        ALL_FIX_ROWS,
         "the scan reads every indexed row, the hidden stash helper included"
     );
     assert_eq!(
         indexed_find_status(cx, &view),
-        found(&[0, 5, indexed_visible(FAR_FIX_ROW)], true),
+        found(&all_fix_visible(), true),
         "the hidden stash helper is not a match in the list"
     );
-    assert_eq!(find_label(cx, &view), "1 of 3");
+    assert_eq!(find_label(cx, &view), "1/3");
     assert_eq!(backend.scans_started(), 1);
 
     // An answered search is not asked for again on later frames.
@@ -1486,38 +1358,36 @@ fn indexed_history_find_scans_the_whole_index_and_selects_the_first_match(
     assert_eq!(store_find(&store).generation(), generation);
     assert_eq!(backend.scans_started(), 1, "the finished scan was repeated");
 
-    step_to(cx, &view, &store, "enter", 5);
-    assert_eq!(find_label(cx, &view), "2 of 3");
-    step_to(cx, &view, &store, "enter", FAR_FIX_ROW);
-    assert_eq!(find_label(cx, &view), "3 of 3");
+    step_to(cx, &view, &store, "enter", 5, "2/3");
+    step_to(cx, &view, &store, "enter", FAR_FIX_ROW, "3/3");
     assert_indexed_row_centred(
         cx,
         &view,
         indexed_visible(FAR_FIX_ROW),
         "a match below the viewport is scrolled to the middle",
     );
-    step_to(cx, &view, &store, "enter", 0);
-    assert_eq!(find_label(cx, &view), "1 of 3", "enter wraps to the top");
-    assert!(indexed_row_in_view(cx, &view, 0));
+    step_to(cx, &view, &store, "enter", 0, "1/3");
+    assert!(indexed_row_in_view(cx, &view, 0), "enter wraps to the top");
     assert!(find_input_is_focused(cx, &view));
 }
 
+/// The first chunk selects the first match; a later chunk extends the
+/// matches without moving the selection, and stepping reaches it.
 #[gpui::test]
-fn indexed_history_find_selects_the_first_match_from_the_first_chunk(
+fn indexed_history_find_selects_from_the_first_chunk_and_steps_across_chunks(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_find_request(cx, &view, &store, "fix");
+    open_and_find(cx, &view, &store, "fix");
     wait_until(cx, "the scan to start", |_| backend.scans_started() == 1);
     assert_eq!(
         indexed_find_status(cx, &view),
         found(&[], false),
         "nothing is known until the scan reports"
     );
+    assert_eq!(find_label(cx, &view), "Searching…");
     assert_eq!(store_selected(&store), None);
 
     report_matches(cx, &view, &store, &[0, 5, STASH_HELPER_ROW], false);
@@ -1527,91 +1397,47 @@ fn indexed_history_find_selects_the_first_match_from_the_first_chunk(
         found(&[0, 5], false),
         "the stash helper the scan reported is hidden, so it is not counted"
     );
-    assert_eq!(
-        find_label(cx, &view),
-        "1 of 2+",
-        "the scan is still running"
-    );
-
-    report_matches(cx, &view, &store, &[FAR_FIX_ROW], true);
-    assert_eq!(
-        indexed_find_status(cx, &view),
-        found(&[0, 5, indexed_visible(FAR_FIX_ROW)], true)
-    );
-    assert_eq!(find_label(cx, &view), "1 of 3", "the scan is done");
-    assert_selection_settles_on(
-        cx,
-        &view,
-        &store,
-        &indexed_find_id(0),
-        "later chunks do not move the selection",
-    );
-}
-
-#[gpui::test]
-fn indexed_history_find_steps_across_streamed_chunks_and_wraps(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
-
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_find_request(cx, &view, &store, "fix");
-    report_matches(cx, &view, &store, &[0, 5, STASH_HELPER_ROW], false);
-    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
+    assert_eq!(find_label(cx, &view), "1/2+", "the scan is still running");
 
     // A match already on screen is selected without scrolling the list.
     assert!(indexed_row_in_view(cx, &view, 5));
     let position = indexed_viewport(cx, &view).0;
-    step_to(cx, &view, &store, "enter", 5);
-    assert_eq!(find_label(cx, &view), "2 of 2+");
+    step_to(cx, &view, &store, "enter", 5, "2/2+");
     assert_eq!(indexed_viewport(cx, &view).0, position);
     // Only the first chunk is known yet, so stepping wraps within it.
-    step_to(cx, &view, &store, "enter", 0);
-    assert_eq!(find_label(cx, &view), "1 of 2+");
+    step_to(cx, &view, &store, "enter", 0, "1/2+");
 
-    let first_chunk = indexed_find_status(cx, &view).unwrap().matches;
     report_matches(cx, &view, &store, &[FAR_FIX_ROW], true);
-    let status = indexed_find_status(cx, &view).unwrap();
     assert_eq!(
-        status.matches[..first_chunk.len()],
-        first_chunk[..],
-        "a later chunk extends the matches already mapped"
+        indexed_find_status(cx, &view),
+        found(&all_fix_visible(), true)
     );
-    assert_eq!(
-        status,
-        found(&[0, 5, indexed_visible(FAR_FIX_ROW)], true).unwrap()
+    assert_eq!(find_label(cx, &view), "1/3", "the scan is done");
+    assert_selection_settles_on(
+        cx,
+        &view,
+        &store,
+        Some(&indexed_find_id(0)),
+        "later chunks do not move the selection",
     );
-    assert_eq!(find_label(cx, &view), "1 of 3");
 
-    step_to(cx, &view, &store, "f3", 5);
-    assert_eq!(find_label(cx, &view), "2 of 3");
-    step_to(cx, &view, &store, "f3", FAR_FIX_ROW);
-    assert_eq!(
-        find_label(cx, &view),
-        "3 of 3",
-        "stepping reaches the match from the second chunk"
-    );
+    step_to(cx, &view, &store, "f3", 5, "2/3");
+    step_to(cx, &view, &store, "f3", FAR_FIX_ROW, "3/3");
     assert_indexed_row_centred(
         cx,
         &view,
         indexed_visible(FAR_FIX_ROW),
-        "an off-screen match is centred",
+        "an off-screen match from the second chunk is centred",
     );
-    step_to(cx, &view, &store, "f3", 0);
-    assert_eq!(find_label(cx, &view), "1 of 3", "f3 wraps to the top");
-    assert!(indexed_row_in_view(cx, &view, 0));
-
-    step_to(cx, &view, &store, "shift-enter", FAR_FIX_ROW);
-    assert_eq!(
-        find_label(cx, &view),
-        "3 of 3",
+    step_to(cx, &view, &store, "f3", 0, "1/3");
+    assert!(indexed_row_in_view(cx, &view, 0), "f3 wraps to the top");
+    step_to(cx, &view, &store, "shift-enter", FAR_FIX_ROW, "3/3");
+    assert!(
+        indexed_row_in_view(cx, &view, indexed_visible(FAR_FIX_ROW)),
         "shift-enter wraps to the end"
     );
-    assert!(indexed_row_in_view(cx, &view, indexed_visible(FAR_FIX_ROW)));
-    step_to(cx, &view, &store, "f2", 5);
-    assert_eq!(find_label(cx, &view), "2 of 3");
-    step_to(cx, &view, &store, "shift-enter", 0);
-    assert_eq!(find_label(cx, &view), "1 of 3");
+    step_to(cx, &view, &store, "f2", 5, "2/3");
+    step_to(cx, &view, &store, "shift-enter", 0, "1/3");
     assert!(find_input_is_focused(cx, &view));
 }
 
@@ -1633,59 +1459,42 @@ fn indexed_history_find_ignores_matches_on_hidden_stash_helper_rows(cx: &mut gpu
         assert_eq!(projection.visible_position(STASH_ROW), Some(STASH_ROW));
     });
 
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "helper");
-    wait_for_find_request(cx, &view, &store, "helper");
+    open_and_find(cx, &view, &store, "helper");
     report_matches(cx, &view, &store, &[STASH_HELPER_ROW], true);
     assert_eq!(
         indexed_find_status(cx, &view),
         found(&[], true),
         "a match on a hidden row is not shown"
     );
-    assert_eq!(find_label(cx, &view), "0 results");
-    assert_selection_settles_on_nothing(cx, &view, &store);
+    assert_eq!(find_label(cx, &view), "No matches");
+    assert_selection_settles_on(cx, &view, &store, None, "nothing to select");
 
     // Rows below the hidden helper are counted at their shown positions.
     retype_query(cx, "fix");
-    wait_for_find_request(cx, &view, &store, "fix");
+    wait_for_find_request(cx, &view, &store, plain_query("fix"));
     report_matches(cx, &view, &store, &[STASH_HELPER_ROW, FAR_FIX_ROW], true);
     wait_for_selection(cx, &view, &store, &indexed_find_id(FAR_FIX_ROW));
     assert_eq!(
         indexed_find_status(cx, &view),
         found(&[FAR_FIX_ROW - 1], true)
     );
-    assert_eq!(find_label(cx, &view), "1 of 1");
+    assert_eq!(find_label(cx, &view), "1/1");
 }
 
-fn assert_selection_settles_on_nothing(
-    cx: &mut gpui::VisualTestContext,
-    view: &gpui::Entity<GitCometView>,
-    store: &AppStore,
-) {
-    for _ in 0..10 {
-        std::thread::sleep(Duration::from_millis(10));
-        sync_view_with_store(cx, view);
-        assert_eq!(store_selected(store), None, "nothing should be selected");
-    }
-}
-
+/// A query edit fades rows by the new query at once, while the label holds
+/// the last answer, through the settle delay and the new scan's silence,
+/// until that scan reports.
 #[gpui::test]
-fn indexed_history_find_edit_holds_the_count_and_dims_rows_at_once(cx: &mut gpui::TestAppContext) {
+fn indexed_history_find_edit_dims_at_once_and_holds_the_label_until_answered(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_find_request(cx, &view, &store, "fix");
-    report_matches(
-        cx,
-        &view,
-        &store,
-        &[0, 5, STASH_HELPER_ROW, FAR_FIX_ROW],
-        true,
-    );
+    open_and_find(cx, &view, &store, "fix");
+    report_matches(cx, &view, &store, &ALL_FIX_ROWS, true);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
-    assert_eq!(find_label(cx, &view), "1 of 3");
+    assert_eq!(find_label(cx, &view), "1/3");
     assert_eq!(
         indexed_dimmed_rows(cx, &view, 0..12),
         vec![1, 2, 3, 4, 6, 7, 8, 9, 10, 11]
@@ -1697,15 +1506,15 @@ fn indexed_history_find_edit_holds_the_count_and_dims_rows_at_once(cx: &mut gpui
     cx.simulate_input("bob");
     draw_and_park(cx);
     sync_view_with_store(cx, &view);
-    assert_eq!(store_find(&store).query, HistoryFindQuery::new("fix"));
+    assert_eq!(store_find(&store).query, plain_query("fix"));
     assert_eq!(
         indexed_find_status(cx, &view).map(|status| status.pending),
         Some(true)
     );
     assert_eq!(
         find_label(cx, &view),
-        "1 of 3",
-        "the last count is held instead of flashing \"Searching…\""
+        "1/3",
+        "the last label is held instead of flashing \"Searching…\""
     );
     assert_eq!(
         indexed_dimmed_rows(cx, &view, 0..12),
@@ -1713,45 +1522,18 @@ fn indexed_history_find_edit_holds_the_count_and_dims_rows_at_once(cx: &mut gpui
         "rows fade by the new query at once; the selected row stays bright"
     );
 
-    settle_typing(cx);
-    wait_for_find_request(cx, &view, &store, "bob");
-    report_matches(cx, &view, &store, &[2, 7], true);
-    wait_for_selection(cx, &view, &store, &indexed_find_id(2));
-    assert_eq!(indexed_find_status(cx, &view), found(&[2, 7], true));
-    assert_eq!(find_label(cx, &view), "1 of 2");
-}
-
-#[gpui::test]
-fn indexed_history_find_holds_the_count_until_the_new_scan_answers(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
-
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_find_request(cx, &view, &store, "fix");
-    report_matches(
-        cx,
-        &view,
-        &store,
-        &[0, 5, STASH_HELPER_ROW, FAR_FIX_ROW],
-        true,
-    );
-    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
-    assert_eq!(find_label(cx, &view), "1 of 3");
-
     // The store has taken the new query, but its scan has not reported yet.
-    retype_query(cx, "bob");
-    wait_for_find_request(cx, &view, &store, "bob");
+    settle_typing(cx);
+    wait_for_find_request(cx, &view, &store, plain_query("bob"));
     draw_and_park(cx);
-    assert_eq!(
-        find_label(cx, &view),
-        "1 of 3",
-        "the last count is held until the new scan answers, not \"Searching…\""
-    );
+    assert_eq!(find_label(cx, &view), "1/3", "held until the scan answers");
 
     report_matches(cx, &view, &store, &[2], false);
     wait_for_selection(cx, &view, &store, &indexed_find_id(2));
-    assert_eq!(find_label(cx, &view), "1 of 1+");
+    assert_eq!(find_label(cx, &view), "1/1+");
+    report_matches(cx, &view, &store, &[7], true);
+    assert_eq!(indexed_find_status(cx, &view), found(&[2, 7], true));
+    assert_eq!(find_label(cx, &view), "1/2");
 }
 
 /// `HistoryFindState::interrupt` (run when the repository's loads are
@@ -1766,13 +1548,10 @@ fn indexed_history_find_asks_again_when_an_unfinished_scan_is_dropped(
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    let generation = wait_for_find_request(cx, &view, &store, "fix");
+    let generation = open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &[0, 5], false);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
-    step_to(cx, &view, &store, "enter", 5);
-    assert_eq!(find_label(cx, &view), "2 of 2+");
+    step_to(cx, &view, &store, "enter", 5, "2/2+");
     wait_until(cx, "the first scan", |_| backend.scans_started() == 1);
 
     store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
@@ -1783,30 +1562,121 @@ fn indexed_history_find_asks_again_when_an_unfinished_scan_is_dropped(
     wait_until(cx, "the search to be asked for again", |cx| {
         sync_view_with_store(cx, &view);
         let results = store_find(&store);
-        results.query == HistoryFindQuery::new("fix") && results.generation() == generation + 2
+        results.query == plain_query("fix") && results.generation() == generation + 2
     });
     wait_until(cx, "the scan to restart", |_| backend.scans_started() == 2);
     assert!(store_find(&store).matches.is_empty());
 
-    report_matches(
-        cx,
-        &view,
-        &store,
-        &[0, 5, STASH_HELPER_ROW, FAR_FIX_ROW],
-        true,
-    );
+    report_matches(cx, &view, &store, &ALL_FIX_ROWS, true);
     assert_eq!(
         indexed_find_status(cx, &view),
-        found(&[0, 5, indexed_visible(FAR_FIX_ROW)], true)
+        found(&all_fix_visible(), true)
     );
     assert_selection_settles_on(
         cx,
         &view,
         &store,
-        &indexed_find_id(5),
+        Some(&indexed_find_id(5)),
         "the restarted search does not jump back to the first match",
     );
-    assert_eq!(find_label(cx, &view), "2 of 3");
+    assert_eq!(find_label(cx, &view), "2/3");
+}
+
+/// Toggling an option is a new query: the running scan is cancelled and a
+/// new one starts with the new options, and its first match is selected.
+#[gpui::test]
+fn indexed_history_find_option_toggles_restart_the_scan(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+
+    let generation = open_and_find(cx, &view, &store, "fix");
+    wait_until(cx, "the first scan", |_| backend.scans_started() == 1);
+    report_matches(cx, &view, &store, &[0, 5], false);
+    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
+
+    let match_case = TextSearchOptions {
+        match_case: true,
+        ..TextSearchOptions::default()
+    };
+    click(cx, MATCH_CASE);
+    assert!(find_input_is_focused(cx, &view), "the toggle keeps focus");
+    let restarted =
+        wait_for_find_request(cx, &view, &store, HistoryFindQuery::new("fix", match_case));
+    assert!(restarted > generation);
+    // The scan worker is a single thread, and a held scan ends only once
+    // cancelled, so a second scan starting means the first was cancelled.
+    wait_until(cx, "the scan to restart", |_| backend.scans_started() == 2);
+    assert_eq!(
+        find_label(cx, &view),
+        "1/2+",
+        "the last label is held until the new scan answers"
+    );
+
+    report_matches(cx, &view, &store, &[5], true);
+    wait_for_selection(cx, &view, &store, &indexed_find_id(5));
+    assert_eq!(find_label(cx, &view), "1/1");
+
+    // Whole word and regex restart it too.
+    for (toggle, options) in [
+        (
+            WHOLE_WORD,
+            TextSearchOptions {
+                whole_word: true,
+                ..match_case
+            },
+        ),
+        (
+            REGEX,
+            TextSearchOptions {
+                whole_word: true,
+                regex: true,
+                ..match_case
+            },
+        ),
+    ] {
+        let scans = backend.scans_started();
+        click(cx, toggle);
+        wait_for_find_request(cx, &view, &store, HistoryFindQuery::new("fix", options));
+        wait_until(cx, "the scan to restart", |_| {
+            backend.scans_started() == scans + 1
+        });
+    }
+}
+
+/// An invalid regex is reported as such and never searched for: no request
+/// reaches the store, no scan starts, nothing fades and nothing is selected.
+#[gpui::test]
+fn indexed_history_find_does_not_search_an_invalid_regex(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+
+    open_find_with_shortcut(cx, &view);
+    let before = store_find(&store).rev;
+    click(cx, REGEX);
+    type_query(cx, "fix(");
+    for _ in 0..5 {
+        sync_view_with_store(cx, &view);
+    }
+    assert_eq!(find_label(cx, &view), "Invalid regex");
+    assert!(find_status(cx, &view).is_error());
+    assert_eq!(indexed_find_status(cx, &view), None);
+    assert_eq!(store_find(&store).query, None, "no search was asked for");
+    assert_eq!(store_find(&store).rev, before, "no Find reached the store");
+    assert_eq!(backend.scans_started(), 0);
+    assert_eq!(indexed_dimmed_rows(cx, &view, 0..12), Vec::<usize>::new());
+    cx.simulate_keystrokes("enter");
+    draw_and_park(cx);
+    assert_selection_settles_on(cx, &view, &store, None, "no jump, no step");
+
+    // Completing the pattern searches it.
+    cx.simulate_input(")");
+    settle_typing(cx);
+    let regex = TextSearchOptions {
+        regex: true,
+        ..TextSearchOptions::default()
+    };
+    wait_for_find_request(cx, &view, &store, HistoryFindQuery::new("fix()", regex));
+    wait_until(cx, "the scan to start", |_| backend.scans_started() == 1);
 }
 
 #[gpui::test]
@@ -1822,17 +1692,10 @@ fn indexed_history_find_reports_a_failed_scan(cx: &mut gpui::TestAppContext) {
     });
     draw_and_park(cx);
     assert_eq!(backend.scans_started(), 1);
-    assert_eq!(
-        indexed_find_status(cx, &view),
-        Some(IndexedFindStatus {
-            matches: Vec::new(),
-            complete: true,
-            pending: false,
-            failed: true,
-        })
-    );
+    assert_eq!(indexed_find_status(cx, &view), failed(&[]));
     assert_eq!(find_label(cx, &view), "Search failed");
-    assert_selection_settles_on_nothing(cx, &view, &store);
+    assert!(find_status(cx, &view).is_error());
+    assert_selection_settles_on(cx, &view, &store, None, "nothing to select");
 }
 
 #[gpui::test]
@@ -1840,9 +1703,7 @@ fn indexed_history_find_keeps_partial_matches_after_a_failure(cx: &mut gpui::Tes
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
-    open_find_with_shortcut(cx, &view);
-    type_query(cx, "fix");
-    wait_for_find_request(cx, &view, &store, "fix");
+    open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &[0, 5], false);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
 
@@ -1852,20 +1713,8 @@ fn indexed_history_find_keeps_partial_matches_after_a_failure(cx: &mut gpui::Tes
         &store,
         Err(Error::new(ErrorKind::Backend("history read failed".into()))),
     );
-    assert_eq!(
-        indexed_find_status(cx, &view),
-        Some(IndexedFindStatus {
-            matches: vec![0, 5],
-            complete: true,
-            pending: false,
-            failed: true,
-        })
-    );
+    assert_eq!(indexed_find_status(cx, &view), failed(&[0, 5]));
     assert_eq!(find_label(cx, &view), "Search failed");
-    step_to(cx, &view, &store, "enter", 5);
-    assert_eq!(
-        find_label(cx, &view),
-        "Search failed",
-        "the matches found before the failure can still be stepped through"
-    );
+    // The matches found before the failure can still be stepped through.
+    step_to(cx, &view, &store, "enter", 5, "Search failed");
 }
