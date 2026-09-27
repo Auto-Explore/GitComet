@@ -1036,7 +1036,7 @@ pub struct GitCometView {
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
-    pub(super) pending_repo_open_reservations: FxHashMap<std::path::PathBuf, u64>,
+    pub(super) pending_repo_open_reservations: FxHashMap<std::path::PathBuf, PendingRepoOpen>,
     pub(super) pending_repo_open_active: Option<std::path::PathBuf>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,

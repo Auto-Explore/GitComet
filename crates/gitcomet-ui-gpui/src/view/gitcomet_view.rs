@@ -1157,7 +1157,13 @@ impl GitCometView {
                 .get(path)
                 .copied()
                 .unwrap_or_default();
-            pending_repo_open_reservations.insert(path.clone(), failure_revision);
+            pending_repo_open_reservations.insert(
+                path.clone(),
+                PendingRepoOpen {
+                    failure_revision,
+                    persist_in_workspace: true,
+                },
+            );
             pending_repo_open_active = Some(path.clone());
         }
         let should_auto_restore = !crate::startup_probe::disable_auto_restore()

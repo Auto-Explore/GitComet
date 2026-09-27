@@ -58,41 +58,51 @@ fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
 impl GitCometView {
     pub(super) fn sync_workspace_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
         let session_repos = session::snapshot_repos_from_state(self.state.as_ref());
-        let live_repo_paths = session_repos
+        let session_repo_paths = session_repos
             .open_repos
             .iter()
             .map(|path| session::path_from_storage_key(path))
             .collect::<Vec<_>>();
-        let live_active_repository = session_repos
+        let session_active_repository = session_repos
             .active_repo_index
-            .and_then(|index| live_repo_paths.get(index).cloned());
+            .and_then(|index| session_repo_paths.get(index).cloned());
+        let mut live_repo_paths: Vec<_> = self
+            .state
+            .repos
+            .iter()
+            .map(|repo| repo.spec.workdir.clone())
+            .collect();
 
-        self.pending_repo_open_reservations
-            .retain(|path, failure_revision| {
-                !live_repo_paths.contains(path)
-                    && self
-                        .state
-                        .repo_open_failures
-                        .get(path)
-                        .copied()
-                        .unwrap_or_default()
-                        == *failure_revision
-            });
+        // Reservations read the latest store snapshot; the view can still be
+        // behind it when a failed open is retried.
+        self.pending_repo_open_reservations.retain(|path, pending| {
+            !live_repo_paths.contains(path)
+                && self
+                    .state
+                    .repo_open_failures
+                    .get(path)
+                    .copied()
+                    .unwrap_or_default()
+                    <= pending.failure_revision
+        });
         if self
             .pending_repo_open_active
             .as_ref()
             .is_some_and(|path| !self.pending_repo_open_reservations.contains_key(path))
         {
-            self.pending_repo_open_active =
-                self.pending_repo_open_reservations.keys().next().cloned();
+            self.pending_repo_open_active = self
+                .pending_repo_open_reservations
+                .iter()
+                .find(|(_, pending)| pending.persist_in_workspace)
+                .map(|(path, _)| path.clone());
         }
 
         // Use the same filtered snapshot as session persistence so provisional
         // external drops never become durable workspace members. A restored
         // repository may still be loading (or temporarily unavailable), so
         // retain its saved membership until bootstrap resolves.
-        if !live_repo_paths.is_empty() || !self.startup_repo_bootstrap_pending {
-            if live_repo_paths.is_empty() && !self.persisted_workspace_repo_paths.is_empty() {
+        if !session_repo_paths.is_empty() || !self.startup_repo_bootstrap_pending {
+            if session_repo_paths.is_empty() && !self.persisted_workspace_repo_paths.is_empty() {
                 // Entering Home: the store records these as recent in the
                 // background, so promote them here rather than race that write.
                 self.refresh_home_repositories();
@@ -101,20 +111,24 @@ impl GitCometView {
                 }
                 self.home_selected = None;
                 self.defer_home_search_focus(true, cx);
-            } else if !live_repo_paths.is_empty() && self.persisted_workspace_repo_paths.is_empty()
+            } else if !session_repo_paths.is_empty()
+                && self.persisted_workspace_repo_paths.is_empty()
             {
                 // Leaving Home: gpui keeps focus on an unmounted element, which
                 // would then be a stale restore target for the palette.
                 self.defer_home_search_focus(false, cx);
             }
-            self.persisted_workspace_repo_paths = live_repo_paths;
-            self.persisted_workspace_active_repository = live_active_repository;
+            self.persisted_workspace_repo_paths = session_repo_paths;
+            self.persisted_workspace_active_repository = session_active_repository;
         }
 
-        let mut synchronized_repo_paths = self.persisted_workspace_repo_paths.clone();
-        for path in self.pending_repo_open_reservations.keys() {
-            if !synchronized_repo_paths.contains(path) {
-                synchronized_repo_paths.push(path.clone());
+        let mut workspace_repo_paths = self.persisted_workspace_repo_paths.clone();
+        for (path, pending) in &self.pending_repo_open_reservations {
+            if pending.persist_in_workspace && !workspace_repo_paths.contains(path) {
+                workspace_repo_paths.push(path.clone());
+            }
+            if !live_repo_paths.contains(path) {
+                live_repo_paths.push(path.clone());
             }
         }
         let synchronized_active_repository = self
@@ -122,13 +136,28 @@ impl GitCometView {
             .clone()
             .or_else(|| self.persisted_workspace_active_repository.clone());
 
-        // Share the effective membership, including pending opens and saved
-        // bootstrap paths, until that membership actually changes.
-        if self.synced_repo_paths.as_ref() != synchronized_repo_paths.as_slice() {
-            self.synced_repo_paths = synchronized_repo_paths.into();
+        // Saved bootstrap paths own their window before their tabs load too.
+        for path in &workspace_repo_paths {
+            if !live_repo_paths.contains(path) {
+                live_repo_paths.push(path.clone());
+            }
         }
-
-        self.workspace_id = crate::app::sync_gitcomet_window_state(
+        self.workspace_id = if self.view_mode == GitCometViewMode::Normal {
+            crate::workspaces::sync_window(
+                cx,
+                self.window_handle.window_id(),
+                self.workspace_id,
+                workspace_repo_paths,
+                synchronized_active_repository,
+            )
+        } else {
+            None
+        };
+        // Live routing includes provisional tabs; durable membership above does not.
+        if self.synced_repo_paths.as_ref() != live_repo_paths.as_slice() {
+            self.synced_repo_paths = live_repo_paths.into();
+        }
+        crate::app::sync_gitcomet_window_registry(
             cx,
             self.window_handle,
             cx.weak_entity(),
@@ -136,7 +165,6 @@ impl GitCometView {
             self.view_mode,
             self.workspace_id,
             Arc::clone(&self.synced_repo_paths),
-            synchronized_active_repository,
         );
         self.sync_workspace_theme_override(cx);
         if let Some(placement) = self.window_placement.clone() {

@@ -208,6 +208,15 @@ impl GitCometView {
     ) {
         if self.repo_id_for_path(&path).is_some() {
             self.activate_repo_path(&path, cx);
+        } else if self
+            .pending_repo_open_reservations
+            .get(&path)
+            .is_some_and(|pending| !pending.persist_in_workspace)
+        {
+            // Select the queued drop without treating its unvalidated path as
+            // a normal open before the view catches up.
+            self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+            cx.notify();
         } else {
             self.open_repo_path_locally(path, cx);
         }
@@ -327,6 +336,7 @@ impl GitCometView {
         path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.reserve_pending_repo_open(&path, true, cx);
         if self.store.snapshot().git_runtime.is_available() {
             self.store.dispatch(Msg::OpenRepo(path));
         } else {
@@ -341,11 +351,19 @@ impl GitCometView {
         path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.reserve_pending_repo_open(&path, false, cx);
         self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
         cx.notify();
     }
 
-    pub(crate) fn reserve_pending_repo_open(&mut self, path: &std::path::Path) {
+    /// Publish ownership before the store reduces the open. Normal opens also
+    /// reserve durable membership so a move can safely detach its source.
+    fn reserve_pending_repo_open(
+        &mut self,
+        path: &std::path::Path,
+        persist_in_workspace: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let failure_revision = self
             .store
             .snapshot()
@@ -355,8 +373,14 @@ impl GitCometView {
             .unwrap_or_default();
         self.pending_repo_open_reservations
             .entry(path.to_path_buf())
-            .or_insert(failure_revision);
-        self.pending_repo_open_active = Some(path.to_path_buf());
+            .or_insert(PendingRepoOpen {
+                failure_revision,
+                persist_in_workspace,
+            });
+        if persist_in_workspace {
+            self.pending_repo_open_active = Some(path.to_path_buf());
+        }
+        self.sync_workspace_and_registry(cx);
     }
 
     /// Take `workspace` as this (empty) window's workspace. The window keeps

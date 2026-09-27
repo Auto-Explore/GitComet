@@ -674,6 +674,13 @@ pub(crate) enum FocusedMergetoolBootstrapAction {
     Complete,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct PendingRepoOpen {
+    pub(in crate::view) failure_revision: u64,
+    /// External drops own their path immediately, but are saved only after validation.
+    pub(in crate::view) persist_in_workspace: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DeferredRepoBootstrap {
     RestoreSession {
