@@ -3248,3 +3248,323 @@ fn file_preview_click_lights_every_use_of_a_name_in_a_script(cx: &mut gpui::Test
 
     std::fs::remove_dir_all(&workdir).expect("cleanup preview script fixture");
 }
+
+/// `helpers.ts` as another program left it while the preview showed a different
+/// file; `helpers_ts_before_insert` is the file as first shown.
+const HELPERS_TS_AFTER_INSERT: &str = crate::view::test_support::TS_COMPILER_OPTIONS_HELPERS;
+
+/// The same file without rows 14-15.
+fn helpers_ts_before_insert() -> String {
+    HELPERS_TS_AFTER_INSERT
+        .split('\n')
+        .filter(|line| !line.contains("alwaysStrict=false") && !line.contains("ignoreDeprecations"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn select_untracked_preview_file(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &Path,
+    file_rel: &Path,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.to_path_buf(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+}
+
+/// Shows `text` from disk at `path` with its parse applied to every row.
+fn wait_for_parsed_untracked_preview(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    path: &Path,
+    text: &str,
+) {
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        view,
+        &format!("parsed preview of {}", path.display()),
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.worktree_preview_path.as_deref() == Some(path)
+                && pane.worktree_preview_text.as_ref() == text
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+                && (0..text.split('\n').count())
+                    .all(|ix| pane.worktree_preview_segments_cache_get(ix).is_some())
+        },
+        |pane| {
+            (
+                pane.worktree_preview_path.clone(),
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_prepared_syntax_document(),
+            )
+        },
+    );
+}
+
+fn select_with_ready_untracked_preview(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &Path,
+    file_rel: &Path,
+    text: &str,
+) {
+    select_untracked_preview_file(cx, view, repo_id, workdir, file_rel);
+    let path = workdir.join(file_rel);
+    let lines: Arc<Vec<String>> = Arc::new(text.split('\n').map(str::to_owned).collect());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, path, lines, text.len(), cx);
+            });
+        });
+    });
+}
+
+fn force_background_preview_parses(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::ZERO,
+                });
+            });
+        });
+    });
+}
+
+fn preview_path(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<std::path::PathBuf> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .worktree_preview_path
+            .clone()
+    })
+}
+
+/// Rows of the preview whose colours differ from a parse of `text` of its own.
+fn preview_rows_coloured_unlike_a_fresh_parse(pane: &MainPaneView, text: &str) -> Vec<String> {
+    fresh_document_line_snapshots(pane.theme, rows::DiffSyntaxLanguage::TypeScript, text)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(ix, expected)| {
+            let Some(styled) = pane.worktree_preview_segments_cache_get(ix) else {
+                return Some(format!("row {}: not painted", ix + 1));
+            };
+            let painted = LineSyntaxSnapshot {
+                text: styled.text.to_string(),
+                syntax: styled
+                    .highlights
+                    .iter()
+                    .filter(|(_, style)| style.background_color.is_none())
+                    .map(|(range, style)| (range.clone(), style.color))
+                    .collect(),
+            };
+            (painted != expected).then(|| {
+                format!(
+                    "row {}\n  painted  {painted:?}\n  expected {expected:?}",
+                    ix + 1
+                )
+            })
+        })
+        .collect()
+}
+
+fn assert_preview_coloured_as_after_insert(pane: &MainPaneView) {
+    let comment = pane.theme.syntax.comment.into_color();
+    let row_14 = pane
+        .worktree_preview_segments_cache_get(13)
+        .expect("row 14 should be painted");
+    let comment_start = row_14.text.find("//").expect("row 14 holds a line comment");
+    assert!(
+        (comment_start..row_14.text.len()).all(|ix| row_14
+            .highlights
+            .iter()
+            .any(|(range, style)| range.contains(&ix) && style.color == Some(comment))),
+        "row 14 should be coloured as a comment: {:?}",
+        styled_debug_info_with_styles(row_14)
+    );
+    let wrong = preview_rows_coloured_unlike_a_fresh_parse(pane, HELPERS_TS_AFTER_INSERT);
+    assert!(
+        wrong.is_empty(),
+        "rows not coloured from the file on screen:\n{}",
+        wrong.join("\n")
+    );
+}
+
+fn preview_fixture_workdir(name: &str) -> std::path::PathBuf {
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview workdir");
+    std::fs::write(workdir.join("helpers.ts"), helpers_ts_before_insert())
+        .expect("write helpers.ts");
+    std::fs::write(workdir.join("other.ts"), OTHER_TS).expect("write other.ts");
+    workdir
+}
+
+const OTHER_TS: &str = "export const other = 1";
+
+#[gpui::test]
+fn untracked_preview_recolours_a_file_rewritten_while_another_file_was_shown(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(391);
+    let workdir = preview_fixture_workdir("preview_rewritten_while_away");
+    let helpers = Path::new("helpers.ts");
+    let other = Path::new("other.ts");
+
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, helpers);
+    wait_for_parsed_untracked_preview(
+        cx,
+        &view,
+        &workdir.join(helpers),
+        &helpers_ts_before_insert(),
+    );
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, other);
+    wait_for_parsed_untracked_preview(cx, &view, &workdir.join(other), OTHER_TS);
+
+    std::fs::write(workdir.join(helpers), HELPERS_TS_AFTER_INSERT).expect("rewrite helpers.ts");
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, helpers);
+    wait_for_parsed_untracked_preview(cx, &view, &workdir.join(helpers), HELPERS_TS_AFTER_INSERT);
+
+    cx.update(|_window, app| {
+        assert_preview_coloured_as_after_insert(view.read(app).main_pane.read(app));
+    });
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
+}
+
+#[gpui::test]
+fn late_background_parse_does_not_colour_a_rewritten_preview(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(392);
+    let workdir = preview_fixture_workdir("preview_late_background_parse");
+    let helpers = Path::new("helpers.ts");
+    let other = Path::new("other.ts");
+
+    // The first version's parse is still running when the user moves on, and
+    // lands while the other file is shown.
+    force_background_preview_parses(cx, &view);
+    select_with_ready_untracked_preview(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        helpers,
+        &helpers_ts_before_insert(),
+    );
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, other);
+    assert_ne!(
+        preview_path(cx, &view),
+        Some(workdir.join(helpers)),
+        "the switch should drop the helpers.ts preview first"
+    );
+    cx.run_until_parked();
+
+    std::fs::write(workdir.join(helpers), HELPERS_TS_AFTER_INSERT).expect("rewrite helpers.ts");
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, helpers);
+    wait_for_parsed_untracked_preview(cx, &view, &workdir.join(helpers), HELPERS_TS_AFTER_INSERT);
+
+    cx.update(|_window, app| {
+        assert_preview_coloured_as_after_insert(view.read(app).main_pane.read(app));
+    });
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
+}
+
+#[gpui::test]
+fn returning_to_an_unchanged_preview_reuses_its_background_parse(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(393);
+    let workdir = preview_fixture_workdir("preview_reuses_left_behind_parse");
+    let helpers = Path::new("helpers.ts");
+    let text = helpers_ts_before_insert();
+
+    force_background_preview_parses(cx, &view);
+    select_with_ready_untracked_preview(cx, &view, repo_id, &workdir, helpers, &text);
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, Path::new("other.ts"));
+    assert_ne!(
+        preview_path(cx, &view),
+        Some(workdir.join(helpers)),
+        "the switch should drop the helpers.ts preview first"
+    );
+    cx.run_until_parked();
+
+    // Same text again: the parse that finished while away must serve it at once,
+    // even with no foreground budget, rather than a second full parse.
+    select_with_ready_untracked_preview(cx, &view, repo_id, &workdir, helpers, &text);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.worktree_preview_prepared_syntax_document().is_some(),
+            "the parse that landed while another file was shown should be reused"
+        );
+    });
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
+}
+
+#[gpui::test]
+fn revisiting_previews_keeps_one_cached_parse_per_file(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(394);
+    let workdir = preview_fixture_workdir("preview_revisits_one_parse_per_file");
+    let helpers = Path::new("helpers.ts");
+    let other = Path::new("other.ts");
+    let helpers_text = helpers_ts_before_insert();
+
+    for _ in 0..3 {
+        select_untracked_preview_file(cx, &view, repo_id, &workdir, helpers);
+        wait_for_parsed_untracked_preview(cx, &view, &workdir.join(helpers), &helpers_text);
+        select_untracked_preview_file(cx, &view, repo_id, &workdir, other);
+        wait_for_parsed_untracked_preview(cx, &view, &workdir.join(other), OTHER_TS);
+    }
+
+    // Every visit has its own rev; older ones must not pile up in the pane's
+    // bounded map, where eviction picks an arbitrary, possibly live, entry.
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        for file in [helpers, other] {
+            let path = workdir.join(file);
+            let cached = pane
+                .prepared_syntax_documents
+                .keys()
+                .filter(|key| {
+                    key.view_mode == PreparedSyntaxViewMode::WorktreePreview
+                        && key.file_path == path
+                })
+                .count();
+            assert_eq!(cached, 1, "cached preview parses of {}", path.display());
+        }
+    });
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
+}

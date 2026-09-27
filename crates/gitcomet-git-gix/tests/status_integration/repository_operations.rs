@@ -1966,6 +1966,58 @@ fn delete_branch_force_keeps_branch_config_when_local_config_is_locked() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn delete_branch_force_keeps_symlinked_config_and_its_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let repo = repo.as_path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["branch", "feature"]);
+    run_git(repo, &["config", "branch.feature.remote", "origin"]);
+
+    // A dotfile-managed config: .git/config is a symlink to a private file.
+    let target = dir.path().join("managed-config");
+    let link = repo.join(".git").join("config");
+    fs::rename(&link, &target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened.delete_branch_force("feature").unwrap();
+
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "branch cleanup must edit the symlink target, not replace the link"
+    );
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let config = fs::read_to_string(&target).unwrap();
+    assert!(
+        !config.contains("[branch \"feature\"]"),
+        "branch section should be removed from the target: {config}"
+    );
+}
+
 #[test]
 fn delete_branch_force_missing_branch_is_structured_git_failure() {
     let _ = ensure_isolated_git_test_env();

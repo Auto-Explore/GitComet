@@ -214,7 +214,7 @@ fn split_markdown_flow_highlight_layers(
 /// A wrapped row's selection is not one box: each visual line contributes the
 /// slice of the range that falls inside it, measured against the unwrapped
 /// layout the wrap boundaries index into.
-fn markdown_flow_range_rects(
+pub(in crate::view) fn markdown_flow_range_rects(
     layout: &gpui::TextLayout,
     start: usize,
     end: usize,

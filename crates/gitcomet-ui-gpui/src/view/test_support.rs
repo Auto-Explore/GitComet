@@ -295,3 +295,44 @@ impl gitcomet_core::services::GitBackend for NoopBackend {
         ))
     }
 }
+
+/// Head of a real `tests/unit/helpers.ts` whose file preview once showed
+/// garbled colours from row 14 on: a stale parse, not the grammar.
+pub(crate) const TS_COMPILER_OPTIONS_HELPERS: &str = r#"import * as assert from 'node:assert/strict'
+import * as ts from 'typescript'
+import transformer from '../../src'
+
+/*
+ * Assertion based test helpers. The reference suite (tests/index.ts) compiles whole files and compares them
+ * to tests/references*, these helpers compile small TSX snippets in memory so a test can pin one behaviour.
+ */
+
+// Same flavour of options as tests/index.ts: no "use strict" prologue, LF newlines
+const baseCompilerOptions: ts.CompilerOptions = {
+    jsx: ts.JsxEmit.Preserve,
+    strict: false,
+    // alwaysStrict=false is deprecated in TypeScript 6 and reported as a diagnostic without this
+    ignoreDeprecations: '6.0',
+    alwaysStrict: false,
+    experimentalDecorators: true,
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    newLine: ts.NewLineKind.LineFeed
+}
+
+// Compiler options that can be passed as `compilerOptions` to the transform functions
+export const es5: ts.CompilerOptions = {target: ts.ScriptTarget.ES5, module: ts.ModuleKind.ESNext}
+export const es5CommonJS: ts.CompilerOptions = {target: ts.ScriptTarget.ES5, module: ts.ModuleKind.CommonJS}
+export const es2015: ts.CompilerOptions = {target: ts.ScriptTarget.ES2015, module: ts.ModuleKind.ES2015}
+export const commonJS: ts.CompilerOptions = {module: ts.ModuleKind.CommonJS}
+
+export interface TranspileResult {
+    code: string
+    map: string | undefined
+    diagnostics: readonly ts.Diagnostic[]
+}
+
+/*
+ * Compiles `input` with the plugin as an `after` transformer and returns the emitted code untouched,
+ * the source map when compilerOptions.sourceMap is set, and the syntactic diagnostics of the input.
+ */"#;

@@ -1831,13 +1831,11 @@ fn open_gitlink_repo(
 
     match crate::open::open_worktree_repo(&path) {
         Ok(repo) => Ok(Some(repo)),
-        Err(gix::open::Error::NotARepository { .. }) => Ok(None),
-        Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
-        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
-            "gix open nested submodule repo {}: {e}",
-            path.display()
-        )))),
+        Err(e) if e.is_not_found() => Ok(None),
+        Err(e) => Err(crate::open::map_open_error(
+            e,
+            &format!("gix open nested submodule repo {}", path.display()),
+        )),
     }
 }
 

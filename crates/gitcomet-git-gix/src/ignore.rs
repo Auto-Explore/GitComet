@@ -66,9 +66,7 @@ pub(crate) fn repository_watch_info(
                         Ok(child) => pending.push(child),
                         // Missing/deinitialized checkouts still retain their
                         // .git input above, so initialization rebuilds coverage.
-                        Err(gix::open::Error::NotARepository { .. }) => {}
-                        Err(gix::open::Error::Io(error))
-                            if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) if error.is_not_found() => {}
                         Err(error) => {
                             return Err(crate::open::map_open_error(error, "watch gitlink"));
                         }
