@@ -95,6 +95,23 @@ impl MainPaneView {
         }
     }
 
+    /// Every preview load has a new rev, so the parse under `key` supersedes the
+    /// file's older ones: drop them rather than let them fill the map, whose
+    /// eviction picks an arbitrary, possibly live, entry.
+    fn insert_worktree_preview_syntax_document(
+        &mut self,
+        key: PreparedSyntaxDocumentKey,
+        document: rows::PreparedDiffSyntaxDocument,
+    ) -> bool {
+        self.prepared_syntax_documents.retain(|cached, _| {
+            cached.view_mode != PreparedSyntaxViewMode::WorktreePreview
+                || cached.repo_id != key.repo_id
+                || cached.file_path != key.file_path
+                || cached.target_rev == key.target_rev
+        });
+        self.insert_prepared_syntax_document(key, document)
+    }
+
     pub(in crate::view) fn full_document_syntax_budget(&self) -> rows::DiffSyntaxBudget {
         #[cfg(test)]
         if let Some(budget) = self.diff_syntax_budget_override {
@@ -1034,7 +1051,7 @@ impl MainPaneView {
             None,
         ) {
             rows::PrepareDiffSyntaxDocumentResult::Ready(document) => {
-                if self.insert_prepared_syntax_document(key, document) {
+                if self.insert_worktree_preview_syntax_document(key, document) {
                     // A click made before this landed is waiting on exactly this
                     // document -- the same replay the file-diff paths run.
                     self.retry_pending_diff_text_syntax_click();
@@ -1064,17 +1081,21 @@ impl MainPaneView {
                             let Some(parsed_document) = parsed_document else {
                                 return;
                             };
-
-                            let inserted = this.insert_prepared_syntax_document(
-                                key.clone(),
-                                rows::inject_background_prepared_diff_syntax_document(
-                                    parsed_document,
-                                ),
+                            // Cached by content whatever happens next, so coming
+                            // back to the same text reuses it instead of reparsing.
+                            let document = rows::inject_background_prepared_diff_syntax_document(
+                                parsed_document,
                             );
-                            if inserted
-                                && this.worktree_preview_prepared_syntax_key().as_ref()
-                                    == Some(&key)
+                            // Only the preview still showing the parsed text may
+                            // take it; after another file or mid-reload it is stale.
+                            if !matches!(this.worktree_preview, Loadable::Ready(_))
+                                || this.worktree_preview_prepared_syntax_key().as_ref()
+                                    != Some(&key)
                             {
+                                return;
+                            }
+
+                            if this.insert_worktree_preview_syntax_document(key, document) {
                                 this.worktree_preview_style_cache_epoch =
                                     this.worktree_preview_style_cache_epoch.wrapping_add(1);
                                 this.retry_pending_diff_text_syntax_click();

@@ -1253,6 +1253,48 @@ fn typescript_treesitter_preserves_arrow_operator_inside_arrow_function() {
 }
 
 #[test]
+fn typescript_block_and_line_comments_among_object_properties_stay_comments() {
+    let text = crate::view::test_support::TS_COMPILER_OPTIONS_HELPERS;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
+
+    // Rows 5-8 and 35-38 are block comments, rows 14 and 23 line comments
+    // (rows 23 and 36 hold backticks).
+    for line_ix in (4..=7).chain([13, 22]).chain(34..=37) {
+        let line = lines[line_ix];
+        let tokens = syntax_tokens_for_prepared_document_line(document, line_ix)
+            .unwrap_or_else(|| panic!("line {line_ix} tokens should be available"));
+        let comment_start = line.len() - line.trim_start().len();
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment
+                    && token.range.start <= comment_start
+                    && token.range.end >= line.len()),
+            "row {} should be one comment span: {line:?} {tokens:?}",
+            line_ix + 1
+        );
+        assert!(
+            tokens
+                .iter()
+                .all(|token| token.kind == SyntaxTokenKind::Comment),
+            "row {} should have no non-comment tokens: {line:?} {tokens:?}",
+            line_ix + 1
+        );
+    }
+
+    let row_15 = lines[14];
+    assert_eq!(
+        token_kinds_for_line_fragment(document, 14, row_15, "ignoreDeprecations"),
+        vec![SyntaxTokenKind::Property],
+    );
+    assert_eq!(
+        token_kinds_for_line_fragment(document, 14, row_15, "'6.0'"),
+        vec![SyntaxTokenKind::String],
+    );
+}
+
+#[test]
 fn html_highlight_spec_compiles_injection_query() {
     let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html)
         .expect("HTML highlight spec should exist");

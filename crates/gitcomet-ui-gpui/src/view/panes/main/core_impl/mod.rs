@@ -2170,7 +2170,9 @@ impl MainPaneView {
             self.diff_autoscroll_pending = next_diff_target.is_some();
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
-            self.worktree_preview_content_rev = 0;
+            // Never back to 0: the rev keys cached parses, and a repeat would
+            // hand a returning file the parse of its old contents.
+            self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
             self.worktree_markdown.invalidate();
             self.worktree_preview_syntax_language = None;
             self.reset_worktree_preview_source_state();

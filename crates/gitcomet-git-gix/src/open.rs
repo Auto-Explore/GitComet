@@ -15,15 +15,9 @@ use std::path::Path;
 /// only governs the opposite branch. Resolving the path ourselves is therefore
 /// the intended fix — so keep every worktree open going through here.
 ///
-/// The raw [`gix::open::Error`] is returned so callers can map it to their own
+/// The raw [`gix::Error`] is returned so callers can map it to their own
 /// error type or treat "not a repository" as absence.
-// This is a thin forwarder over `gix::open`, which itself returns the large
-// `gix::open::Error` by value; boxing here would only complicate every caller's
-// match without a real payoff.
-#[allow(clippy::result_large_err)]
-pub(crate) fn open_worktree_repo(
-    workdir: &Path,
-) -> std::result::Result<gix::Repository, gix::open::Error> {
+pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
     gix::open(git_dir_for_workdir(workdir))
 }
 
@@ -33,12 +27,14 @@ pub(crate) fn open_worktree_repo(
 /// used for the catch-all `Backend` message; the two cases callers act on —
 /// "not a repository" and I/O — map to their own kinds so they stay
 /// distinguishable. Callers that treat a missing repository as absence rather
-/// than an error match on [`gix::open::Error`] themselves instead.
-#[allow(clippy::result_large_err)]
-pub(crate) fn map_open_error(error: gix::open::Error, context: &str) -> Error {
-    match error {
-        gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
-        gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
-        error => Error::new(ErrorKind::Backend(format!("{context}: {error}"))),
+/// than an error check [`gix::Error::is_not_found`] themselves instead.
+pub(crate) fn map_open_error(error: gix::Error, context: &str) -> Error {
+    // gix classifies "not a git repository" (and a missing path) as not-found.
+    if error.is_not_found() {
+        return Error::new(ErrorKind::NotARepository);
+    }
+    match error.classify().find_map(|class| class.io_kind()) {
+        Some(kind) => Error::new(ErrorKind::Io(kind)),
+        None => Error::new(ErrorKind::Backend(format!("{context}: {error}"))),
     }
 }

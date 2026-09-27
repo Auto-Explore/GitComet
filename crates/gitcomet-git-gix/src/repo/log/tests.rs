@@ -112,17 +112,18 @@ fn shallow_snapshot_uses_contents_even_when_stat_metadata_collides() {
 
 #[test]
 fn only_a_missing_object_allows_the_date_order_fallback() {
-    let oid =
-        gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("valid oid");
-    let missing =
-        gix::traverse::commit::topo::Error::Find(gix::objs::find::existing_iter::Error::NotFound {
-            oid,
-        });
+    use gix::error::ErrorExt as _;
+    // The classes gix raises for a missing object and for broken walk state.
+    let missing = gix::error::not_found("An object with id 1111111 could not be found")
+        .raise_erased()
+        .raise(gix::error::message("date-order setup failed"))
+        .erased();
+    let corrupt = gix::error::corruption("Internal state (bitflags) not found").raise_erased();
+    let cancelled = std::io::Error::from(std::io::ErrorKind::Interrupted).raise_erased();
 
     assert!(topo_build_error_is_missing_object(&missing));
-    assert!(!topo_build_error_is_missing_object(
-        &gix::traverse::commit::topo::Error::MissingStateUnexpected
-    ));
+    assert!(!topo_build_error_is_missing_object(&corrupt));
+    assert!(!topo_build_error_is_missing_object(&cancelled));
 }
 
 #[test]
