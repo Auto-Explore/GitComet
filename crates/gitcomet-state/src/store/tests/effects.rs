@@ -2,6 +2,64 @@ use super::*;
 use gitcomet_core::domain::Upstream;
 
 #[test]
+fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(1);
+    let repos = [(
+        repo_id,
+        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+            directory.path(),
+        )) as Arc<dyn GitRepository>,
+    )]
+    .into_iter()
+    .collect();
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    for (path, succeeds) in [("file.txt", true), ("../outside.txt", false)] {
+        let (release, wait) = std::sync::mpsc::channel();
+        executor.spawn(move || {
+            let _ = wait.recv();
+        });
+        let (completion, received) = smol::channel::bounded(1);
+        let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        schedule_effect_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            msg_tx,
+            Effect::SaveWorktreeFile {
+                repo_id,
+                path: PathBuf::from(path),
+                contents: "saved contents".to_string(),
+                stage: false,
+                completion: Some(completion),
+            },
+        );
+        assert_eq!(received.try_recv(), Err(smol::channel::TryRecvError::Empty));
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Ok(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                result, ..
+            })) = recv_effect_message(&msg_rx, Duration::from_millis(50))
+            {
+                assert_eq!(result.is_ok(), succeeds);
+                break;
+            }
+            assert!(Instant::now() < deadline, "save completion");
+        }
+        assert_eq!(received.try_recv(), Ok(succeeds));
+        if succeeds {
+            assert_eq!(
+                std::fs::read_to_string(directory.path().join(path)).unwrap(),
+                "saved contents"
+            );
+        }
+    }
+}
+
+#[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
     for cancel_repo_loads in [false, true] {
         let primary = super::executor::TaskExecutor::new(1);
@@ -1943,6 +2001,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             path: rel.clone(),
             contents: contents.to_string(),
             stage: true,
+            completion: None,
         },
     );
 
@@ -2001,6 +2060,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             path: escaped_path,
             contents: "escape".to_string(),
             stage: false,
+            completion: None,
         },
     );
 
@@ -5917,6 +5977,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 path: PathBuf::from("nested/new.txt"),
                 contents: "content".to_string(),
                 stage: true,
+                completion: None,
             },
             1,
         ),

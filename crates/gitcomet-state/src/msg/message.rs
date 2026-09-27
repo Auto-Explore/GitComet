@@ -774,6 +774,9 @@ pub enum Msg {
         path: PathBuf,
         contents: String,
         stage: bool,
+        /// Reports whether this exact write succeeded. A closed channel also
+        /// means failure; callers must not infer success from an idle queue.
+        completion: Option<smol::channel::Sender<bool>>,
     },
     /// Append patterns to the repository-root `.gitignore`, creating it when
     /// absent. Patterns already present are skipped, so re-running is a no-op.

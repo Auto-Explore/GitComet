@@ -3519,6 +3519,9 @@ pub(crate) struct MainPaneView {
     /// and one must not restore over the other's buffer.
     pub(in crate::view) file_editor_stash:
         FxHashMap<(RepoId, std::path::PathBuf), super::file_editor::StashedFileEdit>,
+    pub(in crate::view) file_editor_pending_saves:
+        FxHashMap<(RepoId, std::path::PathBuf), super::file_editor::PendingFileEditorSave>,
+    pub(in crate::view) file_editor_failed_saves: FxHashSet<(RepoId, std::path::PathBuf)>,
     /// Bumped whenever the set of files with unsaved edits changes.
     ///
     /// That set lives here rather than in the store, so nothing outside this

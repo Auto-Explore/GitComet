@@ -2351,6 +2351,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             path: PathBuf::from("src/lib.rs"),
             contents: "fn main() {}".to_string(),
             stage: true,
+            completion: None,
         },
     );
     assert!(matches!(

@@ -2181,6 +2181,7 @@ impl MainPaneView {
         }
 
         self.state = next;
+        self.settle_file_editor_saves(cx);
         // A closed repo tab takes its `RepoId` with it; buffers stashed under it
         // can never be saved again and would block every future close.
         self.prune_orphaned_file_editor_stash();

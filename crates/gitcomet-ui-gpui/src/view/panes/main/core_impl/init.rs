@@ -547,6 +547,8 @@ impl MainPaneView {
             file_disk_check_in_flight: None,
             file_disk_seen: None,
             file_editor_stash: FxHashMap::default(),
+            file_editor_pending_saves: FxHashMap::default(),
+            file_editor_failed_saves: FxHashSet::default(),
             file_editor_autosave: None,
             file_editor_live_syntax: None,
             file_editor_live_syntax_source: None,

@@ -2382,6 +2382,16 @@ fn move_repository_to_workspace(
         return;
     }
 
+    if !source
+        .view
+        .update(cx, |view, cx| {
+            view.prepare_repo_move(repo_id, &path, target_workspace, cx)
+        })
+        .unwrap_or(false)
+    {
+        return;
+    }
+
     let target = match target_workspace {
         Some(workspace_id) => activate_or_open_workspace(cx, workspace_id),
         None => {
@@ -4099,7 +4109,13 @@ mod tests {
             opened: opened_tx,
             result: Mutex::new(result_rx),
         });
-        cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+        let mut move_target = session::Workspace::new(Vec::new());
+        move_target.custom_name = Some("Move target".to_string());
+        let move_target_id = move_target.id;
+        cx.update(|app| {
+            crate::workspaces::initialize_for_test(app, vec![move_target]);
+            app.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
+        });
         let directory = tempfile::tempdir().expect("create repository directories");
         let root = directory.path().canonicalize().unwrap();
         let base = root.join("base");
@@ -4152,6 +4168,12 @@ mod tests {
                         .iter()
                         .any(|repo| repo.spec.workdir == dropped)
                     {
+                        let dropped_id = snapshot
+                            .repos
+                            .iter()
+                            .find(|repo| repo.spec.workdir == dropped)
+                            .unwrap()
+                            .id;
                         assert!(
                             !session::snapshot_repos_from_state(&snapshot)
                                 .open_repos
@@ -4165,6 +4187,41 @@ mod tests {
                                 );
                             })
                             .unwrap();
+                        for target in [None, Some(move_target_id)] {
+                            source
+                                .update(cx, |view, _, cx| {
+                                    view.request_move_repo_to_workspace(
+                                        dropped_id,
+                                        dropped.clone(),
+                                        target,
+                                        cx,
+                                    );
+                                })
+                                .unwrap();
+                            cx.run_until_parked();
+                            cx.update(|app| {
+                                // The deferred execution boundary also rejects a
+                                // stale menu/confirmation trying to bypass the UI.
+                                move_repository_to_workspace(
+                                    app,
+                                    source.window_id(),
+                                    dropped_id,
+                                    dropped.clone(),
+                                    target,
+                                );
+                                assert_eq!(
+                                    app.windows().len(),
+                                    2,
+                                    "validation must finish before moving a drop"
+                                );
+                                assert!(
+                                    crate::workspaces::workspace(app, move_target_id)
+                                        .unwrap()
+                                        .repositories
+                                        .is_empty()
+                                );
+                            });
+                        }
                         break;
                     }
                     assert!(Instant::now() < deadline, "publish the provisional tab");

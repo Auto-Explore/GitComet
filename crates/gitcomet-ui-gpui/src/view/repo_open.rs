@@ -251,13 +251,7 @@ impl GitCometView {
         ) {
             return;
         }
-        let unsaved_action = UnsavedFileEditsAction::MoveRepo {
-            window_id: self.window_handle.window_id(),
-            repo_id,
-            path: path.clone(),
-            target_workspace,
-        };
-        if self.request_unsaved_file_edits_prompt(unsaved_action, cx) {
+        if !self.prepare_repo_move(repo_id, &path, target_workspace, cx) {
             return;
         }
 
@@ -276,6 +270,33 @@ impl GitCometView {
             path,
             target_workspace,
         );
+    }
+
+    /// Also checked at the deferred transfer boundary: validation or editor
+    /// saves may still be pending after a menu or terminal dialog was opened.
+    pub(crate) fn prepare_repo_move(
+        &mut self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        target_workspace: Option<session::WorkspaceId>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !self.store.snapshot().repos.iter().any(|repo| {
+            repo.id == repo_id
+                && repo.spec.workdir == path
+                && !repo.is_provisional_external_drop_open()
+        }) {
+            return false;
+        }
+        !self.request_unsaved_file_edits_prompt(
+            UnsavedFileEditsAction::MoveRepo {
+                window_id: self.window_handle.window_id(),
+                repo_id,
+                path: path.to_path_buf(),
+                target_workspace,
+            },
+            cx,
+        )
     }
 
     pub(crate) fn detach_repo_for_move(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {

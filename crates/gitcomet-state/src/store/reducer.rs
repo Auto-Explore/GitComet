@@ -1912,9 +1912,10 @@ fn reduce_inner(
             path,
             contents,
             stage,
+            completion,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
+            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage, completion)
         }
         Msg::AppendGitignorePatterns { repo_id, patterns } => {
             begin_local_action(state, repo_id);

@@ -28,6 +28,7 @@ fn model_for_state(
     let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         return ContextMenuModel::new(Vec::new());
     };
+    let move_disabled = state.repos[repo_ix].is_provisional_external_drop_open();
 
     let close_to_right: Vec<RepoId> = state
         .repos
@@ -87,7 +88,7 @@ fn model_for_state(
             label: "Move to new window".into(),
             icon: Some("icons/swap.svg".into()),
             shortcut: None,
-            disabled: false,
+            disabled: move_disabled,
             action: Box::new(ContextMenuAction::MoveRepoToWorkspace {
                 repo_id,
                 path: workdir.clone(),
@@ -106,7 +107,7 @@ fn model_for_state(
                 label: format!("Move to {}", workspace.display_name()).into(),
                 icon: Some("icons/swap.svg".into()),
                 shortcut: None,
-                disabled: false,
+                disabled: move_disabled,
                 action: Box::new(ContextMenuAction::MoveRepoToWorkspace {
                     repo_id,
                     path: workdir.clone(),
@@ -365,5 +366,67 @@ mod tests {
         let state = state_with_repo_tabs(RepoId(1), 3);
 
         assert!(test_model(&state, RepoId(99), None).items.is_empty());
+    }
+
+    #[test]
+    fn review_regression_move_entries_wait_for_external_drop_validation() {
+        use gitcomet_core::services::{GitBackend, GitRepository};
+        use std::sync::{Arc, Mutex, mpsc};
+        use std::time::{Duration, Instant};
+
+        struct Backend {
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl GitBackend for Backend {
+            fn open(
+                &self,
+                workdir: &std::path::Path,
+            ) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+                let _ = self.entered.send(());
+                let _ = self.release.lock().unwrap().recv();
+                Ok(Arc::new(
+                    gitcomet_core::test_support::UnconfiguredRepository::new(workdir),
+                ))
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let workdir = directory.path().canonicalize().unwrap();
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (store, _events) = gitcomet_state::store::AppStore::new_test(Arc::new(Backend {
+            entered,
+            release: Mutex::new(wait),
+        }));
+        store.dispatch(Msg::OpenRepoFromExternalDrop(workdir.clone()));
+        started.recv_timeout(Duration::from_secs(3)).unwrap();
+        let provisional = store.snapshot();
+        let repo_id = provisional.repos[0].id;
+        let mut target = session::Workspace::new(Vec::new());
+        target.custom_name = Some("Target".to_string());
+        let check = |state: &AppState, disabled: bool| {
+            let model = model_for_state(
+                state,
+                repo_id,
+                Some(workdir.clone()),
+                std::slice::from_ref(&target),
+                None,
+            );
+            assert_eq!(entry_action(&model, "Move to new window").0, disabled);
+            assert_eq!(entry_action(&model, "Move to Target").0, disabled);
+            assert!(!entry_action(&model, "Close").0);
+        };
+        check(&provisional, true);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let state = store.snapshot();
+            if !state.repos[0].is_provisional_external_drop_open() {
+                check(&state, false);
+                break;
+            }
+            assert!(Instant::now() < deadline, "validate dropped repository");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }

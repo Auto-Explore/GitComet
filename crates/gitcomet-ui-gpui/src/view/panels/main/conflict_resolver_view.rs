@@ -409,6 +409,7 @@ impl MainPaneView {
                         path: save_path.clone(),
                         contents: text,
                         stage: false,
+                        completion: None,
                     });
                 });
             controls = controls
@@ -445,6 +446,7 @@ impl MainPaneView {
                                         path: stage_path.clone(),
                                         contents: text,
                                         stage: true,
+                                        completion: None,
                                     });
                                 }
                             });

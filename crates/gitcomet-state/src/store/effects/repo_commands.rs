@@ -334,6 +334,7 @@ pub(super) fn schedule_save_worktree_file(
     path: PathBuf,
     contents: String,
     stage: bool,
+    completion: Option<smol::channel::Sender<bool>>,
 ) {
     let command_path = path.clone();
     schedule_repo_command(
@@ -346,26 +347,34 @@ pub(super) fn schedule_save_worktree_file(
             stage,
         },
         move |repo| {
-            let (relative_path, full) = resolve_worktree_save_target(&repo.spec().workdir, &path)?;
-            if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let result = (|| {
+                let (relative_path, full) =
+                    resolve_worktree_save_target(&repo.spec().workdir, &path)?;
+                if let Some(parent) = full.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                }
+                std::fs::write(&full, contents.as_bytes())
+                    .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                if stage {
+                    let path_ref: &Path = &relative_path;
+                    repo.stage(&[path_ref])?;
+                }
+                Ok(CommandOutput {
+                    command: format!(
+                        "Save {}{}",
+                        relative_path.display(),
+                        if stage { " (staged)" } else { "" }
+                    ),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                })
+            })();
+            if let Some(completion) = completion {
+                let _ = completion.try_send(result.is_ok());
             }
-            std::fs::write(&full, contents.as_bytes())
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-            if stage {
-                let path_ref: &Path = &relative_path;
-                repo.stage(&[path_ref])?;
-            }
-            Ok(CommandOutput {
-                command: format!(
-                    "Save {}{}",
-                    relative_path.display(),
-                    if stage { " (staged)" } else { "" }
-                ),
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: Some(0),
-            })
+            result
         },
     );
 }

@@ -1938,8 +1938,9 @@ pub(super) fn schedule_effect(
             path,
             contents,
             stage,
+            completion,
         } => repo_commands::schedule_save_worktree_file(
-            executor, repos, msg_tx, repo_id, path, contents, stage,
+            executor, repos, msg_tx, repo_id, path, contents, stage, completion,
         ),
         Effect::AppendGitignorePatterns { repo_id, patterns } => {
             repo_commands::schedule_append_gitignore_patterns(

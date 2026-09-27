@@ -6,6 +6,7 @@ use crate::view::panes::main::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::GitBackend;
 use palette::IntoColor;
+use std::path::PathBuf;
 
 #[path = "file_editor_scrolling.rs"]
 mod scrolling;
@@ -1937,7 +1938,7 @@ fn request_close_with_dirty_auto_saved_buffer(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
     state: Arc<AppState>,
-) -> gpui::WindowId {
+) -> (gpui::WindowId, smol::channel::Sender<bool>) {
     let window_id = cx.update(|window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, state, cx);
@@ -1959,18 +1960,24 @@ fn request_close_with_dirty_auto_saved_buffer(
         });
     });
     cx.run_until_parked();
-    let took_over = cx.update(|_window, app| {
+    let completion = cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.request_close_window_or_warn(window_id, cx)
+            assert!(
+                this.request_close_window_or_warn(window_id, cx),
+                "the pending auto-save write must hold the close"
+            );
+            this.main_pane.update(cx, |pane, _| {
+                let (repo_id, path) = pane.file_editor_key.clone().unwrap();
+                hold_editor_save_receipt(pane, repo_id, &path)
+            })
         })
     });
-    assert!(took_over, "the pending auto-save write must hold the close");
     // Start the drain waiter before the clock moves.
     cx.run_until_parked();
-    window_id
+    (window_id, completion)
 }
 
-/// Let the drain's real-time grace pass, then step GPUI's clock by `total`.
+/// Let background store work run, then step GPUI's clock by `total`.
 fn advance_file_edit_drain(cx: &mut gpui::VisualTestContext, total: std::time::Duration) {
     std::thread::sleep(std::time::Duration::from_millis(175));
     let step = std::time::Duration::from_millis(25);
@@ -1980,6 +1987,174 @@ fn advance_file_edit_drain(cx: &mut gpui::VisualTestContext, total: std::time::D
         cx.run_until_parked();
         elapsed += step;
     }
+}
+
+/// The effect-layer tests exercise real writes and their receipts. Holding the
+/// receipt here lets the UI test deterministically cover queued/slow writes.
+fn hold_editor_save_receipt(
+    pane: &mut MainPaneView,
+    repo_id: gitcomet_state::model::RepoId,
+    path: &Path,
+) -> smol::channel::Sender<bool> {
+    let (send, received) = smol::channel::bounded(1);
+    pane.file_editor_pending_saves
+        .get_mut(&(repo_id, path.to_path_buf()))
+        .expect("saving must retain a completion receipt")
+        .completions = vec![received];
+    send
+}
+
+fn check_move_waits_for_existing_saves(
+    cx: &mut gpui::TestAppContext,
+    auto_save: bool,
+    succeeds: bool,
+) {
+    let _visual_guard = lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(976);
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let first = PathBuf::from("first.rs");
+    let second = PathBuf::from("second.rs");
+    let mut receipts = Vec::new();
+    let window_id = cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, backend);
+        window.window_handle().window_id()
+    });
+    for path in [&first, &second] {
+        std::fs::write(workdir.join(path), "original\n").unwrap();
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                push_test_state(view, editor_state(repo_id, &workdir, path), cx);
+                view.main_pane.update(cx, |pane, cx| {
+                    pane.auto_save_file_edits = auto_save;
+                    pane.ensure_file_editor_loaded(cx);
+                });
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.main_pane.update(cx, |pane, cx| {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(0..0, "edited\n", cx);
+                    });
+                });
+            })
+        });
+        cx.run_until_parked();
+        receipts.push(cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.main_pane.update(cx, |pane, cx| {
+                    if auto_save {
+                        pane.flush_file_editor_buffer(cx);
+                    } else {
+                        pane.save_file_editor_buffer(cx);
+                    }
+                    assert!(!pane.file_editor_dirty, "save is optimistically clean");
+                    hold_editor_save_receipt(pane, repo_id, path)
+                })
+            })
+        }));
+    }
+
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, &workdir, &first), cx);
+            view.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            let pane = view.main_pane.read(cx);
+            assert!(pane.unsaved_file_edit_keys().is_empty());
+            assert_eq!(
+                pane.file_editor_input.read(cx).text(),
+                "edited\noriginal\n",
+                "reopening a pending save must not reload old disk contents"
+            );
+            assert!(
+                !pane
+                    .file_editor_stash
+                    .contains_key(&(repo_id, first.clone())),
+                "saving another file evicts the old clean stash entry"
+            );
+            view.request_move_repo_to_workspace(repo_id, workdir.clone(), None, cx);
+            assert!(view.pending_unsaved_file_edits_flush.is_some());
+        })
+    });
+    cx.run_until_parked();
+    receipts[1].try_send(true).unwrap();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(50));
+    cx.run_until_parked();
+    cx.cx.update(|app| {
+        assert_eq!(
+            crate::app::windows_owning_repo_for_test(app, &workdir),
+            vec![window_id]
+        );
+        assert_eq!(
+            app.windows().len(),
+            1,
+            "the first save must still block the move"
+        );
+    });
+
+    receipts[0].try_send(succeeds).unwrap();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(50));
+    cx.run_until_parked();
+    cx.cx.update(|app| {
+        let source_exists = app
+            .windows()
+            .iter()
+            .any(|window| window.window_id() == window_id);
+        assert_eq!(source_exists, !succeeds);
+        let owners = crate::app::windows_owning_repo_for_test(app, &workdir);
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0] == window_id, !succeeds);
+        if !succeeds {
+            let pane = view.read(app).main_pane.read(app);
+            let recovered = pane
+                .file_editor_stash
+                .get(&(repo_id, first.clone()))
+                .unwrap();
+            assert!(recovered.is_dirty());
+            assert_eq!(recovered.text.as_ref(), "edited\noriginal\n");
+            assert_eq!(pane.unsaved_file_edit_paths(repo_id), vec![first.clone()]);
+        }
+    });
+}
+
+#[gpui::test]
+fn review_regression_move_waits_for_dispatched_manual_saves(cx: &mut gpui::TestAppContext) {
+    check_move_waits_for_existing_saves(cx, false, true);
+}
+
+#[gpui::test]
+fn review_regression_failed_dispatched_manual_save_keeps_move_recovery(
+    cx: &mut gpui::TestAppContext,
+) {
+    check_move_waits_for_existing_saves(cx, false, false);
+}
+
+#[gpui::test]
+fn review_regression_move_waits_for_dispatched_auto_saves(cx: &mut gpui::TestAppContext) {
+    check_move_waits_for_existing_saves(cx, true, true);
+}
+
+#[gpui::test]
+fn review_regression_failed_dispatched_auto_save_keeps_move_recovery(
+    cx: &mut gpui::TestAppContext,
+) {
+    check_move_waits_for_existing_saves(cx, true, false);
 }
 
 /// A long action in another repository must not hold a close whose own
@@ -2013,7 +2188,8 @@ async fn review_regression_unrelated_repo_action_does_not_block_close(
     .clone();
     state.repos[1].local_actions_in_flight = 1;
 
-    let window_id = request_close_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state));
+    let (window_id, completion) =
+        request_close_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state));
     store.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::RepoCommandFinished {
             repo_id: edited,
@@ -2026,6 +2202,7 @@ async fn review_regression_unrelated_repo_action_does_not_block_close(
             )),
         },
     ));
+    completion.try_send(true).unwrap();
     advance_file_edit_drain(cx, std::time::Duration::from_millis(200));
 
     assert!(
@@ -2062,7 +2239,8 @@ async fn review_regression_timed_out_save_reopens_the_unsaved_dialog(
     // say) keeps the save queued behind it, so the drain can only time out.
     let mut state = (*editor_state(repo_id, &workdir, &file)).clone();
     state.repos[0].local_actions_in_flight = 1;
-    let window_id = request_close_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state));
+    let (window_id, _completion) =
+        request_close_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state));
     advance_file_edit_drain(cx, std::time::Duration::from_secs(6));
 
     assert!(
@@ -2779,6 +2957,12 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
+            this.store.insert_repo_for_test(
+                repo_id,
+                Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                    workdir.clone(),
+                )),
+            );
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
             this.main_pane
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));

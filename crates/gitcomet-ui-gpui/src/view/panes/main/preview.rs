@@ -2219,6 +2219,7 @@ impl MainPaneView {
                             path,
                             contents: contents.clone(),
                             stage: false,
+                            completion: None,
                         });
                         // The file preview only reloads when its target
                         // changes, and re-reading now could beat the write:

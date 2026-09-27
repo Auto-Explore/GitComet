@@ -1930,7 +1930,7 @@ impl RepoState {
         repo
     }
 
-    pub(crate) fn is_provisional_external_drop_open(&self) -> bool {
+    pub fn is_provisional_external_drop_open(&self) -> bool {
         self.provisional_external_drop_open
     }
 
