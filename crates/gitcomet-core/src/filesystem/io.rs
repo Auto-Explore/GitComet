@@ -19,6 +19,53 @@ pub fn absolute_identity(path: &Path) -> io::Result<PathBuf> {
     Ok(canonical_path(absolute.parent().ok_or_else(|| invalid("Missing parent"))?)?.join(name))
 }
 
+/// An explicit replacement may recreate deleted parents. Resolve the existing
+/// ancestor first, then create only ordinary directories beneath that identity.
+pub(super) fn save_identity(path: &Path, recreate: bool) -> io::Result<PathBuf> {
+    match absolute_identity(path) {
+        Ok(path) => return Ok(path),
+        Err(error) if recreate && error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let absolute = std::path::absolute(path)?;
+    let mut ancestor = absolute.parent().ok_or_else(|| invalid("Missing parent"))?;
+    loop {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => return Err(invalid("A save parent is not a regular directory")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                ancestor = ancestor.parent().ok_or(error)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let relative = crate::path_utils::validated_repo_relative_path(
+        absolute
+            .strip_prefix(ancestor)
+            .map_err(|e| invalid(e.to_string()))?,
+    )?;
+    for component in relative.components() {
+        validate_name(component.as_os_str())?;
+    }
+    let root = canonical_path(ancestor)?;
+    let target = root.join(&relative);
+    protect(&target, false, &Cancellation::default())?;
+    let mut parent = PathBuf::new();
+    for component in relative.parent().unwrap().components() {
+        parent.push(component.as_os_str());
+        let directory = crate::path_utils::symlink_free_write_target(&root, &parent)?;
+        match fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        if !fs::symlink_metadata(directory)?.is_dir() {
+            return Err(invalid("A save parent is not a regular directory"));
+        }
+    }
+    crate::path_utils::symlink_free_write_target(&root, &relative)
+}
+
 /// Use the same Windows drive/UNC spelling as repository workdirs.
 pub(super) fn canonical_path(path: &Path) -> io::Result<PathBuf> {
     fs::canonicalize(path).map(crate::path_utils::strip_windows_verbatim_prefix)

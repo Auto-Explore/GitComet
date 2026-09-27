@@ -5,7 +5,7 @@ mod io;
 #[cfg(any(not(any(windows, target_os = "macos")), all(test, unix)))]
 mod trash;
 
-pub use engine::{Filesystem, global};
+pub use engine::{Filesystem, cleanup_on_shutdown, global};
 pub use io::{DiskVersion, absolute_identity, validate_name};
 use std::collections::BTreeMap;
 use std::ffi::OsString;

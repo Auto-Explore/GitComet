@@ -451,8 +451,11 @@ fn run_windowed_app(
     application.run(move |cx: &mut App| {
         cx.set_global(clean_shutdown_tracker);
         crate::ui_probe::start_if_enabled(cx);
-        cx.on_app_quit(|_| async {
-            smol::unblock(session::flush_recent_documents).await;
+        cx.on_app_quit(|_| {
+            // GPUI only waits 200 ms for returned futures. Journal directories
+            // can be large, so finish cleanup before that timeout starts.
+            gitcomet_core::filesystem::cleanup_on_shutdown();
+            async { smol::unblock(session::flush_recent_documents).await }
         })
         .detach();
         if let Some(on_shutdown) = on_shutdown {

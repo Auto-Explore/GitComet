@@ -13,8 +13,18 @@ pub fn global() -> &'static Mutex<Filesystem> {
     SERVICE.get_or_init(|| Mutex::new(Filesystem::default()))
 }
 
+/// Static services are not dropped at process exit. Wait for the current
+/// operation, reject later work, and release ordinary journal storage.
+pub fn cleanup_on_shutdown() {
+    global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .shutdown();
+}
+
 #[derive(Default)]
 pub struct Filesystem {
+    shutting_down: bool,
     undo: VecDeque<JournalEntry>,
     redo: Vec<JournalEntry>,
     revision: u64,
@@ -85,6 +95,19 @@ struct JournalEntry {
 }
 
 impl JournalEntry {
+    fn require_manual_recovery(&mut self, required: bool) {
+        // A failed plain rename can leave only an empty journal and its log.
+        // Keep receipts only when some retained entry still needs restoration.
+        let required = required
+            && self
+                .areas
+                .iter()
+                .any(|area| exists(&area.path().join("item")).unwrap_or(true));
+        for area in &mut self.areas {
+            area.disable_cleanup(required);
+        }
+    }
+
     fn reserve(&mut self, parent: &Path) -> io::Result<PathBuf> {
         let same_volume = |candidate: &Path| {
             #[cfg(unix)]
@@ -172,6 +195,12 @@ impl JournalEntry {
 }
 
 impl Filesystem {
+    fn shutdown(&mut self) {
+        self.shutting_down = true;
+        self.undo.clear();
+        self.redo.clear();
+    }
+
     pub fn prepare_outbound(
         &self,
         id: OperationId,
@@ -232,7 +261,24 @@ impl Filesystem {
         expected: Option<&DiskVersion>,
         overwrite: bool,
     ) -> io::Result<DiskVersion> {
-        let path = absolute_identity(path)?;
+        self.save_with_identity(path, bytes, expected, overwrite)
+            .map(|(_, version)| version)
+    }
+
+    fn save_with_identity(
+        &mut self,
+        path: &Path,
+        bytes: &[u8],
+        expected: Option<&DiskVersion>,
+        overwrite: bool,
+    ) -> io::Result<(PathBuf, DiskVersion)> {
+        if self.shutting_down {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Filesystem service is shutting down",
+            ));
+        }
+        let path = save_identity(path, overwrite)?;
         protect(&path, false, &Cancellation::default())?;
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => Some(metadata),
@@ -284,7 +330,8 @@ impl Filesystem {
                 });
             if let Err(error) = install {
                 if let Err(restore) = rename_exclusive(&parked, &path) {
-                    let location = recovery.areas.remove(0).keep();
+                    recovery.require_manual_recovery(true);
+                    let location = recovery.areas[0].path();
                     return Err(io::Error::other(format!(
                         "Save stopped: {error}. The current file was preserved. The previous version is retained at {} (restore: {restore})",
                         location.display()
@@ -297,9 +344,9 @@ impl Filesystem {
         }
         self.publish(&[PathChange {
             old: None,
-            new: Some(path),
+            new: Some(path.clone()),
         }]);
-        Ok(version)
+        Ok((path, version))
     }
 
     pub fn execute(
@@ -307,6 +354,9 @@ impl Filesystem {
         request: Request,
         mut progress: impl FnMut(Progress),
     ) -> OperationResult {
+        if self.shutting_down {
+            request.cancellation.cancel();
+        }
         if matches!(request.operation, Operation::Undo | Operation::Redo) {
             return self.reverse(request);
         }
@@ -374,9 +424,7 @@ impl Filesystem {
                 } else {
                     path.clone()
                 };
-                let target = absolute_identity(&target)?;
-                self.save(&target, contents, expected.as_ref(), *overwrite)
-                    .map(|version| (target, version))
+                self.save_with_identity(&target, contents, expected.as_ref(), *overwrite)
             });
             let (target, outcome, saved_version, changes) = match saved {
                 Ok((target, version)) => (
@@ -664,14 +712,22 @@ impl Filesystem {
                         }
                     }
                     Err(error) => {
+                        let needs_recovery = error.kind() != io::ErrorKind::Interrupted
+                            || (entry.applied != 0 && entry.applied != entry.steps.len());
                         result.items.push(ItemResult {
                             source: from.clone(),
                             destination: Some(to.clone()),
                             outcome: ItemOutcome::Failed(error.to_string()),
                         });
+                        if needs_recovery {
+                            entry.require_manual_recovery(true);
+                        }
                         break;
                     }
                 }
+            }
+            if result.succeeded() {
+                entry.require_manual_recovery(false);
             }
             if redo {
                 if entry.applied == entry.steps.len() {
@@ -712,9 +768,7 @@ fn complete_outbound_move(
         .and_then(|_| protect_contents(&parked, true, cancellation))
     {
         if let Err(restore) = rename_exclusive(&parked, path) {
-            for area in recovery.areas {
-                let _ = area.keep();
-            }
+            recovery.require_manual_recovery(true);
             return Err(io::Error::other(format!(
                 "Transfer cleanup stopped: {error}. Restore failed: {restore}. Source retained at {}",
                 parked.display()
@@ -725,9 +779,7 @@ fn complete_outbound_move(
     // No undo entry: the receiving application owns the completed transfer.
     // If cleanup is interrupted, retain the remaining bytes and receipt.
     if let Err(error) = remove_tree(&parked) {
-        for area in recovery.areas {
-            let _ = area.keep();
-        }
+        recovery.require_manual_recovery(true);
         return Err(io::Error::other(format!(
             "Transfer succeeded, but source cleanup failed: {error}. Remaining source data: {}",
             parked.display()
@@ -861,9 +913,7 @@ fn native_trash(
         match exists(source) {
             Ok(false) => {
                 if let Err(restore) = rename_exclusive(&backup, source) {
-                    for area in std::mem::take(&mut journal.areas) {
-                        let _ = area.keep();
-                    }
+                    journal.require_manual_recovery(true);
                     return Err(io::Error::other(format!(
                         "Trash failed: {error}. Recovery copy: {} (restore failed: {restore})",
                         backup.display()
@@ -871,9 +921,7 @@ fn native_trash(
                 }
             }
             Err(_) => {
-                for area in std::mem::take(&mut journal.areas) {
-                    let _ = area.keep();
-                }
+                journal.require_manual_recovery(true);
                 return Err(io::Error::other(format!(
                     "Trash failed: {error}. Recovery copy: {}",
                     backup.display()
@@ -881,9 +929,7 @@ fn native_trash(
             }
             Ok(true) if original.matches(source, &request.cancellation).is_ok() => {}
             Ok(true) => {
-                for area in std::mem::take(&mut journal.areas) {
-                    let _ = area.keep();
-                }
+                journal.require_manual_recovery(true);
                 return Err(io::Error::other(format!(
                     "Trash failed: {error}. A new item appeared at the original path and was preserved. Recovery copy: {}",
                     backup.display()
@@ -978,6 +1024,7 @@ fn transfer(
                     .and_then(|_| journal.record_intent(&step.to, &step.from))
                     .and_then(|_| rename_exclusive(&step.to, &step.from));
                 if let Err(restore) = rollback {
+                    journal.require_manual_recovery(true);
                     return Err(io::Error::other(format!(
                         "{error}. Rollback stopped: {restore}. Recovery data is retained at {}",
                         journal.areas.first().unwrap().path().display()

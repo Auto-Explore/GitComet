@@ -725,6 +725,301 @@ fn save_checks_loaded_version_and_preserves_newer_disk_bytes() {
 }
 
 #[test]
+fn explicit_replacement_recreates_deleted_parents_for_repository_and_standalone_saves() {
+    for repository in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_path(directory.path()).unwrap();
+        let parent = root.join("deleted/nested");
+        fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("file.txt");
+        fs::write(&path, b"loaded").unwrap();
+        let expected = DiskVersion::read(&path).unwrap();
+        fs::remove_dir_all(root.join("deleted")).unwrap();
+        let mut service = Filesystem::default();
+        let save = |overwrite| Operation::Save {
+            path: path.clone(),
+            worktree: repository.then(|| root.clone()),
+            contents: Arc::from(&b"retained edits"[..]),
+            expected: Some(expected.clone()),
+            overwrite,
+        };
+        assert!(!run(&mut service, save(false)).succeeded());
+        assert!(
+            !root.join("deleted").exists(),
+            "autosave must not recreate deleted directories"
+        );
+        let result = run(&mut service, save(true));
+        success(&result);
+        assert_eq!(fs::read(&path).unwrap(), b"retained edits");
+        assert_eq!(
+            result.saved_version,
+            Some(DiskVersion::read(&path).unwrap())
+        );
+        assert_eq!(
+            result.changes,
+            vec![PathChange {
+                old: None,
+                new: Some(path.clone())
+            }]
+        );
+        assert_eq!(service.changes_since(0), result.changes);
+        // The direct save API uses the same recreation and validation path.
+        fs::remove_dir_all(root.join("deleted")).unwrap();
+        service
+            .save(&path, b"direct save", Some(&expected), true)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"direct save");
+    }
+}
+
+#[test]
+fn recreating_save_parents_preserves_protected_paths_and_non_directories() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::write(root.join("blocked"), b"existing file").unwrap();
+    let mut service = Filesystem::default();
+    for path in [
+        root.join(".git/missing/file"),
+        root.join("blocked/missing/file"),
+    ] {
+        assert!(service.save(&path, b"edits", None, true).is_err());
+    }
+    assert!(!root.join(".git/missing").exists());
+    assert_eq!(fs::read(root.join("blocked")).unwrap(), b"existing file");
+    let outside = root.join("outside");
+    let worktree = root.join("repo");
+    fs::create_dir(&worktree).unwrap();
+    for path in [outside.join("file"), worktree.join("../outside/file")] {
+        assert!(
+            !run(
+                &mut service,
+                Operation::Save {
+                    path,
+                    worktree: Some(worktree.clone()),
+                    contents: Arc::from(&b"edits"[..]),
+                    expected: None,
+                    overwrite: true,
+                }
+            )
+            .succeeded()
+        );
+        assert!(!outside.exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn recreating_save_parents_never_follows_a_replaced_or_dangling_symlink() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let outside = root.join("outside");
+    let worktree = root.join("repo");
+    fs::create_dir(&worktree).unwrap();
+    let link = worktree.join("deleted");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let mut service = Filesystem::default();
+    for dangling in [true, false] {
+        if !dangling {
+            fs::create_dir(&outside).unwrap();
+        }
+        for repository in [true, false] {
+            let result = run(
+                &mut service,
+                Operation::Save {
+                    path: link.join("nested/file.txt"),
+                    worktree: repository.then(|| worktree.clone()),
+                    contents: Arc::from(&b"edits"[..]),
+                    expected: None,
+                    overwrite: true,
+                },
+            );
+            assert!(!result.succeeded());
+            assert!(!outside.join("nested").exists());
+            assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+        }
+    }
+    // An ancestor alias must not hide Git metadata during parent creation.
+    fs::create_dir_all(root.join(".git/existing")).unwrap();
+    std::os::unix::fs::symlink(root.join(".git"), root.join("alias")).unwrap();
+    assert!(
+        service
+            .save(
+                &root.join("alias/existing/nested/file"),
+                b"edits",
+                None,
+                true
+            )
+            .is_err()
+    );
+    assert!(!root.join(".git/existing/nested").exists());
+}
+
+fn replace_for_shutdown(service: &mut Filesystem, root: &Path) -> PathBuf {
+    let root = canonical_path(root).unwrap();
+    let source = root.join("file.txt");
+    let folder = root.join("destination");
+    fs::create_dir(&folder).unwrap();
+    let destination = folder.join("file.txt");
+    fs::write(&source, b"new").unwrap();
+    fs::write(&destination, b"old").unwrap();
+    let mut request = Request::new(Operation::Transfer {
+        sources: vec![source],
+        destination: folder,
+        intent: TransferIntent::Copy,
+    });
+    request.resolutions.insert(
+        destination,
+        ConflictResolution {
+            expected: DiskVersion::read(&root.join("destination/file.txt")).unwrap(),
+            choice: ConflictChoice::Replace,
+        },
+    );
+    success(&service.execute(request, |_| {}));
+    let parked = service.undo.back().unwrap().steps[0].to.clone();
+    assert_eq!(fs::read(&parked).unwrap(), b"old");
+    parked
+}
+
+fn journal_areas(service: &Filesystem) -> Vec<PathBuf> {
+    service
+        .undo
+        .iter()
+        .chain(&service.redo)
+        .flat_map(|entry| entry.areas.iter().map(|area| area.path().to_path_buf()))
+        .collect()
+}
+
+#[test]
+fn shutdown_cleans_global_journals_before_process_exit() {
+    const CHILD: &str = "GITCOMET_TEST_FILESYSTEM_SHUTDOWN_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // The singleton never drops at process exit; exercise the actual
+        // shutdown entry point in an isolated process, not a local destructor.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "filesystem::engine::tests::shutdown_cleans_global_journals_before_process_exit",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let areas = {
+        let mut service = global().lock().unwrap();
+        replace_for_shutdown(&mut service, root);
+        success(&run(
+            &mut service,
+            Operation::CreateFile {
+                path: root.join("created"),
+            },
+        ));
+        success(&run(&mut service, Operation::Undo));
+        assert!(!service.undo.is_empty() && !service.redo.is_empty());
+        journal_areas(&service)
+    };
+    assert!(areas.iter().all(|area| area.exists()));
+    cleanup_on_shutdown();
+    cleanup_on_shutdown();
+    assert!(areas.iter().all(|area| !area.exists()));
+    assert_eq!(fs::read(root.join("destination/file.txt")).unwrap(), b"new");
+    assert_eq!(fs::read(root.join("file.txt")).unwrap(), b"new");
+    let mut service = global().lock().unwrap();
+    let result = run(
+        &mut service,
+        Operation::CreateFile {
+            path: root.join("late"),
+        },
+    );
+    assert!(matches!(result.items[0].outcome, ItemOutcome::Cancelled));
+    assert!(!root.join("late").exists());
+    assert!(
+        service
+            .save(&root.join("late/file"), b"late save", None, true)
+            .is_err()
+    );
+    assert!(!root.join("late").exists());
+    assert!(service.undo.is_empty() && service.redo.is_empty());
+}
+
+#[test]
+fn shutdown_preserves_recovery_data_after_failed_or_partial_undo() {
+    for partial in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Filesystem::default();
+        let parked = replace_for_shutdown(&mut service, directory.path());
+        let destination = directory.path().join("destination/file.txt");
+        fs::write(
+            if partial { &parked } else { &destination },
+            b"external changes",
+        )
+        .unwrap();
+        assert!(!run(&mut service, Operation::Undo).succeeded());
+        let areas = journal_areas(&service);
+        service.shutdown();
+        assert!(areas.iter().all(|area| area.exists()));
+        assert_eq!(
+            fs::read(&parked).unwrap(),
+            if partial {
+                &b"external changes"[..]
+            } else {
+                &b"old"[..]
+            }
+        );
+        if !partial {
+            assert_eq!(fs::read(&destination).unwrap(), b"external changes");
+        }
+        // These directories intentionally outlive the service for manual recovery.
+        for area in areas {
+            fs::remove_dir_all(area).unwrap();
+        }
+    }
+}
+
+#[test]
+fn successful_undo_retry_releases_recovery_storage_on_shutdown() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut service = Filesystem::default();
+    replace_for_shutdown(&mut service, directory.path());
+    let destination = directory.path().join("destination/file.txt");
+    fs::write(&destination, b"external").unwrap();
+    assert!(!run(&mut service, Operation::Undo).succeeded());
+    fs::write(&destination, b"new").unwrap();
+    success(&run(&mut service, Operation::Undo));
+    let areas = journal_areas(&service);
+    service.shutdown();
+    assert!(areas.iter().all(|area| !area.exists()));
+    assert_eq!(fs::read(destination).unwrap(), b"old");
+}
+
+#[test]
+fn cancelling_undo_before_any_steps_does_not_retain_ordinary_journal_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut service = Filesystem::default();
+    replace_for_shutdown(&mut service, directory.path());
+    let areas = journal_areas(&service);
+    let undo = Request::new(Operation::Undo);
+    undo.cancellation.cancel();
+    assert!(!service.execute(undo, |_| {}).succeeded());
+    service.shutdown();
+    assert!(areas.iter().all(|area| !area.exists()));
+    assert_eq!(
+        fs::read(directory.path().join("destination/file.txt")).unwrap(),
+        b"new"
+    );
+}
+
+#[test]
 fn copy_names_increment_before_extension_and_preserve_native_names() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("report.final.txt");

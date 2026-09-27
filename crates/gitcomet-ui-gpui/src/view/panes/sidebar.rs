@@ -25,6 +25,8 @@ use crate::view::components::InteractiveRowExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 pub(in crate::view) mod explorer_operations;
 pub(in crate::view) use explorer_operations::ExplorerAction;
+mod file_browser_status;
+use file_browser_status::FileBrowserStatusCache;
 // File rows borrow the branch tree's row height: one rhythm for both lists.
 use crate::view::rows::sidebar::{sidebar_list_row_height, sidebar_list_row_height_px};
 
@@ -348,6 +350,7 @@ pub(in super::super) struct SidebarPaneView {
     selected_branch: Option<SelectedBranch>,
     file_search_options: DiffSearchOptions,
     file_browser_rows_cache: FileBrowserRowsCache,
+    file_browser_status_cache: std::cell::RefCell<FileBrowserStatusCache>,
     /// Set transiently while rendering a collapsed-sidebar section popover so the
     /// shared branch-row renderer draws the section-scoped rows instead of the
     /// full cached presentation. `None` during normal (expanded) rendering.
@@ -471,6 +474,7 @@ struct SidebarNotifyFingerprint {
     /// has to repaint when it changes — nothing else in this fingerprint moves
     /// when the user opens a different file.
     diff_target_rev: u64,
+    status_revs: (u64, u64),
 }
 
 impl SidebarNotifyFingerprint {
@@ -481,21 +485,17 @@ impl SidebarNotifyFingerprint {
 
     fn from_state_with_cache(state: &AppState, cache: &mut SidebarPresentationCache) -> Self {
         let active_repo_id = state.active_repo;
-        let repo_fingerprint = active_repo_id
-            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
-            .map(BranchSidebarFingerprint::from_repo);
+        let repo = active_repo_id.and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id));
+        let repo_fingerprint = repo.map(BranchSidebarFingerprint::from_repo);
         let (open_repo_workdirs_count, open_repo_workdirs_hash) =
             open_repo_workdirs_fingerprint(state);
         let (active_workspace_badges_count, active_workspace_badges_hash) =
             cache.active_workspace_badges_fingerprint(state);
-        let file_browser_rev = active_repo_id
-            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
-            .map(|r| r.file_browser.file_browser_rev)
-            .unwrap_or(0);
-        let diff_target_rev = active_repo_id
-            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
-            .map(|r| r.diff_state.diff_target_rev)
-            .unwrap_or(0);
+        let file_browser_rev = repo.map(|r| r.file_browser.file_browser_rev).unwrap_or(0);
+        let diff_target_rev = repo.map(|r| r.diff_state.diff_target_rev).unwrap_or(0);
+        let status_revs = repo
+            .map(|r| (r.worktree_status_cache_rev(), r.staged_status_cache_rev()))
+            .unwrap_or_default();
         Self {
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
@@ -506,6 +506,7 @@ impl SidebarNotifyFingerprint {
             active_workspace_badges_hash,
             file_browser_rev,
             diff_target_rev,
+            status_revs,
         }
     }
 }
@@ -707,6 +708,7 @@ impl SidebarPaneView {
             selected_branch: None,
             file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
+            file_browser_status_cache: Default::default(),
             collapsed_popover_presentation: None,
             collapsed_popover_rows_cache: None,
             collapsed_popover_section: None,
@@ -2971,6 +2973,8 @@ impl SidebarPaneView {
         // than joining and cloning it per row per frame.
         let selection_sources: Rc<[PathBuf]> = Rc::from(this.explorer_sources(None));
         let repo = this.active_repo();
+        let status_badges =
+            repo.and_then(|repo| this.file_browser_status_cache.borrow_mut().get(repo));
         // The file the main pane is showing, so the tree can mark it. Read
         // whatever the target names — a diff of a file is still "this file is
         // open", not only the read-only content view.
@@ -3185,28 +3189,9 @@ impl SidebarPaneView {
                     // sees that it is holding unsaved text.
                     let has_unsaved_edits =
                         !is_directory && unsaved_paths.contains(entry.path.as_ref());
-                    let status = repo
-                        .filter(|r| {
-                            r.file_browser.source
-                                == gitcomet_core::domain::FileSource::WorkingDirectory
-                        })
-                        .and_then(|r| {
-                            [DiffArea::Unstaged, DiffArea::Staged]
-                                .into_iter()
-                                .find_map(|area| {
-                                    r.status_entries_for_area(area)
-                                        .unwrap_or(&[])
-                                        .iter()
-                                        .find(|status| {
-                                            if is_directory {
-                                                status.path.starts_with(entry.path.as_path())
-                                            } else {
-                                                status.path == *entry.path
-                                            }
-                                        })
-                                        .map(|status| status.kind)
-                                })
-                        });
+                    let status = status_badges
+                        .as_ref()
+                        .and_then(|badges| badges.get(&entry.path, is_directory));
                     let row_state = components::InteractiveRowState::default()
                         .selected(
                             selected
@@ -4170,6 +4155,22 @@ mod tests {
                 workdir: PathBuf::from(path),
             },
         )
+    }
+
+    #[test]
+    fn sidebar_repaints_when_either_status_lane_changes() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            sidebar_mode: SidebarMode::Files,
+            ..AppState::test_default()
+        };
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+        state.repos[0].worktree_status_rev += 1;
+        let worktree = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(initial, worktree);
+        state.repos[0].staged_status_rev += 1;
+        assert_ne!(worktree, SidebarNotifyFingerprint::from_state(&state));
     }
 
     #[test]
