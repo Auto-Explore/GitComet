@@ -1639,7 +1639,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R", "B", "I", "M"]);
+    assert_declared_shortcuts(&commit_model, &["C", "T", "D", "P", "R", "B", "I", "M"]);
     assert_shortcut_action!(
         commit_model,
         "Enter",
@@ -1650,6 +1650,11 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                 path: None
             }
         } if *rid == repo_id && cid == &commit_id
+    );
+    assert_shortcut_action!(
+        commit_model,
+        "C",
+        ContextMenuAction::CopyText { text } if text == commit_id.as_ref()
     );
     assert_shortcut_action!(
         commit_model,
