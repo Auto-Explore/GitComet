@@ -404,10 +404,13 @@ impl MainPaneView {
                         return;
                     }
                     let text = this.conflict_resolver_save_contents_from_text(text);
+                    let Some(contents) = this.conflict_output_bytes_for_save(text, cx) else {
+                        return;
+                    };
                     this.store.dispatch(Msg::SaveWorktreeFile {
                         repo_id,
                         path: save_path.clone(),
-                        contents: text,
+                        contents,
                         stage: false,
                     });
                 });
@@ -440,12 +443,16 @@ impl MainPaneView {
                                     cx.notify();
                                 } else {
                                     let text = this.conflict_resolver_save_contents_from_text(text);
-                                    this.store.dispatch(Msg::SaveWorktreeFile {
-                                        repo_id,
-                                        path: stage_path.clone(),
-                                        contents: text,
-                                        stage: true,
-                                    });
+                                    if let Some(contents) =
+                                        this.conflict_output_bytes_for_save(text, cx)
+                                    {
+                                        this.store.dispatch(Msg::SaveWorktreeFile {
+                                            repo_id,
+                                            path: stage_path.clone(),
+                                            contents,
+                                            stage: true,
+                                        });
+                                    }
                                 }
                             });
                     if gate_unresolved > 0 {

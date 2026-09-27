@@ -106,6 +106,7 @@ impl TextInput {
             display_truncation: None,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
+            tab_size: TEXT_INPUT_WRAP_TAB_STOP_COLUMNS,
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             line_height_override: None,
             appearance_metrics: crate::appearance::current(cx),
@@ -773,6 +774,11 @@ impl TextInput {
         self.interaction.submit_on_enter = submit_on_enter;
     }
 
+    #[cfg(test)]
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
         if self.read_only == read_only {
             return;
@@ -914,9 +920,13 @@ impl TextInput {
     ///
     /// Reads just that row out of the rope, so maintaining the cache after an
     /// edit costs O(log n) per touched row rather than a whole-document scan.
-    fn content_width_line_units(content: &TextModelSnapshot, line_ix: usize) -> usize {
+    fn content_width_line_units(
+        content: &TextModelSnapshot,
+        line_ix: usize,
+        tab_size: usize,
+    ) -> usize {
         let line = content.slice(content.line_range_with_terminator(line_ix));
-        line.len().max(line_display_columns(&line))
+        line.len().max(line_display_columns(&line, tab_size))
     }
 
     fn affected_lines(content: &TextModelSnapshot, byte_range: Range<usize>) -> Range<usize> {
@@ -928,11 +938,12 @@ impl TextInput {
 
     fn rebuild_content_width_cache(&mut self) {
         let content = self.content.snapshot();
+        let tab_size = self.tab_size;
         let line_count = content.line_count().max(1);
         let mut cache = ContentWidthCache::default();
         cache.line_units.reserve(line_count);
         for line_ix in 0..line_count {
-            let units = Self::content_width_line_units(&content, line_ix);
+            let units = Self::content_width_line_units(&content, line_ix, tab_size);
             cache.line_units.push(units);
             *cache.unit_counts.entry(units).or_default() += 1;
         }
@@ -974,6 +985,7 @@ impl TextInput {
         };
 
         let content = self.content.snapshot();
+        let tab_size = self.tab_size;
         let new_affected = Self::affected_lines(&content, inserted.clone());
         self.mark_wrap_dirty_from_edit(old_affected.clone(), new_affected.clone());
         if self.content_width_cache.is_none() {
@@ -981,7 +993,7 @@ impl TextInput {
         }
         let replacement_units = new_affected
             .clone()
-            .map(|line_ix| Self::content_width_line_units(&content, line_ix))
+            .map(|line_ix| Self::content_width_line_units(&content, line_ix, tab_size))
             .collect::<Vec<_>>();
         let cache = self
             .content_width_cache
@@ -1189,10 +1201,16 @@ impl TextInput {
             );
             owned_runs.as_slice()
         };
-        let shaped =
-            window
-                .text_system()
-                .shape_line(capped_text, shape_style.font_size, runs, None);
+        let with_tabs = capped_text.clone();
+        let mut shaped = window.text_system().shape_line(
+            shaping_text_without_tabs(capped_text),
+            shape_style.font_size,
+            runs,
+            None,
+        );
+        if let Some(layout) = apply_tab_stops(&shaped, &with_tabs, self.tab_size) {
+            *shaped = Arc::new(layout);
+        }
         self.layout.plain_line_cache.insert(key, shaped.clone());
         self.trim_shape_caches();
         shaped
@@ -1295,10 +1313,12 @@ impl TextInput {
         let width_key = wrap_width_cache_key(rounded_wrap_width);
         let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
         let synchronous = line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD;
+        let tab_size = self.tab_size;
         estimate_wrap_rows_budgeted(
             display_text,
             line_starts,
             wrap_columns,
+            tab_size,
             &mut self.wrap.row_counts,
             &self.wrap.row_counts_current,
             if synchronous {
@@ -1326,7 +1346,7 @@ impl TextInput {
         let snapshot = display_text.to_string();
         let estimate = cx
             .background_executor()
-            .spawn(async move { estimate_wrap_rows_for_text(&snapshot, wrap_columns) });
+            .spawn(async move { estimate_wrap_rows_for_text(&snapshot, wrap_columns, tab_size) });
         cx.spawn(
             async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
                 let rows = estimate.await;
@@ -1439,6 +1459,18 @@ impl TextInput {
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
         }
+        cx.notify();
+    }
+
+    /// Columns a tab advances to. Tabs stay tab characters in the text.
+    pub fn set_tab_size(&mut self, tab_size: usize, cx: &mut Context<Self>) {
+        let tab_size = tab_size.max(1);
+        if self.tab_size == tab_size {
+            return;
+        }
+        self.tab_size = tab_size;
+        self.bump_shape_style_epoch();
+        self.rebuild_content_width_cache_if_present();
         cx.notify();
     }
 

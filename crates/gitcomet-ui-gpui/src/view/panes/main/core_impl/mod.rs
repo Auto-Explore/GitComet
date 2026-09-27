@@ -191,6 +191,9 @@ impl MainPaneView {
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
+            // How the file is read: a new choice or new attributes re-read it.
+            repo.diff_state.text_override_rev.hash(&mut hasher);
+            repo.diff_state.text_attributes_rev.hash(&mut hasher);
             // The historical-browse tint keys off content-preview mode, which can
             // share a diff_target with a plain diff of the same commit+path.
             repo.diff_state.content_preview.hash(&mut hasher);
@@ -415,13 +418,18 @@ impl MainPaneView {
             cx.notify();
             return;
         }
-        let output = save_payload.output;
+        let workdir = repo.spec.workdir.clone();
         let exit_code = focused_mergetool_save_exit_code(
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
+        // Written back in the encoding the file was read in.
+        let Some(output) = self.conflict_output_bytes_for_save(save_payload.output, cx) else {
+            cx.notify();
+            return;
+        };
         self.finish_focused_mergetool_output(
-            &repo.spec.workdir,
+            &workdir,
             &path,
             FocusedMergetoolOutput::Write(output.as_bytes()),
             exit_code,
@@ -430,19 +438,41 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn focused_mergetool_write_side_and_exit(
-        &self,
+        &mut self,
         repo_id: RepoId,
         path: &std::path::Path,
         bytes: &[u8],
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        let Some(workdir) = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.spec.workdir.clone())
+        else {
             self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
             cx.quit();
             return;
         };
+        // A side that decoded as text is held as UTF-8; write it in the file's
+        // own encoding. Binary sides never pass as UTF-8 and keep their bytes.
+        let encoded;
+        let bytes = match (
+            self.conflict_current_text_format(),
+            std::str::from_utf8(bytes),
+        ) {
+            (Some(format), Ok(text)) if !format.format.is_plain_utf8() => {
+                let Some(bytes) = self.conflict_output_bytes_for_save(text.to_string(), cx) else {
+                    return;
+                };
+                encoded = bytes;
+                encoded.as_bytes()
+            }
+            _ => bytes,
+        };
         self.finish_focused_mergetool_output(
-            &repo.spec.workdir,
+            &workdir,
             path,
             FocusedMergetoolOutput::Write(bytes),
             FOCUSED_MERGETOOL_EXIT_SUCCESS,

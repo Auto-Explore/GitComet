@@ -1821,6 +1821,7 @@ impl MainPaneView {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        self.sync_display_tab_width(cx);
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
@@ -2386,6 +2387,7 @@ impl MainPaneView {
             );
 
         let disk_notice = self.render_file_disk_notice(theme, cx);
+        let text_format_strip = self.text_format_strip(cx);
 
         let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)
@@ -3426,6 +3428,7 @@ impl MainPaneView {
                     .h_full()
                     .child(body),
             )
+            .when_some(text_format_strip, |d, strip| d.child(strip))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker { view: cx.entity() })
     }

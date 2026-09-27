@@ -58,6 +58,8 @@ mod signatures;
 mod status;
 mod submodules;
 mod tags;
+mod text_attributes;
+mod text_decode;
 mod worktrees;
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
@@ -461,6 +463,9 @@ pub(crate) struct GixRepo {
     ref_metadata_cache: RefMetadataCache,
     preview_blob_verified: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, VerifiedPreviewBlob>>,
     worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
+    /// Keyed by source identity, attributes and encoding choice.
+    text_format_memo:
+        std::sync::Mutex<rustc_hash::FxHashMap<u64, text_decode::TextFormatMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
     /// Immutable signature formats by oid. `None` means an unsigned commit.
@@ -485,6 +490,7 @@ impl GixRepo {
             ref_metadata_cache: std::sync::Mutex::new(None),
             preview_blob_verified: std::sync::Mutex::default(),
             worktree_source_memo: std::sync::Mutex::default(),
+            text_format_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
@@ -945,8 +951,7 @@ impl GitRepository for GixRepo {
     }
 
     fn diff_parsed(&self, target: &DiffTarget) -> Result<Diff> {
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
-        self.diff_parsed_impl(target)
+        self.diff_parsed_with_encoding_cancellable(target, None, &CancellationToken::new())
     }
 
     fn diff_parsed_cancellable(
@@ -954,12 +959,21 @@ impl GitRepository for GixRepo {
         target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<Diff> {
+        self.diff_parsed_with_encoding_cancellable(target, None, cancellation)
+    }
+
+    fn diff_parsed_with_encoding_cancellable(
+        &self,
+        target: &DiffTarget,
+        encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
-        self.diff_parsed_cancellable_impl(target, cancellation)
+        self.diff_parsed_with_encoding_impl(target, encoding, cancellation)
     }
 
     fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
-        self.diff_file_text_impl(target)
+        self.diff_file_text_decoded_impl(target, None, &CancellationToken::new())
     }
 
     fn diff_file_text_cancellable(
@@ -967,9 +981,22 @@ impl GitRepository for GixRepo {
         target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffText>> {
-        let result = self.diff_file_text_impl_cancellable(target, cancellation);
+        self.diff_file_text_with_encoding_cancellable(target, None, cancellation)
+    }
+
+    fn diff_file_text_with_encoding_cancellable(
+        &self,
+        target: &DiffTarget,
+        encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        let result = self.diff_file_text_decoded_impl(target, encoding, cancellation);
         cancellation.check_cancelled()?;
         result
+    }
+
+    fn text_attributes(&self, path: &Path) -> Result<gitcomet_core::text_format::TextAttributes> {
+        self.text_attributes_impl(path)
     }
 
     fn diff_preview_text_file(
@@ -1011,6 +1038,14 @@ impl GitRepository for GixRepo {
 
     fn conflict_session(&self, path: &Path) -> Result<Option<ConflictSession>> {
         self.conflict_session_impl(path)
+    }
+
+    fn conflict_session_with_encoding(
+        &self,
+        path: &Path,
+        encoding: Option<gitcomet_core::text_format::TextEncoding>,
+    ) -> Result<Option<ConflictSession>> {
+        self.conflict_session_with_encoding_impl(path, encoding)
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
@@ -1439,7 +1474,7 @@ impl GitRepository for GixRepo {
 
     fn apply_unified_patch_to_index_with_output(
         &self,
-        patch: &str,
+        patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
         self.apply_unified_patch_to_index_with_output_impl(patch, reverse)
@@ -1447,7 +1482,7 @@ impl GitRepository for GixRepo {
 
     fn apply_unified_patch_to_worktree_with_output(
         &self,
-        patch: &str,
+        patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
         self.apply_unified_patch_to_worktree_with_output_impl(patch, reverse)

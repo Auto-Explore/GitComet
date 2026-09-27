@@ -241,6 +241,36 @@ impl ConflictPayload {
         matches!(self, ConflictPayload::Binary(_))
     }
 
+    /// Decode `bytes` as the attributes, content or the user's `encoding` say;
+    /// content that is text in no encoding stays `Binary`. `text` is the same
+    /// bytes already known to be UTF-8, reused when they read as UTF-8.
+    pub fn decode(
+        bytes: Option<Arc<[u8]>>,
+        text: Option<Arc<str>>,
+        kind: crate::text_format::SideKind,
+        attributes: &crate::text_format::TextAttributes,
+        encoding: Option<crate::text_format::TextEncoding>,
+    ) -> (Self, Option<crate::text_format::SideTextFormat>) {
+        let raw: &[u8] = match (&bytes, &text) {
+            (Some(bytes), _) => bytes,
+            (None, Some(text)) => text.as_bytes(),
+            (None, None) => return (ConflictPayload::Absent, None),
+        };
+        let decoded = crate::text_format::decode_bytes(raw, kind, attributes, encoding);
+        let format = decoded.format;
+        if format.binary {
+            return (ConflictPayload::Binary(Arc::from(raw)), Some(format));
+        }
+        let unchanged =
+            format.format.is_plain_utf8() && matches!(decoded.text, std::borrow::Cow::Borrowed(_));
+        let decoded: Arc<str> = if unchanged && let Some(text) = &text {
+            Arc::clone(text)
+        } else {
+            Arc::from(decoded.text.as_ref())
+        };
+        (ConflictPayload::Text(decoded), Some(format))
+    }
+
     /// Try to create from raw bytes: if valid UTF-8, produce `Text`; otherwise `Binary`.
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         match String::from_utf8(bytes) {
@@ -589,6 +619,9 @@ pub struct ConflictSession {
     /// Structural split/join edits update this projection without pretending
     /// that the worktree changed before Save.
     pub marker_projection: Option<Arc<str>>,
+    /// How the working-tree file was read, so a save writes it back the same
+    /// way. `None` when nothing decoded it (plain UTF-8 or no worktree file).
+    pub current_format: Option<crate::text_format::SideTextFormat>,
     /// Parsed conflict regions (populated for marker-based text conflicts).
     pub regions: Vec<ConflictRegion>,
     /// Source coordinates corresponding positionally to [`regions`](Self::regions).
@@ -677,6 +710,7 @@ impl ConflictSession {
             .collect();
         Self {
             path,
+            current_format: None,
             conflict_kind,
             strategy,
             base,

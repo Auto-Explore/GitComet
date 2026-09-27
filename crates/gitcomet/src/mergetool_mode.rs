@@ -1,4 +1,5 @@
 use crate::cli::{MergetoolConfig, exit_code};
+use gitcomet_core::text_format::{SideKind, TextAttributes, TextFormat, decode, decode_bytes};
 use gitcomet_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
     conflict_session::try_autosolve_merge_plan,
@@ -47,6 +48,26 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         })
         .transpose()?;
 
+    // Text in another encoding merges as UTF-8 and is written back as it was.
+    let decoded = decode_merge_inputs(base_bytes.as_deref(), &local_bytes, &remote_bytes);
+    let (base_bytes, local_bytes, remote_bytes, output_format) = match decoded {
+        Some((base, local, remote, format)) => (
+            base.map(String::into_bytes),
+            local.into_bytes(),
+            remote.into_bytes(),
+            Some(format),
+        ),
+        None => (base_bytes, local_bytes, remote_bytes, None),
+    };
+    let encode_output = |text: &str| -> Result<Vec<u8>, String> {
+        match output_format {
+            Some(format) => gitcomet_core::text_format::encode(text, format)
+                .map(|bytes| bytes.into_owned())
+                .map_err(|unmappable| format!("Failed to write merged output: {unmappable}")),
+            None => Ok(text.as_bytes().to_vec()),
+        }
+    };
+
     // Build merge options from config labels and algorithm preferences.
     let options = MergeOptions {
         style: config.conflict_style,
@@ -79,7 +100,7 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     let conflict_count = result.conflict_count;
 
     // Write merged output to MERGED path.
-    write_merged_output(config, result.output.as_bytes())?;
+    write_merged_output(config, &encode_output(&result.output)?)?;
 
     if is_clean {
         let display_name = merged_display_name(config);
@@ -92,7 +113,7 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         // Auto mode: try heuristic passes on conflict blocks.
         if let Some(clean_output) = try_autosolve_merge_plan(&plan, &options) {
             // All conflicts resolved by heuristics — write clean output.
-            write_merged_output(config, clean_output.as_bytes())?;
+            write_merged_output(config, &encode_output(&clean_output)?)?;
             let display_name = merged_display_name(config);
             Ok(MergetoolRunResult {
                 stdout: String::new(),
@@ -122,6 +143,41 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
             exit_code: exit_code::CANCELED,
         })
     }
+}
+
+/// The inputs decoded to UTF-8, and the format to write the result in, when
+/// they are text that is not all UTF-8. The local side (the file as it was)
+/// decides the encoding; `None` leaves the bytes to the byte-level merge, which
+/// treats anything undecodable as binary.
+fn decode_merge_inputs(
+    base: Option<&[u8]>,
+    local: &[u8],
+    remote: &[u8],
+) -> Option<(Option<String>, String, String, TextFormat)> {
+    let sides = || base.into_iter().chain([local, remote]);
+    if sides().all(|bytes| std::str::from_utf8(bytes).is_ok()) {
+        return None;
+    }
+    let attributes = TextAttributes::default();
+    let local_format = decode_bytes(local, SideKind::Worktree, &attributes, None).format;
+    if !local_format.is_writable() {
+        return None;
+    }
+    let encoding = local_format.format.encoding;
+    let decode_side = |bytes: &[u8]| -> Option<String> {
+        let bom = encoding.bom().is_some_and(|bom| bytes.starts_with(bom));
+        let decoded = decode(bytes, TextFormat { encoding, bom });
+        (!decoded.malformed).then(|| decoded.text.into_owned())
+    };
+    Some((
+        match base {
+            Some(base) => Some(decode_side(base)?),
+            None => None,
+        },
+        decode_side(local)?,
+        decode_side(remote)?,
+        local_format.format,
+    ))
 }
 
 /// Extract a human-readable display name from the MERGED output path.

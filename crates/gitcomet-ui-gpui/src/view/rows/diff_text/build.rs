@@ -3,19 +3,12 @@ use crate::kit::click::PointerClickExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 use palette::IntoColor;
 
+/// A whole line with its tabs expanded to tab stops.
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
         return SharedString::new(s);
     }
-
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\t' => out.push_str("    "),
-            _ => out.push(ch),
-        }
-    }
-    out.into()
+    crate::view::tab_width::expand_tabs(s).into_owned().into()
 }
 
 #[inline]
@@ -111,6 +104,7 @@ pub(super) fn build_diff_text_segments(
         let mut token_ix = 0usize;
         let mut word_ix = 0usize;
         let mut query_ix = 0usize;
+        let mut column = 0usize;
         let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
         for w in boundaries.windows(2) {
             let (a, b) = (w[0], w[1]);
@@ -139,8 +133,11 @@ pub(super) fn build_diff_text_segments(
             let in_word = segment_overlaps_sorted_ranges(a, b, word_ranges, &mut word_ix);
             let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
 
+            // Segments continue one line, so tab stops count from its start.
+            let mut expanded = String::with_capacity(seg.len());
+            crate::view::tab_width::push_expanded(&mut expanded, seg, &mut column);
             segments.push(CachedDiffTextSegment {
-                text: maybe_expand_tabs(seg),
+                text: expanded.into(),
                 in_word,
                 in_query,
                 syntax,
@@ -583,6 +580,7 @@ pub(super) fn build_styled_text_fused(
         let mut token_ix = 0usize;
         let mut word_ix = 0usize;
         let mut query_ix = 0usize;
+        let mut column = 0usize;
 
         for w in boundaries.windows(2) {
             let (a, b) = (w[0], w[1]);
@@ -609,13 +607,9 @@ pub(super) fn build_styled_text_fused(
             let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
 
             let offset = combined.len();
-            if has_tabs && seg.contains('\t') {
-                for ch in seg.chars() {
-                    match ch {
-                        '\t' => combined.push_str("    "),
-                        _ => combined.push(ch),
-                    }
-                }
+            if has_tabs {
+                // Segments continue one line, so tab stops count from its start.
+                crate::view::tab_width::push_expanded(&mut combined, seg, &mut column);
             } else {
                 combined.push_str(seg);
             }
@@ -1133,13 +1127,12 @@ fn expanded_text_and_remapped_relative_highlights(
 
     let mut out = String::with_capacity(text.len());
     let mut byte_map = vec![0usize; text.len() + 1];
+    let mut column = 0usize;
 
     for (start, ch) in text.char_indices() {
         byte_map[start] = out.len();
-        match ch {
-            '\t' => out.push_str("    "),
-            _ => out.push(ch),
-        }
+        let mut buf = [0u8; 4];
+        crate::view::tab_width::push_expanded(&mut out, ch.encode_utf8(&mut buf), &mut column);
         let end = start + ch.len_utf8();
         let mapped_end = out.len();
         for mapped in byte_map.iter_mut().take(end + 1).skip(start + 1) {

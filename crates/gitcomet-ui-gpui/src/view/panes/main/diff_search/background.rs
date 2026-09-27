@@ -166,7 +166,11 @@ mod tests {
                     "a row without tabs is shared, not copied"
                 );
                 let row = (rows.text)(tab_row, 0).expect("row text");
-                assert_eq!(row.as_ref(), "+    needle", "tabs still expand");
+                assert_eq!(
+                    row.as_ref(),
+                    "+   needle",
+                    "tabs still expand to their stop"
+                );
             });
         });
     }

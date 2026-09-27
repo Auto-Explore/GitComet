@@ -207,8 +207,10 @@ fn binary_content_copies_local_and_returns_conflict() {
     let local_path = tmp.path().join("local.bin");
     let remote_path = tmp.path().join("remote.bin");
 
-    let local_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
-    let remote_bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0]; // JPEG header
+    // PNG and JPEG headers as far as their first NUL, which is what makes
+    // content binary (as it does for git).
+    let local_bytes: Vec<u8> = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+    let remote_bytes: Vec<u8> = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00".to_vec();
 
     write_bytes(&merged_path, b"placeholder");
     write_bytes(&local_path, &local_bytes);
@@ -239,14 +241,14 @@ fn binary_content_copies_local_and_returns_conflict() {
 }
 
 #[test]
-fn non_utf8_content_without_nul_is_treated_as_binary_conflict() {
+fn non_utf8_text_without_nul_conflicts_as_text_in_its_own_encoding() {
     let tmp = tempfile::tempdir().unwrap();
     let merged_path = tmp.path().join("merged.dat");
     let local_path = tmp.path().join("local.dat");
     let remote_path = tmp.path().join("remote.dat");
 
-    // These payloads are intentionally invalid UTF-8 but contain no NUL
-    // bytes to ensure we specifically exercise non-UTF-8 detection.
+    // Invalid UTF-8 without NUL bytes is text in another encoding (git
+    // merges it as text too), not binary.
     let local_bytes: Vec<u8> = b"prefix\n\xFF\n".to_vec();
     let remote_bytes: Vec<u8> = b"prefix\n\xFE\n".to_vec();
 
@@ -271,11 +273,22 @@ fn non_utf8_content_without_nul_is_treated_as_binary_conflict() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::CANCELED);
-    assert!(result.stderr.contains("binary"));
+    assert!(
+        result.stderr.contains("CONFLICT (content)"),
+        "{}",
+        result.stderr
+    );
 
-    // Conflict fallback keeps local bytes in MERGED.
+    // Markers around both sides, each written back in its original bytes.
     let output = fs::read(&merged_path).unwrap();
-    assert_eq!(output, local_bytes);
+    let contains = |needle: &[u8]| output.windows(needle.len()).any(|window| window == needle);
+    assert!(contains(b"<<<<<<<"));
+    assert!(contains(b"\n\xFF\n"));
+    assert!(contains(b"\n\xFE\n"));
+    assert!(
+        std::str::from_utf8(&output).is_err(),
+        "no UTF-8 re-encoding"
+    );
 }
 
 #[test]
@@ -658,8 +671,8 @@ fn merged_output_parent_dirs_created_for_binary_conflict() {
     let local_path = tmp.path().join("local.bin");
     let remote_path = tmp.path().join("remote.bin");
 
-    let local_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47];
-    let remote_bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    let local_bytes: Vec<u8> = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+    let remote_bytes: Vec<u8> = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00".to_vec();
     write_bytes(&local_path, &local_bytes);
     write_bytes(&remote_path, &remote_bytes);
 
@@ -1275,4 +1288,46 @@ fn merge_conflict_with_files_scattered_across_directories() {
     assert!(merged.contains("<<<<<<<"), "conflict markers expected");
     assert!(merged.contains("local"), "local side content expected");
     assert!(merged.contains("remote"), "remote side content expected");
+}
+
+// ── Encodings ────────────────────────────────────────────────────
+
+#[test]
+fn latin1_sides_merge_as_text_and_stay_latin1() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(tmp.path(), Some(""), "", "", "");
+    write_bytes(
+        config.base.as_ref().unwrap(),
+        b"caf\xe9\nligne deux\nligne trois\n",
+    );
+    write_bytes(&config.local, b"CAF\xc9\nligne deux\nligne trois\n");
+    write_bytes(&config.remote, b"caf\xe9\nligne deux\nligne tr\xe8s\n");
+
+    let result = run_mergetool(&config).unwrap();
+    assert_eq!(result.exit_code, exit_code::SUCCESS, "{}", result.stderr);
+    assert_eq!(
+        fs::read(&config.merged).unwrap(),
+        b"CAF\xc9\nligne deux\nligne tr\xe8s\n".to_vec(),
+        "merged as text, written back in the files' encoding"
+    );
+}
+
+#[test]
+fn utf16_sides_keep_their_bom_and_encoding() {
+    let utf16 = |text: &str| {
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(tmp.path(), Some(""), "", "", "");
+    write_bytes(config.base.as_ref().unwrap(), &utf16("a\nb\nc\n"));
+    write_bytes(&config.local, &utf16("A\nb\nc\n"));
+    write_bytes(&config.remote, &utf16("a\nb\nC\n"));
+
+    let result = run_mergetool(&config).unwrap();
+    assert_eq!(result.exit_code, exit_code::SUCCESS, "{}", result.stderr);
+    assert_eq!(fs::read(&config.merged).unwrap(), utf16("A\nb\nC\n"));
 }

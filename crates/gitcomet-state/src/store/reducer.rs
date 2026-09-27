@@ -247,6 +247,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::SelectDiff { .. }
+            | Msg::SetTextOverride { .. }
             | Msg::SelectConflictDiff { .. }
             | Msg::SelectWorktreeUncommitted { .. }
             | Msg::LoadStashes { .. }
@@ -311,6 +312,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::SaveWorktreeFile { .. }
             | Msg::AppendGitignorePatterns { .. }
+            | Msg::AppendGitattributesRule { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
@@ -704,7 +706,8 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // want of credentials — and this replay path exists only to re-run a
         // command after an auth prompt. Retaining `patterns` would make a replay
         // possible; there is just nothing here that an auth prompt could fix.
-        RepoCommandKind::AppendGitignorePatterns { .. } => return None,
+        RepoCommandKind::AppendGitignorePatterns { .. }
+        | RepoCommandKind::AppendGitattributesRule { .. } => return None,
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
@@ -1331,6 +1334,11 @@ fn reduce_inner(
         Msg::SelectDiff { repo_id, target } => {
             diff_selection::select_diff(repos, state, repo_id, target)
         }
+        Msg::SetTextOverride {
+            repo_id,
+            path,
+            value,
+        } => diff_selection::set_text_override(state, repo_id, path, value),
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
             origin,
@@ -1918,6 +1926,10 @@ fn reduce_inner(
         Msg::AppendGitignorePatterns { repo_id, patterns } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
+        }
+        Msg::AppendGitattributesRule { repo_id, rule } => {
+            begin_local_action(state, repo_id);
+            vec![Effect::AppendGitattributesRule { repo_id, rule }]
         }
         Msg::Commit {
             repo_id,
@@ -2727,6 +2739,11 @@ fn reduce_inner(
             target,
             result,
         }) => diff_selection::diff_file_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
+            repo_id,
+            target,
+            result,
+        }) => diff_selection::text_attributes_loaded(state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
             repo_id,
             target,

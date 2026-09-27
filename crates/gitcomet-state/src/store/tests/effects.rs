@@ -1941,7 +1941,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
-            contents: contents.to_string(),
+            contents: contents.to_string().into(),
             stage: true,
         },
     );
@@ -1999,7 +1999,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: escaped_path,
-            contents: "escape".to_string(),
+            contents: "escape".to_string().into(),
             stage: false,
         },
     );
@@ -5915,7 +5915,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from("nested/new.txt"),
-                contents: "content".to_string(),
+                contents: "content".to_string().into(),
                 stage: true,
             },
             1,
@@ -6068,21 +6068,21 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::StageHunk {
                 repo_id,
-                patch: "@@ -1 +1 @@".to_string(),
+                patch: "@@ -1 +1 @@".to_string().into(),
             },
             1,
         ),
         (
             Effect::UnstageHunk {
                 repo_id,
-                patch: "@@ -1 +1 @@".to_string(),
+                patch: "@@ -1 +1 @@".to_string().into(),
             },
             1,
         ),
         (
             Effect::ApplyWorktreePatch {
                 repo_id,
-                patch: "@@ -1 +1 @@".to_string(),
+                patch: "@@ -1 +1 @@".to_string().into(),
                 reverse: true,
             },
             1,

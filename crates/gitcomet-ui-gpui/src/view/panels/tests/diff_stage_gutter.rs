@@ -160,6 +160,7 @@ fn stage_gutter_patch(
         let pane = view.read(app).main_pane.read(app);
         let visible_ix = visible_ix_for_text(&pane, text);
         pane.diff_stage_gutter_patch(visible_ix, kind)
+            .map(|patch| String::from_utf8(patch.as_bytes().to_vec()).expect("UTF-8 patch"))
     })
 }
 

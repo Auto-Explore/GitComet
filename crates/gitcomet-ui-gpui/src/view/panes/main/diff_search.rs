@@ -446,12 +446,7 @@ fn diff_search_displayed_text_matches_query(
     }
 
     expanded_tabs.clear();
-    for ch in text.chars() {
-        match ch {
-            '\t' => expanded_tabs.push_str("    "),
-            _ => expanded_tabs.push(ch),
-        }
-    }
+    crate::view::tab_width::push_expanded(expanded_tabs, text, &mut 0);
     query.is_match(expanded_tabs.as_str())
 }
 
@@ -460,14 +455,7 @@ fn expand_tabs_to_string(text: &str) -> String {
         return text.to_string();
     }
 
-    let mut expanded = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '\t' => expanded.push_str("    "),
-            _ => expanded.push(ch),
-        }
-    }
-    expanded
+    crate::view::tab_width::expand_tabs(text).into_owned()
 }
 
 pub(in crate::view) fn diff_search_split_row_texts_match_query(
@@ -571,14 +559,9 @@ fn inline_patch_diff_search_text<'a>(
         return Some(Cow::Borrowed(line.text.as_ref()));
     }
 
-    let mut expanded = String::with_capacity(line.text.len());
-    for ch in line.text.chars() {
-        match ch {
-            '\t' => expanded.push_str("    "),
-            _ => expanded.push(ch),
-        }
-    }
-    Some(Cow::Owned(expanded))
+    Some(Cow::Owned(
+        crate::view::tab_width::expand_tabs(line.text.as_ref()).into_owned(),
+    ))
 }
 
 fn inline_patch_diff_src_ix_for_visible_ix(
@@ -3971,7 +3954,7 @@ mod tests {
 
     #[test]
     fn split_row_text_search_matches_rendered_tab_expansion() {
-        let query = AsciiCaseInsensitiveNeedle::new("a    b").expect("query");
+        let query = AsciiCaseInsensitiveNeedle::new("a   b").expect("query");
         let mut expanded_tabs = String::new();
 
         assert!(diff_search_split_row_texts_match_query(

@@ -18,6 +18,8 @@ mod markdown_state;
 mod preview;
 pub(in crate::view) mod submodule_summary;
 mod surface;
+mod text_format;
+pub(in crate::view) use text_format::TextEncodingMenuState;
 
 #[cfg(feature = "benchmarks")]
 #[allow(unused_imports)]

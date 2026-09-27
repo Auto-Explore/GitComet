@@ -301,6 +301,9 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }
+            PopoverKind::TextFormatMenu { section } => {
+                self.context_menu_view(PopoverKind::TextFormatMenu { section }, cx)
+            }
             PopoverKind::CommitFileSortMenu { list } => {
                 self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }

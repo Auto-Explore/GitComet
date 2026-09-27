@@ -1063,6 +1063,7 @@ impl GitCometView {
         let annotate_enabled = ui_preferences.diff.annotate_enabled;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
@@ -1588,6 +1589,7 @@ impl GitCometView {
             annotate_enabled,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
             remote_markdown_image_policy,

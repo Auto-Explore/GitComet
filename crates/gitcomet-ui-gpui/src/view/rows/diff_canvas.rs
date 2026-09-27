@@ -1547,13 +1547,6 @@ fn whitespace_marker_len(ch: char) -> usize {
     }
 }
 
-fn diff_display_source_len_for_char(ch: char) -> usize {
-    match ch {
-        '\t' => 4,
-        _ => ch.len_utf8(),
-    }
-}
-
 pub(in crate::view) fn whitespace_visible_diff_offset_map(
     text: &str,
     append_eol_marker: bool,
@@ -1569,11 +1562,13 @@ pub(in crate::view) fn whitespace_visible_diff_offset_map(
     let mut source_to_display = vec![0usize; source_len.saturating_add(1)];
     let mut source = 0usize;
     let mut display = 0usize;
+    let mut column = 0usize;
 
     for ch in text.chars() {
         let source_start = source;
         let display_start = display;
-        source = source.saturating_add(diff_display_source_len_for_char(ch));
+        source = source.saturating_add(crate::view::tab_width::char_expanded_len(ch, column));
+        column += crate::view::tab_width::char_columns(ch, column);
         display = display.saturating_add(whitespace_marker_len(ch));
 
         if let Some(slot) = display_to_source.get_mut(display_start) {
@@ -4415,9 +4410,10 @@ mod tests {
         let offset_map = payload.offset_map.expect("reveal whitespace offset map");
         assert_eq!(offset_map.source_offset_for_display(0), 0);
         assert_eq!(offset_map.source_offset_for_display("a·".len()), 2);
-        assert_eq!(offset_map.source_offset_for_display("a·b→".len()), 7);
+        // The tab at column 3 expands to one space.
+        assert_eq!(offset_map.source_offset_for_display("a·b→".len()), 4);
         assert_eq!(offset_map.display_offset_for_source(2), "a·".len());
-        assert_eq!(offset_map.display_offset_for_source(7), "a·b→".len());
+        assert_eq!(offset_map.display_offset_for_source(4), "a·b→".len());
     }
 
     #[test]

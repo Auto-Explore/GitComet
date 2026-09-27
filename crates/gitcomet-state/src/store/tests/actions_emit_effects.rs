@@ -2078,7 +2078,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut state,
         Msg::ApplyWorktreePatch {
             repo_id,
-            patch: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            patch: "@@ -1 +1 @@\n-old\n+new\n".to_string().into(),
             reverse: true,
         },
     );
@@ -2349,7 +2349,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::SaveWorktreeFile {
             repo_id,
             path: PathBuf::from("src/lib.rs"),
-            contents: "fn main() {}".to_string(),
+            contents: "fn main() {}".to_string().into(),
             stage: true,
         },
     );

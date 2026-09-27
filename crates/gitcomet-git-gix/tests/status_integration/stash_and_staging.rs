@@ -849,7 +849,7 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
         .join("\n")
         + "\n";
     opened
-        .apply_unified_patch_to_index_with_output(&patch, false)
+        .apply_unified_patch_to_index_with_output(patch.as_bytes(), false)
         .unwrap();
 
     let staged_after = opened
@@ -953,7 +953,7 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
         + "\n";
 
     opened
-        .apply_unified_patch_to_index_with_output(&patch, false)
+        .apply_unified_patch_to_index_with_output(patch.as_bytes(), false)
         .unwrap();
 
     let staged_after_stage = opened
@@ -972,7 +972,7 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
     );
 
     opened
-        .apply_unified_patch_to_index_with_output(&patch, true)
+        .apply_unified_patch_to_index_with_output(patch.as_bytes(), true)
         .unwrap();
 
     let staged_after_unstage = opened
@@ -1216,7 +1216,7 @@ fn unstage_line_patch_must_describe_the_index_side() {
     );
     assert!(
         opened
-            .apply_unified_patch_to_index_with_output(staging_shaped, true)
+            .apply_unified_patch_to_index_with_output(staging_shaped.as_bytes(), true)
             .is_err(),
         "a patch describing the HEAD side cannot be reverse-applied to the index"
     );
@@ -1232,7 +1232,7 @@ fn unstage_line_patch_must_describe_the_index_side() {
         " context two\n",
     );
     opened
-        .apply_unified_patch_to_index_with_output(unstage_shaped, true)
+        .apply_unified_patch_to_index_with_output(unstage_shaped.as_bytes(), true)
         .expect("a patch describing the index side reverse-applies");
 
     let staged_after = opened
@@ -1299,7 +1299,7 @@ fn line_level_staging_round_trips_a_path_containing_spaces() {
          \x20context two\n"
     );
     opened
-        .apply_unified_patch_to_index_with_output(&one_line, false)
+        .apply_unified_patch_to_index_with_output(one_line.as_bytes(), false)
         .expect("a per-line patch for a spaced path must apply to the index");
 
     let staged_after = opened

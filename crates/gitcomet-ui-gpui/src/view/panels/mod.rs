@@ -47,6 +47,26 @@ pub(in crate::view) enum HistoryMenuRef {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    /// Read the open file in this encoding; `None` goes back to attributes
+    /// and detection.
+    SetTextEncoding {
+        encoding: Option<gitcomet_core::text_format::TextEncoding>,
+    },
+    ConvertLineEndings {
+        ending: gitcomet_core::text_format::LineEnding,
+    },
+    /// Write the editor's buffer in another encoding on its next save.
+    SaveWithEncoding {
+        format: gitcomet_core::text_format::TextFormat,
+    },
+    /// Tab width for the open file; `None` goes back to its attributes or
+    /// Settings.
+    SetTabSize {
+        size: Option<u8>,
+    },
+    AddGitattributesRule {
+        rule: String,
+    },
     ToggleHistoryRefGroup {
         target: HistoryMenuRef,
     },
@@ -477,12 +497,12 @@ pub(in crate::view) enum ContextMenuAction {
     },
     ApplyIndexPatch {
         repo_id: RepoId,
-        patch: String,
+        patch: gitcomet_state::msg::ContentBytes,
         reverse: bool,
     },
     ApplyWorktreePatch {
         repo_id: RepoId,
-        patch: String,
+        patch: gitcomet_state::msg::ContentBytes,
         reverse: bool,
     },
     StageHunk {

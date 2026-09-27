@@ -389,6 +389,61 @@ pub(super) fn selected_diff_load_plan(
     }
 }
 
+/// A `LoadSelectedDiff` also reads the selected file's attributes; loaded
+/// ones stay until they are replaced.
+pub(super) fn mark_text_attributes_loading(repo_state: &mut RepoState) {
+    let has_file = repo_state
+        .diff_state
+        .diff_target
+        .as_ref()
+        .and_then(DiffTarget::file_path)
+        .is_some();
+    if has_file && !matches!(repo_state.diff_state.text_attributes, Loadable::Ready(_)) {
+        repo_state.diff_state.text_attributes = Loadable::Loading;
+        repo_state.diff_state.text_attributes_rev =
+            repo_state.diff_state.text_attributes_rev.wrapping_add(1);
+    }
+}
+
+/// Read the open file again because what decides its decoding changed: as a
+/// conflict when it is one, otherwise as a new generation that keeps the
+/// content on screen and drops loads still reading it the old way.
+/// `attributes_changed` also makes the views wait for the new attributes.
+pub(super) fn reload_selected_file_text(
+    repo_state: &mut RepoState,
+    repo_id: RepoId,
+    target: &DiffTarget,
+    attributes_changed: bool,
+) -> Vec<Effect> {
+    if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
+        return match conflict_target {
+            SelectedConflictTarget::Current => start_current_conflict_target_reload(repo_state),
+            SelectedConflictTarget::Path(path) => start_conflict_target_reload(repo_state, path),
+        };
+    }
+    repo_state.diff_state.diff_target_rev = repo_state.diff_state.diff_target_rev.wrapping_add(1);
+    if attributes_changed && target.file_path().is_some() {
+        repo_state.diff_state.text_attributes = Loadable::Loading;
+        repo_state.diff_state.text_attributes_rev =
+            repo_state.diff_state.text_attributes_rev.wrapping_add(1);
+    }
+    let load_plan = selected_diff_load_plan(repo_state, target);
+    apply_selected_diff_load_plan_state_with_reload_mode(
+        repo_state,
+        load_plan,
+        DiffReloadMode::KeepLoaded,
+    );
+    repo_state.bump_diff_state_rev();
+    vec![Effect::LoadSelectedDiff {
+        repo_id,
+        load_patch_diff: load_plan.load_patch_diff,
+        load_file_text: load_plan.load_file_text,
+        preview_text_side: load_plan.preview_text_side,
+        load_submodule_summary: load_plan.load_submodule_summary,
+        load_file_image: load_plan.load_file_image,
+    }]
+}
+
 pub(super) fn apply_selected_diff_load_plan_state(
     repo_state: &mut RepoState,
     load_plan: SelectedDiffLoadPlan,
@@ -1331,6 +1386,7 @@ fn summarize_command(
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::AppendGitignorePatterns { .. } => "Update .gitignore",
+            RepoCommandKind::AppendGitattributesRule { .. } => "Update .gitattributes",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. }
             | RepoCommandKind::RemoveWorktree { .. }
@@ -1526,6 +1582,13 @@ fn summarize_command(
         // The worker skips the write when every pattern is already there, and
         // announcing "Added …" for a run that changed nothing would send the
         // user looking for a file that has not moved.
+        RepoCommandKind::AppendGitattributesRule { rule } => {
+            if output.stdout.trim() == gitcomet_core::gitattributes::NOTHING_TO_ADD {
+                "Already in .gitattributes; nothing added".to_string()
+            } else {
+                format!("Added {rule} to .gitattributes")
+            }
+        }
         RepoCommandKind::AppendGitignorePatterns { patterns } => {
             if output.stdout.trim() == gitcomet_core::gitignore::NOTHING_TO_ADD {
                 "Already in .gitignore; nothing added".to_string()

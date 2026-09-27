@@ -1073,6 +1073,7 @@ pub struct GitCometView {
     pub(super) annotate_enabled: bool,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
+    pub(super) diff_tab_size: u8,
     pub(super) diff_show_line_numbers: bool,
     pub(super) auto_save_file_edits: bool,
     pub(super) remote_markdown_image_policy: RemoteMarkdownImagePolicy,

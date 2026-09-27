@@ -171,7 +171,7 @@ impl gpui::IntoElement for MarkdownPreviewSharedHighlightsText {
 
 /// Map a `row.text` byte range onto the tab-expanded text that is painted.
 ///
-/// Styled preview text replaces every tab with [`DIFF_WRAP_TAB_EXPANDED_COLUMNS`]
+/// Styled preview text expands every tab to its tab stop
 /// spaces, so raw offsets would slice the painted text in the wrong place —
 /// shifted by three bytes per preceding tab, and cutting the tail short.
 pub(in crate::view) fn markdown_preview_expanded_slice_range(
@@ -183,14 +183,8 @@ pub(in crate::view) fn markdown_preview_expanded_slice_range(
         return range.clone();
     }
 
-    let expand = |offset: usize| {
-        let offset = offset.min(raw_text.len());
-        let tabs = raw_text.as_bytes()[..offset]
-            .iter()
-            .filter(|byte| **byte == b'\t')
-            .count();
-        offset + tabs * (DIFF_WRAP_TAB_EXPANDED_COLUMNS - 1)
-    };
+    let expand =
+        |offset: usize| crate::view::tab_width::display_offset_for_raw_offset(raw_text, offset);
 
     expand(range.start)..expand(range.end)
 }

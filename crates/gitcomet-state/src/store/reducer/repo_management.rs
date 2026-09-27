@@ -962,6 +962,7 @@ fn fill_set_active_repo_inline_impl(
                 append_start_conflict_target_reload(effects, repo_state, &conflict_path);
             }
             SelectedDiffReload::Diff(load_plan) => {
+                super::util::mark_text_attributes_loading(repo_state);
                 effects.push(Effect::LoadSelectedDiff {
                     repo_id,
                     load_patch_diff: load_plan.load_patch_diff,

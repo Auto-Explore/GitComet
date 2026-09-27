@@ -459,6 +459,18 @@ impl Render for SettingsWindowView {
                             this.set_diff_word_wrap(!this.diff_word_wrap, cx);
                         }));
 
+                    let diff_tab_size_row = self
+                        .summary_row(
+                            "settings_window_diff_tab_size",
+                            "Tab size",
+                            format!("{} spaces", self.diff_tab_size).into(),
+                            self.expanded_section == Some(SettingsSection::DiffTabSize),
+                            theme,
+                        )
+                        .on_activate(false, controls::ControlActivation::Action, cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::DiffTabSize, cx);
+                        }));
+
                     let diff_show_line_numbers_row = self
                         .toggle_row(
                             "settings_window_diff_show_line_numbers",
@@ -1594,7 +1606,43 @@ impl Render for SettingsWindowView {
                         .child(diff_whitespace_mode_row)
                         .child(diff_reveal_whitespace_chars_row)
                         .child(diff_word_wrap_row)
-                        .child(diff_show_line_numbers_row);
+                        .child(diff_tab_size_row);
+
+                    if self.expanded_section == Some(SettingsSection::DiffTabSize) {
+                        let list = uniform_list(
+                            "settings_window_diff_tab_size_list",
+                            DIFF_TAB_SIZE_OPTIONS.len(),
+                            cx.processor(Self::render_diff_tab_size_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.diff_tab_size_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.diff_tab_size_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+                        diff_card = diff_card.child(self.dropdown_list_container(
+                            "settings_window_diff_tab_size_list_container",
+                            "settings_window_diff_tab_size_scrollbar",
+                            self.diff_tab_size_scroll.clone(),
+                            DIFF_TAB_SIZE_OPTIONS.len(),
+                            SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
+                            list,
+                            theme,
+                        ));
+                    }
+
+                    diff_card = diff_card.child(diff_show_line_numbers_row);
 
                     diff_card = diff_card.child(diff_scroll_sync_row);
 

@@ -12,6 +12,7 @@ fn make_region(base: Option<&str>, ours: &str, theirs: &str) -> ConflictRegion {
 fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
     ConflictSession {
         path: PathBuf::from("test.txt"),
+        current_format: None,
         conflict_kind: FileConflictKind::BothModified,
         strategy: ConflictResolverStrategy::FullTextResolver,
         base: ConflictPayload::Text("base\n".into()),

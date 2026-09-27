@@ -1,0 +1,325 @@
+use super::*;
+use crate::view::mod_helpers::TextFormatMenuSection;
+use crate::view::panes::main::TextEncodingMenuState;
+use gitcomet_core::text_format::{LineEnding, TextEncoding};
+
+pub(super) fn model(
+    host: &PopoverHost,
+    section: TextFormatMenuSection,
+    cx: &gpui::App,
+) -> ContextMenuModel {
+    let pane = host.main_pane.read(cx);
+    match section {
+        TextFormatMenuSection::Encoding => match pane.text_encoding_menu_state() {
+            Some(state) => encoding_model(&state),
+            None => {
+                ContextMenuModel::new(vec![ContextMenuItem::Label("No file text is shown".into())])
+            }
+        },
+        TextFormatMenuSection::TabSize => {
+            let (current, _) = pane.effective_tab_size();
+            let chosen = pane.active_repo().and_then(|repo| {
+                let path = repo.diff_state.diff_target.as_ref()?.file_path()?;
+                repo.diff_state.text_override_for(path)?.tab_size
+            });
+            tab_size_model(current, chosen, pane.default_tab_size)
+        }
+        TextFormatMenuSection::LineEnding => {
+            let status = pane.text_format_status();
+            line_ending_model(
+                status.as_ref().is_some_and(|status| status.editable),
+                status
+                    .as_ref()
+                    .map(|status| status.line_ending_tooltip.clone())
+                    .unwrap_or_default(),
+            )
+        }
+    }
+}
+
+fn check(enabled: bool) -> Option<SharedString> {
+    enabled.then_some("icons/check.svg".into())
+}
+
+fn encoding_model(state: &TextEncodingMenuState) -> ContextMenuModel {
+    let mut items = vec![ContextMenuItem::Header("Reopen with encoding".into())];
+    if state.stored_as_utf8 {
+        items.push(ContextMenuItem::Description(
+            "Git stores this file as UTF-8 (working-tree-encoding); the choice applies to the working-tree file."
+                .into(),
+        ));
+    }
+    items.push(ContextMenuItem::Separator);
+    let auto_label = match (state.chosen, state.current) {
+        (None, Some(current)) => format!("Auto-detect ({current})"),
+        _ => "Auto-detect".to_string(),
+    };
+    items.push(ContextMenuItem::Entry {
+        label: auto_label.into(),
+        icon: check(state.chosen.is_none()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::SetTextEncoding { encoding: None }),
+    });
+    let mut group = "";
+    for encoding in TextEncoding::all() {
+        if encoding.group() != group {
+            group = encoding.group();
+            items.push(ContextMenuItem::Header(group.into()));
+        }
+        items.push(ContextMenuItem::Entry {
+            label: encoding.name().into(),
+            icon: check(state.chosen == Some(encoding)),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetTextEncoding {
+                encoding: Some(encoding),
+            }),
+        });
+    }
+    if state.editor {
+        items.extend(save_with_items(state));
+    }
+    if let Some(chosen) = state.chosen {
+        items.extend(remember_items(state, chosen));
+    }
+    ContextMenuModel::new(items)
+}
+
+/// Converting the editor's file: the Unicode encodings, with and without a
+/// byte-order mark, plus the one it was read in.
+fn save_with_items(state: &TextEncodingMenuState) -> Vec<ContextMenuItem> {
+    use gitcomet_core::text_format::TextFormat;
+
+    let mut formats = vec![
+        ("UTF-8".to_string(), TextFormat::UTF_8),
+        (
+            "UTF-8 with BOM".to_string(),
+            TextFormat {
+                encoding: TextEncoding::UTF_8,
+                bom: true,
+            },
+        ),
+        (
+            "UTF-16LE with BOM".to_string(),
+            TextFormat {
+                encoding: TextEncoding::UTF_16LE,
+                bom: true,
+            },
+        ),
+        (
+            "UTF-16BE with BOM".to_string(),
+            TextFormat {
+                encoding: TextEncoding::UTF_16BE,
+                bom: true,
+            },
+        ),
+    ];
+    if let Some(current) = state
+        .current
+        .filter(|current| !current.is_utf8() && !current.is_utf16())
+    {
+        formats.push((
+            current.name().to_string(),
+            TextFormat {
+                encoding: current,
+                bom: false,
+            },
+        ));
+    }
+    let mut items = vec![
+        ContextMenuItem::Separator,
+        ContextMenuItem::Header("Save with encoding".into()),
+        ContextMenuItem::Description("Converts the file the next time it is saved.".into()),
+    ];
+    items.extend(
+        formats
+            .into_iter()
+            .map(|(label, format)| ContextMenuItem::Entry {
+                label: label.into(),
+                icon: None,
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::SaveWithEncoding { format }),
+            }),
+    );
+    items
+}
+
+/// "Save to .gitattributes" for a chosen encoding: the display-only
+/// `encoding` attribute, or git's storage conversion behind its warning.
+fn remember_items(state: &TextEncodingMenuState, chosen: TextEncoding) -> Vec<ContextMenuItem> {
+    use gitcomet_core::gitattributes::{pattern_for_extension, pattern_for_path};
+
+    let entry = |label: String, rule: String| ContextMenuItem::Entry {
+        label: label.into(),
+        icon: None,
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::AddGitattributesRule { rule }),
+    };
+    let file_pattern = pattern_for_path(&state.path);
+    let extension_pattern = pattern_for_extension(&state.path);
+    // git-gui reads `encoding` with its own names; ours round-trip through
+    // `TextEncoding::from_label`, as does iconv's spelling below.
+    let display_label = chosen.git_label();
+    let mut items = vec![
+        ContextMenuItem::Separator,
+        ContextMenuItem::Header("Save to .gitattributes".into()),
+        ContextMenuItem::Description(
+            "encoding= only changes how GitComet and git-gui show the file.".into(),
+        ),
+        entry(
+            format!("This file: encoding={display_label}"),
+            format!("{file_pattern} encoding={display_label}"),
+        ),
+    ];
+    if let Some(extension_pattern) = &extension_pattern {
+        items.push(entry(
+            format!("All {extension_pattern} files: encoding={display_label}"),
+            format!("{extension_pattern} encoding={display_label}"),
+        ));
+    }
+    if !chosen.is_utf8() {
+        let label = working_tree_encoding_label(chosen, state.had_bom);
+        items.push(ContextMenuItem::Description(
+            "working-tree-encoding= makes Git store the file as UTF-8 from the next add: run git add --renormalize, old commits keep their bytes, and everyone's Git must support the encoding."
+                .into(),
+        ));
+        items.push(entry(
+            format!("This file: working-tree-encoding={label}"),
+            format!("{file_pattern} working-tree-encoding={label}"),
+        ));
+    }
+    items
+}
+
+/// Git's spelling, keeping a UTF-16 byte-order mark the file already has.
+fn working_tree_encoding_label(encoding: TextEncoding, had_bom: bool) -> String {
+    if encoding.is_utf16() && had_bom {
+        format!("{}-BOM", encoding.git_label())
+    } else {
+        encoding.git_label().to_string()
+    }
+}
+
+fn tab_size_model(current: u8, chosen: Option<u8>, default: u8) -> ContextMenuModel {
+    let mut items = vec![
+        ContextMenuItem::Header("Tab size".into()),
+        ContextMenuItem::Separator,
+        ContextMenuItem::Entry {
+            label: format!("Default ({default})").into(),
+            icon: check(chosen.is_none()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetTabSize { size: None }),
+        },
+    ];
+    for size in [2u8, 3, 4, 6, 8] {
+        items.push(ContextMenuItem::Entry {
+            label: format!("{size} spaces").into(),
+            icon: check(chosen == Some(size)),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetTabSize { size: Some(size) }),
+        });
+    }
+    if chosen.is_none() && current != default {
+        items.insert(
+            1,
+            ContextMenuItem::Description(
+                format!("This file uses {current} from its attributes.").into(),
+            ),
+        );
+    }
+    ContextMenuModel::new(items)
+}
+
+fn line_ending_model(editable: bool, policy: SharedString) -> ContextMenuModel {
+    let mut items = vec![
+        ContextMenuItem::Header("Line endings".into()),
+        ContextMenuItem::Description(policy.to_string().into()),
+    ];
+    if editable {
+        items.push(ContextMenuItem::Separator);
+        for ending in [LineEnding::Lf, LineEnding::CrLf] {
+            items.push(ContextMenuItem::Entry {
+                label: format!("Convert to {}", ending.label()).into(),
+                icon: None,
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::ConvertLineEndings { ending }),
+            });
+        }
+    }
+    ContextMenuModel::new(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(chosen: Option<TextEncoding>) -> TextEncodingMenuState {
+        TextEncodingMenuState {
+            path: "docs/read me.txt".into(),
+            chosen,
+            current: Some(TextEncoding::WINDOWS_1252),
+            stored_as_utf8: false,
+            had_bom: false,
+            editor: false,
+        }
+    }
+
+    fn rules(model: &ContextMenuModel) -> Vec<String> {
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { action, .. } => match action.as_ref() {
+                    ContextMenuAction::AddGitattributesRule { rule } => Some(rule.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn remembering_is_offered_only_after_a_choice() {
+        assert!(rules(&encoding_model(&state(None))).is_empty());
+        let koi8 = TextEncoding::from_label("koi8-r");
+        assert_eq!(
+            rules(&encoding_model(&state(koi8))),
+            vec![
+                "\"/docs/read me.txt\" encoding=KOI8-R".to_string(),
+                "*.txt encoding=KOI8-R".to_string(),
+                "\"/docs/read me.txt\" working-tree-encoding=KOI8-R".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn utf16_with_bom_keeps_it_in_the_git_label() {
+        assert_eq!(
+            working_tree_encoding_label(TextEncoding::UTF_16LE, true),
+            "UTF-16LE-BOM"
+        );
+        assert_eq!(
+            working_tree_encoding_label(TextEncoding::UTF_16LE, false),
+            "UTF-16LE"
+        );
+    }
+
+    #[test]
+    fn line_endings_convert_only_where_the_view_writes() {
+        let entries = |model: ContextMenuModel| {
+            model
+                .items
+                .iter()
+                .filter(|item| matches!(item, ContextMenuItem::Entry { .. }))
+                .count()
+        };
+        assert_eq!(entries(line_ending_model(false, "".into())), 0);
+        assert_eq!(entries(line_ending_model(true, "".into())), 2);
+    }
+}

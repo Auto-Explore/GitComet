@@ -258,6 +258,7 @@ mod sidebar_presentation;
 mod splash;
 mod state_apply;
 mod status_actions;
+pub(in crate::view) mod tab_width;
 mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;

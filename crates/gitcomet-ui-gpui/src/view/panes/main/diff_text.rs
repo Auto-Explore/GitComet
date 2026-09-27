@@ -1949,14 +1949,7 @@ impl MainPaneView {
             if !s.contains('\t') {
                 return SharedString::new(s);
             }
-            let mut out = String::with_capacity(crate::view::diff_utils::diff_text_display_len(s));
-            for ch in s.chars() {
-                match ch {
-                    '\t' => out.push_str("    "),
-                    _ => out.push(ch),
-                }
-            }
-            out.into()
+            crate::view::tab_width::expand_tabs(s).into_owned().into()
         };
 
         // When markdown rendered preview is active, rows come from the
@@ -3081,10 +3074,10 @@ impl MainPaneView {
 
                 (
                     hunks_count,
-                    hunk_patch,
+                    hunk_patch.map(Into::into),
                     lines_count,
-                    lines_patch,
-                    discard_lines_patch,
+                    lines_patch.map(Into::into),
+                    discard_lines_patch.map(Into::into),
                 )
             } else {
                 (0, None, 0, None, None)

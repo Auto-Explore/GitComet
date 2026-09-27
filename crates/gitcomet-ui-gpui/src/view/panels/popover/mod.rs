@@ -106,6 +106,7 @@ impl PopoverWidthSpec {
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
+const TEXT_FORMAT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(300.0, 220.0, 360.0);
 /// The sort menu's labels name both what is ordered and which way ("File type:
 /// Descending"), which is wider than `NARROW` leaves room for -- at 220px the
 /// icon column and padding leave ~150px of ink and the longest label ellipsises.
@@ -492,6 +493,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
+            | PopoverKind::TextFormatMenu { .. }
             | PopoverKind::CommitFileSortMenu { .. }
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
@@ -861,6 +863,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::UiScalePicker => Anchor::TopRight,
+        // The strip sits at the bottom edge; open upwards.
+        PopoverKind::TextFormatMenu { .. } => Anchor::BottomRight,
         _ => Anchor::TopLeft,
     }
 }
@@ -1021,6 +1025,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
+        PopoverKind::TextFormatMenu { .. } => Some(TEXT_FORMAT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),
         PopoverKind::DiffEditorMenu { .. } => Some(DIFF_EDITOR_MENU_WIDTH),

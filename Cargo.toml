@@ -79,6 +79,8 @@ alacritty_terminal = "0.26"
 anyhow = "1"
 clap = { version = "4.6.7", features = ["derive"] }
 criterion = "0.8.2"
+# Charset guess for files that are not UTF-8 (the detector Firefox uses).
+chardetng = { version = "0.1.17", default-features = false }
 # Runs the tree-sitter allocator install before `main` in every binary that
 # links gitcomet-tree-sitter-alloc, tests included, so no process ever switches
 # allocators while tree-sitter is already holding blocks. Already in the graph
@@ -87,6 +89,8 @@ ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
 dekobon-tree-sitter-groovy = "0.3.0"
+# Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
+encoding_rs = { version = "0.8.41", default-features = false, features = ["alloc", "fast-legacy-encode"] }
 fontdb = "0.24.0"
 futures = "0.3.34"
 gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
@@ -278,6 +282,14 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.taffy]
+opt-level = 2
+
+# Text decoding runs on every non-UTF-8 file load; at opt-level 0 it is
+# tens of times slower than the file read itself.
+[profile.dev.package.encoding_rs]
+opt-level = 2
+
+[profile.dev.package.chardetng]
 opt-level = 2
 
 [profile.test]

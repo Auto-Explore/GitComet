@@ -220,10 +220,12 @@ pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: us
     }
 
     let mut row_start = 0usize;
+    let mut line_column = 0usize;
     let mut count = 0usize;
     let wrap_columns = wrap_columns.max(1);
     while row_start < text.len() {
-        let Some((_, next_start)) = diff_wrap_next_range_for_text(text, wrap_columns, row_start)
+        let Some((_, next_start)) =
+            diff_wrap_next_range_for_text(text, wrap_columns, row_start, &mut line_column)
         else {
             break;
         };
@@ -248,9 +250,11 @@ pub(in crate::view) fn diff_wrap_range_for_text(
 
     let mut row_start = 0usize;
     let mut row_ix = 0usize;
+    let mut line_column = 0usize;
     let wrap_columns = wrap_columns.max(1);
     while row_start < text.len() {
-        let (range, next_start) = diff_wrap_next_range_for_text(text, wrap_columns, row_start)?;
+        let (range, next_start) =
+            diff_wrap_next_range_for_text(text, wrap_columns, row_start, &mut line_column)?;
         if row_ix == wrap_ix {
             return Some(range);
         }
@@ -308,10 +312,11 @@ pub(in crate::view) fn diff_wrap_ranges_for_text(
     let wrap_columns = wrap_columns.max(1);
     let mut ranges = Vec::new();
     let mut row_start = 0usize;
+    let mut line_column = 0usize;
 
     while row_start < text.len() {
         let Some((range, next_start)) =
-            diff_wrap_next_range_for_text(text, wrap_columns, row_start)
+            diff_wrap_next_range_for_text(text, wrap_columns, row_start, &mut line_column)
         else {
             break;
         };
@@ -328,10 +333,14 @@ pub(in crate::view) fn diff_wrap_ranges_for_text(
     ranges
 }
 
+/// The next wrapped row from `row_start`. `line_column` is the line's column
+/// at `row_start` — a tab's width depends on it — and is advanced to the
+/// column where the next row starts.
 fn diff_wrap_next_range_for_text(
     text: &str,
     wrap_columns: usize,
     row_start: usize,
+    line_column: &mut usize,
 ) -> Option<(Range<usize>, usize)> {
     if row_start >= text.len() || !text.is_char_boundary(row_start) {
         return None;
@@ -342,15 +351,14 @@ fn diff_wrap_next_range_for_text(
     let mut last_break = None;
     let mut forced_newline = false;
     let mut saw_char = false;
+    // Line columns at `end` and at `last_break`, so the next row knows its own.
+    let mut end_line_column = *line_column;
+    let mut break_line_column = *line_column;
 
     for (rel_start, ch) in text[row_start..].char_indices() {
         let start = row_start + rel_start;
         let char_end = start + ch.len_utf8();
-        let width = if ch == '\t' {
-            DIFF_WRAP_TAB_EXPANDED_COLUMNS
-        } else {
-            1
-        };
+        let width = crate::view::tab_width::char_columns(ch, end_line_column);
         if column > 0 && column + width > wrap_columns {
             break;
         }
@@ -358,8 +366,10 @@ fn diff_wrap_next_range_for_text(
         saw_char = true;
         column += width;
         end = char_end;
+        end_line_column += width;
         if ch.is_whitespace() {
             last_break = Some(char_end);
+            break_line_column = end_line_column;
         }
         if ch == '\n' {
             forced_newline = true;
@@ -392,6 +402,15 @@ fn diff_wrap_next_range_for_text(
     } else {
         row_start + text[row_start..].chars().next()?.len_utf8()
     };
+    *line_column = if next_start == end {
+        end_line_column
+    } else if Some(next_start) == last_break {
+        break_line_column
+    } else {
+        // A single character wider than the row: count it from the start.
+        let ch = text[row_start..].chars().next()?;
+        *line_column + crate::view::tab_width::char_columns(ch, *line_column)
+    };
 
     Some((row_start..next_start, next_start))
 }
@@ -409,13 +428,11 @@ fn expanded_highlights_to_raw_text(
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
     let mut expanded_to_raw = Vec::with_capacity(raw_text.len() + 1);
     expanded_to_raw.push(0);
+    let mut column = 0usize;
     for (raw_start, ch) in raw_text.char_indices() {
         let raw_end = raw_start + ch.len_utf8();
-        let expanded_len = if ch == '\t' {
-            DIFF_WRAP_TAB_EXPANDED_COLUMNS
-        } else {
-            ch.len_utf8()
-        };
+        let expanded_len = crate::view::tab_width::char_expanded_len(ch, column);
+        column += crate::view::tab_width::char_columns(ch, column);
         for _ in 0..expanded_len {
             expanded_to_raw.push(raw_end);
         }
@@ -551,7 +568,6 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 43] = [
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
 const PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 32_768;
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
-pub(super) const DIFF_WRAP_TAB_EXPANDED_COLUMNS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DiffTextSourceIdentity {
@@ -576,6 +592,7 @@ enum SingleLineTextSourceCacheKey {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct SingleLineStyledTextCacheKey {
+    tab_width: usize,
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     theme_signature: u64,
@@ -584,6 +601,7 @@ struct SingleLineStyledTextCacheKey {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct PreparedReadyLineStyledTextCacheKey {
+    tab_width: usize,
     theme_signature: u64,
     source_ptr: usize,
     source_len: usize,
@@ -593,6 +611,7 @@ struct PreparedReadyLineStyledTextCacheKey {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct SingleLineWordHighlightedTextCacheKey {
+    tab_width: usize,
     language: Option<DiffSyntaxLanguage>,
     mode: DiffSyntaxMode,
     theme_signature: u64,
@@ -670,6 +689,7 @@ impl SingleLineStyledTextCache {
         source_identity: Option<DiffTextSourceIdentity>,
     ) -> SingleLineStyledTextCacheKey {
         SingleLineStyledTextCacheKey {
+            tab_width: crate::view::tab_width::tab_width(),
             language,
             mode,
             theme_signature: self.theme_signature(theme),
@@ -684,6 +704,7 @@ impl SingleLineStyledTextCache {
         tokens: &Arc<[syntax::SyntaxToken]>,
     ) -> PreparedReadyLineStyledTextCacheKey {
         PreparedReadyLineStyledTextCacheKey {
+            tab_width: crate::view::tab_width::tab_width(),
             theme_signature: self.theme_signature(theme),
             source_ptr: text.as_ptr() as usize,
             source_len: text.len(),
@@ -702,6 +723,7 @@ impl SingleLineStyledTextCache {
         word_ranges: &[Range<usize>],
     ) -> SingleLineWordHighlightedTextCacheKey {
         SingleLineWordHighlightedTextCacheKey {
+            tab_width: crate::view::tab_width::tab_width(),
             language,
             mode,
             theme_signature: self.theme_signature(theme),
@@ -1136,16 +1158,24 @@ mod tests {
     }
 
     #[test]
-    fn diff_wrap_ranges_count_tabs_as_fixed_display_expansion() {
+    fn diff_wrap_ranges_count_tabs_to_their_tab_stop() {
+        // At column 3 the tab takes one column, so "aaa\t" fills a row of 4.
         let text = "aaa\tbbb";
         let rows = diff_wrap_ranges_for_text(text, 4)
             .into_iter()
             .map(|range| text[range].to_string())
             .collect::<Vec<_>>();
+        assert_eq!(rows, ["aaa\t", "bbb"]);
+        assert_eq!(diff_wrap_row_count_for_text(text, 4), 2);
 
-        assert_eq!(rows, ["aaa", "\t", "bbb"]);
-        assert_eq!(diff_wrap_row_count_for_text(text, 4), 3);
-        assert_eq!(diff_wrap_range_for_text(text, 4, 1), Some(3..4));
+        // A tab at column 0 takes the whole row.
+        let text = "\tbbb";
+        let rows = diff_wrap_ranges_for_text(text, 4)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(rows, ["\t", "bbb"]);
+        assert_eq!(diff_wrap_range_for_text(text, 4, 1), Some(1..4));
     }
 
     #[test]
@@ -1168,7 +1198,7 @@ mod tests {
         let styled =
             build_cached_diff_styled_text_from_relative_highlights("a b\t", &[(3..4, style)]);
 
-        assert_eq!(styled.text.as_ref(), "a b    ");
+        assert_eq!(styled.text.as_ref(), "a b ");
         let visible = whitespace_visible_line_styled_text_for_raw(&styled, "a b\t");
 
         assert_eq!(visible.text.as_ref(), "a·b→↵");
@@ -1179,7 +1209,7 @@ mod tests {
     fn build_segments_fast_path_skips_syntax_work() {
         let segments = build_diff_text_segments("a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text.as_ref(), "a    b");
+        assert_eq!(segments[0].text.as_ref(), "a   b");
         assert!(!segments[0].in_word);
         assert!(!segments[0].in_query);
         assert_eq!(segments[0].syntax, SyntaxTokenKind::None);
@@ -1190,7 +1220,7 @@ mod tests {
         let theme = AppTheme::gitcomet_dark();
         let styled =
             build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
-        assert_eq!(styled.text.as_ref(), "a    b");
+        assert_eq!(styled.text.as_ref(), "a   b");
         assert!(styled.highlights.is_empty());
         assert_eq!(styled.highlights_hash, 0);
     }
@@ -1796,6 +1826,77 @@ mod tests {
                 .iter()
                 .any(|(range, _)| *range == (16..18))
         );
+    }
+
+    #[test]
+    fn styled_line_caches_follow_tab_width_changes() {
+        let theme = AppTheme::gitcomet_dark();
+        let palette = syntax_highlight_palette(theme);
+        let text = "\tlet value = 42;";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        assert!(syntax::syntax_tokens_for_prepared_document_line(document.inner, 0).is_some());
+        let previous_width = crate::view::tab_width::tab_width() as u8;
+        for width in [4, 8, 2, 4] {
+            crate::view::tab_width::set_tab_width(width);
+            let plain = build_cached_diff_styled_text(
+                theme,
+                text,
+                &[],
+                "",
+                Some(DiffSyntaxLanguage::Rust),
+                DiffSyntaxMode::HeuristicOnly,
+                None,
+            );
+            let words = build_cached_diff_styled_text(
+                theme,
+                text,
+                &[5..10],
+                "",
+                Some(DiffSyntaxLanguage::Rust),
+                DiffSyntaxMode::HeuristicOnly,
+                None,
+            );
+            let prepared =
+                match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                    theme,
+                    &palette,
+                    PreparedDiffTextBuildRequest {
+                        build: DiffTextBuildRequest {
+                            text,
+                            word_ranges: &[],
+                            query: "",
+                            syntax: DiffSyntaxConfig {
+                                language: Some(DiffSyntaxLanguage::Rust),
+                                mode: DiffSyntaxMode::Auto,
+                            },
+                            word_kind: None,
+                        },
+                        prepared_line: PreparedDiffSyntaxLine {
+                            document: Some(document),
+                            line_ix: 0,
+                        },
+                    },
+                ) {
+                    PreparedDocumentLineStyledText::Cacheable(styled) => styled,
+                    PreparedDocumentLineStyledText::Pending(_) => panic!("prepared line is ready"),
+                };
+            let width = usize::from(width);
+            for (kind, styled) in [("syntax", plain), ("word", words), ("prepared", prepared)] {
+                assert_eq!(
+                    styled.text.as_ref(),
+                    format!("{}let value = 42;", " ".repeat(width)),
+                    "{kind} cache at width {width}"
+                );
+                assert!(
+                    styled
+                        .highlights
+                        .iter()
+                        .any(|(range, _)| *range == (width..width + 3)),
+                    "{kind} keyword must move with the tab width"
+                );
+            }
+        }
+        crate::view::tab_width::set_tab_width(previous_width);
     }
 
     #[test]

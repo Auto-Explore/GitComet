@@ -11,7 +11,6 @@ use super::{
 };
 use crate::view::markdown_preview::MarkdownInlineSpan;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
-use crate::view::rows::diff_text::DIFF_WRAP_TAB_EXPANDED_COLUMNS;
 use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
 use crate::view::{
     HISTORY_COL_HANDLE_PX, HISTORY_MESSAGE_BORDER_GAP_PX, HISTORY_MESSAGE_BORDER_W_PX,
@@ -499,7 +498,7 @@ fn wrapped_slices_map_onto_the_tab_expanded_painted_text() {
     // painted text with raw offsets shifted every wrapped row and dropped
     // the tail of the line.
     let raw = "\tab\tcd";
-    let expanded_len = raw.len() + raw.matches('\t').count() * (DIFF_WRAP_TAB_EXPANDED_COLUMNS - 1);
+    let expanded_len = crate::view::tab_width::expanded_len(raw);
 
     // "\tab" -> "    ab", "\tcd" -> "    cd"
     assert_eq!(
@@ -768,7 +767,8 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
     let dark = markdown_preview_row_styled_text(theme, &row);
     let light = markdown_preview_row_styled_text(AppTheme::gitcomet_light(), &row);
 
-    assert_eq!(dark.text.as_ref(), "fn    main() { let x = 1; }");
+    // The tab after "fn" runs to the stop at column 4.
+    assert_eq!(dark.text.as_ref(), "fn  main() { let x = 1; }");
     assert!(
         !dark.highlights.is_empty(),
         "code rows should reuse syntax highlights from the diff text renderer"

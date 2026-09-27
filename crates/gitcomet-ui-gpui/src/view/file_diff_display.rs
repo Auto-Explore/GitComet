@@ -16,12 +16,7 @@ pub(in crate::view) fn expanded_diff_display_text<'a>(
 
     expanded_tabs.clear();
     expanded_tabs.reserve(crate::view::diff_utils::diff_text_display_len(text));
-    for ch in text.chars() {
-        match ch {
-            '\t' => expanded_tabs.push_str("    "),
-            _ => expanded_tabs.push(ch),
-        }
-    }
+    crate::view::tab_width::push_expanded(expanded_tabs, text, &mut 0);
     expanded_tabs.as_str()
 }
 
@@ -180,12 +175,7 @@ fn append_large_file_diff_display_text_slice(
 }
 
 fn append_expanded_tabs(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        match ch {
-            '\t' => out.push_str("    "),
-            _ => out.push(ch),
-        }
-    }
+    crate::view::tab_width::push_expanded(out, text, &mut 0);
 }
 
 #[cfg(test)]
@@ -221,7 +211,8 @@ mod tests {
         append_file_diff_display_text_slice(&mut out, &raw_text, 4..9, &mut expanded_tabs);
 
         assert_eq!(out.as_str(), &display_text[4..9]);
-        assert_eq!(out, "   de");
+        // "abc" + one space to the tab stop at column 4.
+        assert_eq!(out, "defxx");
     }
 
     #[test]

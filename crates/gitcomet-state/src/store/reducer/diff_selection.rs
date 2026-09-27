@@ -567,6 +567,7 @@ pub(super) fn fill_select_diff_inline(
         selected_diff_load_plan(repo_state, target)
     };
     apply_selected_diff_load_plan_state(repo_state, load_plan);
+    super::util::mark_text_attributes_loading(repo_state);
     repo_state.bump_diff_state_rev();
 
     effects.push(Effect::LoadSelectedDiff {
@@ -860,15 +861,19 @@ pub(super) fn close_inline_submodule_diff(state: &mut AppState, repo_id: RepoId)
     Vec::new()
 }
 
-pub(super) fn stage_hunk(repo_id: RepoId, patch: String) -> Vec<Effect> {
+pub(super) fn stage_hunk(repo_id: RepoId, patch: crate::msg::ContentBytes) -> Vec<Effect> {
     vec![Effect::StageHunk { repo_id, patch }]
 }
 
-pub(super) fn unstage_hunk(repo_id: RepoId, patch: String) -> Vec<Effect> {
+pub(super) fn unstage_hunk(repo_id: RepoId, patch: crate::msg::ContentBytes) -> Vec<Effect> {
     vec![Effect::UnstageHunk { repo_id, patch }]
 }
 
-pub(super) fn apply_worktree_patch(repo_id: RepoId, patch: String, reverse: bool) -> Vec<Effect> {
+pub(super) fn apply_worktree_patch(
+    repo_id: RepoId,
+    patch: crate::msg::ContentBytes,
+    reverse: bool,
+) -> Vec<Effect> {
     vec![Effect::ApplyWorktreePatch {
         repo_id,
         patch,
@@ -921,6 +926,73 @@ pub(super) fn diff_loaded(
         }
     }
     Vec::new()
+}
+
+pub(super) fn text_attributes_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: DiffTarget,
+    result: std::result::Result<gitcomet_core::text_format::TextAttributes, Error>,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let same_file = repo_state
+        .diff_state
+        .diff_target
+        .as_ref()
+        .and_then(DiffTarget::file_path)
+        .is_some_and(|path| target.file_path() == Some(path));
+    if !same_file {
+        return Vec::new();
+    }
+    let next = match result {
+        Ok(attributes) => Loadable::Ready(Arc::new(attributes)),
+        Err(e) => Loadable::Error(e.to_string()),
+    };
+    let unchanged = match (&repo_state.diff_state.text_attributes, &next) {
+        (Loadable::Ready(current), Loadable::Ready(new)) => current == new,
+        _ => false,
+    };
+    if !unchanged {
+        repo_state.diff_state.text_attributes = next;
+        repo_state.diff_state.text_attributes_rev =
+            repo_state.diff_state.text_attributes_rev.wrapping_add(1);
+        repo_state.bump_diff_state_rev();
+    }
+    Vec::new()
+}
+
+/// Store the user's choice for the open file. A new encoding re-reads it
+/// (keeping the current content on screen); line ending and tab size are
+/// the views' own business.
+pub(super) fn set_text_override(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+    value: gitcomet_core::text_format::TextOverride,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(target) = repo_state.diff_state.diff_target.clone() else {
+        return Vec::new();
+    };
+    if target.file_path() != Some(path.as_path()) {
+        return Vec::new();
+    }
+    let previous = repo_state.diff_state.text_override_for(&path);
+    if previous.unwrap_or_default() == value {
+        return Vec::new();
+    }
+    repo_state.diff_state.text_override =
+        (!value.is_empty()).then_some(crate::model::OpenFileTextOverride { path, value });
+    repo_state.bump_text_override_rev();
+    repo_state.bump_diff_state_rev();
+    if previous.and_then(|previous| previous.encoding) == value.encoding {
+        return Vec::new();
+    }
+    super::util::reload_selected_file_text(repo_state, repo_id, &target, false)
 }
 
 pub(super) fn diff_file_loaded(
