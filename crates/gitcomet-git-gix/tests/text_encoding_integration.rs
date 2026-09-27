@@ -615,6 +615,31 @@ fn written_gitattributes_patterns_match_exactly_their_path_in_git() {
 }
 
 #[test]
+#[cfg(unix)]
+fn attribute_patterns_with_line_breaks_do_not_add_rules_for_other_files() {
+    use gitcomet_core::gitattributes::{append_rule, pattern_for_extension, pattern_for_path};
+    test_git_env::ensure_initialized();
+    for (path, extension, decoy) in [
+        ("a\nx.txt encoding=KOI8-R\nz.txt", false, "x.txt"),
+        ("a\r\nx.txt encoding=KOI8-R\r\nz.txt", false, "x.txt"),
+        ("a.ext\nvictim encoding=KOI8-R\nz", true, "victim"),
+    ] {
+        let dir = init_repo();
+        let pattern = if extension {
+            pattern_for_extension(Path::new(path)).unwrap()
+        } else {
+            pattern_for_path(Path::new(path))
+        };
+        let rule = format!("{pattern} encoding=windows-1252");
+        let contents = append_rule(b"", &rule).unwrap();
+        assert_eq!(contents.iter().filter(|&&byte| byte == b'\n').count(), 1);
+        fs::write(dir.path().join(".gitattributes"), contents).unwrap();
+        assert_eq!(check_attr(dir.path(), "encoding", path), "windows-1252");
+        assert_eq!(check_attr(dir.path(), "encoding", decoy), "unspecified");
+    }
+}
+
+#[test]
 fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
     use gitcomet_core::conflict_session::ConflictPayload;
     test_git_env::ensure_initialized();

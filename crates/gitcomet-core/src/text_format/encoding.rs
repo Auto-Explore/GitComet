@@ -396,7 +396,15 @@ impl TextEncoding {
 
     /// The encoding a leading byte-order mark announces, and its length.
     pub fn for_bom(bytes: &[u8]) -> Option<(Self, usize)> {
+        if Self::has_unsupported_bom(bytes) {
+            return None;
+        }
         Encoding::for_bom(bytes).map(|(encoding, len)| (whatwg(encoding), len))
+    }
+
+    /// UTF-32 is unsupported; its little-endian BOM starts with UTF-16LE's.
+    pub(super) fn has_unsupported_bom(bytes: &[u8]) -> bool {
+        bytes.starts_with(b"\xFF\xFE\x00\x00") || bytes.starts_with(b"\x00\x00\xFE\xFF")
     }
 
     pub(super) fn from_whatwg(encoding: &'static Encoding) -> Self {

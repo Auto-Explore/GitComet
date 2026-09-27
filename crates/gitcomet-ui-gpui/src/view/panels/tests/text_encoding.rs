@@ -105,6 +105,239 @@ fn koi8() -> TextEncoding {
     TextEncoding::from_label("koi8-r").unwrap()
 }
 
+#[gpui::test]
+fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(9511);
+    let current = "<<<<<<< ours\ncafé\n=======\ntea\n>>>>>>> theirs\n";
+    std::fs::write(
+        workdir.path().join(FILE),
+        b"<<<<<<< ours\ncaf\xe9\n=======\ntea\n>>>>>>> theirs\n",
+    )
+    .unwrap();
+    let mut repo = conflict_compare_repo_state(
+        repo_id,
+        workdir.path(),
+        Path::new(FILE),
+        "base\n",
+        "café\n",
+        "tea\n",
+        current,
+    );
+    set_test_conflict_status(&mut repo, FILE, gitcomet_core::domain::DiffArea::Unstaged);
+    repo.diff_state.text_override = Some(gitcomet_state::model::OpenFileTextOverride {
+        path: FILE.into(),
+        value: TextOverride {
+            encoding: Some(TextEncoding::WINDOWS_1252),
+            ..TextOverride::default()
+        },
+    });
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, app_state_with_repo(repo, repo_id), cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert_eq!(
+                pane.conflict_resolver.path.as_deref(),
+                Some(Path::new(FILE))
+            );
+            assert!(!pane.conflict_resolved_output_is_modified());
+            pane.conflict_resolver_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "my resolution\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let edited = cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.conflict_resolved_output_is_modified());
+        pane.conflict_resolver_input.read(app).text().to_string()
+    });
+    // Both choosing another encoding and returning to automatic detection
+    // would reload the conflict sources, so both must keep the edits.
+    for encoding in [Some(koi8()), None] {
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.main_pane
+                    .update(cx, |pane, cx| pane.set_text_encoding_override(encoding, cx));
+            });
+        });
+        crate::view::test_support::drain_store_worker(&view, cx);
+        cx.update(|_, app| {
+            let root = view.read(app);
+            let pane = root.main_pane.read(app);
+            assert_eq!(pane.conflict_resolver_input.read(app).text(), edited);
+            assert!(pane.conflict_resolved_output_is_modified());
+            let state = root.store.snapshot();
+            let repo = state.repos.iter().find(|repo| repo.id == repo_id).unwrap();
+            assert_eq!(
+                repo.diff_state
+                    .text_override_for(Path::new(FILE))
+                    .unwrap()
+                    .encoding,
+                Some(TextEncoding::WINDOWS_1252)
+            );
+            assert!(state.banner_error.as_ref().is_some_and(|banner| {
+                banner.repo_id == Some(repo_id)
+                    && banner.message.contains("Save or discard your edits")
+            }));
+        });
+    }
+    // Once the output has been saved, the same request can reload normally.
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.mark_conflict_resolved_output_saved(cx);
+            pane.set_text_encoding_override(Some(koi8()), cx);
+        });
+    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_, app| {
+        let state = view.read(app).store.snapshot();
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id).unwrap();
+        assert_eq!(
+            repo.diff_state
+                .text_override_for(Path::new(FILE))
+                .unwrap()
+                .encoding,
+            Some(koi8())
+        );
+    });
+}
+
+#[gpui::test]
+fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    for close_window in [false, true] {
+        for (prefix, writable) in [("Ā", false), ("header ", true)] {
+            let (view, cx) = open_window(cx);
+            let workdir = tempfile::tempdir().unwrap();
+            let original = b"caf\xe9\n";
+            std::fs::write(workdir.path().join(FILE), original).unwrap();
+            let repo_id = gitcomet_state::model::RepoId(9512);
+            show(
+                cx,
+                &view,
+                file_state(
+                    repo_id,
+                    workdir.path(),
+                    true,
+                    Loadable::NotLoaded,
+                    Some(TextEncoding::WINDOWS_1252),
+                ),
+                true,
+            );
+            cx.update(|window, app| {
+                view.update(app, |view, cx| {
+                    view.main_pane.update(cx, |pane, cx| {
+                        pane.set_auto_save_file_edits(true, cx);
+                        pane.file_editor_input.update(cx, |input, cx| {
+                            input.replace_utf8_range(0..0, prefix, cx);
+                        });
+                        pane.on_file_editor_edited(cx);
+                        assert!(pane.file_editor_is_dirty());
+                    });
+                    assert!(if close_window {
+                        view.request_close_window_or_warn(window.window_handle().window_id(), cx)
+                    } else {
+                        view.request_quit_unsaved_file_edits_prompt(cx)
+                    });
+                    assert_eq!(view.pending_unsaved_file_edits_flush.is_some(), writable);
+                    assert_eq!(view.main_pane.read(cx).file_editor_is_dirty(), !writable);
+                    if writable {
+                        assert!(view.pending_unsaved_file_edits_prompt.is_none());
+                        // The test checks scheduling; don't actually close its window.
+                        view.pending_unsaved_file_edits_flush = None;
+                    } else {
+                        let prompt = view
+                            .pending_unsaved_file_edits_prompt
+                            .as_ref()
+                            .expect("offer Save/Discard instead of retrying a failed encoding");
+                        assert_eq!(prompt.files, [SharedString::from(FILE)]);
+                        let pane = view.main_pane.read(cx);
+                        assert_eq!(pane.file_editor_input.read(cx).text(), "Ācafé\n");
+                    }
+                });
+            });
+            assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
+        }
+    }
+}
+
+#[gpui::test]
+fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(9513);
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId("feedface".into()),
+        path: None,
+    };
+    let diff = gitcomet_core::domain::Diff::from_unified(
+        target.clone(),
+        "diff --git a/a.txt b/a.txt\n@@ -0,0 +1 @@\n+\tneedle\n",
+    );
+    let mut repo = opening_repo_state(repo_id, workdir.path());
+    repo.diff_state.diff_target = Some(target);
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff = Loadable::Ready(Arc::new(diff));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, app_state_with_repo(repo, repo_id), cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Inline;
+            pane.diff_word_wrap = false;
+            pane.default_tab_size = 2;
+            pane.sync_display_tab_width(cx);
+            pane.diff_search_active = true;
+            pane.diff_search_query = "+       needle".into();
+            pane.diff_search_recompute_matches();
+            assert!(pane.diff_search_matches.is_empty());
+            assert!(pane.diff_search_inline_patch_trigram_index.is_some());
+            let projection = (
+                pane.diff_visible_cache_len,
+                pane.diff_visible_cache_projection_rev,
+            );
+            pane.default_tab_size = 8;
+            pane.sync_display_tab_width(cx);
+            assert_eq!(pane.diff_search_matches.len(), 1);
+            assert_eq!(
+                projection,
+                (
+                    pane.diff_visible_cache_len,
+                    pane.diff_visible_cache_projection_rev
+                )
+            );
+            assert_eq!(
+                pane.diff_text_full_line_for_region(
+                    pane.diff_search_matches[0],
+                    DiffTextRegion::Inline
+                )
+                .as_ref(),
+                "+       needle"
+            );
+
+            // Changing width while the search is closed must invalidate it too.
+            pane.diff_search_active = false;
+            pane.default_tab_size = 2;
+            pane.sync_display_tab_width(cx);
+            pane.diff_search_active = true;
+            pane.diff_search_query = "+ needle".into();
+            pane.diff_search_recompute_matches();
+            assert_eq!(pane.diff_search_matches.len(), 1);
+        });
+    });
+}
+
 fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool) {
     for (other_bytes, other_encoding) in [
         (b"caf\xe9\n".as_slice(), TextEncoding::UTF_8),

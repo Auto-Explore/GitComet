@@ -115,6 +115,22 @@ fn format_details(format: &SideTextFormat, attributes: &TextAttributes) -> Strin
 }
 
 impl MainPaneView {
+    /// Saving can be called from a root-view close handler, so show errors
+    /// after that handler releases its borrow of the root.
+    pub(super) fn show_text_format_error(
+        &self,
+        message: impl Into<String>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root = self.root_view.clone();
+        let message = message.into();
+        cx.defer(move |cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.push_toast(crate::view::components::ToastKind::Error, message, cx);
+            });
+        });
+    }
+
     /// How the conflicted file was read from the working tree.
     pub(in crate::view) fn conflict_current_text_format(&self) -> Option<SideTextFormat> {
         self.active_repo()?
@@ -135,9 +151,7 @@ impl MainPaneView {
         {
             Ok((bytes, _)) => Some(bytes),
             Err(message) => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.push_toast(crate::view::components::ToastKind::Error, message, cx);
-                });
+                self.show_text_format_error(message, cx);
                 None
             }
         }
@@ -289,6 +303,7 @@ impl MainPaneView {
         self.diff_wrap_visible_cache_key = None;
         self.diff_wrap_visible_rows = Arc::from([]);
         self.diff_scrollbar_markers_cache.clear();
+        self.diff_search_inline_patch_trigram_index = None;
         if self.diff_search_active && !self.diff_search_query.is_empty() {
             self.diff_search_recompute_matches_preserving_current();
         }
@@ -364,15 +379,16 @@ impl MainPaneView {
         else {
             return;
         };
-        if self.main_pane_surface().body == MainPaneBody::FileEditor && self.file_editor_dirty {
-            let _ = self.root_view.update(cx, |root, cx| {
-                root.push_toast(
-                    crate::view::components::ToastKind::Error,
-                    "Save or discard your edits before reopening the file in another encoding"
-                        .to_string(),
-                    cx,
-                );
-            });
+        let unsaved_editor =
+            self.main_pane_surface().body == MainPaneBody::FileEditor && self.file_editor_dirty;
+        let unsaved_resolution = self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+            && self.conflict_resolved_output_is_modified();
+        if unsaved_editor || unsaved_resolution {
+            self.show_text_format_error(
+                "Save or discard your edits before reopening the file in another encoding",
+                cx,
+            );
             return;
         }
         let value = TextOverride {

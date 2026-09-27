@@ -77,6 +77,63 @@ fn bom_wins_over_detection() {
 }
 
 #[test]
+fn utf32_boms_are_rejected_before_utf16_detection_or_overrides() {
+    for bytes in [
+        b"\xFF\xFE\x00\x00a\x00\x00\x00\n\x00\x00\x00".as_slice(),
+        b"\x00\x00\xFE\xFF\x00\x00\x00a\x00\x00\x00\n".as_slice(),
+    ] {
+        assert_eq!(TextEncoding::for_bom(bytes), None);
+        for attributes in [
+            TextAttributes::default(),
+            TextAttributes {
+                encoding: Some(EncodingAttr::from_label("UTF-16LE")),
+                ..TextAttributes::default()
+            },
+            TextAttributes {
+                working_tree_encoding: Some(EncodingAttr::from_label("UTF-16LE")),
+                ..TextAttributes::default()
+            },
+        ] {
+            for kind in [SideKind::Worktree, SideKind::GitInternal] {
+                for override_encoding in [
+                    None,
+                    Some(TextEncoding::UTF_16LE),
+                    Some(TextEncoding::UTF_16BE),
+                ] {
+                    let decoded = decode_bytes(bytes, kind, &attributes, override_encoding);
+                    assert!(decoded.format.binary);
+                    assert!(!decoded.format.is_writable());
+                    assert_eq!(decoded.format.source, FormatSource::Binary);
+                }
+            }
+        }
+        // Recognize the four-byte BOM even when reads split it into pieces.
+        for chunk_size in 1..=bytes.len() {
+            let mut sniffer = ContentSniffer::new();
+            for chunk in bytes.chunks(chunk_size) {
+                sniffer.feed(chunk);
+            }
+            let sniff = sniffer.finish();
+            assert_eq!(sniff.bom, None);
+            assert!(
+                sniff
+                    .resolve(SideKind::Worktree, &TextAttributes::default(), None)
+                    .binary
+            );
+        }
+    }
+    let utf16 = decode_bytes(
+        b"\xFF\xFEa\x00\n\x00",
+        SideKind::Worktree,
+        &TextAttributes::default(),
+        None,
+    );
+    assert_eq!(utf16.text, "a\n");
+    assert!(utf16.format.is_writable());
+    assert_eq!(utf16.format.format.encoding, TextEncoding::UTF_16LE);
+}
+
+#[test]
 fn bomless_ascii_utf16_is_found_before_utf8() {
     // Valid UTF-8 byte-wise (NUL is valid), so this must be sniffed first.
     let utf16 = encode(

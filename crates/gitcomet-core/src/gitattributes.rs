@@ -31,6 +31,8 @@ fn pattern_token(pattern: String) -> String {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
             _ => out.push(ch),
         }
     }
@@ -89,6 +91,18 @@ mod tests {
         assert_eq!(
             pattern_for_path(Path::new("a b[1].txt")),
             "\"/a b\\\\[1\\\\].txt\""
+        );
+    }
+
+    #[test]
+    fn pattern_tokens_keep_line_breaks_inside_one_rule() {
+        assert_eq!(
+            pattern_for_path(Path::new("a\nx.txt encoding=KOI8-R\r\nz.txt")),
+            "\"/a\\nx.txt encoding=KOI8-R\\r\\nz.txt\""
+        );
+        assert_eq!(
+            pattern_for_extension(Path::new("a.ext\nvictim encoding=KOI8-R\rz")).as_deref(),
+            Some("\"*.ext\\nvictim encoding=KOI8-R\\rz\"")
         );
     }
 

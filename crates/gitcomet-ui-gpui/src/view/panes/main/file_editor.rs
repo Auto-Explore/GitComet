@@ -900,21 +900,24 @@ impl MainPaneView {
         }));
     }
 
-    /// Write the buffer to the working tree.
+    /// Write the buffer to the working tree. Returns whether a write was dispatched.
     ///
     /// Reuses the same command the merge tool saves through, so the write goes
     /// through the workdir-escape check, lands in the command log, and raises
     /// the same "Saved → path" toast.
-    pub(in crate::view) fn save_file_editor_buffer(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn save_file_editor_buffer(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         let Some((repo_id, path)) = self.file_editor_key.clone() else {
-            return;
+            return false;
         };
         // Belt and braces against writing a buffer that is not the file's: while
         // a read is in flight the input holds a blank placeholder, and every
         // save entry point (the button, Ctrl+S, auto-save, Save all) can be
         // reached in that window.
         if self.file_editor_loading || !self.file_editor_dirty {
-            return;
+            return false;
         }
         // Every caller that gets here on purpose (button, Ctrl+S, Save all)
         // is the user keeping their edits over the other program's.
@@ -934,10 +937,8 @@ impl MainPaneView {
                 Err(message) => {
                     // Kept dirty: nothing was written.
                     self.file_editor_autosave = None;
-                    let _ = self.root_view.update(cx, |root, cx| {
-                        root.push_toast(crate::view::components::ToastKind::Error, message, cx);
-                    });
-                    return;
+                    self.show_text_format_error(message, cx);
+                    return false;
                 }
             };
 
@@ -992,6 +993,7 @@ impl MainPaneView {
         // disk, and it is only invalidated when the *target* changes.
         self.invalidate_worktree_preview_for_saved_path(&path);
         cx.notify();
+        true
     }
 
     /// Keep an unsaved buffer around under its path.
@@ -1040,12 +1042,16 @@ impl MainPaneView {
     }
 
     /// Try auto-save, then stash any edits that could not be written.
+    /// Returns whether a write was dispatched, so closing can wait for it.
     ///
     /// The two moments this covers are leaving the editor and losing focus,
     /// which is where "auto-save" has to mean more than "after a pause" — a
     /// pause that is interrupted by navigating away would otherwise lose the
     /// write it was about to make.
-    pub(in crate::view) fn flush_file_editor_buffer(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn flush_file_editor_buffer(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         // `file_editor_loading` for the same reason `save_file_editor_buffer`
         // checks it: between blanking the buffer and the read landing, the
         // buffer holds a placeholder that reads as *dirty* — the saved
@@ -1053,16 +1059,17 @@ impl MainPaneView {
         // does not match it. Flushing there stashed that empty placeholder under
         // the file's own path, and the next open restored it over the file.
         if self.file_editor_loading || self.file_editor_key.is_none() || !self.file_editor_dirty {
-            return;
+            return false;
         }
         // With "File changed on disk" open the buffer is kept, not written:
         // leaving the file is not an answer to the question.
-        if self.auto_save_file_edits && !self.file_disk_notice_awaits_editor() {
-            self.save_file_editor_buffer(cx);
-        }
+        let dispatched = self.auto_save_file_edits
+            && !self.file_disk_notice_awaits_editor()
+            && self.save_file_editor_buffer(cx);
         if self.file_editor_dirty {
             self.stash_current_file_editor_buffer(cx);
         }
+        dispatched
     }
 
     /// Drop stashed buffers whose repo tab has been closed.
@@ -1293,9 +1300,7 @@ impl MainPaneView {
             let bytes = match encode_for_save(stashed.text.clone(), stashed.text_format) {
                 Ok((bytes, _)) => bytes,
                 Err(message) => {
-                    let _ = self.root_view.update(cx, |root, cx| {
-                        root.push_toast(crate::view::components::ToastKind::Error, message, cx);
-                    });
+                    self.show_text_format_error(message, cx);
                     self.file_editor_stash.insert((repo_id, path), stashed);
                     continue;
                 }

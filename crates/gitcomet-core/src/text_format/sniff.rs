@@ -196,6 +196,7 @@ impl ContentSniffer {
         let utf16 = self.utf16_guess();
         ContentSniff {
             bom,
+            unsupported_bom: TextEncoding::has_unsupported_bom(head),
             utf16,
             has_nul: self.prefix_has_nul,
             utf8_valid: self.utf8_valid,
@@ -239,6 +240,7 @@ fn utf8_sequence_len(lead: u8) -> usize {
 #[derive(Clone, Debug)]
 pub struct ContentSniff {
     pub bom: Option<(TextEncoding, usize)>,
+    unsupported_bom: bool,
     pub utf16: Option<TextEncoding>,
     pub has_nul: bool,
     pub utf8_valid: bool,
@@ -268,6 +270,9 @@ impl ContentSniff {
         let working_tree_encoding = attributes.working_tree_encoding();
         let with = |encoding: TextEncoding, source| self.format(encoding, source);
 
+        if self.unsupported_bom {
+            return with(TextEncoding::UTF_8, FormatSource::Binary);
+        }
         if let Some(encoding) = override_encoding
             && !(kind == SideKind::GitInternal && working_tree_encoding.is_some())
         {
@@ -317,9 +322,7 @@ impl ContentSniff {
             return with(TextEncoding::UTF_8, FormatSource::Utf8);
         }
         if self.has_nul {
-            let mut format = with(TextEncoding::UTF_8, FormatSource::Binary);
-            format.binary = true;
-            return format;
+            return with(TextEncoding::UTF_8, FormatSource::Binary);
         }
         if let Some(encoding) = attributes
             .gui_encoding
@@ -351,7 +354,7 @@ impl ContentSniff {
         SideTextFormat {
             format: TextFormat { encoding, bom },
             source,
-            binary: false,
+            binary: source == FormatSource::Binary,
             malformed: false,
             lossy: false,
             line_endings: if encoding.is_ascii_compatible() {
