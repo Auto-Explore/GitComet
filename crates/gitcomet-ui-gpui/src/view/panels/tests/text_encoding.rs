@@ -106,6 +106,74 @@ fn koi8() -> TextEncoding {
 }
 
 #[gpui::test]
+fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::{DiffArea, FileConflictKind, FileStatusKind};
+    use gitcomet_core::text_format::SideKind;
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(9520);
+    for (original, encoding) in [
+        (b"caf\xe9\n".as_slice(), TextEncoding::WINDOWS_1252),
+        (b"\xff\xfea\0\n\0".as_slice(), TextEncoding::UTF_16LE),
+        (
+            b"\x87\x90\n".as_slice(),
+            TextEncoding::from_label("shift_jis").unwrap(),
+        ),
+    ] {
+        let (base, _) = ConflictPayload::decode(
+            Some(Arc::from(original)),
+            None,
+            SideKind::GitInternal,
+            &TextAttributes::default(),
+            Some(encoding),
+        );
+        let session = ConflictSession::new_with_current(
+            FILE.into(),
+            FileConflictKind::BothDeleted,
+            base,
+            ConflictPayload::Absent,
+            ConflictPayload::Absent,
+            ConflictPayload::Absent,
+        );
+        let file = gitcomet_state::model::ConflictFile::from_shared_conflict_session(
+            Path::new(FILE),
+            &session,
+        );
+        let bytes = conflict_side_output_bytes(&file, ThreeWayColumn::Base).unwrap();
+        assert_eq!(bytes.as_ref(), original);
+        let mut repo = opening_repo_state(repo_id, workdir.path());
+        set_test_file_status_with_conflict(
+            &mut repo,
+            FILE,
+            FileStatusKind::Conflicted,
+            Some(FileConflictKind::BothDeleted),
+            DiffArea::Unstaged,
+        );
+        repo.conflict_state.conflict_file_path = Some(FILE.into());
+        repo.conflict_state.conflict_file = Loadable::Ready(Some(file));
+        repo.conflict_state.conflict_session = Some(session);
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                push_test_state(view, app_state_with_repo(repo, repo_id), cx)
+            })
+        });
+        cx.run_until_parked();
+        let _ = std::fs::remove_file(workdir.path().join(FILE));
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                assert!(pane.conflict_current_text_format().is_none());
+                pane.focused_mergetool_write_side_and_exit(repo_id, Path::new(FILE), &bytes, cx);
+            });
+        });
+        assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
+    }
+}
+
+#[gpui::test]
 fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);

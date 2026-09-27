@@ -54,13 +54,14 @@ pub fn pattern_for_extension(repo_path: &Path) -> Option<String> {
 }
 
 /// `existing` with `line` appended on a line of its own, or `None` when the
-/// exact line is already there. Works on bytes so a file in any encoding is
-/// never re-encoded.
+/// exact line is the last rule. Earlier copies may have been overridden by
+/// later patterns. Works on bytes so the file is never re-encoded.
 pub fn append_rule(existing: &[u8], line: &str) -> Option<Vec<u8>> {
-    let already = existing.split(|byte| *byte == b'\n').any(|existing_line| {
-        existing_line.strip_suffix(b"\r").unwrap_or(existing_line) == line.as_bytes()
-    });
-    if already {
+    let last_rule = existing
+        .rsplit(|byte| *byte == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .find(|line| !line.is_empty() && !line.starts_with(b"#"));
+    if last_rule == Some(line.as_bytes()) {
         return None;
     }
     let crlf = existing.windows(2).any(|pair| pair == b"\r\n");
@@ -126,5 +127,24 @@ mod tests {
             b"# caf\xe9\r\n*.c text\r\n/a eol=lf\r\n"
         );
         assert_eq!(append_rule(b"/a eol=lf\n", "/a eol=lf"), None);
+    }
+
+    #[test]
+    fn an_earlier_duplicate_does_not_override_a_later_rule() {
+        let rule = "/menu.txt encoding=windows-1252";
+        for later in [
+            "/menu.txt encoding=koi8-r",
+            "*.txt encoding=koi8-r",
+            "* -encoding",
+        ] {
+            let existing = format!("{rule}\n{later}\n");
+            let updated = append_rule(existing.as_bytes(), rule).unwrap();
+            assert_eq!(updated, format!("{existing}{rule}\n").as_bytes());
+            assert_eq!(append_rule(&updated, rule), None);
+        }
+        assert_eq!(
+            append_rule(format!("{rule}\r\n\r\n # comment\r\n").as_bytes(), rule),
+            None
+        );
     }
 }

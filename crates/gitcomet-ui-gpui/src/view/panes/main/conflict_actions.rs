@@ -921,12 +921,7 @@ impl MainPaneView {
             .as_ref()
             .filter(|session| session.path == path);
         let current_text = session
-            .and_then(|session| match session.current.as_ref() {
-                Some(gitcomet_core::conflict_session::ConflictPayload::Text(text)) => {
-                    Some(text.clone())
-                }
-                _ => None,
-            })
+            .and_then(|session| session.current.as_ref()?.as_shared_text().cloned())
             .or_else(|| file.current.clone());
         let structural_marker_snapshot = session
             .and_then(|session| session.marker_projection.clone())
@@ -1730,12 +1725,7 @@ impl MainPaneView {
             .conflict_state
             .conflict_session
             .as_ref()
-            .and_then(|session| match session.current.as_ref() {
-                Some(gitcomet_core::conflict_session::ConflictPayload::Text(text)) => {
-                    Some(text.clone())
-                }
-                _ => None,
-            })
+            .and_then(|session| session.current.as_ref()?.as_shared_text().cloned())
             .or_else(|| file.current.clone());
         let structural_marker_snapshot = repo
             .conflict_state

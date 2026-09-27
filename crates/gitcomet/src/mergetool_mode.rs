@@ -1,6 +1,6 @@
 use crate::cli::{MergetoolConfig, exit_code};
 use gitcomet_core::text_format::{
-    SideKind, TextAttributes, TextFormat, decode, decode_bytes, round_trips,
+    SideKind, TextAttributes, TextEncoding, TextFormat, decode_bytes,
 };
 use gitcomet_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
@@ -172,12 +172,15 @@ fn decode_merge_inputs(
         return None;
     }
     let output_format = decoded_local.format.format;
-    let encoding = output_format.encoding;
     let decode_side = |bytes: &[u8]| -> Option<String> {
-        let bom = encoding.bom().is_some_and(|bom| bytes.starts_with(bom));
-        let format = TextFormat { encoding, bom };
-        let decoded = decode(bytes, format);
-        (!decoded.malformed && round_trips(bytes, &decoded.text, format))
+        // Each input can announce its own encoding. Only BOM-less sides
+        // inherit LOCAL's encoding; the shared decoder also rejects UTF-32.
+        let encoding =
+            TextEncoding::for_bom(bytes).map_or(output_format.encoding, |(encoding, _)| encoding);
+        let decoded = decode_bytes(bytes, SideKind::Worktree, &attributes, Some(encoding));
+        decoded
+            .format
+            .is_writable()
             .then(|| decoded.text.into_owned())
     };
     Some((

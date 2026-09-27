@@ -568,6 +568,32 @@ fn check_attr(repo: &Path, attribute: &str, path: &str) -> String {
 }
 
 #[test]
+fn saving_an_earlier_encoding_again_overrides_later_assignments() {
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let append = |rule: &str| {
+        let path = dir.path().join(".gitattributes");
+        let existing = fs::read(&path).unwrap_or_default();
+        if let Some(updated) = gitcomet_core::gitattributes::append_rule(&existing, rule) {
+            fs::write(path, updated).unwrap();
+        }
+    };
+    for encoding in ["windows-1252", "koi8-r", "windows-1252"] {
+        append(&format!("/menu.txt encoding={encoding}"));
+        assert_eq!(check_attr(dir.path(), "encoding", "menu.txt"), encoding);
+    }
+    let before = fs::read(dir.path().join(".gitattributes")).unwrap();
+    append("/menu.txt encoding=windows-1252");
+    assert_eq!(fs::read(dir.path().join(".gitattributes")).unwrap(), before);
+    append("*.txt encoding=koi8-r");
+    append("/menu.txt encoding=windows-1252");
+    assert_eq!(
+        check_attr(dir.path(), "encoding", "menu.txt"),
+        "windows-1252"
+    );
+}
+
+#[test]
 fn written_gitattributes_patterns_match_exactly_their_path_in_git() {
     test_git_env::ensure_initialized();
     use gitcomet_core::gitattributes::{append_rule, pattern_for_extension, pattern_for_path};
@@ -681,13 +707,18 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
         .conflict_session_with_encoding(Path::new("menu.txt"), None)
         .unwrap()
         .expect("conflict session");
-    let text = |payload: &ConflictPayload| match payload {
-        ConflictPayload::Text(text) => text.to_string(),
-        other => panic!("expected text, got {other:?}"),
-    };
+    let text = |payload: &ConflictPayload| payload.as_text().expect("decoded text").to_string();
     assert_eq!(text(&session.ours), "Café crème brûlée maison\n");
     assert_eq!(text(&session.theirs), "Café crème brûlée pour deux\n");
     assert_eq!(text(&session.base), "Café crème brûlée\n");
+    assert!(
+        session.merge_plan.is_some(),
+        "decoded stages still build a text merge plan"
+    );
+    assert_eq!(
+        session.base_bytes().unwrap(),
+        b"Caf\xe9 cr\xe8me br\xfbl\xe9e\n"
+    );
     let current = session.current_format.expect("worktree file read");
     assert_eq!(current.format.encoding, TextEncoding::WINDOWS_1252);
     assert!(

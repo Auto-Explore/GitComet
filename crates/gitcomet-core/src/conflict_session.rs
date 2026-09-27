@@ -51,6 +51,9 @@ pub use subchunk::{Subchunk, split_conflict_into_subchunks};
 pub enum ConflictPayload {
     /// Valid UTF-8 text content.
     Text(Arc<str>),
+    /// Decoded text whose source bytes differ from its UTF-8 representation.
+    /// Keep the originals for whole-side restore actions, including lossy text.
+    EncodedText { text: Arc<str>, bytes: Arc<[u8]> },
     /// Non-UTF8 binary content.
     Binary(Arc<[u8]>),
     /// Side is absent (file deleted or not present on this branch).
@@ -60,14 +63,16 @@ pub enum ConflictPayload {
 /// Tuple form used by staged conflict-file loading: `(raw_bytes, utf8_text)`.
 pub type ConflictStageParts = (Option<Arc<[u8]>>, Option<Arc<str>>);
 
-/// Canonicalize staged conflict-file parts so UTF-8 content is carried once as
-/// text while non-UTF8 payloads stay in their raw byte form.
+/// Drop a redundant UTF-8 byte copy, retaining original bytes when text was decoded.
 pub fn canonicalize_stage_parts(
     bytes: Option<Arc<[u8]>>,
     text: Option<Arc<str>>,
 ) -> ConflictStageParts {
     if let Some(text) = text {
-        return (None, Some(text));
+        return (
+            bytes.filter(|bytes| bytes.as_ref() != text.as_bytes()),
+            Some(text),
+        );
     }
 
     match bytes {
@@ -205,10 +210,15 @@ impl PartialEq<ConflictRegionText> for String {
 }
 
 impl ConflictPayload {
-    /// Returns the text content if this payload is `Text`.
+    /// Returns decoded text, when available.
     pub fn as_text(&self) -> Option<&str> {
+        self.as_shared_text().map(AsRef::as_ref)
+    }
+
+    /// Shared decoded text for projections that need to retain its backing.
+    pub fn as_shared_text(&self) -> Option<&Arc<str>> {
         match self {
-            ConflictPayload::Text(s) => Some(s),
+            ConflictPayload::Text(text) | ConflictPayload::EncodedText { text, .. } => Some(text),
             _ => None,
         }
     }
@@ -216,12 +226,14 @@ impl ConflictPayload {
     /// Returns the raw bytes for this payload.
     ///
     /// For UTF-8 text payloads this returns the encoded text bytes.
-    /// For binary payloads this returns the original bytes.
+    /// For decoded text and binary payloads this returns the original bytes.
     /// For absent payloads this returns `None`.
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             ConflictPayload::Text(s) => Some(s.as_bytes()),
-            ConflictPayload::Binary(bytes) => Some(bytes.as_ref()),
+            ConflictPayload::EncodedText { bytes, .. } | ConflictPayload::Binary(bytes) => {
+                Some(bytes.as_ref())
+            }
             ConflictPayload::Absent => None,
         }
     }
@@ -261,14 +273,23 @@ impl ConflictPayload {
         if format.binary {
             return (ConflictPayload::Binary(Arc::from(raw)), Some(format));
         }
-        let unchanged =
-            format.format.is_plain_utf8() && matches!(decoded.text, std::borrow::Cow::Borrowed(_));
+        let unchanged = (format.format.is_plain_utf8()
+            && matches!(decoded.text, std::borrow::Cow::Borrowed(_)))
+            || decoded.text.as_bytes() == raw;
         let decoded: Arc<str> = if unchanged && let Some(text) = &text {
             Arc::clone(text)
         } else {
             Arc::from(decoded.text.as_ref())
         };
-        (ConflictPayload::Text(decoded), Some(format))
+        let payload = if unchanged {
+            ConflictPayload::Text(decoded)
+        } else {
+            ConflictPayload::EncodedText {
+                text: decoded,
+                bytes: bytes.clone().unwrap_or_else(|| Arc::from(raw)),
+            }
+        };
+        (payload, Some(format))
     }
 
     /// Try to create from raw bytes: if valid UTF-8, produce `Text`; otherwise `Binary`.
@@ -284,12 +305,13 @@ impl ConflictPayload {
     /// Prefers text when present; falls back to binary bytes; produces `Absent`
     /// when both are `None`.
     pub fn from_stage_parts(bytes: Option<Arc<[u8]>>, text: Option<Arc<str>>) -> Self {
-        if let Some(t) = text {
-            ConflictPayload::Text(t)
-        } else if let Some(b) = bytes {
-            ConflictPayload::Binary(b)
-        } else {
-            ConflictPayload::Absent
+        match (bytes, text) {
+            (Some(bytes), Some(text)) if bytes.as_ref() != text.as_bytes() => {
+                ConflictPayload::EncodedText { text, bytes }
+            }
+            (_, Some(text)) => ConflictPayload::Text(text),
+            (Some(bytes), None) => ConflictPayload::Binary(bytes),
+            (None, None) => ConflictPayload::Absent,
         }
     }
 
@@ -299,6 +321,7 @@ impl ConflictPayload {
     pub fn into_stage_parts(self) -> ConflictStageParts {
         match self {
             ConflictPayload::Text(text) => (None, Some(text)),
+            ConflictPayload::EncodedText { text, bytes } => (Some(bytes), Some(text)),
             ConflictPayload::Binary(bytes) => (Some(bytes), None),
             ConflictPayload::Absent => (None, None),
         }
@@ -658,7 +681,9 @@ impl ConflictSession {
 
     fn payload_as_side_text(payload: &ConflictPayload) -> Option<ConflictRegionText> {
         match payload {
-            ConflictPayload::Text(text) => Some(ConflictRegionText::shared(text.clone())),
+            ConflictPayload::Text(text) | ConflictPayload::EncodedText { text, .. } => {
+                Some(ConflictRegionText::shared(text.clone()))
+            }
             ConflictPayload::Absent => Some(ConflictRegionText::from(String::new())),
             ConflictPayload::Binary(_) => None,
         }
@@ -666,7 +691,9 @@ impl ConflictSession {
 
     fn payload_as_base_text(payload: &ConflictPayload) -> Option<Option<ConflictRegionText>> {
         match payload {
-            ConflictPayload::Text(text) => Some(Some(ConflictRegionText::shared(text.clone()))),
+            ConflictPayload::Text(text) | ConflictPayload::EncodedText { text, .. } => {
+                Some(Some(ConflictRegionText::shared(text.clone())))
+            }
             ConflictPayload::Absent => Some(None),
             ConflictPayload::Binary(_) => None,
         }
@@ -809,14 +836,16 @@ impl ConflictSession {
         }
 
         let session = self;
-        let ConflictPayload::Text(ours_text) = &session.ours else {
+        let Some(ours_text) = session.ours.as_text() else {
             return;
         };
-        let ConflictPayload::Text(theirs_text) = &session.theirs else {
+        let Some(theirs_text) = session.theirs.as_text() else {
             return;
         };
         let base_text = match &session.base {
-            ConflictPayload::Text(text) => Some(text.as_ref()),
+            ConflictPayload::Text(text) | ConflictPayload::EncodedText { text, .. } => {
+                Some(text.as_ref())
+            }
             ConflictPayload::Absent => None,
             ConflictPayload::Binary(_) => return,
         };
@@ -937,7 +966,7 @@ impl ConflictSession {
     /// the budget-exceeded fallback, and answering "two-input" there would make
     /// [`ManualAlignment::source_range`] read the wrong field for every source.
     fn plan_is_three_way(&self) -> bool {
-        matches!(self.base, ConflictPayload::Text(_))
+        self.base.as_text().is_some()
     }
 
     fn replan_with_manual_alignments(

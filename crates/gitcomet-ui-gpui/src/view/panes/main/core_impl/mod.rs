@@ -455,22 +455,8 @@ impl MainPaneView {
             cx.quit();
             return;
         };
-        // A side that decoded as text is held as UTF-8; write it in the file's
-        // own encoding. Binary sides never pass as UTF-8 and keep their bytes.
-        let encoded;
-        let bytes = match (
-            self.conflict_current_text_format(),
-            std::str::from_utf8(bytes),
-        ) {
-            (Some(format), Ok(text)) if !format.format.is_plain_utf8() => {
-                let Some(bytes) = self.conflict_output_bytes_for_save(text.to_string(), cx) else {
-                    return;
-                };
-                encoded = bytes;
-                encoded.as_bytes()
-            }
-            _ => bytes,
-        };
+        // Whole-side restoration uses the stage's original bytes. Its encoding
+        // can differ from the current file's, and the current file may be absent.
         self.finish_focused_mergetool_output(
             &workdir,
             path,

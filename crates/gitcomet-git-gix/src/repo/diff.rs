@@ -939,6 +939,7 @@ impl GixRepo {
 
         let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
+        let current_payload = current.clone();
         let session = if strategy == ConflictResolverStrategy::FullTextResolver {
             // Full-text sessions use one stage-derived merge plan for aligned
             // rows, conflict regions, and the marker projection while retaining
@@ -956,7 +957,10 @@ impl GixRepo {
             // worktree payload (including an absent payload) for their
             // specialized completion behavior.
             match current {
-                Some(ConflictPayload::Text(current)) => ConflictSession::from_merged_shared_text(
+                Some(
+                    ConflictPayload::Text(current)
+                    | ConflictPayload::EncodedText { text: current, .. },
+                ) => ConflictSession::from_merged_shared_text(
                     repo_path,
                     conflict_kind,
                     base,
@@ -976,6 +980,7 @@ impl GixRepo {
             }
         };
         let mut session = session;
+        session.current = current_payload;
         session.current_format = current_format;
         Ok(Some(session))
     }

@@ -2,6 +2,112 @@ use super::*;
 use gitcomet_core::domain::Upstream;
 
 #[test]
+fn repository_refreshes_reload_selected_text_attributes_from_git() {
+    use crate::msg::RepoExternalChange;
+    use gitcomet_core::text_format::{TabWidthSource, TextEncoding};
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q"]);
+    let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+    let repo = backend.open(dir.path()).unwrap();
+    let repo_id = RepoId(9521);
+    let path = PathBuf::from("menu.txt");
+    let mut repos = FxHashMap::default();
+    repos.insert(repo_id, repo.clone());
+    let executor = super::executor::TaskExecutor::new(1);
+    let id_alloc = AtomicU64::new(9522);
+    for refresh in [
+        Msg::ReloadRepo { repo_id },
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange::Worktree,
+        },
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange::Index,
+        },
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange::GitState,
+        },
+    ] {
+        fs::write(
+            dir.path().join(".gitattributes"),
+            "/menu.txt encoding=windows-1252 whitespace=tabwidth=2\n",
+        )
+        .unwrap();
+        let original = repo.text_attributes(&path).unwrap();
+        let mut state = AppState::test_default();
+        let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
+        repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        });
+        // This preview reads from disk and does not otherwise load a diff.
+        repo_state.diff_state.content_preview = true;
+        repo_state.diff_state.text_attributes = Loadable::Ready(Arc::new(original.clone()));
+        let original_rev = repo_state.diff_state.text_attributes_rev;
+        state.repos.push(repo_state);
+        state.active_repo = Some(repo_id);
+        fs::write(
+            dir.path().join(".gitattributes"),
+            "/menu.txt encoding=koi8-r whitespace=tabwidth=8\n",
+        )
+        .unwrap();
+        let effects = reduce(&mut repos, &id_alloc, &mut state, refresh);
+        let load = effects
+            .into_iter()
+            .find(|effect| matches!(effect, Effect::LoadSelectedDiff { .. }))
+            .expect("a refresh must request the selected file's attributes");
+        let (tx, rx) = std::sync::mpsc::channel();
+        schedule_effect_with_state_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            state.clone(),
+            tx,
+            load,
+        );
+        let reply = recv_effect_message(&rx, Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            reply,
+            Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded { .. })
+        ));
+        reduce(&mut repos, &id_alloc, &mut state, reply);
+        let diff = &state.repos[0].diff_state;
+        let Loadable::Ready(attributes) = &diff.text_attributes else {
+            panic!("attributes did not load")
+        };
+        assert_ne!(attributes.as_ref(), &original);
+        assert_eq!(
+            attributes.encoding.as_ref().and_then(|attr| attr.encoding),
+            TextEncoding::from_label("koi8-r")
+        );
+        let tab = attributes.tab_width.unwrap();
+        assert_eq!(tab.columns, 8);
+        assert_eq!(tab.source, TabWidthSource::Attribute);
+        assert!(diff.text_attributes_rev > original_rev);
+        let revision = diff.text_attributes_rev;
+        let attributes = attributes.as_ref().clone();
+        // An unchanged refresh should not churn the editor's decoding key.
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path: path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                result: Ok(attributes),
+            }),
+        );
+        assert_eq!(state.repos[0].diff_state.text_attributes_rev, revision);
+    }
+}
+
+#[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
     for cancel_repo_loads in [false, true] {
         let primary = super::executor::TaskExecutor::new(1);

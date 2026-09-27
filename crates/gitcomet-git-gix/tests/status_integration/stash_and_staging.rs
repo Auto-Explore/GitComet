@@ -1796,6 +1796,38 @@ fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
     );
 }
 
+#[test]
+fn both_deleted_decoded_base_keeps_original_stage_bytes() {
+    let _ = ensure_isolated_git_test_env();
+    for (encoding, bytes, text) in [
+        ("windows-1252", b"caf\xe9\n".as_slice(), "café\n"),
+        ("UTF-16LE", b"\xff\xfea\0\n\0".as_slice(), "a\n"),
+        ("shift_jis", b"\x87\x90\n".as_slice(), "≒\n"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_conflict_fixture(repo);
+        write(
+            repo,
+            ".gitattributes",
+            format!("removed.txt encoding={encoding}\n"),
+        );
+        let blob = hash_blob(repo, bytes);
+        set_unmerged_stages(repo, "removed.txt", Some(&blob), None, None);
+        let opened = GixBackend.open(repo).unwrap();
+        let session = opened
+            .conflict_session(Path::new("removed.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
+        assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
+        assert!(session.current_format.is_none());
+        assert_eq!(session.base.as_text(), Some(text));
+        assert_eq!(session.base_bytes(), Some(bytes));
+        assert_eq!(session.base.into_stage_parts().0.as_deref(), Some(bytes));
+    }
+}
+
 /// End-to-end test: AddedByUs conflict session uses TwoWayKeepDelete
 /// strategy, and keeping the file via `checkout_conflict_side(Ours)`
 /// resolves the conflict.

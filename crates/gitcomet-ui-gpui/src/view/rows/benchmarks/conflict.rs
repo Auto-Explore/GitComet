@@ -822,6 +822,9 @@ fn stage_loaded_stage_parts_from_payload(
 ) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
     match payload {
         ConflictPayload::Text(text) => (None, Some(Arc::<str>::from(text.as_ref()))),
+        ConflictPayload::EncodedText { text, bytes } => {
+            (Some(bytes.clone()), Some(Arc::<str>::from(text.as_ref())))
+        }
         ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
         ConflictPayload::Absent => (None, None),
     }

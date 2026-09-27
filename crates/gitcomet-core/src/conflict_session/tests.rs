@@ -103,6 +103,71 @@ fn stage_parts_text_preferred_over_bytes() {
 // -- ConflictRegionResolution tests --
 
 #[test]
+fn decoded_payloads_keep_original_bytes_through_stage_parts() {
+    use crate::text_format::{SideKind, TextAttributes, TextEncoding};
+    for (bytes, encoding, text) in [
+        (
+            b"caf\xe9\n".as_slice(),
+            TextEncoding::WINDOWS_1252,
+            "café\n",
+        ),
+        (
+            b"\xef\xbb\xbfcaf\xc3\xa9\n".as_slice(),
+            TextEncoding::UTF_8,
+            "café\n",
+        ),
+        (b"\xff\xfea\0\n\0".as_slice(), TextEncoding::UTF_16LE, "a\n"),
+        (
+            b"\x87\x90\n".as_slice(),
+            TextEncoding::from_label("shift_jis").unwrap(),
+            "≒\n",
+        ),
+        (b"bad\xff\n".as_slice(), TextEncoding::UTF_8, "bad�\n"),
+    ] {
+        let original: Arc<[u8]> = bytes.into();
+        let (payload, _) = ConflictPayload::decode(
+            Some(original.clone()),
+            None,
+            SideKind::GitInternal,
+            &TextAttributes::default(),
+            Some(encoding),
+        );
+        assert_eq!(payload.as_text(), Some(text));
+        assert_eq!(payload.as_bytes(), Some(bytes));
+        assert!(!payload.is_binary());
+        let shared_text = payload.as_shared_text().unwrap().clone();
+        let parts = payload.into_stage_parts();
+        let (raw, decoded) = canonicalize_stage_parts(parts.0, parts.1);
+        assert!(Arc::ptr_eq(raw.as_ref().unwrap(), &original));
+        assert!(Arc::ptr_eq(decoded.as_ref().unwrap(), &shared_text));
+        let restored = ConflictPayload::from_stage_parts(raw, decoded);
+        assert_eq!(restored.as_bytes(), Some(bytes));
+        assert_eq!(restored.as_text(), Some(text));
+    }
+}
+
+#[test]
+fn decoded_utf8_payloads_store_text_once() {
+    use crate::text_format::{SideKind, TextAttributes};
+    let text: Arc<str> = "café\n".into();
+    let (payload, _) = ConflictPayload::decode(
+        Some(Arc::from(text.as_bytes())),
+        Some(text.clone()),
+        SideKind::GitInternal,
+        &TextAttributes::default(),
+        None,
+    );
+    let (bytes, decoded) = payload.into_stage_parts();
+    assert!(bytes.is_none());
+    assert!(Arc::ptr_eq(decoded.as_ref().unwrap(), &text));
+    assert!(
+        canonicalize_stage_parts(Some(Arc::from(text.as_bytes())), Some(text))
+            .0
+            .is_none()
+    );
+}
+
+#[test]
 fn unresolved_is_not_resolved() {
     assert!(!ConflictRegionResolution::Unresolved.is_resolved());
 }

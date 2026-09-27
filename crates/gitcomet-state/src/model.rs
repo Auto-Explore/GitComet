@@ -435,11 +435,7 @@ impl ConflictFile {
 fn conflict_file_side_from_payload(
     payload: &ConflictPayload,
 ) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
-    match payload {
-        ConflictPayload::Text(text) => (None, Some(text.clone())),
-        ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
-        ConflictPayload::Absent => (None, None),
-    }
+    payload.clone().into_stage_parts()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

@@ -405,6 +405,21 @@ pub(super) fn mark_text_attributes_loading(repo_state: &mut RepoState) {
     }
 }
 
+/// Refresh attributes independently of content: even an immutable commit
+/// view follows the working tree's current attributes and repository config.
+pub(super) fn reload_selected_text_attributes(repo_state: &mut RepoState) -> Option<Effect> {
+    repo_state.diff_state.diff_target.as_ref()?.file_path()?;
+    mark_text_attributes_loading(repo_state);
+    Some(Effect::LoadSelectedDiff {
+        repo_id: repo_state.id,
+        load_patch_diff: false,
+        load_file_text: false,
+        preview_text_side: None,
+        load_submodule_summary: false,
+        load_file_image: false,
+    })
+}
+
 /// Read the open file again because what decides its decoding changed: as a
 /// conflict when it is one, otherwise as a new generation that keeps the
 /// content on screen and drops loads still reading it the old way.

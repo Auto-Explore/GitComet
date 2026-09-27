@@ -1382,3 +1382,51 @@ fn utf16_sides_keep_their_bom_and_encoding() {
     assert_eq!(result.exit_code, exit_code::SUCCESS, "{}", result.stderr);
     assert_eq!(fs::read(&config.merged).unwrap(), utf16("A\nb\nC\n"));
 }
+
+#[test]
+fn merge_inputs_follow_their_own_boms_and_write_the_local_format() {
+    use gitcomet_core::text_format::encode;
+    for local_encoding in [TextEncoding::UTF_16LE, TextEncoding::UTF_16BE] {
+        for base_encoding in [
+            TextEncoding::UTF_16LE,
+            TextEncoding::UTF_16BE,
+            TextEncoding::UTF_8,
+        ] {
+            for remote_encoding in [
+                TextEncoding::UTF_16LE,
+                TextEncoding::UTF_16BE,
+                TextEncoding::UTF_8,
+            ] {
+                let encoded = |text, encoding| {
+                    encode(
+                        text,
+                        TextFormat {
+                            encoding,
+                            bom: true,
+                        },
+                    )
+                    .unwrap()
+                    .into_owned()
+                };
+                let tmp = tempfile::tempdir().unwrap();
+                let config = make_config(tmp.path(), Some(""), "", "", "");
+                // An unchanged LOCAL must take REMOTE's decoded text, not its
+                // byte order. Also exercise changes made independently on both sides.
+                for (local, expected) in [("a\nb\nc\n", "a\nb\nC\n"), ("A\nb\nc\n", "A\nb\nC\n")] {
+                    write_bytes(
+                        config.base.as_ref().unwrap(),
+                        &encoded("a\nb\nc\n", base_encoding),
+                    );
+                    write_bytes(&config.local, &encoded(local, local_encoding));
+                    write_bytes(&config.remote, &encoded("a\nb\nC\n", remote_encoding));
+                    let result = run_mergetool(&config).unwrap();
+                    assert_eq!(result.exit_code, exit_code::SUCCESS, "{}", result.stderr);
+                    assert_eq!(
+                        fs::read(&config.merged).unwrap(),
+                        encoded(expected, local_encoding)
+                    );
+                }
+            }
+        }
+    }
+}
