@@ -1764,12 +1764,12 @@ fn lfs_status_menu_labels(
 fn lfs_support(lockable: bool) -> gitcomet_core::large_files::LargeFileSupport {
     let mut support = gitcomet_core::large_files::LargeFileSupport::default();
     support.lfs.filter_configured = true;
+    support.lfs.has_lockable_patterns = lockable;
     support
         .lfs
         .tracked_patterns
         .push(gitcomet_core::large_files::LfsTrackedPattern {
             pattern: "*.psd".into(),
-            lockable,
             source: std::path::PathBuf::from(".gitattributes"),
         });
     support

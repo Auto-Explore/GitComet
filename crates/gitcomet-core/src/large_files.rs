@@ -71,7 +71,6 @@ impl UncommittedLargeFiles {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct LfsTrackedPattern {
     pub pattern: String,
-    pub lockable: bool,
     /// `.gitattributes` file the line came from, relative to the workdir.
     pub source: PathBuf,
 }
@@ -82,6 +81,9 @@ pub struct LfsRepoInfo {
     pub filter_configured: bool,
     pub filter_required: bool,
     pub tracked_patterns: Vec<LfsTrackedPattern>,
+    /// An attribute rule sets `lockable`, independently of `filter=lfs`.
+    /// Per-file state resolves the effective value through the attribute stack.
+    pub has_lockable_patterns: bool,
     pub storage_dir: PathBuf,
     pub has_local_store: bool,
     /// Smudge is skipped (`filter.lfs.smudge` runs `--skip`, or the env var).
@@ -93,10 +95,6 @@ impl LfsRepoInfo {
     /// The repository uses LFS: patterns are tracked or objects are stored.
     pub fn in_use(&self) -> bool {
         !self.tracked_patterns.is_empty() || self.has_local_store
-    }
-
-    pub fn has_lockable_patterns(&self) -> bool {
-        self.tracked_patterns.iter().any(|pattern| pattern.lockable)
     }
 }
 

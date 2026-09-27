@@ -5,9 +5,10 @@ use crate::util::{
     run_git_background_capture, run_git_with_input_output, run_git_with_output,
     validate_ref_like_arg,
 };
-use gitcomet_core::domain::DiffTarget;
+use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::large_files::{LargeFileCommand, LfsLock, lfs_include_pattern};
+use gitcomet_core::lfs;
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use std::path::PathBuf;
 
@@ -105,7 +106,7 @@ impl super::GixRepo {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut revisions = self.index_side_trees(paths)?;
+        let mut revisions = self.lfs_local_trees(paths, false)?;
         if let Ok(head) = self.repo().head_id() {
             revisions.push(head.to_string());
         }
@@ -118,12 +119,14 @@ impl super::GixRepo {
     }
 
     fn lfs_fetch_for_diff(&self, target: &DiffTarget) -> Result<CommandOutput> {
-        let mut index_trees = Vec::new();
+        let mut local_trees = Vec::new();
         let (path, mut revisions) = match target {
-            DiffTarget::WorkingTree { path, .. } => {
+            DiffTarget::WorkingTree { path, area } => {
                 // The index side need not be in HEAD (after `reset --soft`, or
                 // theirs in a merge), and git-lfs fetches by commit or tree.
-                index_trees = self.index_side_trees(std::slice::from_ref(path))?;
+                // An unstaged worktree pointer can also differ from both.
+                local_trees =
+                    self.lfs_local_trees(std::slice::from_ref(path), *area == DiffArea::Unstaged)?;
                 let head = self.repo().head_id().is_ok();
                 (path, head.then(|| "HEAD".to_string()).into_iter().collect())
             }
@@ -148,7 +151,7 @@ impl super::GixRepo {
                 if let Some(to) = to_commit_id {
                     revisions.push(to.as_ref().to_string());
                 } else {
-                    index_trees = self.index_side_trees(std::slice::from_ref(path))?;
+                    local_trees = self.lfs_local_trees(std::slice::from_ref(path), true)?;
                 }
                 (path, revisions)
             }
@@ -165,7 +168,7 @@ impl super::GixRepo {
                 .detach()
                 .to_string();
         }
-        revisions.extend(index_trees);
+        revisions.extend(local_trees);
         let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
         let include = lfs_include_pattern(relative).ok_or_else(|| {
             Error::new(ErrorKind::Backend(
@@ -194,49 +197,48 @@ impl super::GixRepo {
         )
     }
 
-    /// One tree per index stage of each path, holding just that blob, so
-    /// git-lfs can fetch the index side. Only loose objects are
-    /// written; the index itself is untouched.
-    fn index_side_trees(&self, paths: &[PathBuf]) -> Result<Vec<String>> {
+    /// One tree per index stage and, when displayed, the worktree pointer, so
+    /// git-lfs can fetch content absent from HEAD. Only loose objects are
+    /// written; the index and worktree are untouched.
+    fn lfs_local_trees(&self, paths: &[PathBuf], include_worktree: bool) -> Result<Vec<String>> {
         use gix::objs::tree::{Entry, EntryKind};
         let repo = self.repo();
         let backend = |e: &dyn std::fmt::Display| {
-            Error::new(ErrorKind::Backend(format!("index side for LFS fetch: {e}")))
+            Error::new(ErrorKind::Backend(format!("local side for LFS fetch: {e}")))
         };
         let index = repo.index_or_empty().map_err(|e| backend(&e))?;
         let mut trees = Vec::new();
         for path in paths {
             let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
             let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative));
-            let Some(range) = index.entry_range(key.as_ref()) else {
-                continue;
-            };
-            for entry in &index.entries()[range] {
-                let mut components = key.split(|byte| *byte == b'/').rev();
-                let Some(name) = components.next() else {
-                    continue;
-                };
-                let mut id = repo
-                    .write_object(gix::objs::Tree {
-                        entries: vec![Entry {
-                            mode: EntryKind::Blob.into(),
-                            filename: name.into(),
-                            oid: entry.id,
-                        }],
-                    })
-                    .map_err(|e| backend(&e))?
-                    .detach();
-                for dir in components {
+            let mut blobs: Vec<_> = index
+                .entry_range(key.as_ref())
+                .into_iter()
+                .flat_map(|range| &index.entries()[range])
+                .map(|entry| entry.id)
+                .collect();
+            let full = self.spec.workdir.join(relative);
+            if include_worktree
+                && std::fs::symlink_metadata(&full).is_ok_and(|metadata| metadata.is_file())
+                && let Some(bytes) = super::large_files::read_pointer_candidate(&full)
+                && lfs::parse_pointer(&bytes).is_some()
+            {
+                blobs.push(repo.write_blob(&bytes).map_err(|e| backend(&e))?.detach());
+            }
+            for mut id in blobs {
+                let mut kind = EntryKind::Blob;
+                for name in key.split(|byte| *byte == b'/').rev() {
                     id = repo
                         .write_object(gix::objs::Tree {
                             entries: vec![Entry {
-                                mode: EntryKind::Tree.into(),
-                                filename: dir.into(),
+                                mode: kind.into(),
+                                filename: name.into(),
                                 oid: id,
                             }],
                         })
                         .map_err(|e| backend(&e))?
                         .detach();
+                    kind = EntryKind::Tree;
                 }
                 trees.push(id.to_string());
             }

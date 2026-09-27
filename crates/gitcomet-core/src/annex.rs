@@ -26,7 +26,11 @@ pub fn parse_key(raw: &str) -> Option<AnnexKey> {
     }
     let mut fields = fields.split('-');
     let backend = fields.next()?;
-    if backend.is_empty() || !backend.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if backend.is_empty()
+        || !backend
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
         return None;
     }
     let mut size = None;
@@ -245,6 +249,23 @@ mod tests {
             "a/b--c",
         ] {
             assert!(parse_key(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn sha3_backends_are_recognised_in_keys_and_both_pointer_forms() {
+        for backend in ["SHA3_224", "SHA3_256", "SHA3_384", "SHA3_512", "SHA3_512E"] {
+            let raw = format!("{backend}-s5--abcdef.bin");
+            let expected = AnnexKey {
+                raw: Arc::from(raw.as_str()),
+                backend: Arc::from(backend),
+                size: Some(5),
+            };
+            assert_eq!(parse_key(&raw), Some(expected.clone()));
+            let pointer = format!("/annex/objects/{raw}\n");
+            assert_eq!(key_from_pointer(pointer.as_bytes()), Some(expected.clone()));
+            let target = format!("../.git/annex/objects/Xk/Wq/{raw}/{raw}");
+            assert_eq!(key_from_symlink_target(target.as_bytes()), Some(expected));
         }
     }
 

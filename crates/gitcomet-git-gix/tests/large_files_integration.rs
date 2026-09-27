@@ -117,10 +117,54 @@ fn lfs_repository_reports_filter_patterns_and_store() {
         .lfs
         .tracked_patterns
         .iter()
-        .map(|p| (p.pattern.as_str(), p.lockable))
+        .map(|p| p.pattern.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(patterns, [("*.bin", false), ("*.psd", true)]);
+    assert_eq!(patterns, ["*.bin", "*.psd"]);
+    assert!(support.lfs.has_lockable_patterns);
     assert!(support.is_active() && !support.annex.in_use());
+}
+
+#[test]
+fn lfs_lock_capability_detects_separate_attribute_rules() {
+    for (attributes, overrides, lockable) in [
+        ("*.bin filter=lfs\n*.bin lockable\n", "", true),
+        ("*.bin lockable\n*.bin filter=lfs\n", "", true),
+        ("*.bin filter=lfs\na.bin lockable\n", "", true),
+        ("*.bin filter=lfs\n", "a.bin lockable\n", true),
+        ("*.bin filter=lfs\n*.bin -lockable\n", "", false),
+        ("*.bin filter=lfs\n*.bin !lockable\n", "", false),
+        ("*.bin filter=lfs lockable -lockable\n", "", false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_repo(repo);
+        fs::write(repo.join(".gitattributes"), attributes).unwrap();
+        fs::write(repo.join(".git/info/attributes"), overrides).unwrap();
+        fs::write(
+            repo.join("a.bin"),
+            format!(
+                "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+                "1".repeat(64)
+            ),
+        )
+        .unwrap();
+        git(repo, &["add", "."]);
+
+        let (status, opened) = status(repo);
+        let support = opened
+            .large_file_support_cancellable(&CancellationToken::new())
+            .unwrap();
+        let files = opened
+            .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(files.staged[Path::new("a.bin")].lockable, lockable);
+        assert_eq!(
+            support.lfs.has_lockable_patterns, lockable,
+            "{attributes:?}, {overrides:?}"
+        );
+        assert_eq!(support.lfs.tracked_patterns.len(), 1);
+        assert_eq!(support.lfs.tracked_patterns[0].pattern, "*.bin");
+    }
 }
 
 #[test]
@@ -1028,6 +1072,13 @@ fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
     let (repo, _) = clone_lfs_history(dir.path());
     git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
     git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    // A staged diff must not try to fetch an unrelated worktree object that
+    // the remote does not have.
+    let worktree = format!(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+        "0".repeat(64)
+    );
+    fs::write(repo.join("a.bin"), &worktree).unwrap();
     let target = DiffTarget::WorkingTree {
         path: PathBuf::from("a.bin"),
         area: DiffArea::Staged,
@@ -1054,6 +1105,131 @@ fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
         source_text(diff.new_source.as_ref()).as_deref(),
         Some("current version\n"),
         "index side"
+    );
+    assert_eq!(fs::read_to_string(repo.join("a.bin")).unwrap(), worktree);
+}
+
+#[test]
+fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
+    use gitcomet_core::domain::CommitId;
+    use gitcomet_core::large_files::LargeFileCommand;
+    if !git_lfs_available() {
+        return;
+    }
+    for (path, range) in [
+        ("a.bin", false),
+        ("nested/a [1].bin", false),
+        ("a.bin", true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, middle) = clone_lfs_history(dir.path());
+        let pointer = git(&repo, &["show", "HEAD~2:a.bin"]);
+        git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+        git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+        if path != "a.bin" {
+            fs::create_dir(repo.join("nested")).unwrap();
+            git(&repo, &["mv", "a.bin", path]);
+        }
+        fs::write(repo.join(path), &pointer).unwrap();
+        let index_before = git(&repo, &["ls-files", "--stage"]);
+        let target = if range {
+            DiffTarget::CommitRange {
+                from_commit_id: CommitId(middle.into()),
+                to_commit_id: None,
+                path: Some(path.into()),
+            }
+        } else {
+            DiffTarget::WorkingTree {
+                path: if path == "a.bin" {
+                    path.into()
+                } else {
+                    repo.join(path)
+                },
+                area: DiffArea::Unstaged,
+            }
+        };
+        let opened = GixBackend.open(&repo).unwrap();
+        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        assert_eq!(
+            diff.old_large.unwrap().content,
+            LargeFileContent::MissingLocally
+        );
+        assert_eq!(
+            diff.new_large.unwrap().content,
+            LargeFileContent::MissingLocally
+        );
+
+        opened
+            .run_large_file_command(&LargeFileCommand::LfsFetchForDiff {
+                target: target.clone(),
+            })
+            .unwrap();
+
+        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        assert_eq!(diff.old_large.unwrap().content, LargeFileContent::Available);
+        assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
+        assert_eq!(
+            source_text(diff.old_source.as_ref()).as_deref(),
+            Some(if range {
+                "middle version\n"
+            } else {
+                "current version\n"
+            })
+        );
+        assert_eq!(
+            source_text(diff.new_source.as_ref()).as_deref(),
+            Some("large file contents\n")
+        );
+        assert_eq!(git(&repo, &["ls-files", "--stage"]), index_before);
+        assert_eq!(fs::read_to_string(repo.join(path)).unwrap(), pointer);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lfs_diff_download_does_not_follow_worktree_symlinks() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = clone_lfs_history(dir.path());
+    // The diff displays the link text. Its target's missing LFS object is
+    // unrelated and cannot be fetched from the remote.
+    fs::write(
+        repo.join("other.txt"),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+            "0".repeat(64)
+        ),
+    )
+    .unwrap();
+    fs::remove_file(repo.join("a.bin")).unwrap();
+    std::os::unix::fs::symlink("other.txt", repo.join("a.bin")).unwrap();
+    let target = unstaged("a.bin");
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+            target: target.clone(),
+        },
+    );
+    let diff = GixBackend
+        .open(&repo)
+        .unwrap()
+        .diff_file_text(&target)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        source_text(diff.old_source.as_ref()).as_deref(),
+        Some("current version\n")
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("other.txt")
+    );
+    assert!(diff.new_large.is_none());
+    assert_eq!(
+        fs::read_link(repo.join("a.bin")).unwrap(),
+        Path::new("other.txt")
     );
 }
 
@@ -1243,7 +1419,7 @@ fn support_refresh_reads_external_config_and_attribute_changes() {
         .large_file_support_cancellable(&CancellationToken::new())
         .unwrap();
     assert_eq!(support.lfs.tracked_patterns[0].pattern, "*.psd");
-    assert!(support.lfs.has_lockable_patterns());
+    assert!(support.lfs.has_lockable_patterns);
 }
 
 #[test]

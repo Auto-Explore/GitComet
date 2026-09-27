@@ -5333,12 +5333,12 @@ fn lfs_download_reloads_a_selected_historical_diff() {
 fn lockable_patterns_load_locks_once_and_failures_stay_quiet() {
     let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
     let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.lfs.has_lockable_patterns = true;
     support
         .lfs
         .tracked_patterns
         .push(gitcomet_core::large_files::LfsTrackedPattern {
             pattern: "*.psd".into(),
-            lockable: true,
             source: PathBuf::from(".gitattributes"),
         });
     let loaded = |support| {

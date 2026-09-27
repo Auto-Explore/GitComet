@@ -212,7 +212,7 @@ pub(super) fn push_items(
             LargeFileCommand::LfsPushAll { remote },
         ));
     }
-    if support.lfs.has_lockable_patterns() {
+    if support.lfs.has_lockable_patterns {
         items.push(ContextMenuItem::Entry {
             label: "Refresh LFS locks".into(),
             icon: Some("icons/refresh.svg".into()),

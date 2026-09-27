@@ -40,7 +40,7 @@ fn may_be_pointer(head: &[u8]) -> bool {
 }
 
 /// Read a file only if it could be a pointer; `None` for ordinary content.
-fn read_pointer_candidate(path: &Path) -> Option<Vec<u8>> {
+pub(super) fn read_pointer_candidate(path: &Path) -> Option<Vec<u8>> {
     let mut file = std::fs::File::open(path).ok()?;
     if file.metadata().ok()?.len() > MAX_POINTER_BYTES {
         return None;
@@ -232,7 +232,10 @@ impl CommittedPointerScan {
         let max_pointer_bytes = if annex {
             MAX_POINTER_BYTES
         } else if stores.lfs.join("objects").is_dir()
-            || scan_lfs_patterns(repo, &CancellationToken::new(), |_| true).unwrap_or(false)
+            || scan_lfs_attributes(repo, &CancellationToken::new(), |pattern, _| {
+                pattern.is_some()
+            })
+            .unwrap_or(false)
         {
             MAX_LFS_POINTER_BYTES
         } else {
@@ -313,28 +316,15 @@ impl LockableLookup<'_> {
     }
 }
 
-/// `filter=lfs` patterns from every tracked `.gitattributes`, an untracked
-/// root one, and `info/attributes`. Macros are not expanded here; per-file
-/// state uses the real attribute stack.
-fn lfs_tracked_patterns(
+/// Visit `filter=lfs` patterns and independent `lockable` rules in tracked
+/// `.gitattributes`, an untracked root one, and `info/attributes`. Macros are
+/// not expanded here; per-file state uses the real attribute stack.
+/// Returning true stops the scan, so row classification only needs the first
+/// LFS pattern and keeps no list of attribute-file contents in memory.
+fn scan_lfs_attributes(
     repo: &gix::Repository,
     cancellation: &CancellationToken,
-) -> Result<Vec<LfsTrackedPattern>> {
-    let mut patterns = Vec::new();
-    scan_lfs_patterns(repo, cancellation, |pattern| {
-        patterns.push(pattern);
-        false
-    })?;
-    Ok(patterns)
-}
-
-/// Visit attribute sources lazily. Returning true stops the scan, so row
-/// classification only needs to find the first LFS pattern and keeps no list
-/// of attribute-file contents in memory.
-fn scan_lfs_patterns(
-    repo: &gix::Repository,
-    cancellation: &CancellationToken,
-    mut found: impl FnMut(LfsTrackedPattern) -> bool,
+    mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
     let workdir = repo.workdir().unwrap_or(repo.common_dir());
     let index = repo
@@ -386,16 +376,18 @@ fn scan_lfs_patterns(
                         lfs = value.as_bstr() == "lfs";
                     }
                     ("filter", _) => lfs = false,
-                    ("lockable", gix::attrs::StateRef::Set) => lockable = true,
+                    ("lockable", state) => lockable = matches!(state, gix::attrs::StateRef::Set),
                     _ => {}
                 }
             }
-            if lfs
-                && found(LfsTrackedPattern {
-                    pattern: pattern.to_string(),
+            if (lfs || lockable)
+                && found(
+                    lfs.then(|| LfsTrackedPattern {
+                        pattern: pattern.to_string(),
+                        source: source.clone(),
+                    }),
                     lockable,
-                    source: source.clone(),
-                })
+                )
             {
                 return Ok(true);
             }
@@ -561,18 +553,22 @@ impl super::GixRepo {
                 .is_some_and(|value| value.contains_str("--skip"))
         };
         cancellation.check_cancelled()?;
-        let tracked_patterns = lfs_tracked_patterns(&repo, cancellation)?;
-        let lfs = LfsRepoInfo {
+        let mut lfs = LfsRepoInfo {
             filter_configured: lfs_filter_configured(&config),
             filter_required: config.boolean("filter.lfs.required").unwrap_or(false),
-            tracked_patterns,
             has_local_store: storage_dir.join("objects").is_dir(),
             storage_dir,
             skip_smudge: truthy_env("GIT_LFS_SKIP_SMUDGE")
                 || skip_flag("filter.lfs.smudge")
                 || skip_flag("filter.lfs.process"),
             locks_verify: config.boolean("lfs.locksverify"),
+            ..LfsRepoInfo::default()
         };
+        scan_lfs_attributes(&repo, cancellation, |pattern, lockable| {
+            lfs.tracked_patterns.extend(pattern);
+            lfs.has_lockable_patterns |= lockable;
+            false
+        })?;
 
         let annex = AnnexRepoInfo {
             has_annex_dir: repo.common_dir().join("annex").is_dir(),

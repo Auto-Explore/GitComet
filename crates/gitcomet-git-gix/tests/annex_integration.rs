@@ -1431,6 +1431,57 @@ fn whereis_uses_historical_keys_after_the_path_is_deleted() {
 
 #[cfg(unix)]
 #[test]
+fn sha3_annex_backends_resolve_staged_content_when_locked_and_unlocked() {
+    use gitcomet_core::large_files::LargeFilePointer;
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let opened = open(&repo);
+    for backend in ["SHA3_256", "SHA3_512E"] {
+        let name = format!("{backend}.txt");
+        let content = "SHA-3 annex content\n";
+        fs::write(repo.join(&name), content).unwrap();
+        git(
+            &repo,
+            &["annex", "add", &format!("--backend={backend}"), &name],
+        );
+        for unlocked in [false, true] {
+            if unlocked {
+                git(&repo, &["annex", "unlock", &name]);
+            }
+            let files = opened
+                .uncommitted_large_files_for_status_cancellable(
+                    &opened.status().unwrap(),
+                    &CancellationToken::new(),
+                )
+                .unwrap();
+            let state = files
+                .staged
+                .get(Path::new(&name))
+                .expect("annex metadata for SHA-3 key");
+            let LargeFilePointer::Annex(key) = &state.pointer else {
+                panic!("expected annex key")
+            };
+            assert_eq!(&*key.backend, backend);
+            assert_eq!(state.in_local_store, Some(true));
+            let diff = opened
+                .diff_file_text(&DiffTarget::WorkingTree {
+                    path: name.clone().into(),
+                    area: DiffArea::Staged,
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
+            assert_eq!(
+                fs::read_to_string(diff.new_source.unwrap().path).unwrap(),
+                content
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
     use gitcomet_core::annex;
     require_annex!();

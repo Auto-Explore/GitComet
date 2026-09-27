@@ -2542,7 +2542,7 @@ pub(super) fn large_file_support_loaded(
     }
     let lockable = matches!(
         &repo_state.large_file_support,
-        Loadable::Ready(support) if support.lfs.has_lockable_patterns()
+        Loadable::Ready(support) if support.lfs.has_lockable_patterns
     );
     if lockable
         && matches!(repo_state.lfs_locks, Loadable::NotLoaded)
