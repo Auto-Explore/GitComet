@@ -55,7 +55,7 @@ These shortcuts apply when a GitComet text input has focus.
 | Undo | `Cmd-Z` | `Ctrl-Z` | |
 | Redo | `Cmd-Shift-Z` | `Ctrl-Shift-Z` | |
 | Show the character palette | `Ctrl-Cmd-Space` | None | macOS only. |
-| Delete to line start / end | `Cmd-Backspace`, `Cmd-Delete` | None | macOS only. With the caret at the end of a single-line input, such as a search box, `Cmd-Backspace` clears it. At the start or end of a line, deletes the line break instead. |
+| Delete to line start / end | `Cmd-Backspace`, `Cmd-Delete` | `Ctrl-Shift-Backspace`, `Ctrl-Shift-Delete` | With the caret at the end of a single-line input, such as a search box, deleting to the line start clears it. At the start or end of a line, deletes the line break instead. |
 
 ### Cursor movement and selection
 

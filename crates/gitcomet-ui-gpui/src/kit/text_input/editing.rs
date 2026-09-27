@@ -2088,7 +2088,8 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    /// Cmd-Backspace on macOS: delete back to where Home would move the caret.
+    /// Cmd-Backspace (Ctrl-Shift-Backspace on Windows/Linux): delete back to
+    /// where Home would move the caret.
     /// At the start of a row it deletes the line break instead, joining the
     /// row to the one above, as native text fields do.
     pub(super) fn delete_to_line_start(
@@ -2113,8 +2114,9 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    /// Cmd-Delete (fn-Backspace) on macOS: delete forward to where End would
-    /// move the caret, or the line break when already at the end of a row.
+    /// Cmd-Delete (Ctrl-Shift-Delete on Windows/Linux): delete forward to
+    /// where End would move the caret, or the line break when already at the
+    /// end of a row.
     pub(super) fn delete_to_line_end(
         &mut self,
         _: &DeleteToLineEnd,

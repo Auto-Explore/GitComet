@@ -2023,6 +2023,18 @@ fn bind_text_input_keys(cx: &mut App) {
             Some("TextInput"),
         ),
         KeyBinding::new("cmd-delete", crate::kit::DeleteToLineEnd, Some("TextInput")),
+        // The Windows/Linux counterpart, as in GTK text views. Plain
+        // Ctrl-Backspace/Delete already delete a word there.
+        KeyBinding::new(
+            "ctrl-shift-backspace",
+            crate::kit::DeleteToLineStart,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-delete",
+            crate::kit::DeleteToLineEnd,
+            Some("TextInput"),
+        ),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
         KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
         KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
@@ -2595,6 +2607,8 @@ mod tests {
             ("alt-delete", crate::kit::DeleteWordRight.name()),
             ("cmd-backspace", crate::kit::DeleteToLineStart.name()),
             ("cmd-delete", crate::kit::DeleteToLineEnd.name()),
+            ("ctrl-shift-backspace", crate::kit::DeleteToLineStart.name()),
+            ("ctrl-shift-delete", crate::kit::DeleteToLineEnd.name()),
             ("enter", crate::kit::Enter.name()),
             ("shift-enter", crate::kit::ShiftEnter.name()),
             ("secondary-enter", crate::view::TextInputCommitSubmit.name()),

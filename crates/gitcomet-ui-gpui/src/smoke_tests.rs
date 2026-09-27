@@ -602,6 +602,16 @@ fn text_input_cmd_backspace_and_cmd_delete_delete_to_the_line_edges(cx: &mut gpu
                 Some("TextInput"),
             ),
             KeyBinding::new("cmd-delete", crate::kit::DeleteToLineEnd, Some("TextInput")),
+            KeyBinding::new(
+                "ctrl-shift-backspace",
+                crate::kit::DeleteToLineStart,
+                Some("TextInput"),
+            ),
+            KeyBinding::new(
+                "ctrl-shift-delete",
+                crate::kit::DeleteToLineEnd,
+                Some("TextInput"),
+            ),
         ]);
     });
 
@@ -618,6 +628,13 @@ fn text_input_cmd_backspace_and_cmd_delete_delete_to_the_line_edges(cx: &mut gpu
     set_text(cx, "hello brave world");
     cx.simulate_keystrokes("alt-left cmd-delete");
     assert_eq!(text(cx), "hello brave ");
+
+    // The Windows/Linux chords do the same.
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("alt-left ctrl-shift-backspace");
+    assert_eq!(text(cx), "world");
+    cx.simulate_keystrokes("ctrl-shift-delete");
+    assert_eq!(text(cx), "");
 
     // With nothing on that side there is nothing to delete.
     set_text(cx, "hello");
