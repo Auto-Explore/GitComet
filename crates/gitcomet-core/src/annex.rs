@@ -2,7 +2,7 @@
 //! `.git/annex/objects/…/<KEY>/<KEY>`, an unlocked file is a pointer file
 //! whose first line is `/annex/objects/<KEY>`.
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 /// Pointer files longer than this are content (git-annex's own rule).
 pub const POINTER_MAX_BYTES: usize = 32 * 1024;
@@ -17,7 +17,7 @@ pub struct AnnexKey {
 
 /// `BACKEND[-sSIZE][-mMTIME][-Sn-Cn]--NAME`, e.g. `SHA256E-s10--abc.bin`.
 pub fn parse_key(raw: &str) -> Option<AnnexKey> {
-    if raw.contains('/') || raw.chars().any(char::is_control) {
+    if raw.chars().any(char::is_control) || (cfg!(windows) && raw.contains('\\')) {
         return None;
     }
     let (fields, name) = raw.split_once("--")?;
@@ -52,7 +52,14 @@ pub fn parse_key(raw: &str) -> Option<AnnexKey> {
 
 /// Key of a locked annexed file from its symlink target.
 pub fn key_from_symlink_target(target: &[u8]) -> Option<AnnexKey> {
-    let target = std::str::from_utf8(target).ok()?.replace('\\', "/");
+    let target = std::str::from_utf8(target).ok()?;
+    // Preserve literal backslashes in Unix key filenames. Only normalize a
+    // Windows-style target when its directory separators require it.
+    let target = if target.contains("annex/objects/") {
+        Cow::Borrowed(target)
+    } else {
+        Cow::Owned(target.replace('\\', "/"))
+    };
     if !target.contains("annex/objects/") {
         return None;
     }
@@ -62,7 +69,7 @@ pub fn key_from_symlink_target(target: &[u8]) -> Option<AnnexKey> {
     if parts.next()? != key {
         return None;
     }
-    parse_key(key)
+    key_from_filename(key)
 }
 
 /// Key of an unlocked annexed file from its pointer bytes.
@@ -81,7 +88,58 @@ pub fn key_from_pointer(bytes: &[u8]) -> Option<AnnexKey> {
         .strip_prefix("/annex/objects/")?
         .trim_end_matches('\n')
         .trim_end_matches('\r');
-    parse_key(key)
+    key_from_filename(key)
+}
+
+/// git-annex's keyFile escaping is separate from the raw key accepted by
+/// --key and hashed for object directories. Decode in one pass so escaped
+/// ampersands cannot introduce another escape.
+fn key_from_filename(filename: &str) -> Option<AnnexKey> {
+    if filename.contains('/') {
+        return None;
+    }
+    if !filename.contains(['&', '%']) {
+        return parse_key(filename);
+    }
+    let mut key = String::with_capacity(filename.len());
+    let mut chars = filename.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let decoded = match (ch, chars.peek()) {
+            ('%', _) => '/',
+            ('&', Some('a')) => {
+                chars.next();
+                '&'
+            }
+            ('&', Some('c')) => {
+                chars.next();
+                ':'
+            }
+            ('&', Some('s')) => {
+                chars.next();
+                '%'
+            }
+            _ => ch,
+        };
+        key.push(decoded);
+    }
+    parse_key(&key)
+}
+
+fn key_filename(key: &str) -> Cow<'_, str> {
+    if !key.contains(['&', '%', ':', '/']) {
+        return Cow::Borrowed(key);
+    }
+    let mut filename = String::with_capacity(key.len());
+    for ch in key.chars() {
+        match ch {
+            '&' => filename.push_str("&a"),
+            '%' => filename.push_str("&s"),
+            ':' => filename.push_str("&c"),
+            '/' => filename.push('%'),
+            _ => filename.push(ch),
+        }
+    }
+    Cow::Owned(filename)
 }
 
 /// Where git-annex may keep a key's content, relative to `.git/annex/objects`:
@@ -91,28 +149,24 @@ pub fn key_from_pointer(bytes: &[u8]) -> Option<AnnexKey> {
 pub fn object_paths(key: &str, levels: usize) -> [std::path::PathBuf; 2] {
     use md5::{Digest as _, Md5};
     let digest = Md5::digest(key.as_bytes());
-    // hashDirMixed: the digest's first four bytes as a little-endian word,
-    // six base-32 digits in swapped pairs, two characters per level.
+    // hashDirMixed uses git-annex's own alphabet and skips every sixth bit;
+    // standard base32 cannot reproduce it. Swap digit pairs, two per level.
     const CHARS: &[u8; 32] = b"0123456789zqjxkmvwgpfZQJXKMVWGPF";
     let word = u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]);
-    let digits: Vec<u8> = (0..6)
-        .map(|i| CHARS[((word >> (6 * i)) & 31) as usize])
-        .collect();
-    let mixed: Vec<u8> = digits
-        .chunks(2)
-        .flat_map(|pair| [pair[1], pair[0]])
-        .collect();
+    let mixed: [u8; 4] = std::array::from_fn(|i| CHARS[((word >> (6 * (i ^ 1))) & 31) as usize]);
     // hashDirLower: hex digest, three characters per level.
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut hex = [0u8; 6];
+    let hex = faster_hex::hex_encode(&digest[..3], &mut hex).expect("six hex digits fit");
     let levels = levels.clamp(1, 2);
     let mixed = std::str::from_utf8(&mixed).unwrap_or_default();
+    let filename = key_filename(key);
     let path = |width: usize, digits: &str| {
         (0..levels)
             .map(|level| &digits[level * width..(level + 1) * width])
-            .chain([key, key])
+            .chain([filename.as_ref(), filename.as_ref()])
             .collect()
     };
-    [path(2, mixed), path(3, &hex)]
+    [path(2, mixed), path(3, hex)]
 }
 
 /// Split `adjusted/<base>(<mode>)` into base branch and mode.
@@ -134,6 +188,45 @@ mod tests {
     use super::*;
 
     const KEY: &str = "SHA256E-s10--5f0e8b51a6a5.bin";
+
+    #[test]
+    fn filesystem_escapes_are_decoded_once_and_encoded_for_object_paths() {
+        // Raw keys, filenames and hash directories verified with examinekey
+        // and fromkey, including escapes that could be decoded twice.
+        for (raw, filename, mixed) in [
+            (
+                "WORM-s5-m1700000000--a:b.txt",
+                "WORM-s5-m1700000000--a&cb.txt",
+                "f4/6x",
+            ),
+            ("URL--a&b:c%d/e", "URL--a&ab&cc&sd%e", "x5/2p"),
+        ] {
+            let pointer = format!("/annex/objects/{filename}\n");
+            let target = format!(".git/annex/objects/{mixed}/{filename}/{filename}");
+            assert_eq!(
+                key_from_pointer(pointer.as_bytes()).unwrap().raw.as_ref(),
+                raw
+            );
+            assert_eq!(
+                key_from_symlink_target(target.as_bytes())
+                    .unwrap()
+                    .raw
+                    .as_ref(),
+                raw
+            );
+            assert_eq!(
+                object_paths(raw, 2)[0],
+                std::path::Path::new(mixed).join(filename).join(filename)
+            );
+            assert_eq!(key_filename(raw), filename);
+        }
+        let raw = "URL--literal&c&s%:雪";
+        assert_eq!(
+            key_from_filename(&key_filename(raw)).unwrap().raw.as_ref(),
+            raw
+        );
+        assert!(key_from_pointer(b"/annex/objects/URL--../outside\n").is_none());
+    }
 
     #[test]
     fn parses_keys_with_and_without_size() {

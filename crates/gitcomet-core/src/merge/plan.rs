@@ -1952,14 +1952,6 @@ fn same_block_kind(
     !previous_delta && !next_delta
 }
 
-fn fnv_update(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 fn block_fingerprint(
     rows: &[AlignedRow],
     classification: MergeBlockClassification,
@@ -1967,24 +1959,25 @@ fn block_fingerprint(
     b_lines: &[&str],
     c_lines: &[&str],
 ) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    hash = fnv_update(hash, format!("{classification:?}").as_bytes());
+    use std::hash::Hasher as _;
+    let mut hash = fnv::FnvHasher::default();
+    hash.write(format!("{classification:?}").as_bytes());
     for row in rows {
         for (tag, index, lines) in [
             (b'A', row.a, a_lines),
             (b'B', row.b, b_lines),
             (b'C', row.c, c_lines),
         ] {
-            hash = fnv_update(hash, &[tag]);
+            hash.write(&[tag]);
             if let Some(line) = index.and_then(|index| lines.get(index)) {
-                hash = fnv_update(hash, line.as_bytes());
+                hash.write(line.as_bytes());
             } else {
-                hash = fnv_update(hash, &[0xff]);
+                hash.write(&[0xff]);
             }
-            hash = fnv_update(hash, &[0]);
+            hash.write(&[0]);
         }
     }
-    hash
+    hash.finish()
 }
 
 fn build_blocks(
@@ -2353,6 +2346,21 @@ mod tests {
             equal_bc,
             ..AlignedRow::default()
         }
+    }
+
+    #[test]
+    fn block_fingerprint_preserves_existing_hash_values() {
+        // A library change must not change IDs used to restore merge choices.
+        assert_eq!(
+            block_fingerprint(
+                &[row(true, true, false, false, false, false)],
+                MergeBlockClassification::BChangedCDeleted,
+                &["alpha"],
+                &["beta"],
+                &[],
+            ),
+            0xd2d9_2d9e_9178_fb92
+        );
     }
 
     #[test]

@@ -26,11 +26,12 @@ fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKin
             (components::ToastKind::Warning, message)
         }
         GitHookOperationStatus::Failed => {
-            let hook = failed_hook.unwrap_or("Git");
-            let message = if operation.label == "Commit" && hook == "pre-commit" {
-                "Commit blocked by pre-commit hook".to_string()
-            } else {
-                format!("{} failed in {hook} hook", operation.label)
+            let message = match failed_hook {
+                Some("pre-commit") if operation.label == "Commit" => {
+                    "Commit blocked by pre-commit hook".to_string()
+                }
+                Some(hook) => format!("{} failed in {hook} hook", operation.label),
+                None => format!("{} failed", operation.label),
             };
             (components::ToastKind::Error, message)
         }
@@ -572,6 +573,7 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command_started: false,
             transfer: None,
         }
     }
@@ -651,6 +653,17 @@ mod tests {
         ));
         assert!(matches!(kind, components::ToastKind::Warning));
         assert_eq!(message, "Commit created, but post-commit hook failed");
+    }
+
+    #[test]
+    fn failed_annex_command_without_hooks_has_a_command_failure_notice() {
+        let mut operation = completed_hook_operation(GitHookOperationStatus::Failed, "pre-commit");
+        operation.hooks.clear();
+        operation.command_started = true;
+        operation.label = "annex sync".into();
+        let (kind, message) = hook_completion_notice(&operation);
+        assert!(matches!(kind, components::ToastKind::Error));
+        assert_eq!(message, "annex sync failed");
     }
 
     #[test]

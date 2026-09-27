@@ -454,7 +454,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self.repo();
+                let repo = self.reopen_repo()?;
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -535,7 +535,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
+                let repo = self.reopen_repo()?;
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -567,7 +567,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
+                let repo = self.reopen_repo()?;
                 let old = self.file_diff_source_from_revision_path(
                     &repo,
                     from_commit_id.as_ref(),
@@ -637,7 +637,7 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let source = FileDiffTextSource::new(path.clone());
         let (large_file, path) =
-            match self.large_file_side(&self.repo(), &source, logical_path, worktree) {
+            match self.large_file_side(&self.reopen_repo()?, &source, logical_path, worktree) {
                 Some((large, replacement)) => {
                     (Some(large), replacement.map_or(path, |source| source.path))
                 }
@@ -816,7 +816,7 @@ impl GixRepo {
         };
         // Git LFS / git-annex sides hold pointer text; show the real image
         // when it is here, so both sides decode.
-        let repo = self.repo();
+        let repo = self.reopen_repo()?;
         let logical = to_repo_path(&image.path, &self.spec.workdir)?;
         for (side, metadata) in [
             (&mut image.old, &mut image.old_large),

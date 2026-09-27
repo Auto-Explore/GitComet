@@ -1260,17 +1260,7 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
 }
 
 fn percent_encode(input: &str) -> String {
-    let mut encoded = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        let is_unreserved =
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
-        if is_unreserved {
-            encoded.push(char::from(byte));
-        } else {
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
+    gitcomet_core::url_encoding::encode_component(input).collect()
 }
 
 fn single_line_text(input: &str) -> String {

@@ -1,7 +1,7 @@
 use gitcomet_core::auth::askpass::{
-    GIT_COMMAND_TIMEOUT_ENV, append_host_prompt_to_stderr, append_passphrase_prompt_to_stderr,
-    configure_git_auth_prompt, create_askpass_script, remember_successful_prompt_auth,
-    take_pending_git_auth,
+    GIT_COMMAND_TIMEOUT_ENV, PromptAuth, append_host_prompt_to_stderr,
+    append_passphrase_prompt_to_stderr, configure_git_auth_prompt, create_askpass_script,
+    remember_successful_prompt_auth, take_pending_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -19,6 +19,32 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) use gitcomet_core::auth::askpass::git_command_timeout;
+
+thread_local! {
+    static SHARED_GIT_AUTH: std::cell::RefCell<Option<Option<PromptAuth>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+fn command_git_auth() -> Option<PromptAuth> {
+    SHARED_GIT_AUTH
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(take_pending_git_auth)
+}
+
+/// Consume staged credentials once for a multi-command operation. Keep them
+/// on this worker only, and restore the previous scope even on panic.
+pub(crate) fn with_shared_git_auth<T>(run: impl FnOnce() -> T) -> T {
+    struct RestoreAuth(Option<Option<PromptAuth>>);
+    impl Drop for RestoreAuth {
+        fn drop(&mut self) {
+            SHARED_GIT_AUTH.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    let auth = command_git_auth();
+    let _restore = RestoreAuth(SHARED_GIT_AUTH.with(|slot| slot.replace(Some(auth))));
+    run()
+}
 
 // Used by test-only helpers below.
 #[cfg(test)]
@@ -1175,11 +1201,7 @@ fn run_command_with_timeout_auth_stdin(
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     let lfs_progress = LfsProgressMonitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = if allow_auth {
-            take_pending_git_auth()
-        } else {
-            None
-        };
+        let auth = if allow_auth { command_git_auth() } else { None };
         let script = create_askpass_script().map_err(io_err)?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
@@ -1484,7 +1506,7 @@ where
     let liveness = LivenessClock::new();
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = take_pending_git_auth();
+        let auth = command_git_auth();
         let script = create_askpass_script().map_err(io_err)?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
@@ -1685,12 +1707,10 @@ pub(crate) fn stable_path_bytes(path: &Path) -> Vec<u8> {
 }
 
 pub(crate) fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+    use std::hash::Hasher as _;
+    let mut hash = fnv::FnvHasher::default();
+    hash.write(bytes);
+    hash.finish()
 }
 
 // Test helper: constructs a git stage:path blob spec for index stage testing.
@@ -2048,6 +2068,17 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fnv_preserves_existing_cache_hashes() {
+        for (bytes, expected) in [
+            (&b""[..], 0xcbf2_9ce4_8422_2325),
+            (&b"hello"[..], 0xa430_d846_80aa_bd0b),
+            (&b"/tmp/repo\0\xff"[..], 0xa2a3_b27f_0667_4725),
+        ] {
+            assert_eq!(fnv1a_64(bytes), expected);
+        }
+    }
 
     #[test]
     fn activity_progress_deadline_survives_continuous_small_chunks() {

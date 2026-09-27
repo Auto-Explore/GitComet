@@ -194,6 +194,21 @@ impl LocalStores {
     }
 }
 
+fn has_annex_branch(repo: &gix::Repository) -> bool {
+    repo.try_find_reference("refs/heads/git-annex")
+        .ok()
+        .flatten()
+        .is_some()
+        || repo.references().ok().is_some_and(|refs| {
+            refs.remote_branches().ok().is_some_and(|mut refs| {
+                refs.any(|reference| {
+                    reference
+                        .is_ok_and(|reference| reference.name().as_bstr().ends_with(b"/git-annex"))
+                })
+            })
+        })
+}
+
 /// Commit rows are classified only in repositories that use either tool, and
 /// only blobs small enough to be a pointer of the tools in use are read.
 pub(super) struct CommittedPointerScan {
@@ -207,30 +222,18 @@ impl CommittedPointerScan {
     pub(super) fn of(repo: &gix::Repository) -> Option<Self> {
         let config = repo.config_snapshot();
         let annex = repo.common_dir().join("annex").is_dir()
-            || config.string("annex.uuid").is_some()
-            || repo
-                .try_find_reference("refs/heads/git-annex")
-                .ok()
-                .flatten()
-                .is_some();
+            || config
+                .string("annex.uuid")
+                .is_some_and(|uuid| !uuid.is_empty())
+            || has_annex_branch(repo);
         let stores = LocalStores::of(repo);
-        // Not the filter config: `git lfs install` sets it globally, so it
-        // says git-lfs is installed, not that this repository uses it.
-        let lfs = || {
-            stores.lfs.join("objects").is_dir()
-                || [
-                    repo.workdir().map(|dir| dir.join(".gitattributes")),
-                    Some(repo.common_dir().join("info").join("attributes")),
-                ]
-                .into_iter()
-                .flatten()
-                .any(|path| {
-                    std::fs::read(path).is_ok_and(|text| text.find(b"filter=lfs").is_some())
-                })
-        };
+        // Global filter config only means LFS is installed. Use the same
+        // attribute sources as the support summary, including nested ones.
         let max_pointer_bytes = if annex {
             MAX_POINTER_BYTES
-        } else if lfs() {
+        } else if stores.lfs.join("objects").is_dir()
+            || scan_lfs_patterns(repo, &CancellationToken::new(), |_| true).unwrap_or(false)
+        {
             MAX_LFS_POINTER_BYTES
         } else {
             return None;
@@ -308,6 +311,97 @@ impl LockableLookup<'_> {
                 && matches!(matched.assignment.state, gix::attrs::StateRef::Set)
         })
     }
+}
+
+/// `filter=lfs` patterns from every tracked `.gitattributes`, an untracked
+/// root one, and `info/attributes`. Macros are not expanded here; per-file
+/// state uses the real attribute stack.
+fn lfs_tracked_patterns(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+) -> Result<Vec<LfsTrackedPattern>> {
+    let mut patterns = Vec::new();
+    scan_lfs_patterns(repo, cancellation, |pattern| {
+        patterns.push(pattern);
+        false
+    })?;
+    Ok(patterns)
+}
+
+/// Visit attribute sources lazily. Returning true stops the scan, so row
+/// classification only needs to find the first LFS pattern and keeps no list
+/// of attribute-file contents in memory.
+fn scan_lfs_patterns(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+    mut found: impl FnMut(LfsTrackedPattern) -> bool,
+) -> Result<bool> {
+    let workdir = repo.workdir().unwrap_or(repo.common_dir());
+    let index = repo
+        .index_or_empty()
+        .map_err(|e| backend_error("read index for LFS patterns", e))?;
+    let sources = index.entries().iter().filter_map(|entry| {
+        let path = entry.path(&index);
+        (path == ".gitattributes" || path.ends_with(b"/.gitattributes"))
+            .then(|| {
+                gix::path::try_from_bstr(path)
+                    .ok()
+                    .map(|path| (path.into_owned(), Some(entry.id)))
+            })
+            .flatten()
+    });
+    // Include the untracked root and the local attribute overrides too.
+    let sources = sources.chain([
+        (PathBuf::from(".gitattributes"), None),
+        (PathBuf::from(".git/info/attributes"), None),
+    ]);
+    let mut saw_root = false;
+    for (source, id) in sources {
+        cancellation.check_cancelled()?;
+        if source == Path::new(".gitattributes") {
+            if saw_root {
+                continue;
+            }
+            saw_root = true;
+        }
+        let full = if source == Path::new(".git/info/attributes") {
+            repo.common_dir().join("info/attributes")
+        } else {
+            workdir.join(&source)
+        };
+        let bytes = std::fs::read(full)
+            .ok()
+            .or_else(|| repo.find_object(id?).ok().map(|object| object.data.clone()));
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        for (kind, assignments, _line) in gix::attrs::parse(&bytes).flatten() {
+            let gix::attrs::parse::Kind::Pattern(pattern) = kind else {
+                continue;
+            };
+            let (mut lfs, mut lockable) = (false, false);
+            for assignment in assignments.flatten() {
+                match (assignment.name.as_str(), assignment.state) {
+                    ("filter", gix::attrs::StateRef::Value(value)) => {
+                        lfs = value.as_bstr() == "lfs";
+                    }
+                    ("filter", _) => lfs = false,
+                    ("lockable", gix::attrs::StateRef::Set) => lockable = true,
+                    _ => {}
+                }
+            }
+            if lfs
+                && found(LfsTrackedPattern {
+                    pattern: pattern.to_string(),
+                    lockable,
+                    source: source.clone(),
+                })
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 impl super::GixRepo {
@@ -467,7 +561,7 @@ impl super::GixRepo {
                 .is_some_and(|value| value.contains_str("--skip"))
         };
         cancellation.check_cancelled()?;
-        let tracked_patterns = self.lfs_tracked_patterns(&repo, cancellation)?;
+        let tracked_patterns = lfs_tracked_patterns(&repo, cancellation)?;
         let lfs = LfsRepoInfo {
             filter_configured: lfs_filter_configured(&config),
             filter_required: config.boolean("filter.lfs.required").unwrap_or(false),
@@ -482,20 +576,7 @@ impl super::GixRepo {
 
         let annex = AnnexRepoInfo {
             has_annex_dir: repo.common_dir().join("annex").is_dir(),
-            has_annex_branch: repo
-                .try_find_reference("refs/heads/git-annex")
-                .ok()
-                .flatten()
-                .is_some()
-                || repo.references().ok().is_some_and(|refs| {
-                    refs.remote_branches().ok().is_some_and(|mut refs| {
-                        refs.any(|reference| {
-                            reference.is_ok_and(|reference| {
-                                reference.name().as_bstr().ends_with(b"/git-annex")
-                            })
-                        })
-                    })
-                }),
+            has_annex_branch: has_annex_branch(&repo),
             uuid: config
                 .string("annex.uuid")
                 .map(|value| value.to_str_lossy().into_owned())
@@ -515,77 +596,6 @@ impl super::GixRepo {
         Ok(LargeFileSupport { lfs, annex })
     }
 
-    /// `filter=lfs` patterns from every tracked `.gitattributes`, an untracked
-    /// root one, and `info/attributes`. Macros are not expanded here; per-file
-    /// state uses the real attribute stack.
-    fn lfs_tracked_patterns(
-        &self,
-        repo: &gix::Repository,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<LfsTrackedPattern>> {
-        let workdir = &self.spec.workdir;
-        let mut sources: Vec<(PathBuf, Vec<u8>)> = Vec::new();
-        let index = repo
-            .index_or_empty()
-            .map_err(|e| backend_error("read index for LFS patterns", e))?;
-        let mut saw_root = false;
-        for entry in index.entries() {
-            let path = entry.path(&index);
-            if path != ".gitattributes" && !path.ends_with(b"/.gitattributes") {
-                continue;
-            }
-            cancellation.check_cancelled()?;
-            saw_root |= path == ".gitattributes";
-            let Ok(relative) = gix::path::try_from_bstr(path) else {
-                continue;
-            };
-            let relative = relative.into_owned();
-            let bytes = std::fs::read(workdir.join(&relative)).ok().or_else(|| {
-                repo.find_object(entry.id)
-                    .ok()
-                    .map(|object| object.data.clone())
-            });
-            if let Some(bytes) = bytes {
-                sources.push((relative, bytes));
-            }
-        }
-        if !saw_root && let Ok(bytes) = std::fs::read(workdir.join(".gitattributes")) {
-            sources.push((PathBuf::from(".gitattributes"), bytes));
-        }
-        let info = repo.common_dir().join("info").join("attributes");
-        if let Ok(bytes) = std::fs::read(&info) {
-            sources.push((PathBuf::from(".git/info/attributes"), bytes));
-        }
-
-        let mut patterns = Vec::new();
-        for (source, bytes) in sources {
-            for (kind, assignments, _line) in gix::attrs::parse(&bytes).flatten() {
-                let gix::attrs::parse::Kind::Pattern(pattern) = kind else {
-                    continue;
-                };
-                let (mut lfs, mut lockable) = (false, false);
-                for assignment in assignments.flatten() {
-                    match (assignment.name.as_str(), assignment.state) {
-                        ("filter", gix::attrs::StateRef::Value(value)) => {
-                            lfs = value.as_bstr() == "lfs";
-                        }
-                        ("filter", _) => lfs = false,
-                        ("lockable", gix::attrs::StateRef::Set) => lockable = true,
-                        _ => {}
-                    }
-                }
-                if lfs {
-                    patterns.push(LfsTrackedPattern {
-                        pattern: pattern.to_string(),
-                        lockable,
-                        source: source.clone(),
-                    });
-                }
-            }
-        }
-        Ok(patterns)
-    }
-
     pub(super) fn uncommitted_large_files_impl(
         &self,
         status: &RepoStatus,
@@ -595,7 +605,7 @@ impl super::GixRepo {
         if status.staged.len() + status.unstaged.len() > LARGE_FILE_STATUS_ROW_LIMIT {
             return Ok(result);
         }
-        let repo = self.repo();
+        let repo = self.reopen_repo()?;
         let index = repo
             .index_or_empty()
             .map_err(|e| backend_error("read index for large files", e))?;

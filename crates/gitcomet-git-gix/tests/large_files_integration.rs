@@ -1301,3 +1301,186 @@ fn lfs_status_download_fetches_staged_content_and_preserves_staged_blobs() {
     );
     assert_eq!(git(&repo, &["ls-files", "--stage"]), index_before);
 }
+
+#[test]
+fn lfs_worktree_range_download_fetches_the_displayed_index_pointer() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, middle) = clone_lfs_history(dir.path());
+    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    let before = git(&repo, &["ls-files", "--stage"]);
+    let pointer = fs::read(repo.join("a.bin")).unwrap();
+    let target = DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId(middle.into()),
+        to_commit_id: None,
+        path: Some("a.bin".into()),
+    };
+    let opened = GixBackend.open(&repo).unwrap();
+    assert_eq!(
+        opened
+            .diff_file_text(&target)
+            .unwrap()
+            .unwrap()
+            .new_large
+            .unwrap()
+            .content,
+        LargeFileContent::MissingLocally
+    );
+    opened
+        .run_large_file_command(
+            &gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
+                target: target.clone(),
+            },
+        )
+        .unwrap();
+    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    assert_eq!(
+        source_text(diff.old_source.as_ref()).as_deref(),
+        Some("middle version\n")
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("current version\n")
+    );
+    assert_eq!(git(&repo, &["ls-files", "--stage"]), before);
+    assert_eq!(fs::read(repo.join("a.bin")).unwrap(), pointer);
+}
+
+#[test]
+fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
+    use gitcomet_core::domain::{CommitId, DiffPreviewTextSide};
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_lfs_repo(&repo);
+    fs::write(
+        repo.join(".gitattributes"),
+        "*.bin filter=lfs\n*.png filter=lfs\n",
+    )
+    .unwrap();
+    let image_bytes = b"\x89PNG\r\n\x1a\nimage";
+    fs::write(repo.join("pic.png"), image_bytes).unwrap();
+    fs::write(repo.join("a.bin"), "new content\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "new content and image"]);
+    let head = CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let parent = CommitId(git(&repo, &["rev-parse", "HEAD^"]).trim().into());
+    let opened = GixBackend.open(&repo).unwrap();
+    let text_target = DiffTarget::Commit {
+        commit_id: head.clone(),
+        path: Some("a.bin".into()),
+    };
+    let image_target = DiffTarget::Commit {
+        commit_id: head.clone(),
+        path: Some("pic.png".into()),
+    };
+    let status = RepoStatus {
+        staged: vec![row("a.bin", FileStatusKind::Modified)].into(),
+        unstaged: Default::default(),
+    };
+    let cancellation = CancellationToken::new();
+    let mut previous = repo.join(".git/lfs");
+    for configured in [PathBuf::from("moved-lfs"), dir.path().join("external-lfs")] {
+        git(
+            &repo,
+            &["config", "lfs.storage", configured.to_str().unwrap()],
+        );
+        let storage = if configured.is_absolute() {
+            configured
+        } else {
+            repo.join(".git").join(configured)
+        };
+        let support = opened
+            .large_file_support_cancellable(&cancellation)
+            .unwrap();
+        assert_eq!(support.lfs.storage_dir, storage);
+        assert!(!support.lfs.has_local_store);
+        let missing = opened
+            .uncommitted_large_files_for_status_cancellable(&status, &cancellation)
+            .unwrap();
+        assert_eq!(
+            missing.staged[Path::new("a.bin")].in_local_store,
+            Some(false)
+        );
+        assert_eq!(
+            opened
+                .diff_file_text(&text_target)
+                .unwrap()
+                .unwrap()
+                .new_large
+                .unwrap()
+                .content,
+            LargeFileContent::MissingLocally
+        );
+        fs::rename(&previous, &storage).unwrap();
+        let present = opened
+            .uncommitted_large_files_for_status_cancellable(&status, &cancellation)
+            .unwrap();
+        assert_eq!(
+            present.staged[Path::new("a.bin")].in_local_store,
+            Some(true)
+        );
+        let diff = opened.diff_file_text(&text_target).unwrap().unwrap();
+        assert_eq!(
+            source_text(diff.new_source.as_ref()).as_deref(),
+            Some("new content\n")
+        );
+        let preview = opened
+            .diff_preview_text_file(&text_target, DiffPreviewTextSide::New)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fs::read_to_string(preview.path).unwrap(), "new content\n");
+        let image = opened.diff_file_image(&image_target).unwrap().unwrap();
+        assert_eq!(image.new.as_deref(), Some(image_bytes.as_slice()));
+        for rows in [
+            opened.commit_details(&head).unwrap().files,
+            opened.diff_range_files(&parent, Some(&head)).unwrap(),
+        ] {
+            let state = rows
+                .iter()
+                .find(|row| row.path == Path::new("a.bin"))
+                .unwrap()
+                .large_file
+                .as_ref()
+                .unwrap();
+            assert_eq!(state.in_local_store, Some(true));
+        }
+        previous = storage;
+    }
+}
+
+#[test]
+fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
+    use gitcomet_core::domain::CommitId;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    git(repo, &["commit", "--allow-empty", "-qm", "empty"]);
+    let parent = CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into());
+    fs::create_dir(repo.join("nested")).unwrap();
+    fs::write(repo.join("nested/.gitattributes"), "*.bin filter=lfs\n").unwrap();
+    fs::write(repo.join("nested/a.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:1111111111111111111111111111111111111111111111111111111111111111\nsize 12\n").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-qm", "nested LFS pointer"]);
+    let head = CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into());
+    let opened = GixBackend.open(repo).unwrap();
+    assert!(!repo.join(".git/lfs").exists());
+    for rows in [
+        opened.commit_details(&head).unwrap().files,
+        opened.diff_range_files(&parent, Some(&head)).unwrap(),
+    ] {
+        let state = rows
+            .iter()
+            .find(|row| row.path == Path::new("nested/a.bin"))
+            .unwrap()
+            .large_file
+            .as_ref()
+            .expect("nested LFS pattern enables classification");
+        assert!(state.pointer.is_lfs());
+        assert_eq!(state.in_local_store, Some(false));
+    }
+}

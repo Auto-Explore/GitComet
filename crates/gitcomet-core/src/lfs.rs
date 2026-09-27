@@ -18,7 +18,7 @@ impl LfsOid {
         if hex.len() != 64 || !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
             return None;
         }
-        crate::hex::decode(hex)?.try_into().ok().map(Self)
+        crate::hex::decode_array(hex).map(Self)
     }
 
     pub fn to_hex(&self) -> String {

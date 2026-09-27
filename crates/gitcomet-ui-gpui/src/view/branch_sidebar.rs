@@ -427,6 +427,10 @@ pub(in crate::view) struct BranchSidebarSourceFingerprint(u64);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
+    annex_refs_hidden: bool,
+    annex_rev: u64,
+    annex_reuse_identity: fingerprint::LoadableArcIdentity,
+    annex_hash: u64,
     local_revs: (u64, u64),
     local_hash: u64,
     local_reuse_key: u64,
@@ -446,6 +450,9 @@ pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
 
 impl BranchSidebarSourceFingerprintParts {
     fn for_repo(repo: &RepoState, reuse: Option<&Self>) -> Self {
+        let annex_refs_hidden = repo.annex_refs_hidden;
+        let annex_rev = repo.large_file_support_rev;
+        let annex_reuse_identity = fingerprint::loadable_arc_identity(&repo.large_file_support);
         let local_revs = (repo.head_branch_rev, repo.branches_rev);
         let local_reuse_key = branch_sidebar_local_reuse_key(repo);
         let remote_revs = (
@@ -463,6 +470,19 @@ impl BranchSidebarSourceFingerprintParts {
         let stash_reuse_identity = fingerprint::loadable_arc_identity(&repo.stashes);
 
         Self {
+            annex_refs_hidden,
+            annex_rev,
+            annex_reuse_identity,
+            annex_hash: reuse
+                .filter(|parts| {
+                    parts.annex_refs_hidden == annex_refs_hidden
+                        && parts.annex_rev == annex_rev
+                        && parts.annex_reuse_identity == annex_reuse_identity
+                })
+                .map_or_else(
+                    || branch_sidebar_annex_source_hash(repo),
+                    |parts| parts.annex_hash,
+                ),
             local_revs,
             local_reuse_key,
             local_hash: reuse
@@ -531,6 +551,8 @@ impl BranchSidebarSourceFingerprintParts {
         self.submodule_hash.hash(&mut hasher);
         4u8.hash(&mut hasher);
         self.stash_hash.hash(&mut hasher);
+        5u8.hash(&mut hasher);
+        self.annex_hash.hash(&mut hasher);
         BranchSidebarSourceFingerprint(hasher.finish())
     }
 }
@@ -551,6 +573,13 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
     repo: &RepoState,
     cached: &BranchSidebarSourceFingerprintParts,
 ) -> bool {
+    if cached.annex_refs_hidden != repo.annex_refs_hidden
+        || cached.annex_rev != repo.large_file_support_rev
+        || cached.annex_reuse_identity
+            != fingerprint::loadable_arc_identity(&repo.large_file_support)
+    {
+        return false;
+    }
     let local_revs = (repo.head_branch_rev, repo.branches_rev);
     if cached.local_revs != local_revs
         && cached.local_reuse_key != branch_sidebar_local_reuse_key(repo)
@@ -595,7 +624,6 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
 }
 
 fn hash_branch_sidebar_local_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
-    repo.annex_refs_hidden.hash(hasher);
     fingerprint::hash_loadable_kind(&repo.head_branch, hasher);
     if let Loadable::Ready(head_branch) = &repo.head_branch {
         head_branch.hash(hasher);
@@ -642,7 +670,6 @@ fn branch_sidebar_local_reuse_key(repo: &RepoState) -> u64 {
 }
 
 fn hash_branch_sidebar_remote_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
-    repo.annex_refs_hidden.hash(hasher);
     fingerprint::hash_loadable_kind(&repo.head_branch, hasher);
     if let Loadable::Ready(head_branch) = &repo.head_branch {
         head_branch.hash(hasher);
@@ -712,12 +739,17 @@ fn branch_sidebar_worktree_source_hash(repo: &RepoState) -> u64 {
     hasher.finish()
 }
 
-fn hash_branch_sidebar_submodule_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
-    // The Annex section follows the submodules; it reads the support summary.
-    fingerprint::hash_loadable_kind(&repo.large_file_support, hasher);
+fn branch_sidebar_annex_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    repo.annex_refs_hidden.hash(&mut hasher);
+    fingerprint::hash_loadable_kind(&repo.large_file_support, &mut hasher);
     if let Loadable::Ready(support) = &repo.large_file_support {
-        support.annex.hash(hasher);
+        support.annex.hash(&mut hasher);
     }
+    hasher.finish()
+}
+
+fn hash_branch_sidebar_submodule_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
     fingerprint::hash_loadable_kind(&repo.submodules, hasher);
     if let Loadable::Ready(submodules) = &repo.submodules {
         for submodule in submodules.iter() {
@@ -2329,7 +2361,7 @@ mod tests {
     fn hidden_annex_refs_leave_branch_lists_and_change_the_cache_source() {
         let mut repo = annex_repo();
         let shown = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
-        let (shown_source, _) = branch_sidebar_source_fingerprint(&repo, None);
+        let (shown_source, cached) = branch_sidebar_source_fingerprint(&repo, None);
         assert!(branch_labels(&shown).iter().any(|name| name == "git-annex"));
 
         repo.annex_refs_hidden = true;
@@ -2342,11 +2374,63 @@ mod tests {
             "{labels:?}"
         );
         assert!(labels.iter().any(|name| name == "main"), "{labels:?}");
-        let (hidden_source, _) = branch_sidebar_source_fingerprint(&repo, None);
+        assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+        let (hidden_source, _) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+        assert_eq!(
+            hidden_source,
+            branch_sidebar_source_fingerprint(&repo, None).0
+        );
         assert_ne!(
             shown_source, hidden_source,
             "cached rows must not be reused"
         );
+    }
+
+    #[test]
+    fn annex_support_invalidates_both_sidebar_cache_reuse_paths() {
+        let mut repo = annex_repo();
+        repo.large_file_support = Loadable::NotLoaded;
+        let (mut source, mut cached) = branch_sidebar_source_fingerprint(&repo, None);
+        for support in [
+            Loadable::Loading,
+            annex_repo().large_file_support,
+            {
+                let mut support = match annex_repo().large_file_support {
+                    Loadable::Ready(support) => (*support).clone(),
+                    _ => unreachable!(),
+                };
+                support.annex.uuid = Some("changed-uuid".into());
+                support.annex.restage_pending = true;
+                Loadable::Ready(Arc::new(support))
+            },
+            Loadable::NotLoaded,
+        ] {
+            repo.large_file_support = support;
+            repo.branch_sidebar_rev += 1;
+            assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+            let (next, parts) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+            assert_ne!(source, next);
+            assert_eq!(next, branch_sidebar_source_fingerprint(&repo, None).0);
+            assert_eq!(parts.local_hash, cached.local_hash);
+            assert_eq!(parts.remote_hash, cached.remote_hash);
+            assert!(branch_sidebar_source_matches_cached(&repo, &parts));
+            (source, cached) = (next, parts);
+        }
+    }
+
+    #[test]
+    fn annex_support_revision_invalidates_an_in_place_update() {
+        let mut repo = annex_repo();
+        let (old, cached) = branch_sidebar_source_fingerprint(&repo, None);
+        let Loadable::Ready(support) = &mut repo.large_file_support else {
+            unreachable!()
+        };
+        Arc::make_mut(support).annex.restage_pending = true;
+        repo.large_file_support_rev += 1;
+        assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+        let (updated, _) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+        assert_ne!(old, updated);
+        assert_eq!(updated, branch_sidebar_source_fingerprint(&repo, None).0);
     }
 
     #[test]

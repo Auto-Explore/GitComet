@@ -651,7 +651,10 @@ impl super::GixRepo {
     }
 
     pub(super) fn run_annex_command(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
-        let result = self.run_annex_command_inner(command);
+        if let Some(operation) = gitcomet_core::git_operation::current() {
+            operation.emit(GitOperationEvent::CommandStarted);
+        }
+        let result = crate::util::with_shared_git_auth(|| self.run_annex_command_inner(command));
         if command.restages_after() {
             // Also after a failure or a cancel, which kill git-annex before its
             // own restage. A fresh operation keeps a cancelled one's flag from

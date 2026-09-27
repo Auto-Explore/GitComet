@@ -31,6 +31,7 @@ bench = false
 doc = false
 
 [dependencies]
+fnv = { workspace = true }
 gitcomet-core = { workspace = true }
 gix = { workspace = true }
 lru = { workspace = true }

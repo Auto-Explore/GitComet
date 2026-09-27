@@ -27,6 +27,7 @@ pub mod services;
 pub mod signing_tools;
 pub mod squash;
 pub mod text_utils;
+pub mod url_encoding;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

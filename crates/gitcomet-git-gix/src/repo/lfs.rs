@@ -143,16 +143,15 @@ impl super::GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path: Some(path),
-            } => (
-                path,
-                vec![
-                    from_commit_id.as_ref().to_string(),
-                    to_commit_id
-                        .as_ref()
-                        .map_or("HEAD", |id| id.as_ref())
-                        .to_string(),
-                ],
-            ),
+            } => {
+                let mut revisions = vec![from_commit_id.as_ref().to_string()];
+                if let Some(to) = to_commit_id {
+                    revisions.push(to.as_ref().to_string());
+                } else {
+                    index_trees = self.index_side_trees(std::slice::from_ref(path))?;
+                }
+                (path, revisions)
+            }
             _ => return Err(paths_arg_error("git lfs fetch for diff")),
         };
         // Resolve to object ids before writing the line-delimited stdin protocol.

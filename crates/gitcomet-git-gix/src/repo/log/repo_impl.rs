@@ -828,7 +828,7 @@ impl GixRepo {
     }
 
     pub(in super::super) fn commit_details_impl(&self, id: &CommitId) -> Result<CommitDetails> {
-        let repo = self.repo();
+        let repo = self.reopen_repo()?;
         let spec = id.as_ref();
         let commit = find_commit_by_id(&repo, id)?;
 
@@ -906,7 +906,7 @@ impl GixRepo {
     ) -> Result<Vec<CommitFileChange>> {
         match to {
             Some(to) => {
-                let repo = self.repo();
+                let repo = self.reopen_repo()?;
                 diff_range_files(&repo, from, to)
             }
             // Working-tree tip: the newer side is the live worktree, which has no

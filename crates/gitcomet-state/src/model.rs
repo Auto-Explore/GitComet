@@ -1028,7 +1028,9 @@ pub struct GitHookOperation {
     pub output_bytes: usize,
     pub output_truncated: bool,
     pub latest_line: String,
-    /// Latest Git LFS transfer progress, when the operation moved content.
+    /// An explicit command requested activity before producing any output.
+    pub command_started: bool,
+    /// Latest large-file transfer progress, when the operation moved content.
     pub transfer: Option<gitcomet_core::git_operation::TransferProgress>,
 }
 
@@ -1037,9 +1039,9 @@ impl GitHookOperation {
         !self.hooks.is_empty()
     }
 
-    /// Worth showing in the activity panel: a hook ran or content moved.
+    /// Explicit commands must expose cancellation even while silent.
     pub fn is_reportable(&self) -> bool {
-        self.has_hooks() || self.transfer.is_some()
+        self.command_started || self.has_hooks() || self.transfer.is_some()
     }
 
     pub fn active_hook_name(&self) -> Option<&str> {

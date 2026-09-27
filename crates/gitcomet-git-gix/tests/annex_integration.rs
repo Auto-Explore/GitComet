@@ -655,6 +655,9 @@ fn special_remote_types_come_from_the_annex_branch() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    fs::write(repo.join("extra.bin"), "extra version\n").unwrap();
+    git(&repo, &["annex", "add", "extra.bin"]);
+    git(&repo, &["commit", "-qm", "extra file"]);
     let clone = dir.path().join("clone");
     git(
         dir.path(),
@@ -679,6 +682,25 @@ fn special_remote_types_come_from_the_annex_branch() {
     assert!(fresh.annex.has_annex_branch);
     assert!(!fresh.annex.initialized());
     assert!(!fresh.annex.has_annex_dir);
+    let head = CommitId(git(&clone, &["rev-parse", "HEAD"]).trim().into());
+    let parent = CommitId(git(&clone, &["rev-parse", "HEAD^"]).trim().into());
+    for rows in [
+        opened.commit_details(&head).unwrap().files,
+        opened.diff_range_files(&parent, Some(&head)).unwrap(),
+    ] {
+        let state = rows
+            .iter()
+            .find(|row| row.path == Path::new("extra.bin"))
+            .unwrap()
+            .large_file
+            .as_ref()
+            .expect("remote annex branch enables committed pointer scans");
+        assert!(matches!(
+            state.pointer,
+            gitcomet_core::large_files::LargeFilePointer::Annex(_)
+        ));
+        assert_eq!(state.in_local_store, Some(false));
+    }
     opened
         .run_large_file_command(&LargeFileCommand::AnnexInit)
         .unwrap();
@@ -1405,4 +1427,209 @@ fn whereis_uses_historical_keys_after_the_path_is_deleted() {
             in_backup
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
+    use gitcomet_core::annex;
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let opened = open(&repo);
+    let cancellation = CancellationToken::new();
+    for name in ["a:b.txt", "percent%.txt"] {
+        fs::write(repo.join(name), "escaped content\n").unwrap();
+        git(&repo, &["annex", "add", "--backend=WORM", name]);
+        let raw = git(&repo, &["annex", "lookupkey", name]).trim().to_string();
+        let link = fs::read_link(repo.join(name)).unwrap();
+        assert_eq!(
+            annex::key_from_symlink_target(link.to_str().unwrap().as_bytes())
+                .unwrap()
+                .raw
+                .as_ref(),
+            raw
+        );
+        let objects = repo.join(".git/annex/objects");
+        assert!(
+            annex::object_paths(&raw, 2)
+                .iter()
+                .any(|path| objects.join(path).is_file())
+        );
+        git(&repo, &["annex", "unlock", name]);
+        let pointer = git(&repo, &["show", &format!(":{name}")]);
+        assert_eq!(
+            annex::key_from_pointer(pointer.as_bytes())
+                .unwrap()
+                .raw
+                .as_ref(),
+            raw
+        );
+        git(&repo, &["commit", "-qm", "escaped key"]);
+        let target = DiffTarget::Commit {
+            commit_id: CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into()),
+            path: Some(name.into()),
+        };
+        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
+        assert_eq!(
+            fs::read_to_string(diff.new_source.unwrap().path).unwrap(),
+            "escaped content\n"
+        );
+        let rows = opened
+            .uncommitted_large_files_for_status_cancellable(&staged_row(name), &cancellation)
+            .unwrap();
+        assert_eq!(rows.staged[Path::new(name)].in_local_store, Some(true));
+        git(&repo, &["annex", "copy", "--to=backup", name]);
+        git(&repo, &["annex", "drop", name]);
+        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        let key = match diff.new_large.unwrap().pointer {
+            gitcomet_core::large_files::LargeFilePointer::Annex(key) => key.raw.to_string(),
+            _ => unreachable!(),
+        };
+        let locations = opened
+            .annex_whereis_cancellable(&key, &cancellation)
+            .unwrap();
+        assert!(!locations.copies.is_empty());
+        opened
+            .run_large_file_command(&LargeFileCommand::AnnexGetKeys { keys: vec![key] })
+            .unwrap();
+        assert_eq!(
+            opened
+                .diff_file_text(&target)
+                .unwrap()
+                .unwrap()
+                .new_large
+                .unwrap()
+                .content,
+            LargeFileContent::Available
+        );
+    }
+}
+
+#[cfg(unix)]
+fn with_annex_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
+    if let Some(root) = std::env::var_os("GITCOMET_ANNEX_TEST_ROOT") {
+        test(Path::new(&root));
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    write_script(&bin.join("git-annex"), script);
+    in_child(
+        name,
+        &[
+            ("PATH", path_with(&bin)),
+            ("GITCOMET_ANNEX_TEST_ROOT", dir.path().as_os_str().into()),
+        ],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn annex_credentials_survive_fallback_and_multiple_keys_without_leaking() {
+    use gitcomet_core::auth::{GitAuthKind, ScopedStagedGitAuth, StagedGitAuth};
+    const SCRIPT: &str = r#"#!/bin/sh
+for arg in "$@"; do case "$arg" in -*) ;; *) sub="$arg"; break ;; esac; done
+case "$sub" in
+  pull|push) printf "Invalid argument \`%s'\n\nUsage: git-annex COMMAND\n" "$sub" >&2; exit 1 ;;
+  restage) [ -z "$GITCOMET_AUTH_SECRET" ] || echo leaked >> "$GITCOMET_ANNEX_TEST_ROOT/leaks"; exit 0 ;;
+esac
+secret=$("$GIT_ASKPASS" "Password:")
+[ "$secret" = "annex-test-secret" ] || { echo 'Authentication failed' >&2; exit 1; }
+printf '%s\n' "$sub" >> "$GITCOMET_ANNEX_TEST_ROOT/authenticated"
+[ "$sub" != get ] || printf '{"command":"get","success":true}\n'
+"#;
+    with_annex_shim(
+        "annex_credentials_survive_fallback_and_multiple_keys_without_leaking",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let opened = open(repo);
+            let keys = vec!["WORM-s1-m1--first".into(), "WORM-s1-m1--second".into()];
+            for command in [
+                LargeFileCommand::AnnexPull { content: true },
+                LargeFileCommand::AnnexPush { content: true },
+                LargeFileCommand::AnnexGetKeys { keys },
+            ] {
+                {
+                    let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                        kind: GitAuthKind::UsernamePassword,
+                        username: Some("test".into()),
+                        secret: "annex-test-secret".into(),
+                    });
+                    opened.run_large_file_command(&command).unwrap();
+                }
+                assert!(
+                    opened
+                        .run_large_file_command(&LargeFileCommand::AnnexSync { content: false })
+                        .is_err(),
+                    "credentials must not outlive the command"
+                );
+            }
+            assert_eq!(
+                fs::read_to_string(repo.join("authenticated")).unwrap(),
+                "sync\nsync\nget\nget\n"
+            );
+            assert!(
+                !repo.join("leaks").exists(),
+                "quiet restage must not inherit credentials"
+            );
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn silent_annex_commands_announce_activity_before_they_can_stall() {
+    use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
+    use std::sync::mpsc;
+    use std::time::Duration;
+    const SCRIPT: &str = "#!/bin/sh\ncase \"$*\" in *restage*) exit 0 ;; esac\nprintf started > \"$GITCOMET_ANNEX_TEST_ROOT/started\"\nexec sleep 30\n";
+    with_annex_shim(
+        "silent_annex_commands_announce_activity_before_they_can_stall",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let opened = open(repo);
+            for command in [
+                LargeFileCommand::AnnexPull { content: true },
+                LargeFileCommand::AnnexPush { content: true },
+                LargeFileCommand::AnnexSync { content: true },
+                LargeFileCommand::AnnexFsck,
+            ] {
+                let (tx, rx) = mpsc::channel();
+                let context = GitOperationContext::new("annex test", move |_, event| {
+                    let _ = tx.send(event);
+                });
+                let operation = context.clone();
+                let opened = opened.clone();
+                let worker = std::thread::spawn(move || {
+                    let _scope = git_operation::attach(&operation);
+                    opened.run_large_file_command(&command)
+                });
+                let first = rx.recv_timeout(Duration::from_secs(5));
+                if first != Ok(GitOperationEvent::CommandStarted) {
+                    git_operation::cancel(context.id());
+                    let _ = worker.join();
+                    panic!("silent command must announce activity before output: {first:?}");
+                }
+                // Wait for a real running subprocess, so this also verifies Stop
+                // kills a stalled command rather than merely preventing spawn.
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while !repo.join("started").exists() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(git_operation::cancel(context.id()));
+                let result = worker.join().unwrap();
+                assert!(matches!(
+                    result.unwrap_err().kind(),
+                    gitcomet_core::error::ErrorKind::Cancelled
+                ));
+                assert!(repo.join("started").exists());
+                fs::remove_file(repo.join("started")).unwrap();
+            }
+        },
+    );
 }

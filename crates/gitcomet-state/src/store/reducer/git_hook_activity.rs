@@ -39,6 +39,7 @@ pub(super) fn started(
         output_bytes: 0,
         output_truncated: false,
         latest_line: String::new(),
+        command_started: false,
         transfer: None,
     });
     repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
@@ -60,6 +61,7 @@ pub(super) fn apply_event(
 
     let mut started_first_hook = false;
     match event {
+        GitOperationEvent::CommandStarted => operation.command_started = true,
         GitOperationEvent::Output { chunks } => {
             for chunk in chunks {
                 let text = sanitize_activity_text(&chunk.text);
@@ -354,6 +356,33 @@ mod tests {
                 workdir: std::env::temp_dir().join("gitcomet-hook-activity-test"),
             },
         )
+    }
+
+    #[test]
+    fn silent_annex_command_is_reportable_and_cancellable_from_startup() {
+        let mut repo = repo_state();
+        let id = GitOperationId(1);
+        started(
+            &mut repo,
+            id,
+            "git annex sync".into(),
+            None,
+            SystemTime::UNIX_EPOCH,
+        );
+        apply_event(&mut repo, id, GitOperationEvent::CommandStarted);
+        assert!(repo.feedback.hook_activity[0].is_reportable());
+        assert!(repo.feedback.hook_activity[0].transfer.is_none());
+        assert!(request_cancel(&mut repo, id));
+        finished(
+            &mut repo,
+            id,
+            GitOperationOuterOutcome::Cancelled,
+            Duration::from_millis(1),
+        );
+        assert_eq!(
+            repo.feedback.hook_activity[0].status,
+            GitHookOperationStatus::Cancelled
+        );
     }
 
     fn hook_id(child_id: u64) -> HookExecutionId {

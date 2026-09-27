@@ -894,8 +894,8 @@ struct ThemeFileSyntaxColors {
 /// `gpui::Rgba` is a `palette` re-export, and its `Deserialize` reads a
 /// `{"red":…,"green":…,"blue":…,"alpha":…}` object, not the `"#rrggbbaa"`
 /// strings every theme file — shipped and user-authored alike — is written in.
-/// `palette`'s own `FromStr` is closer but only accepts the two forms that
-/// carry alpha, so the four-form parser lives here.
+/// Dispatch to palette's RGB or RGBA parser while requiring a leading `#`
+/// and preserving the theme format's four supported spellings.
 #[derive(Clone, Copy)]
 struct HexColor(Rgba);
 
@@ -908,32 +908,25 @@ impl HexColor {
             format!("invalid hex color {value:?}: expected #rgb, #rgba, #rrggbb, or #rrggbbaa")
         })?;
 
-        let digit = |ix: usize| -> Result<u8, String> {
-            u8::from_str_radix(&hex[ix..ix + 1], 16)
-                .map_err(|err| format!("invalid hex color {value:?}: {err}"))
-        };
-        let pair = |ix: usize| -> Result<u8, String> {
-            u8::from_str_radix(&hex[ix..ix + 2], 16)
-                .map_err(|err| format!("invalid hex color {value:?}: {err}"))
-        };
-
+        // Palette slices at byte offsets and its integer parser accepts `+`;
+        // require ASCII hex digits before handing it user-authored colors.
+        if !matches!(hex.len(), 3 | 4 | 6 | 8) || !hex.as_bytes().iter().all(u8::is_ascii_hexdigit)
+        {
+            return Err(format!(
+                "invalid hex color {value:?}: expected #rgb, #rgba, #rrggbb, or #rrggbbaa"
+            ));
+        }
         let components = match hex.len() {
-            len @ (3 | 4) if hex.is_ascii() => {
-                let alpha = if len == 4 { digit(3)? } else { 0xf };
-                // `#abc` means `#aabbcc`, so each digit is duplicated rather
-                // than shifted — `0xa` widens to `0xaa`, not `0xa0`.
-                [digit(0)?, digit(1)?, digit(2)?, alpha].map(|d| (d << 4) | d)
-            }
-            len @ (6 | 8) if hex.is_ascii() => {
-                let alpha = if len == 8 { pair(6)? } else { 0xff };
-                [pair(0)?, pair(2)?, pair(4)?, alpha]
-            }
-            _ => {
-                return Err(format!(
-                    "invalid hex color {value:?}: expected #rgb, #rgba, #rrggbb, or #rrggbbaa"
-                ));
-            }
-        };
+            3 | 6 => hex.parse::<palette::Srgb<u8>>().map(|rgb| {
+                let (r, g, b) = rgb.into_components();
+                [r, g, b, 255]
+            }),
+            _ => hex.parse::<palette::Srgba<u8>>().map(|rgba| {
+                let (r, g, b, a) = rgba.into_components();
+                [r, g, b, a]
+            }),
+        }
+        .map_err(|err| format!("invalid hex color {value:?}: {err}"))?;
 
         let [r, g, b, a] = components.map(|c| f32::from(c) / 255.0);
         Ok(Self(Rgba::new(r, g, b, a)))
@@ -1959,6 +1952,36 @@ mod tests {
     use palette::IntoColor;
     use std::{fs, path::PathBuf};
     use tempfile::tempdir;
+
+    #[test]
+    fn theme_hex_colors_keep_all_four_spellings_and_strict_validation() {
+        for (input, expected) in [
+            ("#aBc", [0xaa_u8, 0xbb, 0xcc, 0xff]),
+            ("#aBcD", [0xaa, 0xbb, 0xcc, 0xdd]),
+            ("  #a1B2c3\n", [0xa1, 0xb2, 0xc3, 0xff]),
+            ("#a1B2c380", [0xa1, 0xb2, 0xc3, 0x80]),
+        ] {
+            let [r, g, b, a] = expected.map(|channel| f32::from(channel) / 255.0);
+            assert_eq!(HexColor::parse(input).unwrap().0, Rgba::new(r, g, b, a));
+        }
+        for invalid in [
+            "abc",
+            "#",
+            "#12",
+            "#12345",
+            "#123456789",
+            "#aabbccddeeff",
+            "##abc",
+            "#ab g",
+            "#gggggg",
+            "#+a0000",
+            "#0000+a00",
+            "#éab",
+            "#💙ab",
+        ] {
+            assert!(HexColor::parse(invalid).is_err(), "{invalid:?}");
+        }
+    }
 
     fn themes_markdown_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/themes.md")
