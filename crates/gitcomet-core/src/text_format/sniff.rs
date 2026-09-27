@@ -1,3 +1,5 @@
+use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
+
 use super::{
     FormatSource, LineEndingCounter, LineEndingStats, SideKind, SideTextFormat, TextAttributes,
     TextEncoding, TextFormat,
@@ -310,9 +312,9 @@ impl ContentSniff {
         }
         if self.utf8_valid {
             if self.ascii_only && self.escape_seen {
-                let mut detector = chardetng::EncodingDetector::new();
+                let mut detector = EncodingDetector::new(Iso2022JpDetection::Allow);
                 detector.feed(&self.sample, true);
-                if detector.guess(None, true) == encoding_rs::ISO_2022_JP {
+                if detector.guess(None, Utf8Detection::Allow) == encoding_rs::ISO_2022_JP {
                     return with(
                         TextEncoding::from_whatwg(encoding_rs::ISO_2022_JP),
                         FormatSource::Detected { confident: true },
@@ -332,12 +334,12 @@ impl ContentSniff {
         {
             return with(encoding, FormatSource::GuiEncoding);
         }
-        let (encoding, confident) = self.guess();
-        with(encoding, FormatSource::Detected { confident })
+        // chardetng no longer reports confidence, so keep heuristic guesses uncertain.
+        with(self.guess(), FormatSource::Detected { confident: false })
     }
 
-    fn guess(&self) -> (TextEncoding, bool) {
-        let mut detector = chardetng::EncodingDetector::new();
+    fn guess(&self) -> TextEncoding {
+        let mut detector = EncodingDetector::new(Iso2022JpDetection::Allow);
         // End the sample on an ASCII byte so a sequence cut at the budget is
         // not scored as an error.
         let sample = match self.sample.iter().rposition(|&byte| byte < 0x80) {
@@ -345,8 +347,7 @@ impl ContentSniff {
             _ => &self.sample[..],
         };
         detector.feed(sample, true);
-        let (encoding, confident) = detector.guess_assess(None, false);
-        (TextEncoding::from_whatwg(encoding), confident)
+        TextEncoding::from_whatwg(detector.guess(None, Utf8Detection::Deny))
     }
 
     fn format(&self, encoding: TextEncoding, source: FormatSource) -> SideTextFormat {
