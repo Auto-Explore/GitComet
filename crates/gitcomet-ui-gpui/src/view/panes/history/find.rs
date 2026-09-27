@@ -6,6 +6,11 @@ use gitcomet_core::history_find::HistoryFindQuery;
 use gitcomet_state::history_find::HistoryFindMsg;
 use std::rc::Rc;
 
+/// Quiet time after a keystroke before the query is searched and the first
+/// match selected. Row dimming follows every keystroke immediately; this only
+/// spares the whole-history scan and the selection's detail load.
+pub(in crate::view) const HISTORY_FIND_SETTLE_MS: u64 = 120;
+
 /// Gap between the column header and the floating bar.
 const FIND_BAR_TOP_GAP_PX: f32 = 6.0;
 const FIND_BAR_RIGHT_GAP_PX: f32 = 8.0;
@@ -22,15 +27,19 @@ pub(in crate::view) struct HistoryFind {
     requested: Option<(HistoryFindQuery, usize)>,
     matches: Option<(FindMatchesKey, Rc<FindMatches>)>,
     /// The count last shown for an answered query. Held while a new query's
-    /// scan is in flight, so the count does not blink on every keystroke.
-    label: SharedString,
+    /// scan has nothing to report yet, so the count does not blink on every
+    /// keystroke.
+    label: Option<SharedString>,
+    /// Running while the user is still typing; see [`HISTORY_FIND_SETTLE_MS`].
+    settling: Option<gpui::Task<()>>,
     _input_subscription: gpui::Subscription,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum FindMatchesKey {
     Indexed {
-        rev: u64,
+        /// The store's search; its match chunks only grow.
+        generation: u64,
         /// The displayed graph: its projection decides which raw rows show.
         graph: usize,
     },
@@ -42,9 +51,11 @@ enum FindMatchesKey {
 }
 
 /// Matching rows, as ascending visible indices of the displayed list.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(in crate::view) struct FindMatches {
     pub(in crate::view) visible: Vec<usize>,
+    /// Store match chunks already mapped into `visible`.
+    chunks_seen: usize,
     /// `false` while an indexed scan is still running.
     pub(in crate::view) complete: bool,
     /// The store has not answered this query yet.
@@ -110,7 +121,8 @@ impl HistoryView {
                 jump_to_first: false,
                 requested: None,
                 matches: None,
-                label: "0 results".into(),
+                label: None,
+                settling: None,
                 _input_subscription: subscription,
             }
         });
@@ -143,6 +155,7 @@ impl HistoryView {
         find.open = false;
         find.jump_to_first = false;
         find.matches = None;
+        find.settling = None;
         if find.requested.take().is_some()
             && let Some(repo_id) = self.active_repo_id()
         {
@@ -182,10 +195,22 @@ impl HistoryView {
             .is_some_and(|find| find.query != HistoryFindQuery::new(&text));
         if query_changed {
             self.set_history_find_query(&text, true);
+            self.settle_history_find(cx);
             cx.notify();
         }
         if enter_pressed {
-            self.history_find_step(true, cx);
+            if self
+                .find
+                .as_mut()
+                .and_then(|find| find.settling.take())
+                .is_some()
+            {
+                // Typed and pressed Enter at once: search now and let the
+                // pending first-match jump land.
+                cx.notify();
+            } else {
+                self.history_find_step(true, cx);
+            }
         }
     }
 
@@ -198,10 +223,33 @@ impl HistoryView {
         find.matches = None;
     }
 
+    fn settle_history_find(&mut self, cx: &mut gpui::Context<Self>) {
+        let delay = cx
+            .background_executor()
+            .timer(std::time::Duration::from_millis(HISTORY_FIND_SETTLE_MS));
+        let settling = cx.spawn(async move |view, cx| {
+            delay.await;
+            let _ = view.update(cx, |this, cx| {
+                if let Some(find) = this.find.as_mut() {
+                    find.settling = None;
+                }
+                cx.notify();
+            });
+        });
+        if let Some(find) = self.find.as_mut() {
+            find.settling = Some(settling);
+        }
+    }
+
     /// Keep the store's scan in step with the query and the displayed index,
-    /// then take the first-match jump a query edit asked for. Runs each render.
+    /// then take the first-match jump a query edit asked for. Runs each render
+    /// once typing has settled.
     pub(super) fn sync_history_find(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(find) = self.find.as_ref().filter(|find| find.open) else {
+        let Some(find) = self
+            .find
+            .as_ref()
+            .filter(|find| find.open && find.settling.is_none())
+        else {
             return;
         };
         let Some(repo_id) = self.active_repo_id() else {
@@ -257,63 +305,73 @@ impl HistoryView {
     /// Matches for the current query over the displayed list, cached until
     /// the query, the list, or the store's results change.
     pub(in crate::view) fn history_find_matches(&mut self) -> Option<Rc<FindMatches>> {
-        let find = self.find.as_ref().filter(|find| find.open)?;
-        let query = find.query.clone()?;
-        let repo = self.active_repo()?;
+        let query = self.history_find_query()?.clone();
+        let repo_id = self.active_repo_id()?;
+        // Held separately so the cache below can be updated while reading it.
+        let state = Arc::clone(&self.state);
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
 
         if let Some(shown) = self
             .indexed
             .presentation
-            .as_ref()
-            .filter(|shown| shown.key.repo_id == repo.id)
+            .clone()
+            .filter(|shown| shown.key.repo_id == repo_id)
         {
             let projection = &shown.graph.projection;
             let results = &repo.history_state.find;
-            let key = FindMatchesKey::Indexed {
-                rev: results.rev,
-                graph: Arc::as_ptr(&shown.graph) as usize,
-            };
-            if let Some((cached, matches)) = &find.matches
-                && *cached == key
-            {
-                return Some(Rc::clone(matches));
-            }
-            let matches = if results.is_for(&query, &projection.index) {
-                FindMatches {
-                    // Stash helper rows are hidden from the list; so are their matches.
-                    visible: results
-                        .matches
-                        .iter()
-                        .filter_map(|&raw| projection.visible_position(raw))
-                        .collect(),
-                    complete: results.done || results.error.is_some(),
-                    pending: false,
-                    failed: results.error.is_some(),
-                }
-            } else {
-                FindMatches {
+            if !results.is_for(&query, &projection.index) {
+                return Some(Rc::new(FindMatches {
                     pending: true,
                     ..FindMatches::default()
-                }
-            };
-            let matches = Rc::new(matches);
-            if let Some(find) = self.find.as_mut() {
-                find.matches = Some((key, Rc::clone(&matches)));
+                }));
             }
-            return Some(matches);
+            let key = FindMatchesKey::Indexed {
+                generation: results.generation(),
+                graph: Arc::as_ptr(&shown.graph) as usize,
+            };
+            let find = self.find.as_mut()?;
+            if find
+                .matches
+                .as_ref()
+                .is_none_or(|(cached, _)| *cached != key)
+            {
+                find.matches = Some((key, Rc::default()));
+            }
+            let (_, cached) = find.matches.as_mut()?;
+            let complete = results.done || results.error.is_some();
+            let failed = results.error.is_some();
+            // A long scan reports many chunks; map only the ones not seen yet.
+            if cached.chunks_seen < results.matches.len()
+                || cached.complete != complete
+                || cached.failed != failed
+            {
+                let matches = Rc::make_mut(cached);
+                for chunk in &results.matches[matches.chunks_seen..] {
+                    // Stash helper rows are hidden from the list; so are their matches.
+                    matches.visible.extend(
+                        chunk
+                            .iter()
+                            .filter_map(|&raw| projection.visible_position(raw as usize)),
+                    );
+                }
+                matches.chunks_seen = results.matches.len();
+                matches.complete = complete;
+                matches.failed = failed;
+            }
+            return Some(Rc::clone(cached));
         }
 
         // Without an index the list is the loaded log page; match it directly.
         let cache = self
             .history_cache
             .as_ref()
-            .filter(|cache| cache.base.request.repo_id == repo.id)?;
+            .filter(|cache| cache.base.request.repo_id == repo_id)?;
         let key = FindMatchesKey::Paged {
             query: query.clone(),
             page: Arc::as_ptr(&cache.page) as usize,
             visible: cache.base.visible_indices.len(),
         };
-        if let Some((cached, matches)) = &find.matches
+        if let Some((cached, matches)) = self.find.as_ref().and_then(|find| find.matches.as_ref())
             && *cached == key
         {
             return Some(Rc::clone(matches));
@@ -334,8 +392,7 @@ impl HistoryView {
                 .map(|(visible_ix, _)| visible_ix)
                 .collect(),
             complete: true,
-            pending: false,
-            failed: false,
+            ..FindMatches::default()
         });
         if let Some(find) = self.find.as_mut() {
             find.matches = Some((key, Rc::clone(&matches)));
@@ -407,104 +464,41 @@ impl HistoryView {
         true
     }
 
-    /// Select a match the way clicking its row would, and scroll it to the
-    /// middle of the list.
+    /// Select a match the way clicking its row would and bring it into view.
     fn select_history_find_match(&mut self, visible_ix: usize, cx: &mut gpui::Context<Self>) {
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
-        if let Some(shown) = self
-            .indexed
-            .presentation
-            .clone()
-            .filter(|shown| shown.key.repo_id == repo_id)
-        {
-            let Some(id) = shown.graph.projection.commit_id(visible_ix) else {
-                return;
-            };
-            let list_ix = self.indexed.plan.list_ix_for_visible(visible_ix);
-            if !self.history_find_is_selected(&id) {
-                self.select_indexed_commit(
-                    repo_id,
-                    id,
-                    gitcomet_state::msg::CommitSelectMode::Single,
-                );
+        if self.indexed.presentation.is_some() {
+            if self.select_indexed_commit_row(repo_id, visible_ix, true, cx) {
+                self.dismiss_history_refs_hover(cx);
             }
-            self.cancel_history_scroll_reveal();
-            self.scroll_indexed_to(list_ix, true);
-            self.dismiss_history_refs_hover(cx);
-            cx.notify();
             return;
         }
-
         let plan = self.ensure_history_list_plan();
-        let Some(cache) = self
-            .history_cache
-            .as_ref()
-            .filter(|cache| cache.base.request.repo_id == repo_id)
-        else {
-            return;
-        };
-        let Some(commit) = cache
-            .base
-            .visible_indices
-            .get(visible_ix)
-            .and_then(|commit_ix| cache.page.commits.get(commit_ix))
-        else {
-            return;
-        };
-        let commit_id = commit.id.clone();
-        let request = &cache.base.request;
-        let (log_rev, stashes_rev, history_scope) = (
-            request.log_source as u64,
-            request.stashes_rev,
-            request.history_scope,
-        );
-        let list_ix = plan.list_ix_for_visible(visible_ix);
-        if !self.history_find_is_selected(&commit_id) {
-            self.store.dispatch(Msg::SelectCommit {
-                repo_id,
-                commit_id: commit_id.clone(),
-            });
+        if self.select_paged_commit_row(repo_id, &plan, visible_ix, cx) {
+            cx.notify();
         }
-        super::set_history_selected_list_index_cache(
-            &mut self.history_selected_list_index_cache,
-            repo_id,
-            log_rev,
-            stashes_rev,
-            history_scope,
-            &plan,
-            Some(commit_id),
-            list_ix,
-        );
-        self.dismiss_history_refs_hover(cx);
-        self.history_scroll
-            .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
-        cx.notify();
-    }
-
-    /// Only a single selection counts: re-selecting the one commit already
-    /// shown would still collapse a multi-selection.
-    fn history_find_is_selected(&self, id: &CommitId) -> bool {
-        self.active_repo().is_some_and(|repo| {
-            repo.history_state.selected_commit.as_ref() == Some(id)
-                && !repo.history_state.multi_selection.is_multi()
-        })
     }
 
     pub(in crate::view) fn history_find_label(&mut self) -> SharedString {
-        let label = match self.history_find_matches() {
-            None => "0 results".into(),
-            Some(matches) if matches.pending => {
-                return self
-                    .find
-                    .as_ref()
-                    .map_or_else(|| "0 results".into(), |find| find.label.clone());
-            }
-            Some(matches) => self.history_find_count_label(&matches),
+        let Some(matches) = self.history_find_matches() else {
+            return "0 results".into();
         };
+        // The scan reports only once it has matches or is done, so an empty,
+        // unfinished result means it has not answered yet.
+        let unanswered =
+            matches.pending || (matches.visible.is_empty() && !matches.complete && !matches.failed);
+        if unanswered {
+            return self
+                .find
+                .as_ref()
+                .and_then(|find| find.label.clone())
+                .unwrap_or_else(|| "Searching…".into());
+        }
+        let label = self.history_find_count_label(&matches);
         if let Some(find) = self.find.as_mut() {
-            find.label = label.clone();
+            find.label = Some(label.clone());
         }
         label
     }
@@ -516,11 +510,7 @@ impl HistoryView {
         let more = if matches.complete { "" } else { "+" };
         let total = matches.visible.len();
         if total == 0 {
-            return if matches.complete {
-                "0 results".into()
-            } else {
-                "Searching…".into()
-            };
+            return "0 results".into();
         }
         let current = self
             .history_find_selected_visible_ix()

@@ -52,7 +52,7 @@ pub(super) fn schedule(
                         .iter()
                         .enumerate()
                         .filter(|(_, commit)| work.query.matches(commit))
-                        .map(|(offset, _)| start + offset),
+                        .filter_map(|(offset, _)| u32::try_from(start + offset).ok()),
                 );
                 start = end;
                 // A block without matches changes nothing the view shows.

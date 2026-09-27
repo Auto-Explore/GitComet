@@ -11,8 +11,11 @@ pub struct HistoryFindState {
     pub query: Option<HistoryFindQuery>,
     /// The index the matches belong to. Results for any other index are stale.
     pub index: Option<HistoryIndexHandle>,
-    /// Matching raw index rows in ascending (display) order.
-    pub matches: Arc<Vec<usize>>,
+    /// Matching raw index rows in ascending (display) order, in the chunks
+    /// the scan reported them. A search only ever appends chunks, so a reader
+    /// can resume after the ones it has already seen, and publishing a new
+    /// chunk copies the chunk list rather than every match found so far.
+    pub matches: Arc<Vec<Arc<[u32]>>>,
     pub done: bool,
     pub error: Option<String>,
     pub rev: u64,
@@ -36,6 +39,18 @@ impl HistoryFindState {
         }
     }
 
+    /// Identifies one search; its `matches` only grow while it lasts.
+    pub fn generation(&self) -> u64 {
+        self.seq
+    }
+
+    /// Every matching raw row, in order.
+    pub fn match_rows(&self) -> impl Iterator<Item = usize> + '_ {
+        self.matches
+            .iter()
+            .flat_map(|chunk| chunk.iter().map(|&row| row as usize))
+    }
+
     /// Whether these results answer `query` over `index`.
     pub fn is_for(&self, query: &HistoryFindQuery, index: &HistoryIndexHandle) -> bool {
         self.query.as_ref() == Some(query)
@@ -49,7 +64,8 @@ impl HistoryFindState {
 #[derive(Clone, Debug)]
 pub struct HistoryFindChunk {
     /// Newly found raw rows, all greater than any row reported before.
-    pub matches: Vec<usize>,
+    /// Index rows fit in `u32` (see `HistoryIndexBuilder::push`).
+    pub matches: Vec<u32>,
     pub done: bool,
 }
 

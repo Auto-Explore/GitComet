@@ -477,14 +477,6 @@ fn indexed_fixture_with_width(
     (builder.finish(&CancellationToken::new()).unwrap(), commits)
 }
 
-fn install_index(state: &mut AppState, index: gitcomet_core::history_index::HistoryIndexHandle) {
-    let history = &mut state.repos[0].history_state;
-    history.log_snapshot = Some(index.snapshot.clone());
-    history.indexed.requested = Some(index.snapshot.clone());
-    history.indexed.index = Some(index);
-    history.indexed.rev += 1;
-}
-
 fn signature_demand_follows_the_viewport(cx: &mut gpui::TestAppContext, indexed: bool) {
     let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(600);

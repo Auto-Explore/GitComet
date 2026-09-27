@@ -48,7 +48,7 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryFindMsg) -> Vec<Effect>
             match result {
                 Ok(chunk) => {
                     if !chunk.matches.is_empty() {
-                        Arc::make_mut(&mut find.matches).extend(chunk.matches);
+                        Arc::make_mut(&mut find.matches).push(chunk.matches.into());
                     }
                     find.done = chunk.done;
                 }
@@ -114,7 +114,7 @@ mod tests {
         }
     }
 
-    fn found(state: &mut AppState, seq: u64, matches: Vec<usize>, done: bool) {
+    fn found(state: &mut AppState, seq: u64, matches: Vec<u32>, done: bool) {
         reduce(
             state,
             HistoryFindMsg::Found {
@@ -133,7 +133,7 @@ mod tests {
         found(&mut state, work.seq, vec![1, 3], false);
         found(&mut state, work.seq, vec![6], true);
         let find = &state.repos[0].history_state.find;
-        assert_eq!(find.matches.as_slice(), &[1, 3, 6]);
+        assert_eq!(find.match_rows().collect::<Vec<_>>().as_slice(), &[1, 3, 6]);
         assert!(find.done);
     }
 
@@ -157,7 +157,15 @@ mod tests {
         assert!(find.matches.is_empty());
         assert!(!find.done);
         found(&mut state, new.seq, vec![5], true);
-        assert_eq!(state.repos[0].history_state.find.matches.as_slice(), &[5]);
+        assert_eq!(
+            state.repos[0]
+                .history_state
+                .find
+                .match_rows()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            &[5]
+        );
     }
 
     #[test]
@@ -208,7 +216,15 @@ mod tests {
         let scan = work(find(&mut state, "fix", &index));
         found(&mut state, scan.seq, vec![2], true);
         state.repos[0].bump_load_epoch();
-        assert_eq!(state.repos[0].history_state.find.matches.as_slice(), &[2]);
+        assert_eq!(
+            state.repos[0]
+                .history_state
+                .find
+                .match_rows()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            &[2]
+        );
         assert!(find(&mut state, "fix", &index).is_empty());
     }
 
@@ -225,7 +241,7 @@ mod tests {
             )),
         );
         let find = &state.repos[0].history_state.find;
-        assert_eq!(find.matches.as_slice(), &[1]);
+        assert_eq!(find.match_rows().collect::<Vec<_>>().as_slice(), &[1]);
         assert!(find.error.is_some());
     }
 }

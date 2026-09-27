@@ -1252,6 +1252,49 @@ impl HistoryView {
         }
     }
 
+    /// Select the commit on a visible row of the indexed list the way
+    /// clicking it would, and bring it into view: centred when
+    /// `center_if_hidden` and it is off screen, otherwise scrolled only as far
+    /// as needed.
+    pub(in crate::view) fn select_indexed_commit_row(
+        &mut self,
+        repo_id: RepoId,
+        visible_ix: usize,
+        center_if_hidden: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(id) = self
+            .indexed
+            .presentation
+            .as_ref()
+            .filter(|shown| shown.key.repo_id == repo_id)
+            .and_then(|shown| shown.graph.projection.commit_id(visible_ix))
+        else {
+            return false;
+        };
+        let list_ix = self.indexed.plan.list_ix_for_visible(visible_ix);
+        if !self.is_single_selected_commit(&id) {
+            self.select_indexed_commit(repo_id, id, gitcomet_state::msg::CommitSelectMode::Single);
+        }
+        self.cancel_history_scroll_reveal();
+        let center = center_if_hidden && !self.indexed_row_in_view(list_ix);
+        self.scroll_indexed_to(list_ix, center);
+        cx.notify();
+        true
+    }
+
+    fn indexed_row_in_view(&self, row: usize) -> bool {
+        self.scroll_interaction
+            .borrow()
+            .logical
+            .as_ref()
+            .is_some_and(|logical| {
+                let top = row as f64 * logical.height;
+                top >= logical.position()
+                    && top + logical.height <= logical.position() + logical.viewport
+            })
+    }
+
     pub(super) fn select_adjacent_indexed(
         &mut self,
         direction: i8,
@@ -1295,13 +1338,8 @@ impl HistoryView {
             .min(total - 1);
         match plan.row_at(row) {
             Some(HistoryListRow::Commit { visible_ix }) => {
-                if let Some(id) = shown.graph.projection.commit_id(visible_ix) {
-                    self.select_indexed_commit(
-                        repo.id,
-                        id,
-                        gitcomet_state::msg::CommitSelectMode::Single,
-                    );
-                }
+                let repo_id = repo.id;
+                return self.select_indexed_commit_row(repo_id, visible_ix, false, cx);
             }
             Some(HistoryListRow::WorkingTreeSummary) => {
                 self.select_working_tree_summary_row(repo.id, cx)

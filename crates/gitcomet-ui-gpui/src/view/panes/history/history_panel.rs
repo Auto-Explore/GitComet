@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::HistoryView;
-use crate::view::caches::HistoryListRow;
+use crate::view::caches::{HistoryListPlan, HistoryListRow};
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 /// The log's column-header bar and the chips inside it ("All branches", the
@@ -420,31 +420,70 @@ impl HistoryView {
         let Some(HistoryListRow::Commit { visible_ix }) = plan.row_at(next_list_ix) else {
             return false;
         };
-        let Some(commit_ix) = cache.base.visible_indices.get(visible_ix) else {
-            return false;
-        };
-        let Some(commit) = page.commits.get(commit_ix) else {
-            return false;
-        };
+        self.select_paged_commit_row(repo_id, &plan, visible_ix, _cx)
+    }
 
-        self.store.dispatch(Msg::SelectCommit {
-            repo_id,
-            commit_id: commit.id.clone(),
-        });
+    /// Select the commit on a visible row of the paged list the way clicking
+    /// it would, and scroll it to the middle of the list.
+    pub(in crate::view) fn select_paged_commit_row(
+        &mut self,
+        repo_id: RepoId,
+        plan: &HistoryListPlan,
+        visible_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(cache) = self
+            .history_cache
+            .as_ref()
+            .filter(|cache| cache.base.request.repo_id == repo_id)
+        else {
+            return false;
+        };
+        let Some(commit) = cache
+            .base
+            .visible_indices
+            .get(visible_ix)
+            .and_then(|commit_ix| cache.page.commits.get(commit_ix))
+        else {
+            return false;
+        };
+        let commit_id = commit.id.clone();
+        let request = &cache.base.request;
+        let (log_rev, stashes_rev, history_scope) = (
+            request.log_source as u64,
+            request.stashes_rev,
+            request.history_scope,
+        );
+        let list_ix = plan.list_ix_for_visible(visible_ix);
+        if !self.is_single_selected_commit(&commit_id) {
+            self.store.dispatch(Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+            });
+        }
         super::set_history_selected_list_index_cache(
             &mut self.history_selected_list_index_cache,
             repo_id,
             log_rev,
             stashes_rev,
             history_scope,
-            &plan,
-            Some(commit.id.clone()),
-            next_list_ix,
+            plan,
+            Some(commit_id),
+            list_ix,
         );
-        self.dismiss_history_refs_hover(_cx);
+        self.dismiss_history_refs_hover(cx);
         self.history_scroll
-            .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
+            .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
         true
+    }
+
+    /// Whether `id` is the one selected commit. Re-selecting it would change
+    /// nothing, while a multi-selection that includes it still collapses.
+    pub(in crate::view) fn is_single_selected_commit(&self, id: &CommitId) -> bool {
+        self.active_repo().is_some_and(|repo| {
+            repo.history_state.selected_commit.as_ref() == Some(id)
+                && !repo.history_state.multi_selection.is_multi()
+        })
     }
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
