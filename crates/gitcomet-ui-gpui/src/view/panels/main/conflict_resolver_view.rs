@@ -2513,6 +2513,8 @@ impl MainPaneView {
         query: Option<rows::MarkdownPreviewQuery>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let tab_width = self.display_tab_width;
+
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let (id, list_id, vscrollbar_id, label, scroll) = match side {
             ThreeWayColumn::Base => (
@@ -2605,7 +2607,9 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .track_scroll(&handle)
                             .pr(vertical_scrollbar_gutter)
-                            .child(rows::render_markdown_document(&document, &context)),
+                            .child(rows::render_markdown_document(
+                                tab_width, &document, &context,
+                            )),
                     )
                     .when(!vertical_sync_enabled, |d| {
                         d.child(

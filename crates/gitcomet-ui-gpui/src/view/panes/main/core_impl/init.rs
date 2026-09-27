@@ -343,6 +343,7 @@ impl MainPaneView {
             remote_markdown_images: RemoteMarkdownImages::new(remote_markdown_image_policy),
             diff_word_wrap,
             default_tab_size,
+            display_tab_width: usize::from(default_tab_size),
             diff_show_line_numbers,
             diff_scroll_sync,
             diff_content_mode,

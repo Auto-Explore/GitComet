@@ -960,6 +960,8 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let tab_width = self.display_tab_width;
+
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         if preview.old_blocks.is_empty() && preview.new_blocks.is_empty() {
             return empty_diff_text_document(
@@ -1027,11 +1029,13 @@ impl MainPaneView {
             };
         let body = match self.diff_view {
             DiffViewMode::Inline => rows::render_markdown_document_with_blocks(
+                tab_width,
                 &preview.inline,
                 &preview.inline_blocks,
                 &context(self, DiffTextRegion::Inline, 2),
             ),
             DiffViewMode::Split => rows::render_markdown_diff_split(
+                tab_width,
                 &preview,
                 &context(self, DiffTextRegion::SplitLeft, 0),
                 &context(self, DiffTextRegion::SplitRight, 1),

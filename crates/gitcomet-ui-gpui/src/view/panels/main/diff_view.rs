@@ -1822,6 +1822,7 @@ impl MainPaneView {
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         self.sync_display_tab_width(cx);
+        let tab_width = self.display_tab_width;
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
@@ -2437,6 +2438,7 @@ impl MainPaneView {
                                     let image_root = self.markdown_preview_image_root();
                                     let drawn_pictures = rows::MarkdownDrawnPictures::default();
                                     let body = rows::render_markdown_document(
+                                        tab_width,
                                         &document,
                                         &rows::MarkdownDocumentContext {
                                             theme,

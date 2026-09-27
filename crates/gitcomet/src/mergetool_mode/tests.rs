@@ -1293,6 +1293,57 @@ fn merge_conflict_with_files_scattered_across_directories() {
 // ── Encodings ────────────────────────────────────────────────────
 
 #[test]
+fn binary_fallback_after_decoding_preserves_original_bytes() {
+    let text = b"caf\xe9\n".as_slice();
+    let binary = b"\x00\x00\xff".as_slice();
+    for (base, local, remote, expected, exit) in [
+        (text, text, binary, binary, exit_code::SUCCESS),
+        (binary, text, binary, text, exit_code::SUCCESS),
+        (binary, text, text, text, exit_code::SUCCESS),
+        (b"old\n".as_slice(), text, binary, text, exit_code::CANCELED),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path(), Some(""), "", "", "");
+        write_bytes(config.base.as_ref().unwrap(), base);
+        write_bytes(&config.local, local);
+        write_bytes(&config.remote, remote);
+        assert!(decode_merge_inputs(Some(base), local, remote).is_some());
+        let result = run_mergetool(&config).unwrap();
+        assert_eq!(result.exit_code, exit, "{}", result.stderr);
+        assert!(result.stderr.contains("binary"));
+        assert_eq!(fs::read(&config.merged).unwrap(), expected);
+    }
+}
+
+#[test]
+fn every_transcoded_merge_side_must_round_trip() {
+    let format = TextFormat {
+        encoding: gitcomet_core::text_format::TextEncoding::from_label("shift_jis").unwrap(),
+        bom: false,
+    };
+    let clean = gitcomet_core::text_format::encode("日本語の文章です。\n", format)
+        .unwrap()
+        .into_owned();
+    let mut duplicate = clean.clone();
+    duplicate.extend_from_slice(b"\x87\x90\n");
+    assert!(decode_merge_inputs(Some(&clean), &clean, &clean).is_some());
+    for lossy_side in 0..3 {
+        let mut sides = [clean.as_slice(); 3];
+        sides[lossy_side] = &duplicate;
+        assert!(decode_merge_inputs(Some(sides[0]), sides[1], sides[2]).is_none());
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(tmp.path(), Some(""), "", "", "");
+    write_bytes(config.base.as_ref().unwrap(), &clean);
+    write_bytes(&config.local, &clean);
+    write_bytes(&config.remote, &duplicate);
+    let result = run_mergetool(&config).unwrap();
+    assert_eq!(result.exit_code, exit_code::SUCCESS, "{}", result.stderr);
+    assert_eq!(fs::read(&config.merged).unwrap(), duplicate);
+}
+
+#[test]
 fn latin1_sides_merge_as_text_and_stay_latin1() {
     let tmp = tempfile::tempdir().unwrap();
     let config = make_config(tmp.path(), Some(""), "", "", "");

@@ -272,9 +272,11 @@ impl MainPaneView {
         for input in [&self.file_editor_input, &self.conflict_resolver_input] {
             input.update(cx, |input, cx| input.set_tab_size(usize::from(size), cx));
         }
-        if !crate::view::tab_width::set_tab_width(size) {
+        let width = usize::from(size);
+        if self.display_tab_width == width {
             return;
         }
+        self.display_tab_width = width;
         self.clear_diff_text_style_caches();
         self.clear_diff_text_projected_highlights();
         self.clear_conflict_diff_style_caches();

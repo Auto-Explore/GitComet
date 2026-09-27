@@ -180,6 +180,79 @@ fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool
 }
 
 #[gpui::test]
+async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
+    std::fs::write(workdir.path().join("other.txt"), "other\n").unwrap();
+    let repo_id = gitcomet_state::model::RepoId(9510);
+    let state =
+        |attributes, encoding| file_state(repo_id, workdir.path(), true, attributes, encoding);
+    show(cx, &view, state(Loadable::NotLoaded, None), true);
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.set_auto_save_file_edits(false, cx);
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "edit ", cx);
+            });
+            pane.on_file_editor_edited(cx);
+        });
+    });
+    show(
+        cx,
+        &view,
+        file_state_for_path(
+            repo_id,
+            workdir.path(),
+            "other.txt",
+            true,
+            Loadable::NotLoaded,
+            None,
+        ),
+        true,
+    );
+    show(cx, &view, state(Loadable::Loading, None), true);
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.file_editor_input.read(app).text(), "edit café\n");
+        assert!(pane.file_editor_decode_key.is_none());
+    });
+    let attributes = Arc::new(TextAttributes::default());
+    show(
+        cx,
+        &view,
+        state(Loadable::Ready(attributes.clone()), None),
+        true,
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert_eq!(pane.file_editor_input.read(cx).text(), "edit café\n");
+            assert!(pane.file_editor_is_dirty());
+            assert!(pane.file_editor_decode_key.is_some());
+            pane.save_file_editor_buffer(cx);
+            assert!(!pane.file_editor_is_dirty());
+        });
+    });
+    show(
+        cx,
+        &view,
+        state(Loadable::Ready(attributes), Some(koi8())),
+        true,
+    );
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.file_editor_input.read(app).text(), "cafИ\n");
+        assert_eq!(
+            pane.file_editor_text_format.unwrap().format.encoding,
+            koi8()
+        );
+    });
+}
+
+#[gpui::test]
 async fn failed_encoding_autosave_preserves_edits_across_navigation(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     check_unsaved_buffer_roundtrip(cx, true);

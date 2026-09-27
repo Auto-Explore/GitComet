@@ -1099,6 +1099,7 @@ fn worktree_encoding_to_git(
     full: &Path,
     attributes: &gitcomet_core::text_format::TextAttributes,
 ) -> Result<Vec<u8>> {
+    use gix::error::ErrorExt as _;
     use gix::filter::plumbing::eol;
 
     let raw = std::fs::read(full).map_err(io_err_to_error)?;
@@ -1121,14 +1122,11 @@ fn worktree_encoding_to_git(
     let index_blob = index
         .entry_by_path(index_path.as_ref())
         .map(|entry| entry.id);
-    let mut index_object = |buf: &mut Vec<u8>| -> std::result::Result<
-        Option<()>,
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    let mut index_object = |buf: &mut Vec<u8>| -> gix::ExnResult<Option<()>> {
         let Some(id) = index_blob else {
             return Ok(None);
         };
-        let object = repo.find_object(id)?;
+        let object = repo.find_object(id).map_err(|error| error.raise_erased())?;
         buf.clear();
         buf.extend_from_slice(&object.data);
         Ok(Some(()))

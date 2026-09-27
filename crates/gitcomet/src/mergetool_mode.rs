@@ -1,5 +1,7 @@
 use crate::cli::{MergetoolConfig, exit_code};
-use gitcomet_core::text_format::{SideKind, TextAttributes, TextFormat, decode, decode_bytes};
+use gitcomet_core::text_format::{
+    SideKind, TextAttributes, TextFormat, decode, decode_bytes, round_trips,
+};
 use gitcomet_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
     conflict_session::try_autosolve_merge_plan,
@@ -49,15 +51,21 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         .transpose()?;
 
     // Text in another encoding merges as UTF-8 and is written back as it was.
+    // Keep the original bytes for fallback if any decoded side is binary.
     let decoded = decode_merge_inputs(base_bytes.as_deref(), &local_bytes, &remote_bytes);
-    let (base_bytes, local_bytes, remote_bytes, output_format) = match decoded {
+    let (merge_base, merge_local, merge_remote, output_format) = match &decoded {
         Some((base, local, remote, format)) => (
-            base.map(String::into_bytes),
-            local.into_bytes(),
-            remote.into_bytes(),
-            Some(format),
+            base.as_deref().map(str::as_bytes),
+            local.as_bytes(),
+            remote.as_bytes(),
+            Some(*format),
         ),
-        None => (base_bytes, local_bytes, remote_bytes, None),
+        None => (
+            base_bytes.as_deref(),
+            local_bytes.as_slice(),
+            remote_bytes.as_slice(),
+            None,
+        ),
     };
     let encode_output = |text: &str| -> Result<Vec<u8>, String> {
         match output_format {
@@ -79,9 +87,9 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
 
     // Run the 3-way merge algorithm with byte-level binary detection.
     let plan = match build_merge_plan_bytes_with_optional_base(
-        base_bytes.as_deref(),
-        &local_bytes,
-        &remote_bytes,
+        merge_base,
+        merge_local,
+        merge_remote,
         &options,
     ) {
         Ok(result) => result,
@@ -159,24 +167,27 @@ fn decode_merge_inputs(
         return None;
     }
     let attributes = TextAttributes::default();
-    let local_format = decode_bytes(local, SideKind::Worktree, &attributes, None).format;
-    if !local_format.is_writable() {
+    let decoded_local = decode_bytes(local, SideKind::Worktree, &attributes, None);
+    if !decoded_local.format.is_writable() {
         return None;
     }
-    let encoding = local_format.format.encoding;
+    let output_format = decoded_local.format.format;
+    let encoding = output_format.encoding;
     let decode_side = |bytes: &[u8]| -> Option<String> {
         let bom = encoding.bom().is_some_and(|bom| bytes.starts_with(bom));
-        let decoded = decode(bytes, TextFormat { encoding, bom });
-        (!decoded.malformed).then(|| decoded.text.into_owned())
+        let format = TextFormat { encoding, bom };
+        let decoded = decode(bytes, format);
+        (!decoded.malformed && round_trips(bytes, &decoded.text, format))
+            .then(|| decoded.text.into_owned())
     };
     Some((
         match base {
             Some(base) => Some(decode_side(base)?),
             None => None,
         },
-        decode_side(local)?,
+        decoded_local.text.into_owned(),
         decode_side(remote)?,
-        local_format.format,
+        output_format,
     ))
 }
 

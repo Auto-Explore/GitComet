@@ -193,11 +193,13 @@ pub(in crate::view) fn whitespace_visible_line_styled_text(
 }
 
 pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
+    tab_width: usize,
     styled: &CachedDiffStyledText,
     raw_text: &str,
 ) -> CachedDiffStyledText {
     if raw_text.contains('\t') && styled.text.as_ref() != raw_text {
-        let raw_highlights = expanded_highlights_to_raw_text(raw_text, styled.highlights.as_ref());
+        let raw_highlights =
+            expanded_highlights_to_raw_text(tab_width, raw_text, styled.highlights.as_ref());
         let (text, highlights) =
             whitespace_visible_line_text_and_highlights(raw_text, &raw_highlights);
         let text_hash = hash_text_content(text.as_ref());
@@ -214,7 +216,11 @@ pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
 }
 
 #[cfg(test)]
-pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: usize) -> usize {
+pub(in crate::view) fn diff_wrap_row_count_for_text(
+    tab_width: usize,
+    text: &str,
+    wrap_columns: usize,
+) -> usize {
     if text.is_empty() {
         return 1;
     }
@@ -224,9 +230,13 @@ pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: us
     let mut count = 0usize;
     let wrap_columns = wrap_columns.max(1);
     while row_start < text.len() {
-        let Some((_, next_start)) =
-            diff_wrap_next_range_for_text(text, wrap_columns, row_start, &mut line_column)
-        else {
+        let Some((_, next_start)) = diff_wrap_next_range_for_text(
+            tab_width,
+            text,
+            wrap_columns,
+            row_start,
+            &mut line_column,
+        ) else {
             break;
         };
         count += 1;
@@ -240,6 +250,7 @@ pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: us
 
 #[cfg(test)]
 pub(in crate::view) fn diff_wrap_range_for_text(
+    tab_width: usize,
     text: &str,
     wrap_columns: usize,
     wrap_ix: usize,
@@ -253,8 +264,13 @@ pub(in crate::view) fn diff_wrap_range_for_text(
     let mut line_column = 0usize;
     let wrap_columns = wrap_columns.max(1);
     while row_start < text.len() {
-        let (range, next_start) =
-            diff_wrap_next_range_for_text(text, wrap_columns, row_start, &mut line_column)?;
+        let (range, next_start) = diff_wrap_next_range_for_text(
+            tab_width,
+            text,
+            wrap_columns,
+            row_start,
+            &mut line_column,
+        )?;
         if row_ix == wrap_ix {
             return Some(range);
         }
@@ -302,6 +318,7 @@ pub(in crate::view) fn slice_cached_diff_styled_text(
 }
 
 pub(in crate::view) fn diff_wrap_ranges_for_text(
+    tab_width: usize,
     text: &str,
     wrap_columns: usize,
 ) -> Vec<Range<usize>> {
@@ -315,9 +332,13 @@ pub(in crate::view) fn diff_wrap_ranges_for_text(
     let mut line_column = 0usize;
 
     while row_start < text.len() {
-        let Some((range, next_start)) =
-            diff_wrap_next_range_for_text(text, wrap_columns, row_start, &mut line_column)
-        else {
+        let Some((range, next_start)) = diff_wrap_next_range_for_text(
+            tab_width,
+            text,
+            wrap_columns,
+            row_start,
+            &mut line_column,
+        ) else {
             break;
         };
         ranges.push(range);
@@ -337,6 +358,7 @@ pub(in crate::view) fn diff_wrap_ranges_for_text(
 /// at `row_start` — a tab's width depends on it — and is advanced to the
 /// column where the next row starts.
 fn diff_wrap_next_range_for_text(
+    tab_width: usize,
     text: &str,
     wrap_columns: usize,
     row_start: usize,
@@ -358,7 +380,7 @@ fn diff_wrap_next_range_for_text(
     for (rel_start, ch) in text[row_start..].char_indices() {
         let start = row_start + rel_start;
         let char_end = start + ch.len_utf8();
-        let width = crate::view::tab_width::char_columns(ch, end_line_column);
+        let width = crate::view::tab_width::char_columns(tab_width, ch, end_line_column);
         if column > 0 && column + width > wrap_columns {
             break;
         }
@@ -409,7 +431,7 @@ fn diff_wrap_next_range_for_text(
     } else {
         // A single character wider than the row: count it from the start.
         let ch = text[row_start..].chars().next()?;
-        *line_column + crate::view::tab_width::char_columns(ch, *line_column)
+        *line_column + crate::view::tab_width::char_columns(tab_width, ch, *line_column)
     };
 
     Some((row_start..next_start, next_start))
@@ -423,6 +445,7 @@ fn clamp_to_char_boundary(text: &str, mut ix: usize) -> usize {
 }
 
 fn expanded_highlights_to_raw_text(
+    tab_width: usize,
     raw_text: &str,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
@@ -431,8 +454,8 @@ fn expanded_highlights_to_raw_text(
     let mut column = 0usize;
     for (raw_start, ch) in raw_text.char_indices() {
         let raw_end = raw_start + ch.len_utf8();
-        let expanded_len = crate::view::tab_width::char_expanded_len(ch, column);
-        column += crate::view::tab_width::char_columns(ch, column);
+        let expanded_len = crate::view::tab_width::char_expanded_len(tab_width, ch, column);
+        column += crate::view::tab_width::char_columns(tab_width, ch, column);
         for _ in 0..expanded_len {
             expanded_to_raw.push(raw_end);
         }
@@ -682,6 +705,7 @@ impl SingleLineStyledTextCache {
 
     fn key_for(
         &mut self,
+        tab_width: usize,
         theme: AppTheme,
         language: DiffSyntaxLanguage,
         mode: DiffSyntaxMode,
@@ -689,7 +713,7 @@ impl SingleLineStyledTextCache {
         source_identity: Option<DiffTextSourceIdentity>,
     ) -> SingleLineStyledTextCacheKey {
         SingleLineStyledTextCacheKey {
-            tab_width: crate::view::tab_width::tab_width(),
+            tab_width,
             language,
             mode,
             theme_signature: self.theme_signature(theme),
@@ -699,12 +723,13 @@ impl SingleLineStyledTextCache {
 
     fn prepared_key_for(
         &mut self,
+        tab_width: usize,
         theme: AppTheme,
         text: &str,
         tokens: &Arc<[syntax::SyntaxToken]>,
     ) -> PreparedReadyLineStyledTextCacheKey {
         PreparedReadyLineStyledTextCacheKey {
-            tab_width: crate::view::tab_width::tab_width(),
+            tab_width,
             theme_signature: self.theme_signature(theme),
             source_ptr: text.as_ptr() as usize,
             source_len: text.len(),
@@ -715,6 +740,7 @@ impl SingleLineStyledTextCache {
 
     fn word_highlighted_key_for(
         &mut self,
+        tab_width: usize,
         theme: AppTheme,
         language: Option<DiffSyntaxLanguage>,
         mode: DiffSyntaxMode,
@@ -723,7 +749,7 @@ impl SingleLineStyledTextCache {
         word_ranges: &[Range<usize>],
     ) -> SingleLineWordHighlightedTextCacheKey {
         SingleLineWordHighlightedTextCacheKey {
-            tab_width: crate::view::tab_width::tab_width(),
+            tab_width,
             language,
             mode,
             theme_signature: self.theme_signature(theme),
@@ -1100,8 +1126,10 @@ mod tests {
 
     #[test]
     fn diff_wrap_ranges_prefer_word_boundaries() {
+        let tab_width = 4;
+
         let text = "alpha beta gamma";
-        let rows = diff_wrap_ranges_for_text(text, 9)
+        let rows = diff_wrap_ranges_for_text(tab_width, text, 9)
             .into_iter()
             .map(|range| text[range].to_string())
             .collect::<Vec<_>>();
@@ -1111,11 +1139,13 @@ mod tests {
 
     #[test]
     fn diff_wrap_ranges_keep_a_word_that_ends_on_the_column_boundary() {
+        let tab_width = 4;
+
         // "alpha beta" is exactly 10 columns and the next character is a space,
         // so the row is not splitting a word: giving "beta" back to the next row
         // would wrap the line four columns short of the width it had.
         let text = "alpha beta gamma";
-        let rows = diff_wrap_ranges_for_text(text, 10)
+        let rows = diff_wrap_ranges_for_text(tab_width, text, 10)
             .into_iter()
             .map(|range| text[range].to_string())
             .collect::<Vec<_>>();
@@ -1125,9 +1155,11 @@ mod tests {
 
     #[test]
     fn diff_wrap_ranges_tile_the_line_and_respect_the_column_budget() {
+        let tab_width = 4;
+
         let text = "alpha beta gamma delta";
         for columns in 1..=text.len() + 4 {
-            let ranges = diff_wrap_ranges_for_text(text, columns);
+            let ranges = diff_wrap_ranges_for_text(tab_width, text, columns);
             let joined = ranges
                 .iter()
                 .cloned()
@@ -1148,8 +1180,10 @@ mod tests {
 
     #[test]
     fn diff_wrap_ranges_hard_break_long_words() {
+        let tab_width = 4;
+
         let text = "abcdefghijkl";
-        let rows = diff_wrap_ranges_for_text(text, 5)
+        let rows = diff_wrap_ranges_for_text(tab_width, text, 5)
             .into_iter()
             .map(|range| text[range].to_string())
             .collect::<Vec<_>>();
@@ -1159,47 +1193,65 @@ mod tests {
 
     #[test]
     fn diff_wrap_ranges_count_tabs_to_their_tab_stop() {
+        let tab_width = 4;
+
         // At column 3 the tab takes one column, so "aaa\t" fills a row of 4.
         let text = "aaa\tbbb";
-        let rows = diff_wrap_ranges_for_text(text, 4)
+        let rows = diff_wrap_ranges_for_text(tab_width, text, 4)
             .into_iter()
             .map(|range| text[range].to_string())
             .collect::<Vec<_>>();
         assert_eq!(rows, ["aaa\t", "bbb"]);
-        assert_eq!(diff_wrap_row_count_for_text(text, 4), 2);
+        assert_eq!(diff_wrap_row_count_for_text(tab_width, text, 4), 2);
 
         // A tab at column 0 takes the whole row.
         let text = "\tbbb";
-        let rows = diff_wrap_ranges_for_text(text, 4)
+        let rows = diff_wrap_ranges_for_text(tab_width, text, 4)
             .into_iter()
             .map(|range| text[range].to_string())
             .collect::<Vec<_>>();
         assert_eq!(rows, ["\t", "bbb"]);
-        assert_eq!(diff_wrap_range_for_text(text, 4, 1), Some(1..4));
+        assert_eq!(diff_wrap_range_for_text(tab_width, text, 4, 1), Some(1..4));
     }
 
     #[test]
     fn diff_wrap_range_matches_full_range_builder() {
+        let tab_width = 4;
+
         let text = "alpha beta γamma\nnext\trow";
-        let ranges = diff_wrap_ranges_for_text(text, 9);
+        let ranges = diff_wrap_ranges_for_text(tab_width, text, 9);
 
         for (wrap_ix, range) in ranges.iter().cloned().enumerate() {
             assert!(text.is_char_boundary(range.start));
             assert!(text.is_char_boundary(range.end));
-            assert_eq!(diff_wrap_range_for_text(text, 9, wrap_ix), Some(range));
+            assert_eq!(
+                diff_wrap_range_for_text(tab_width, text, 9, wrap_ix),
+                Some(range)
+            );
         }
-        assert_eq!(diff_wrap_row_count_for_text(text, 9), ranges.len());
-        assert_eq!(diff_wrap_range_for_text(text, 9, ranges.len()), None);
+        assert_eq!(
+            diff_wrap_row_count_for_text(tab_width, text, 9),
+            ranges.len()
+        );
+        assert_eq!(
+            diff_wrap_range_for_text(tab_width, text, 9, ranges.len()),
+            None
+        );
     }
 
     #[test]
     fn whitespace_visible_line_styled_text_for_raw_preserves_tab_markers() {
+        let tab_width = 4;
+
         let style = gpui::HighlightStyle::default();
-        let styled =
-            build_cached_diff_styled_text_from_relative_highlights("a b\t", &[(3..4, style)]);
+        let styled = build_cached_diff_styled_text_from_relative_highlights(
+            tab_width,
+            "a b\t",
+            &[(3..4, style)],
+        );
 
         assert_eq!(styled.text.as_ref(), "a b ");
-        let visible = whitespace_visible_line_styled_text_for_raw(&styled, "a b\t");
+        let visible = whitespace_visible_line_styled_text_for_raw(tab_width, &styled, "a b\t");
 
         assert_eq!(visible.text.as_ref(), "a·b→↵");
         assert_eq!(visible.highlights[0].0, 4..7);
@@ -1207,7 +1259,10 @@ mod tests {
 
     #[test]
     fn build_segments_fast_path_skips_syntax_work() {
-        let segments = build_diff_text_segments("a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
+        let tab_width = 4;
+
+        let segments =
+            build_diff_text_segments(tab_width, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text.as_ref(), "a   b");
         assert!(!segments[0].in_word);
@@ -1217,9 +1272,19 @@ mod tests {
 
     #[test]
     fn build_cached_styled_text_plain_has_no_highlights() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
-        let styled =
-            build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
+        let styled = build_cached_diff_styled_text(
+            tab_width,
+            theme,
+            "a\tb",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
         assert_eq!(styled.text.as_ref(), "a   b");
         assert!(styled.highlights.is_empty());
         assert_eq!(styled.highlights_hash, 0);
@@ -1227,18 +1292,29 @@ mod tests {
 
     #[test]
     fn build_segments_does_not_panic_on_non_char_boundary_ranges() {
+        let tab_width = 4;
+
         // This can happen if token ranges are computed in bytes that don't align to UTF-8
         // boundaries. We should never panic during diff rendering.
         let text = "aé"; // 'é' is 2 bytes in UTF-8
         let ranges = vec![Range { start: 1, end: 2 }];
-        let segments =
-            build_diff_text_segments(text, &ranges, "", None, DiffSyntaxMode::Auto, None);
+        let segments = build_diff_text_segments(
+            tab_width,
+            text,
+            &ranges,
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text.as_ref(), text);
     }
 
     #[test]
     fn styled_text_highlights_cover_combined_ranges() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let segments = vec![
             CachedDiffTextSegment {
@@ -1265,6 +1341,7 @@ mod tests {
         // Hashing highlights is used for caching shaped layouts; it should be stable for identical
         // highlight sequences within a process.
         let styled = build_cached_diff_styled_text(
+            tab_width,
             theme,
             "abcdef",
             &[],
@@ -1279,8 +1356,11 @@ mod tests {
 
     #[test]
     fn cached_styled_text_highlights_all_query_occurrences() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let styled = build_cached_diff_styled_text(
+            tab_width,
             theme,
             "abxxab",
             &[],
@@ -1459,6 +1539,8 @@ mod tests {
 
     #[test]
     fn prepared_yaml_fast_path_matches_legacy_segment_builder_for_real_diff_lines() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let text = concat!(
             "name: Deployment CI\n",
@@ -1514,6 +1596,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("prepared YAML line {line_ix} should be available"));
 
             let current = match build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                tab_width,
                 theme,
                 line_text,
                 &[],
@@ -1537,6 +1620,7 @@ mod tests {
             let legacy = segments_to_cached_styled_text(
                 theme,
                 &build_diff_text_segments(
+                    tab_width,
                     line_text,
                     &[],
                     "",
@@ -1749,11 +1833,14 @@ mod tests {
     }
     #[test]
     fn cached_styled_text_from_relative_highlights_expands_tabs_and_remaps_ranges() {
+        let tab_width = 4;
+
         let style = gpui::HighlightStyle {
             color: Some(gpui::hsla(0.33, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let styled = build_cached_diff_styled_text_from_relative_highlights(
+            tab_width,
             "\tlet value",
             &[(0..1, style), (1..4, style)],
         );
@@ -1766,6 +1853,8 @@ mod tests {
 
     #[test]
     fn cached_styled_text_from_relative_highlights_handles_multibyte_utf8_with_tabs() {
+        let tab_width = 4;
+
         let style = gpui::HighlightStyle {
             color: Some(gpui::hsla(0.5, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
@@ -1773,6 +1862,7 @@ mod tests {
         // "→" is 3 bytes (U+2192), tab is 1 byte.
         // Input: "\t→x" — 5 bytes: tab(0..1), arrow(1..4), x(4..5)
         let styled = build_cached_diff_styled_text_from_relative_highlights(
+            tab_width,
             "\t\u{2192}x",
             &[(0..1, style), (1..4, style), (4..5, style)],
         );
@@ -1790,11 +1880,14 @@ mod tests {
 
     #[test]
     fn cached_styled_text_from_relative_highlights_no_tabs_passes_through() {
+        let tab_width = 4;
+
         let style = gpui::HighlightStyle {
             color: Some(gpui::hsla(0.5, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let styled = build_cached_diff_styled_text_from_relative_highlights(
+            tab_width,
             "let x = 1;",
             &[(0..3, style), (8..9, style)],
         );
@@ -1807,8 +1900,11 @@ mod tests {
 
     #[test]
     fn cached_styled_text_syntax_only_expands_tabs_without_segment_build() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let styled = build_cached_diff_styled_text(
+            tab_width,
             theme,
             "\tlet value = 42;",
             &[],
@@ -1835,10 +1931,9 @@ mod tests {
         let text = "\tlet value = 42;";
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
         assert!(syntax::syntax_tokens_for_prepared_document_line(document.inner, 0).is_some());
-        let previous_width = crate::view::tab_width::tab_width() as u8;
-        for width in [4, 8, 2, 4] {
-            crate::view::tab_width::set_tab_width(width);
+        for tab_width in [4, 8, 2, 4] {
             let plain = build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 text,
                 &[],
@@ -1848,6 +1943,7 @@ mod tests {
                 None,
             );
             let words = build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 text,
                 &[5..10],
@@ -1857,7 +1953,7 @@ mod tests {
                 None,
             );
             let prepared =
-                match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(tab_width,
                     theme,
                     &palette,
                     PreparedDiffTextBuildRequest {
@@ -1880,7 +1976,7 @@ mod tests {
                     PreparedDocumentLineStyledText::Cacheable(styled) => styled,
                     PreparedDocumentLineStyledText::Pending(_) => panic!("prepared line is ready"),
                 };
-            let width = usize::from(width);
+            let width = tab_width;
             for (kind, styled) in [("syntax", plain), ("word", words), ("prepared", prepared)] {
                 assert_eq!(
                     styled.text.as_ref(),
@@ -1896,15 +1992,17 @@ mod tests {
                 );
             }
         }
-        crate::view::tab_width::set_tab_width(previous_width);
     }
 
     #[test]
     fn repeated_syntax_only_line_styled_text_reuses_cached_highlights() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let text = "let cached_value = 42;";
 
         let first = build_cached_diff_styled_text(
+            tab_width,
             theme,
             text,
             &[],
@@ -1914,6 +2012,7 @@ mod tests {
             None,
         );
         let second = build_cached_diff_styled_text(
+            tab_width,
             theme,
             text,
             &[],
@@ -1935,11 +2034,14 @@ mod tests {
 
     #[test]
     fn repeated_word_highlighted_line_styled_text_reuses_cached_highlights() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let text = "let cached_value = replacement_value;";
         let word_ranges = [4..16, 19..36];
 
         let first = build_cached_diff_styled_text(
+            tab_width,
             theme,
             text,
             &word_ranges,
@@ -1949,6 +2051,7 @@ mod tests {
             None,
         );
         let second = build_cached_diff_styled_text(
+            tab_width,
             theme,
             text,
             &word_ranges,
@@ -1970,6 +2073,8 @@ mod tests {
 
     #[test]
     fn repeated_prepared_ready_line_styled_text_reuses_cached_text_and_highlights() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let highlight_palette = syntax_highlight_palette(theme);
         let text = "let prepared_cached_value = 42;";
@@ -1998,6 +2103,7 @@ mod tests {
 
         let first =
             match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                tab_width,
                 theme,
                 &highlight_palette,
                 request,
@@ -2009,6 +2115,7 @@ mod tests {
             };
         let second =
             match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                tab_width,
                 theme,
                 &highlight_palette,
                 request,
@@ -2037,6 +2144,8 @@ mod tests {
 
     #[test]
     fn prepared_ready_line_styled_text_cache_respects_full_document_context() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let highlight_palette = syntax_highlight_palette(theme);
         let line_text = "still comment */ let x = 1;";
@@ -2066,6 +2175,7 @@ mod tests {
 
         let build = |document, line_ix| {
             match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                tab_width,
                 theme,
                 &highlight_palette,
                 PreparedDiffTextBuildRequest {
@@ -2116,11 +2226,14 @@ mod tests {
 
     #[test]
     fn syntax_only_line_styled_text_cache_is_scoped_by_theme() {
+        let tab_width = 4;
+
         let text = "let themed_value = 42;";
         let dark_theme = AppTheme::gitcomet_dark();
         let light_theme = AppTheme::gitcomet_light();
 
         let dark = build_cached_diff_styled_text(
+            tab_width,
             dark_theme,
             text,
             &[],
@@ -2130,6 +2243,7 @@ mod tests {
             None,
         );
         let light = build_cached_diff_styled_text(
+            tab_width,
             light_theme,
             text,
             &[],
@@ -2349,11 +2463,14 @@ mod tests {
 
     #[test]
     fn nonblocking_prepared_line_helper_transitions_from_pending_to_cacheable() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let text = "let value = 1;";
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
 
         let first = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+            tab_width,
             theme,
             text,
             &[],
@@ -2385,6 +2502,7 @@ mod tests {
         }
 
         let second = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+            tab_width,
             theme,
             text,
             &[],
@@ -2741,8 +2859,11 @@ mod tests {
 
     #[test]
     fn query_overlay_honors_search_options() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let base = build_cached_diff_styled_text(
+            tab_width,
             theme,
             "Render render cat concat cat",
             &[],
@@ -2803,16 +2924,34 @@ mod tests {
 
     #[test]
     fn query_overlay_skips_literal_multiline_row_fragments_without_stream_match_context() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
 
-        let first_base =
-            build_cached_diff_styled_text(theme, "foo", &[], "", None, DiffSyntaxMode::Auto, None);
+        let first_base = build_cached_diff_styled_text(
+            tab_width,
+            theme,
+            "foo",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
         let first = query_overlay_for_test(theme, &first_base, "foo\nbar", Default::default());
         assert!(Arc::ptr_eq(&first.highlights, &first_base.highlights));
         assert_eq!(first.highlights_hash, first_base.highlights_hash);
 
-        let second_base =
-            build_cached_diff_styled_text(theme, "bar", &[], "", None, DiffSyntaxMode::Auto, None);
+        let second_base = build_cached_diff_styled_text(
+            tab_width,
+            theme,
+            "bar",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
         let second = query_overlay_for_test(theme, &second_base, "foo\nbar", Default::default());
         assert!(Arc::ptr_eq(&second.highlights, &second_base.highlights));
         assert_eq!(second.highlights_hash, second_base.highlights_hash);
@@ -2880,8 +3019,11 @@ mod tests {
     /// It wears the same token the editable buffer's selection does.
     #[test]
     fn query_overlay_marks_the_current_match_with_the_selection_token() {
+        let tab_width = 4;
+
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let base = build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 "alpha needle beta",
                 &[],
@@ -2934,6 +3076,8 @@ mod tests {
 
     #[test]
     fn query_overlay_reuses_prebuilt_regex_matcher_for_multiple_rows() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(
             r"r.n.e.",
@@ -2943,6 +3087,7 @@ mod tests {
             },
         );
         let first_base = build_cached_diff_styled_text(
+            tab_width,
             theme,
             "Render first",
             &[],
@@ -2952,6 +3097,7 @@ mod tests {
             None,
         );
         let second_base = build_cached_diff_styled_text(
+            tab_width,
             theme,
             "render second",
             &[],

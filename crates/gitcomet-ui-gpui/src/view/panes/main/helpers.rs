@@ -3196,6 +3196,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_word_wrap: bool,
     /// The settings' tab size; a file's attributes or the user's choice win.
     pub(in crate::view) default_tab_size: u8,
+    /// Width used by this pane's current layout and selection geometry.
+    pub(in crate::view) display_tab_width: usize,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
     pub(in crate::view) diff_content_mode: DiffContentMode,

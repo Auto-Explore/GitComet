@@ -731,10 +731,7 @@ impl MainPaneView {
             self.reread_file_editor_from_disk(cx);
             return;
         }
-        let Some(current) = self.file_editor_decode_key else {
-            return;
-        };
-        if current == key {
+        if self.file_editor_decode_key == Some(key) {
             return;
         }
         if self.file_editor_dirty {

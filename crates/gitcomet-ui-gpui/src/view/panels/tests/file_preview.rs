@@ -1788,6 +1788,8 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
 fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     cx: &mut gpui::TestAppContext,
 ) {
+    let tab_width = 4;
+
     const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
     const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
@@ -1963,7 +1965,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
             .worktree_preview_line_raw_text(0)
             .expect("streamed preview line should be addressable");
         let (_, materialized_metrics) = crate::perf_alloc::measure_allocations(|| {
-            let full_text = crate::view::file_diff_display_text(&raw_text);
+            let full_text = crate::view::file_diff_display_text(tab_width, &raw_text);
             std::hint::black_box(full_text.len());
         });
         assert!(

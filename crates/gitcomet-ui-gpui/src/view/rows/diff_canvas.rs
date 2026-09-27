@@ -1548,10 +1548,11 @@ fn whitespace_marker_len(ch: char) -> usize {
 }
 
 pub(in crate::view) fn whitespace_visible_diff_offset_map(
+    tab_width: usize,
     text: &str,
     append_eol_marker: bool,
 ) -> DiffTextOffsetMap {
-    let source_len = crate::view::diff_utils::diff_text_display_len(text);
+    let source_len = crate::view::diff_utils::diff_text_display_len(tab_width, text);
     let mut display_len = text.chars().map(whitespace_marker_len).sum::<usize>();
     let append_synthetic_eol = append_eol_marker && !text.ends_with('\n');
     if append_synthetic_eol {
@@ -1567,8 +1568,10 @@ pub(in crate::view) fn whitespace_visible_diff_offset_map(
     for ch in text.chars() {
         let source_start = source;
         let display_start = display;
-        source = source.saturating_add(crate::view::tab_width::char_expanded_len(ch, column));
-        column += crate::view::tab_width::char_columns(ch, column);
+        source = source.saturating_add(crate::view::tab_width::char_expanded_len(
+            tab_width, ch, column,
+        ));
+        column += crate::view::tab_width::char_columns(tab_width, ch, column);
         display = display.saturating_add(whitespace_marker_len(ch));
 
         if let Some(slot) = display_to_source.get_mut(display_start) {
@@ -1880,6 +1883,7 @@ fn streamed_diff_text_relative_prepared_highlights(
 }
 
 fn build_streamed_diff_slice_styled_text(
+    tab_width: usize,
     theme: AppTheme,
     spec: &StreamedDiffTextPaintSpec,
     requested_slice_range: &Range<usize>,
@@ -1893,6 +1897,7 @@ fn build_streamed_diff_slice_styled_text(
     let mut pending = false;
     let mut base = match &spec.syntax {
         StreamedDiffTextSyntaxSource::None => build_cached_diff_styled_text(
+            tab_width,
             theme,
             slice_text_ref,
             &[],
@@ -1910,10 +1915,12 @@ fn build_streamed_diff_slice_styled_text(
                 resolved_slice_range.clone(),
             ) {
                 Some(highlights) => build_cached_diff_styled_text_from_relative_highlights(
+                    tab_width,
                     slice_text_ref,
                     highlights.as_slice(),
                 ),
                 None => build_cached_diff_styled_text(
+                    tab_width,
                     theme,
                     slice_text_ref,
                     &[],
@@ -1968,11 +1975,13 @@ fn build_streamed_diff_slice_styled_text(
                         ) {
                             Some(highlights) => {
                                 build_cached_diff_styled_text_from_relative_highlights(
+                                    tab_width,
                                     slice_text_ref,
                                     highlights.as_slice(),
                                 )
                             }
                             None => build_cached_diff_styled_text(
+                                tab_width,
                                 theme,
                                 slice_text_ref,
                                 &[],
@@ -1984,12 +1993,14 @@ fn build_streamed_diff_slice_styled_text(
                         }
                     } else {
                         build_cached_diff_styled_text_from_relative_highlights(
+                            tab_width,
                             slice_text_ref,
                             relative.as_slice(),
                         )
                     }
                 }
                 None => build_cached_diff_styled_text(
+                    tab_width,
                     theme,
                     slice_text_ref,
                     &[],
@@ -2052,12 +2063,14 @@ thread_local! {
 }
 
 fn whitespace_visible_cached(
+    tab_width: usize,
     styled: &CachedDiffStyledText,
     raw_text: Option<&str>,
 ) -> (CachedDiffStyledText, DiffTextOffsetMap) {
     let key = {
         let mut hasher = FxHasher::default();
         0u8.hash(&mut hasher);
+        tab_width.hash(&mut hasher);
         styled.text_hash.hash(&mut hasher);
         styled.highlights_hash.hash(&mut hasher);
         match raw_text {
@@ -2076,12 +2089,12 @@ fn whitespace_visible_cached(
     }
     let value = match raw_text {
         Some(raw_text) => (
-            whitespace_visible_line_styled_text_for_raw(styled, raw_text),
-            whitespace_visible_diff_offset_map(raw_text, true),
+            whitespace_visible_line_styled_text_for_raw(tab_width, styled, raw_text),
+            whitespace_visible_diff_offset_map(tab_width, raw_text, true),
         ),
         None => (
             whitespace_visible_line_styled_text(styled),
-            whitespace_visible_diff_offset_map(styled.text.as_ref(), true),
+            whitespace_visible_diff_offset_map(tab_width, styled.text.as_ref(), true),
         ),
     };
     WHITESPACE_VISIBLE_TEXT_CACHE.with(|cache| {
@@ -2090,10 +2103,14 @@ fn whitespace_visible_cached(
     value
 }
 
-fn whitespace_visible_raw_cached(raw_text: &str) -> (CachedDiffStyledText, DiffTextOffsetMap) {
+fn whitespace_visible_raw_cached(
+    tab_width: usize,
+    raw_text: &str,
+) -> (CachedDiffStyledText, DiffTextOffsetMap) {
     let key = {
         let mut hasher = FxHasher::default();
         1u8.hash(&mut hasher);
+        tab_width.hash(&mut hasher);
         raw_text.hash(&mut hasher);
         hasher.finish()
     };
@@ -2102,7 +2119,7 @@ fn whitespace_visible_raw_cached(raw_text: &str) -> (CachedDiffStyledText, DiffT
     {
         return hit;
     }
-    let offset_map = whitespace_visible_diff_offset_map(raw_text, true);
+    let offset_map = whitespace_visible_diff_offset_map(tab_width, raw_text, true);
     let text = whitespace_visible_line_text(raw_text);
     let text_hash = {
         let mut hasher = FxHasher::default();
@@ -2147,6 +2164,7 @@ fn slice_cached_diff_styled_text_cached(
 }
 
 fn diff_text_paint_payload(
+    tab_width: usize,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<&StreamedDiffTextPaintSpec>,
     raw_text: Option<&str>,
@@ -2168,11 +2186,11 @@ fn diff_text_paint_payload(
 
         let mut offset_map: Option<DiffTextOffsetMap> = None;
         let styled = if let Some(styled) = styled {
-            let (visible, map) = whitespace_visible_cached(styled, raw_text);
+            let (visible, map) = whitespace_visible_cached(tab_width, styled, raw_text);
             offset_map = Some(map);
             Some(visible)
         } else if let Some(spec) = streamed_spec {
-            let (visible, map) = whitespace_visible_raw_cached(spec.raw_text.as_ref());
+            let (visible, map) = whitespace_visible_raw_cached(tab_width, spec.raw_text.as_ref());
             offset_map = Some(map);
             Some(visible)
         } else {
@@ -2244,6 +2262,7 @@ fn diff_text_paint_payload(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn inline_diff_line_row_canvas(
+    tab_width: usize,
     theme: AppTheme,
     view: Entity<MainPaneView>,
     ui_scale_percent: u32,
@@ -2268,6 +2287,7 @@ pub(super) fn inline_diff_line_row_canvas(
     stage_hover: Option<DiffStageHover>,
 ) -> AnyElement {
     let paint_payload = diff_text_paint_payload(
+        tab_width,
         styled,
         streamed_spec.as_ref(),
         raw_text,
@@ -2420,6 +2440,7 @@ pub(super) fn inline_diff_line_row_canvas(
 
             window.paint_layer(prepaint.text_bounds, |window| {
                 paint_selectable_diff_text(
+                    tab_width,
                     &view,
                     visible_ix,
                     DiffTextRegion::Inline,
@@ -2499,6 +2520,7 @@ pub(super) fn inline_diff_line_row_canvas(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_diff_line_row_canvas(
+    tab_width: usize,
     theme: AppTheme,
     view: Entity<MainPaneView>,
     ui_scale_percent: u32,
@@ -2530,6 +2552,7 @@ pub(super) fn split_diff_line_row_canvas(
     stage_hover: Option<DiffStageHover>,
 ) -> AnyElement {
     let left_payload = diff_text_paint_payload(
+        tab_width,
         left_styled,
         left_streamed_spec.as_ref(),
         left_raw_text,
@@ -2538,6 +2561,7 @@ pub(super) fn split_diff_line_row_canvas(
         wrap,
     );
     let right_payload = diff_text_paint_payload(
+        tab_width,
         right_styled,
         right_streamed_spec.as_ref(),
         right_raw_text,
@@ -2739,6 +2763,7 @@ pub(super) fn split_diff_line_row_canvas(
 
             window.paint_layer(prepaint.left_text_bounds, |window| {
                 paint_selectable_diff_text(
+                    tab_width,
                     &view,
                     visible_ix,
                     DiffTextRegion::SplitLeft,
@@ -2765,6 +2790,7 @@ pub(super) fn split_diff_line_row_canvas(
 
             window.paint_layer(prepaint.right_text_bounds, |window| {
                 paint_selectable_diff_text(
+                    tab_width,
                     &view,
                     visible_ix,
                     DiffTextRegion::SplitRight,
@@ -2857,6 +2883,7 @@ pub(super) fn split_diff_line_row_canvas(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn patch_split_column_row_canvas(
+    tab_width: usize,
     theme: AppTheme,
     view: Entity<MainPaneView>,
     ui_scale_percent: u32,
@@ -2885,6 +2912,7 @@ pub(super) fn patch_split_column_row_canvas(
         super::diff::PatchSplitColumn::Right => DiffTextRegion::SplitRight,
     };
     let paint_payload = diff_text_paint_payload(
+        tab_width,
         styled,
         streamed_spec.as_ref(),
         raw_text,
@@ -3029,6 +3057,7 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.paint_layer(prepaint.text_bounds, |window| {
                 paint_selectable_diff_text(
+                    tab_width,
                     &view,
                     visible_ix,
                     region,
@@ -3173,6 +3202,7 @@ pub(in crate::view) fn blame_gutter_row_canvas(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn worktree_preview_row_canvas(
+    tab_width: usize,
     theme: AppTheme,
     view: Entity<MainPaneView>,
     ui_scale_percent: u32,
@@ -3189,6 +3219,7 @@ pub(super) fn worktree_preview_row_canvas(
     wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
     let paint_payload = diff_text_paint_payload(
+        tab_width,
         styled,
         streamed_spec.as_ref(),
         raw_text,
@@ -3307,6 +3338,7 @@ pub(super) fn worktree_preview_row_canvas(
 
             window.paint_layer(prepaint.text_bounds, |window| {
                 paint_selectable_diff_text(
+                    tab_width,
                     &view,
                     ix,
                     DiffTextRegion::Inline,
@@ -3916,6 +3948,7 @@ fn shaped_gutter_line(
 
 #[allow(clippy::too_many_arguments)]
 fn paint_selectable_diff_text(
+    tab_width: usize,
     view: &Entity<MainPaneView>,
     visible_ix: usize,
     region: DiffTextRegion,
@@ -3999,7 +4032,7 @@ fn paint_selectable_diff_text(
             )
         });
         let (mut slice_styled, pending, resolved_slice_range) =
-            build_streamed_diff_slice_styled_text(theme, spec, &slice_range);
+            build_streamed_diff_slice_styled_text(tab_width, theme, spec, &slice_range);
         if reveal_whitespace_chars {
             let append_eol_marker = resolved_slice_range.end >= spec.raw_text.len();
             slice_styled = whitespace_visible_styled_text(&slice_styled, append_eol_marker);
@@ -4385,7 +4418,31 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_offset_cache_keeps_each_tab_width() {
+        let raw = "a\tneedle";
+        let styled = CachedDiffStyledText {
+            text: raw.into(),
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash: 12345,
+        };
+        for width in [2, 8, 2] {
+            for (text, map) in [
+                whitespace_visible_raw_cached(width, raw),
+                whitespace_visible_cached(width, &styled, Some(raw)),
+            ] {
+                assert_eq!(text.text.as_ref(), "a→needle↵");
+                assert_eq!(map.source_len(), width + "needle".len());
+                assert_eq!(map.source_offset_for_display("a→".len()), width);
+                assert_eq!(map.display_offset_for_source(width), "a→".len());
+            }
+        }
+    }
+
+    #[test]
     fn diff_text_paint_payload_reveals_whitespace_markers() {
+        let tab_width = 4;
+
         let style = HighlightStyle::default();
         let styled = CachedDiffStyledText {
             text: "a b\t".into(),
@@ -4395,6 +4452,7 @@ mod tests {
         };
 
         let payload = diff_text_paint_payload(
+            tab_width,
             Some(&styled),
             None,
             Some("a b\t"),
@@ -4418,13 +4476,22 @@ mod tests {
 
     #[test]
     fn diff_text_paint_payload_keeps_streamed_whitespace_rows_unmaterialized() {
+        let tab_width = 4;
+
         let raw = "a ".repeat((STREAMED_DIFF_TEXT_MIN_BYTES / 2).saturating_add(1));
         let spec = streamed_query_spec(raw.as_str(), "", DiffSearchOptions::default());
 
         assert!(should_stream_diff_text(Some(&spec)));
 
-        let payload =
-            diff_text_paint_payload(None, Some(&spec), None, true, DiffTextRegion::Inline, None);
+        let payload = diff_text_paint_payload(
+            tab_width,
+            None,
+            Some(&spec),
+            None,
+            true,
+            DiffTextRegion::Inline,
+            None,
+        );
 
         assert!(payload.text.is_empty());
         assert!(payload.highlights.is_empty());
@@ -4655,6 +4722,8 @@ mod tests {
 
     #[test]
     fn streamed_query_overlay_skips_whole_word_on_partial_slice() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let spec = streamed_query_spec(
             "foo_suffix",
@@ -4665,7 +4734,8 @@ mod tests {
             },
         );
 
-        let (styled, _, resolved) = build_streamed_diff_slice_styled_text(theme, &spec, &(0..3));
+        let (styled, _, resolved) =
+            build_streamed_diff_slice_styled_text(tab_width, theme, &spec, &(0..3));
 
         assert_eq!(resolved, 0..3);
         assert_eq!(styled.text.as_ref(), "foo");
@@ -4674,6 +4744,8 @@ mod tests {
 
     #[test]
     fn streamed_query_overlay_skips_regex_anchor_on_partial_slice() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let spec = streamed_query_spec(
             "prefixfoo suffix",
@@ -4684,7 +4756,8 @@ mod tests {
             },
         );
 
-        let (styled, _, resolved) = build_streamed_diff_slice_styled_text(theme, &spec, &(6..9));
+        let (styled, _, resolved) =
+            build_streamed_diff_slice_styled_text(tab_width, theme, &spec, &(6..9));
 
         assert_eq!(resolved, 6..9);
         assert_eq!(styled.text.as_ref(), "foo");
@@ -4693,6 +4766,8 @@ mod tests {
 
     #[test]
     fn streamed_query_overlay_keeps_boundary_sensitive_matches_on_full_slice() {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let spec = streamed_query_spec(
             "foo suffix",
@@ -4703,8 +4778,12 @@ mod tests {
             },
         );
 
-        let (styled, _, resolved) =
-            build_streamed_diff_slice_styled_text(theme, &spec, &(0.."foo suffix".len()));
+        let (styled, _, resolved) = build_streamed_diff_slice_styled_text(
+            tab_width,
+            theme,
+            &spec,
+            &(0.."foo suffix".len()),
+        );
 
         assert_eq!(resolved, 0.."foo suffix".len());
         assert_eq!(highlight_ranges(&styled), vec![0..3]);

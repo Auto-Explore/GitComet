@@ -7,8 +7,8 @@ pub(in crate::view) fn multiline_text_copy_capacity_hint(line_count: usize) -> u
 }
 
 /// Byte length of a line once its tabs are expanded to tab stops.
-pub(in crate::view) fn diff_text_display_len(text: &str) -> usize {
-    crate::view::tab_width::expanded_len(text)
+pub(in crate::view) fn diff_text_display_len(tab_width: usize, text: &str) -> usize {
+    crate::view::tab_width::expanded_len(tab_width, text)
 }
 
 fn scrollbar_markers_from_bucket_flags(buckets: &[u8]) -> Vec<components::ScrollbarMarker> {
@@ -1325,10 +1325,12 @@ mod tests {
 
     #[test]
     fn diff_text_display_len_expands_tabs_without_allocating() {
-        assert_eq!(diff_text_display_len("hello"), 5);
+        let tab_width = 4;
+
+        assert_eq!(diff_text_display_len(tab_width, "hello"), 5);
         // Tab stops of 4: "    wide" then a tab to column 12.
-        assert_eq!(diff_text_display_len("\twide\tcell"), 16);
-        assert_eq!(diff_text_display_len("ab\tc"), 5);
+        assert_eq!(diff_text_display_len(tab_width, "\twide\tcell"), 16);
+        assert_eq!(diff_text_display_len(tab_width, "ab\tc"), 5);
     }
 
     #[test]

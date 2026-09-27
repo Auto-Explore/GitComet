@@ -1665,7 +1665,11 @@ impl MainPaneView {
         side: DiffTextPairSide,
         pos: &DiffTextPos,
     ) -> Option<DiffTextPairMatch> {
-        let hit = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, pos.offset)?;
+        let tab_width = self.display_tab_width;
+
+        let hit = rows::prepared_diff_syntax_pair_at_display_offset(
+            tab_width, document, line_ix, pos.offset,
+        )?;
 
         let spans: Vec<DiffTextPairSpan> = hit
             .open
@@ -1701,8 +1705,11 @@ impl MainPaneView {
         side: DiffTextPairSide,
         pos: &DiffTextPos,
     ) -> FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> {
-        let ends =
-            rows::prepared_diff_syntax_occurrences_at_display_offset(document, line_ix, pos.offset);
+        let tab_width = self.display_tab_width;
+
+        let ends = rows::prepared_diff_syntax_occurrences_at_display_offset(
+            tab_width, document, line_ix, pos.offset,
+        );
         if ends.is_empty() {
             return FxHashMap::default();
         }
@@ -1944,12 +1951,16 @@ impl MainPaneView {
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> SharedString {
+        let tab_width = self.display_tab_width;
+
         let fallback = SharedString::default();
         let expand_tabs = |s: &str| -> SharedString {
             if !s.contains('\t') {
                 return SharedString::new(s);
             }
-            crate::view::tab_width::expand_tabs(s).into_owned().into()
+            crate::view::tab_width::expand_tabs(tab_width, s)
+                .into_owned()
+                .into()
         };
 
         // When markdown rendered preview is active, rows come from the
@@ -1965,7 +1976,7 @@ impl MainPaneView {
             }
             return self
                 .worktree_preview_line_raw_text(visible_ix)
-                .map(|line| file_diff_display_text(&line))
+                .map(|line| file_diff_display_text(tab_width, &line))
                 .unwrap_or(fallback);
         }
 
@@ -2004,7 +2015,7 @@ impl MainPaneView {
                         {
                             return styled.text.clone();
                         }
-                        return file_diff_display_text(&row.text);
+                        return file_diff_display_text(tab_width, &row.text);
                     }
                     DiffViewMode::Split => {
                         if !matches!(
@@ -2028,7 +2039,9 @@ impl MainPaneView {
                             DiffTextRegion::SplitRight => row.new.as_ref(),
                             DiffTextRegion::Inline => unreachable!(),
                         };
-                        return text.map(file_diff_display_text).unwrap_or(fallback);
+                        return text
+                            .map(|text| file_diff_display_text(tab_width, text))
+                            .unwrap_or(fallback);
                     }
                 },
             }
@@ -2049,7 +2062,7 @@ impl MainPaneView {
                     {
                         return styled.text.clone();
                     }
-                    return file_diff_display_text(&row.text);
+                    return file_diff_display_text(tab_width, &row.text);
                 } else if let Some(line) = self.file_diff_inline_row(mapped_ix) {
                     let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
                     if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
@@ -2102,7 +2115,9 @@ impl MainPaneView {
                 DiffTextRegion::SplitRight => row.new.as_ref(),
                 DiffTextRegion::Inline => unreachable!(),
             };
-            return text.map(file_diff_display_text).unwrap_or(fallback);
+            return text
+                .map(|text| file_diff_display_text(tab_width, text))
+                .unwrap_or(fallback);
         }
 
         let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
@@ -2138,6 +2153,8 @@ impl MainPaneView {
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> usize {
+        let tab_width = self.display_tab_width;
+
         let display_len = crate::view::diff_utils::diff_text_display_len;
 
         if self.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
@@ -2161,7 +2178,7 @@ impl MainPaneView {
             }
             return self
                 .worktree_preview_line_raw_text(source_ix)
-                .map(|line| file_diff_display_len(&line))
+                .map(|line| file_diff_display_len(tab_width, &line))
                 .unwrap_or(0);
         }
 
@@ -2186,7 +2203,7 @@ impl MainPaneView {
                         .header_display_src_ix()
                         .and_then(|src_ix| {
                             self.collapsed_diff_hunk_header_display(src_ix)
-                                .map(|display| display_len(display.as_ref()))
+                                .map(|display| display_len(tab_width, display.as_ref()))
                         })
                         .unwrap_or(0);
                 }
@@ -2203,7 +2220,7 @@ impl MainPaneView {
                         {
                             return styled.text.len();
                         }
-                        return file_diff_display_len(&row.text);
+                        return file_diff_display_len(tab_width, &row.text);
                     }
                     DiffViewMode::Split => {
                         if !matches!(
@@ -2227,7 +2244,9 @@ impl MainPaneView {
                             DiffTextRegion::SplitRight => row.new.as_ref(),
                             DiffTextRegion::Inline => unreachable!(),
                         };
-                        return text.map(file_diff_display_len).unwrap_or(0);
+                        return text
+                            .map(|text| file_diff_display_len(tab_width, text))
+                            .unwrap_or(0);
                     }
                 },
             }
@@ -2248,14 +2267,14 @@ impl MainPaneView {
                     {
                         return styled.text.len();
                     }
-                    return file_diff_display_len(&row.text);
+                    return file_diff_display_len(tab_width, &row.text);
                 } else if let Some(line) = self.file_diff_inline_row(mapped_ix) {
                     let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
                     if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
                     {
                         return styled.text.len();
                     }
-                    return display_len(diff_content_text(&line));
+                    return display_len(tab_width, diff_content_text(&line));
                 }
                 return 0;
             }
@@ -2278,7 +2297,7 @@ impl MainPaneView {
             {
                 return display.len();
             }
-            return display_len(line.text.as_ref());
+            return display_len(tab_width, line.text.as_ref());
         }
 
         match region {
@@ -2301,7 +2320,9 @@ impl MainPaneView {
                 DiffTextRegion::SplitRight => row.new.as_ref(),
                 DiffTextRegion::Inline => unreachable!(),
             };
-            return text.map(file_diff_display_len).unwrap_or(0);
+            return text
+                .map(|text| file_diff_display_len(tab_width, text))
+                .unwrap_or(0);
         }
 
         let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
@@ -2319,7 +2340,7 @@ impl MainPaneView {
                 {
                     return display.len();
                 }
-                display_len(line.text.as_ref())
+                display_len(tab_width, line.text.as_ref())
             }
             PatchSplitRow::Aligned { row, .. } => {
                 let text = match region {
@@ -2327,7 +2348,7 @@ impl MainPaneView {
                     DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
                     DiffTextRegion::Inline => unreachable!(),
                 };
-                display_len(text)
+                display_len(tab_width, text)
             }
         }
     }
@@ -2391,13 +2412,15 @@ impl MainPaneView {
         range: Range<usize>,
         expanded_tabs: &mut String,
     ) {
+        let tab_width = self.display_tab_width;
+
         if range.start >= range.end {
             return;
         }
 
         if self.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
             let text = self.diff_text_line_for_region(visible_ix, region);
-            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
             return;
         }
 
@@ -2421,6 +2444,8 @@ impl MainPaneView {
         range: Range<usize>,
         expanded_tabs: &mut String,
     ) {
+        let tab_width = self.display_tab_width;
+
         if range.start >= range.end {
             return;
         }
@@ -2441,7 +2466,13 @@ impl MainPaneView {
                 return;
             }
             if let Some(raw_text) = self.worktree_preview_line_raw_text(source_visible_ix) {
-                append_file_diff_display_text_slice(out, &raw_text, range, expanded_tabs);
+                append_file_diff_display_text_slice(
+                    tab_width,
+                    out,
+                    &raw_text,
+                    range,
+                    expanded_tabs,
+                );
             }
             return;
         }
@@ -2456,6 +2487,7 @@ impl MainPaneView {
                     ) => {
                         if let Some(row) = self.file_diff_inline_render_data(row_ix) {
                             append_file_diff_display_text_slice(
+                                tab_width,
                                 out,
                                 &row.text,
                                 range,
@@ -2478,6 +2510,7 @@ impl MainPaneView {
                                 });
                         if let Some(raw_text) = raw_text {
                             append_file_diff_display_text_slice(
+                                tab_width,
                                 out,
                                 &raw_text,
                                 range,
@@ -2490,7 +2523,7 @@ impl MainPaneView {
                 }
             }
             let text = self.diff_text_full_line_for_region(source_visible_ix, region);
-            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
             return;
         }
 
@@ -2503,7 +2536,13 @@ impl MainPaneView {
                 return;
             }
             if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
-                append_file_diff_display_text_slice(out, &row.text, range, expanded_tabs);
+                append_file_diff_display_text_slice(
+                    tab_width,
+                    out,
+                    &row.text,
+                    range,
+                    expanded_tabs,
+                );
             }
             return;
         }
@@ -2518,13 +2557,13 @@ impl MainPaneView {
                 DiffTextRegion::Inline => return,
             };
             if let Some(text) = text {
-                append_file_diff_display_text_slice(out, text, range, expanded_tabs);
+                append_file_diff_display_text_slice(tab_width, out, text, range, expanded_tabs);
             }
             return;
         }
 
         let text = self.diff_text_full_line_for_region(source_visible_ix, region);
-        append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+        append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
     }
 
     fn diff_text_string_for_region(

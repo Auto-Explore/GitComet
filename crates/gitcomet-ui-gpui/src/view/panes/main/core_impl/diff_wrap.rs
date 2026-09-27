@@ -24,10 +24,11 @@ pub(super) fn diff_wrap_columns_for_width(width: Pixels, char_width: Pixels) -> 
 }
 
 pub(super) fn diff_wrap_byte_ranges_for_source_text(
+    tab_width: usize,
     text: &str,
     columns: usize,
 ) -> Vec<rows::DiffWrapByteRange> {
-    let mut ranges = rows::diff_wrap_ranges_for_text(text, columns)
+    let mut ranges = rows::diff_wrap_ranges_for_text(tab_width, text, columns)
         .into_iter()
         .map(rows::DiffWrapByteRange::from_range)
         .collect::<Vec<_>>();
@@ -38,15 +39,19 @@ pub(super) fn diff_wrap_byte_ranges_for_source_text(
 }
 
 pub(super) fn diff_wrap_byte_ranges_for_revealed_text(
+    tab_width: usize,
     source_text: &str,
     raw_text: Option<&str>,
     columns: usize,
 ) -> Vec<rows::DiffWrapByteRange> {
     let marker_text = raw_text
-        .filter(|raw| crate::view::diff_utils::diff_text_display_len(raw) == source_text.len())
+        .filter(|raw| {
+            crate::view::diff_utils::diff_text_display_len(tab_width, raw) == source_text.len()
+        })
         .unwrap_or(source_text);
-    let offset_map = rows::whitespace_visible_diff_offset_map(marker_text, true);
+    let offset_map = rows::whitespace_visible_diff_offset_map(tab_width, marker_text, true);
     let mut ranges = rows::diff_wrap_ranges_for_text(
+        tab_width,
         rows::whitespace_visible_line_text(marker_text).as_ref(),
         columns,
     )
@@ -68,15 +73,16 @@ pub(super) fn diff_wrap_byte_ranges_for_revealed_text(
 }
 
 pub(super) fn diff_wrap_byte_ranges_for_text(
+    tab_width: usize,
     source_text: &str,
     raw_text: Option<&str>,
     columns: usize,
     reveal_whitespace_chars: bool,
 ) -> Vec<rows::DiffWrapByteRange> {
     if reveal_whitespace_chars {
-        diff_wrap_byte_ranges_for_revealed_text(source_text, raw_text, columns)
+        diff_wrap_byte_ranges_for_revealed_text(tab_width, source_text, raw_text, columns)
     } else {
-        diff_wrap_byte_ranges_for_source_text(source_text, columns)
+        diff_wrap_byte_ranges_for_source_text(tab_width, source_text, columns)
     }
 }
 
@@ -85,12 +91,14 @@ pub(super) fn diff_wrap_empty_byte_ranges() -> Vec<rows::DiffWrapByteRange> {
 }
 
 pub(super) fn diff_wrap_byte_ranges_for_file_diff_text(
+    tab_width: usize,
     text: &gitcomet_core::file_diff::FileDiffLineText,
     columns: usize,
     reveal_whitespace_chars: bool,
 ) -> Vec<rows::DiffWrapByteRange> {
-    let display = crate::view::file_diff_display::file_diff_display_text(text);
+    let display = crate::view::file_diff_display::file_diff_display_text(tab_width, text);
     diff_wrap_byte_ranges_for_text(
+        tab_width,
         display.as_ref(),
         Some(text.as_ref()),
         columns,
@@ -99,12 +107,13 @@ pub(super) fn diff_wrap_byte_ranges_for_file_diff_text(
 }
 
 pub(super) fn diff_wrap_byte_ranges_for_optional_file_diff_text(
+    tab_width: usize,
     text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
     columns: usize,
     reveal_whitespace_chars: bool,
 ) -> Vec<rows::DiffWrapByteRange> {
     text.map(|text| {
-        diff_wrap_byte_ranges_for_file_diff_text(text, columns, reveal_whitespace_chars)
+        diff_wrap_byte_ranges_for_file_diff_text(tab_width, text, columns, reveal_whitespace_chars)
     })
     .unwrap_or_else(diff_wrap_empty_byte_ranges)
 }
@@ -451,10 +460,13 @@ impl MainPaneView {
         split_columns: usize,
         preview_columns: usize,
     ) -> (Vec<rows::DiffWrapByteRange>, Vec<rows::DiffWrapByteRange>) {
+        let tab_width = self.display_tab_width;
+
         // A file preview is one column of plain file lines.
         if self.is_file_preview_active() {
             return (
                 diff_wrap_byte_ranges_for_optional_file_diff_text(
+                    tab_width,
                     self.worktree_preview_line_raw_text(source_visible_ix)
                         .as_ref(),
                     preview_columns,
@@ -478,6 +490,7 @@ impl MainPaneView {
                         };
                         (
                             diff_wrap_byte_ranges_for_file_diff_text(
+                                tab_width,
                                 &row.text,
                                 inline_columns,
                                 self.reveal_whitespace_chars,
@@ -491,11 +504,13 @@ impl MainPaneView {
                         };
                         (
                             diff_wrap_byte_ranges_for_optional_file_diff_text(
+                                tab_width,
                                 row.old.as_ref(),
                                 split_columns,
                                 self.reveal_whitespace_chars,
                             ),
                             diff_wrap_byte_ranges_for_optional_file_diff_text(
+                                tab_width,
                                 row.new.as_ref(),
                                 split_columns,
                                 self.reveal_whitespace_chars,
@@ -515,6 +530,7 @@ impl MainPaneView {
                     if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
                         return (
                             diff_wrap_byte_ranges_for_file_diff_text(
+                                tab_width,
                                 &row.text,
                                 inline_columns,
                                 self.reveal_whitespace_chars,
@@ -529,6 +545,7 @@ impl MainPaneView {
                         .diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
                     (
                         diff_wrap_byte_ranges_for_text(
+                            tab_width,
                             text.as_ref(),
                             Some(crate::view::diff_utils::diff_content_text(&line)),
                             inline_columns,
@@ -543,11 +560,13 @@ impl MainPaneView {
                     };
                     (
                         diff_wrap_byte_ranges_for_optional_file_diff_text(
+                            tab_width,
                             row.old.as_ref(),
                             split_columns,
                             self.reveal_whitespace_chars,
                         ),
                         diff_wrap_byte_ranges_for_optional_file_diff_text(
+                            tab_width,
                             row.new.as_ref(),
                             split_columns,
                             self.reveal_whitespace_chars,
@@ -574,6 +593,7 @@ impl MainPaneView {
                     self.diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
                 (
                     diff_wrap_byte_ranges_for_text(
+                        tab_width,
                         text.as_ref(),
                         Some(line.text.as_ref()),
                         inline_columns,
@@ -594,12 +614,14 @@ impl MainPaneView {
                     );
                     (
                         diff_wrap_byte_ranges_for_text(
+                            tab_width,
                             left.as_ref(),
                             row.old.as_ref().map(|text| text.as_ref()),
                             split_columns,
                             self.reveal_whitespace_chars,
                         ),
                         diff_wrap_byte_ranges_for_text(
+                            tab_width,
                             right.as_ref(),
                             row.new.as_ref().map(|text| text.as_ref()),
                             split_columns,
@@ -624,12 +646,14 @@ impl MainPaneView {
                     );
                     (
                         diff_wrap_byte_ranges_for_text(
+                            tab_width,
                             left.as_ref(),
                             (!left.is_empty()).then_some(line.text.as_ref()),
                             split_columns,
                             self.reveal_whitespace_chars,
                         ),
                         diff_wrap_byte_ranges_for_text(
+                            tab_width,
                             right.as_ref(),
                             (!right.is_empty()).then_some(line.text.as_ref()),
                             split_columns,

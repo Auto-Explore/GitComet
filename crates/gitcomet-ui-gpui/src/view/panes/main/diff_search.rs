@@ -437,6 +437,7 @@ fn diff_search_inline_patch_query_uses_trigram_index(
 
 #[inline]
 fn diff_search_displayed_text_matches_query(
+    tab_width: usize,
     query: AsciiCaseInsensitiveNeedle<'_>,
     text: &str,
     expanded_tabs: &mut String,
@@ -446,31 +447,30 @@ fn diff_search_displayed_text_matches_query(
     }
 
     expanded_tabs.clear();
-    crate::view::tab_width::push_expanded(expanded_tabs, text, &mut 0);
+    crate::view::tab_width::push_expanded(tab_width, expanded_tabs, text, &mut 0);
     query.is_match(expanded_tabs.as_str())
 }
 
-fn expand_tabs_to_string(text: &str) -> String {
-    if !text.contains('\t') {
-        return text.to_string();
-    }
-
-    crate::view::tab_width::expand_tabs(text).into_owned()
+fn expand_tabs_to_string(tab_width: usize, text: &str) -> String {
+    crate::view::tab_width::expand_tabs(tab_width, text).into_owned()
 }
 
 pub(in crate::view) fn diff_search_split_row_texts_match_query(
+    tab_width: usize,
     query: AsciiCaseInsensitiveNeedle<'_>,
     left: Option<&str>,
     right: Option<&str>,
     expanded_tabs: &mut String,
 ) -> bool {
     if let Some(text) = left
-        && diff_search_displayed_text_matches_query(query, text, expanded_tabs)
+        && diff_search_displayed_text_matches_query(tab_width, query, text, expanded_tabs)
     {
         return true;
     }
 
-    right.is_some_and(|text| diff_search_displayed_text_matches_query(query, text, expanded_tabs))
+    right.is_some_and(|text| {
+        diff_search_displayed_text_matches_query(tab_width, query, text, expanded_tabs)
+    })
 }
 
 #[inline]
@@ -537,6 +537,7 @@ fn diff_search_resume_match_ix(
 }
 
 fn inline_patch_diff_search_text<'a>(
+    tab_width: usize,
     diff: &'a Diff,
     diff_click_kinds: &[DiffClickKind],
     diff_header_display_cache: &'a FxHashMap<usize, SharedString>,
@@ -560,7 +561,7 @@ fn inline_patch_diff_search_text<'a>(
     }
 
     Some(Cow::Owned(
-        crate::view::tab_width::expand_tabs(line.text.as_ref()).into_owned(),
+        crate::view::tab_width::expand_tabs(tab_width, line.text.as_ref()).into_owned(),
     ))
 }
 
@@ -576,6 +577,7 @@ fn inline_patch_diff_src_ix_for_visible_ix(
 }
 
 fn inline_patch_diff_visible_ix_matches_query(
+    tab_width: usize,
     diff: &Diff,
     diff_click_kinds: &[DiffClickKind],
     diff_header_display_cache: &FxHashMap<usize, SharedString>,
@@ -591,11 +593,18 @@ fn inline_patch_diff_visible_ix_matches_query(
     ) else {
         return false;
     };
-    inline_patch_diff_search_text(diff, diff_click_kinds, diff_header_display_cache, src_ix)
-        .is_some_and(|text| query.is_match(text.as_ref()))
+    inline_patch_diff_search_text(
+        tab_width,
+        diff,
+        diff_click_kinds,
+        diff_header_display_cache,
+        src_ix,
+    )
+    .is_some_and(|text| query.is_match(text.as_ref()))
 }
 
 fn collect_inline_patch_diff_visible_matches_with_needle(
+    tab_width: usize,
     diff: &Diff,
     diff_click_kinds: &[DiffClickKind],
     diff_header_display_cache: &FxHashMap<usize, SharedString>,
@@ -609,6 +618,7 @@ fn collect_inline_patch_diff_visible_matches_with_needle(
         .unwrap_or(diff_visible_indices.len());
     for visible_ix in 0..total {
         if inline_patch_diff_visible_ix_matches_query(
+            tab_width,
             diff,
             diff_click_kinds,
             diff_header_display_cache,
@@ -1981,6 +1991,8 @@ impl MainPaneView {
     }
 
     fn diff_search_scan_current_view_general(&mut self, matcher: &DiffSearchMatcher) {
+        let tab_width = self.display_tab_width;
+
         self.diff_search_matches.clear();
 
         if self.is_file_preview_active() {
@@ -2093,8 +2105,12 @@ impl MainPaneView {
                     let (left, right) = provider.split_row_texts(mapped_ix)?;
                     Some((
                         visible_ix,
-                        left.map(|left| Cow::Owned(expand_tabs_to_string(left.as_ref()))),
-                        right.map(|right| Cow::Owned(expand_tabs_to_string(right.as_ref()))),
+                        left.map(|left| {
+                            Cow::Owned(expand_tabs_to_string(tab_width, left.as_ref()))
+                        }),
+                        right.map(|right| {
+                            Cow::Owned(expand_tabs_to_string(tab_width, right.as_ref()))
+                        }),
                     ))
                 })
                 .collect();
@@ -2151,6 +2167,8 @@ impl MainPaneView {
         &mut self,
         query: AsciiCaseInsensitiveNeedle<'_>,
     ) -> bool {
+        let tab_width = self.display_tab_width;
+
         let diff = match self.rendered_patch_diff_loadable() {
             Some(Loadable::Ready(diff)) => Arc::clone(diff),
             _ => return false,
@@ -2164,6 +2182,7 @@ impl MainPaneView {
 
         if !diff_search_inline_patch_query_uses_trigram_index(query) {
             collect_inline_patch_diff_visible_matches_with_needle(
+                tab_width,
                 diff.as_ref(),
                 diff_click_kinds,
                 diff_header_display_cache,
@@ -2181,6 +2200,7 @@ impl MainPaneView {
             if let Some(map) = self.diff_visible_inline_map.as_ref() {
                 map.for_each_visible_src_ix(|visible_ix, src_ix| {
                     if let Some(text) = inline_patch_diff_search_text(
+                        tab_width,
                         diff.as_ref(),
                         &self.diff_click_kinds,
                         &self.diff_header_display_cache,
@@ -2192,6 +2212,7 @@ impl MainPaneView {
             } else {
                 for (visible_ix, &src_ix) in self.diff_visible_indices.iter().enumerate() {
                     if let Some(text) = inline_patch_diff_search_text(
+                        tab_width,
                         diff.as_ref(),
                         &self.diff_click_kinds,
                         &self.diff_header_display_cache,
@@ -2213,6 +2234,7 @@ impl MainPaneView {
             DiffSearchVisibleCandidates::None => {}
             DiffSearchVisibleCandidates::All => {
                 collect_inline_patch_diff_visible_matches_with_needle(
+                    tab_width,
                     diff.as_ref(),
                     diff_click_kinds,
                     diff_header_display_cache,
@@ -2226,6 +2248,7 @@ impl MainPaneView {
                 for &visible_ix in candidate_visible_rows {
                     let visible_ix = visible_ix as usize;
                     if inline_patch_diff_visible_ix_matches_query(
+                        tab_width,
                         diff.as_ref(),
                         diff_click_kinds,
                         diff_header_display_cache,
@@ -2244,6 +2267,8 @@ impl MainPaneView {
     }
 
     fn diff_search_scan_inline_patch_diff_general(&mut self, matcher: &DiffSearchMatcher) -> bool {
+        let tab_width = self.display_tab_width;
+
         let diff = match self.rendered_patch_diff_loadable() {
             Some(Loadable::Ready(diff)) => Arc::clone(diff),
             _ => return false,
@@ -2253,6 +2278,7 @@ impl MainPaneView {
             let mut rows = Vec::new();
             map.for_each_visible_src_ix(|visible_ix, src_ix| {
                 if let Some(text) = inline_patch_diff_search_text(
+                    tab_width,
                     diff.as_ref(),
                     &self.diff_click_kinds,
                     &self.diff_header_display_cache,
@@ -2270,6 +2296,7 @@ impl MainPaneView {
                 .enumerate()
                 .filter_map(|(visible_ix, src_ix)| {
                     inline_patch_diff_search_text(
+                        tab_width,
                         diff.as_ref(),
                         &self.diff_click_kinds,
                         &self.diff_header_display_cache,
@@ -2292,6 +2319,8 @@ impl MainPaneView {
         visible_ix: usize,
         expanded_tabs: &mut String,
     ) -> bool {
+        let tab_width = self.display_tab_width;
+
         if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Split {
             return false;
         }
@@ -2310,6 +2339,7 @@ impl MainPaneView {
             return false;
         };
         diff_search_split_row_texts_match_query(
+            tab_width,
             query,
             left.as_ref().map(|text| text.as_ref()),
             right.as_ref().map(|text| text.as_ref()),
@@ -2358,6 +2388,8 @@ impl MainPaneView {
         query: AsciiCaseInsensitiveNeedle<'_>,
         previous_matches: &mut Vec<usize>,
     ) -> bool {
+        let tab_width = self.display_tab_width;
+
         if self.is_file_editor_active()
             || self.is_file_preview_active()
             || self.active_conflict_target().is_some()
@@ -2388,6 +2420,7 @@ impl MainPaneView {
             index.candidates(query.as_bytes()),
             |visible_ix| {
                 inline_patch_diff_visible_ix_matches_query(
+                    tab_width,
                     diff.as_ref(),
                     diff_click_kinds,
                     diff_header_display_cache,
@@ -3954,16 +3987,20 @@ mod tests {
 
     #[test]
     fn split_row_text_search_matches_rendered_tab_expansion() {
+        let tab_width = 4;
+
         let query = AsciiCaseInsensitiveNeedle::new("a   b").expect("query");
         let mut expanded_tabs = String::new();
 
         assert!(diff_search_split_row_texts_match_query(
+            tab_width,
             query,
             Some("a\tb"),
             None,
             &mut expanded_tabs,
         ));
         assert!(diff_search_split_row_texts_match_query(
+            tab_width,
             query,
             None,
             Some("a\tb"),

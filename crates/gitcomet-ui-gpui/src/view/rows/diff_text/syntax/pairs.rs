@@ -624,8 +624,12 @@ fn delimits_whole_node(
 /// pair in a tab-indented file lands several columns per indent level off.
 ///
 /// An offset landing inside an expanded tab resolves to that tab.
-pub(in crate::view) fn raw_offset_for_display_offset(line: &str, display_offset: usize) -> usize {
-    crate::view::tab_width::raw_offset_for_display_offset(line, display_offset)
+pub(in crate::view) fn raw_offset_for_display_offset(
+    tab_width: usize,
+    line: &str,
+    display_offset: usize,
+) -> usize {
+    crate::view::tab_width::raw_offset_for_display_offset(tab_width, line, display_offset)
 }
 
 /// The raw offset for a click's caret boundary, or `None` when that boundary is
@@ -636,15 +640,20 @@ pub(in crate::view) fn raw_offset_for_display_offset(line: &str, display_offset:
 /// pointer is in trailing blank space; the view keeps those geometrically
 /// distinct and rejects the latter before calling the syntax layer.
 pub(in crate::view) fn clicked_raw_offset_for_display_offset(
+    tab_width: usize,
     line: &str,
     display_offset: usize,
 ) -> Option<usize> {
-    (display_offset <= crate::view::diff_utils::diff_text_display_len(line))
-        .then(|| raw_offset_for_display_offset(line, display_offset))
+    (display_offset <= crate::view::diff_utils::diff_text_display_len(tab_width, line))
+        .then(|| raw_offset_for_display_offset(tab_width, line, display_offset))
 }
 
 /// Convert an offset in a raw line to the display column the canvas painted it
 /// at -- the inverse of [`raw_offset_for_display_offset`].
-pub(in crate::view) fn display_offset_for_raw_offset(line: &str, raw_offset: usize) -> usize {
-    crate::view::tab_width::display_offset_for_raw_offset(line, raw_offset)
+pub(in crate::view) fn display_offset_for_raw_offset(
+    tab_width: usize,
+    line: &str,
+    raw_offset: usize,
+) -> usize {
+    crate::view::tab_width::display_offset_for_raw_offset(tab_width, line, raw_offset)
 }

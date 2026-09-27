@@ -45,8 +45,11 @@ fn markdown_row(kind: MarkdownPreviewRowKind) -> MarkdownPreviewRow {
 
 #[test]
 fn worktree_preview_query_overlay_honors_search_options_for_cached_rows() {
+    let tab_width = 4;
+
     let theme = AppTheme::gitcomet_dark();
     let base = build_cached_diff_styled_text(
+        tab_width,
         theme,
         "Render render cat concat cat",
         &[],
@@ -422,6 +425,8 @@ fn markdown_preview_row_background_uses_alert_and_fallback_only_when_unchanged()
 
 #[test]
 fn markdown_preview_row_styled_text_maps_inline_styles_and_skips_normal_spans() {
+    let tab_width = 4;
+
     let theme = AppTheme::gitcomet_light();
 
     let mut row = markdown_row(MarkdownPreviewRowKind::Paragraph);
@@ -449,7 +454,7 @@ fn markdown_preview_row_styled_text_maps_inline_styles_and_skips_normal_spans() 
         },
     ]);
 
-    let styled = markdown_preview_row_styled_text(theme, &row);
+    let styled = markdown_preview_row_styled_text(tab_width, theme, &row);
     let highlights = styled.highlights.as_ref();
 
     assert_eq!(styled.text.as_ref(), "link under strike plain");
@@ -493,25 +498,27 @@ fn amber_inline_code_spans_use_the_neutral_code_surface() {
 
 #[test]
 fn wrapped_slices_map_onto_the_tab_expanded_painted_text() {
+    let tab_width = 4;
+
     // Wrap ranges are measured on `row.text`, where a tab is one byte, but
     // the painted text expands each tab to four spaces. Slicing the
     // painted text with raw offsets shifted every wrapped row and dropped
     // the tail of the line.
     let raw = "\tab\tcd";
-    let expanded_len = crate::view::tab_width::expanded_len(raw);
+    let expanded_len = crate::view::tab_width::expanded_len(tab_width, raw);
 
     // "\tab" -> "    ab", "\tcd" -> "    cd"
     assert_eq!(
-        markdown_preview_expanded_slice_range(raw, expanded_len, &(0..3)),
+        markdown_preview_expanded_slice_range(tab_width, raw, expanded_len, &(0..3)),
         0..6
     );
     assert_eq!(
-        markdown_preview_expanded_slice_range(raw, expanded_len, &(3..raw.len())),
+        markdown_preview_expanded_slice_range(tab_width, raw, expanded_len, &(3..raw.len())),
         6..expanded_len
     );
     // A row without tabs keeps its ranges untouched.
     assert_eq!(
-        markdown_preview_expanded_slice_range("abcd", 4, &(1..3)),
+        markdown_preview_expanded_slice_range(tab_width, "abcd", 4, &(1..3)),
         1..3
     );
 }
@@ -705,6 +712,8 @@ fn a_picture_is_named_the_same_way_wherever_it_is_asked_about() {
 
 #[test]
 fn markdown_preview_row_styled_text_repairs_spans_that_split_a_multibyte_char() {
+    let tab_width = 4;
+
     // A span pointing inside a multi-byte character used to reach `gpui`
     // as a text run whose length splits that character, aborting the
     // process inside `str::split_at` while shaping the line.
@@ -725,7 +734,7 @@ fn markdown_preview_row_styled_text_repairs_spans_that_split_a_multibyte_char() 
         },
     ]);
 
-    let styled = markdown_preview_row_styled_text(theme, &row);
+    let styled = markdown_preview_row_styled_text(tab_width, theme, &row);
     let text = styled.text.as_ref();
 
     for (range, _) in styled.highlights.iter() {
@@ -739,6 +748,8 @@ fn markdown_preview_row_styled_text_repairs_spans_that_split_a_multibyte_char() 
 
 #[test]
 fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
+    let tab_width = 4;
+
     let theme = AppTheme::gitcomet_dark();
     let row = MarkdownPreviewRow {
         kind: MarkdownPreviewRowKind::CodeLine {
@@ -763,9 +774,10 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
         continues_item: false,
     };
 
-    let dark_highlights = Arc::clone(&markdown_preview_row_styled_text(theme, &row).highlights);
-    let dark = markdown_preview_row_styled_text(theme, &row);
-    let light = markdown_preview_row_styled_text(AppTheme::gitcomet_light(), &row);
+    let dark_highlights =
+        Arc::clone(&markdown_preview_row_styled_text(tab_width, theme, &row).highlights);
+    let dark = markdown_preview_row_styled_text(tab_width, theme, &row);
+    let light = markdown_preview_row_styled_text(tab_width, AppTheme::gitcomet_light(), &row);
 
     // The tab after "fn" runs to the stop at column 4.
     assert_eq!(dark.text.as_ref(), "fn  main() { let x = 1; }");
