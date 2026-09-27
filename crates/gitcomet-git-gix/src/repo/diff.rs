@@ -429,6 +429,8 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffText>> {
         cancellation.check_cancelled()?;
+        // Worktree normalization consults config as well as attributes.
+        let repo = self.reopen_repo()?;
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -440,7 +442,6 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self.repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -513,7 +514,6 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -543,7 +543,6 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
                 let old = self.file_diff_source_from_revision_path(
                     &repo,
                     from_commit_id.as_ref(),
@@ -901,7 +900,7 @@ impl GixRepo {
         use gitcomet_core::text_format::SideKind;
 
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-        let repo = self.repo();
+        let repo = self.reopen_repo()?;
         let stage_data = gix_index_conflict_stage_data(&repo, &repo_path)?;
         let Some(conflict_kind) = stage_data.conflict_kind else {
             return Ok(None);
@@ -1705,6 +1704,15 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         .ok()?
         .matching_attributes(&mut outcome);
     let mut hasher = FxHasher::default();
+    let config = repo.config_snapshot();
+    for key in [
+        "core.autocrlf",
+        "core.eol",
+        "core.safecrlf",
+        "core.checkRoundtripEncoding",
+    ] {
+        config.string(key).hash(&mut hasher);
+    }
     for matched in outcome.iter() {
         let assignment = matched.assignment;
         if assignment.name.as_str() == "filter"

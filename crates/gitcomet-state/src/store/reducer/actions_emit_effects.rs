@@ -1317,18 +1317,11 @@ pub(super) fn repo_command_finished(
         repo_state.bump_diff_state_rev();
         extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
     }
-    if command_succeeded
-        && matches!(command, RepoCommandKind::AppendGitattributesRule { .. })
-        && let Some(target) = repo_state.diff_state.diff_target.clone()
-    {
-        // The new rule now decides how the open file reads, so the view's own
-        // choice goes and the file is read again under the rule.
-        if repo_state.diff_state.text_override.take().is_some() {
-            repo_state.bump_text_override_rev();
-        }
-        extra_effects.extend(super::util::reload_selected_file_text(
-            repo_state, repo_id, &target, true,
-        ));
+    if command_succeeded && matches!(command, RepoCommandKind::AppendGitattributesRule { .. }) {
+        // A root rule can be shadowed by deeper attributes or info/attributes.
+        // Keep the user's choice for this open file; Auto-detect or selecting
+        // another file ends it. The refreshed attributes decide any reload.
+        extra_effects.extend(super::util::reload_selected_text_attributes(repo_state));
     }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);

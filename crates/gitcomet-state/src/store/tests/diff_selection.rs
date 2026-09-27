@@ -5812,7 +5812,7 @@ mod text_override {
         state: &mut AppState,
         path: &str,
         attributes: TextAttributes,
-    ) {
+    ) -> Vec<Effect> {
         reduce(
             repos,
             &AtomicU64::new(40),
@@ -5822,7 +5822,7 @@ mod text_override {
                 target: target(path, gitcomet_core::domain::DiffArea::Unstaged),
                 result: Ok(attributes),
             }),
-        );
+        )
     }
 
     fn gitattributes_rule_written(
@@ -5889,29 +5889,47 @@ mod text_override {
     }
 
     #[test]
-    fn a_written_gitattributes_rule_rereads_the_file_under_its_new_attributes() {
+    fn a_written_gitattributes_rule_refreshes_attributes_and_keeps_the_choice() {
         let (mut repos, mut state) = selected("a.txt");
         attributes_loaded(&mut repos, &mut state, "a.txt", TextAttributes::default());
         set(&mut repos, &mut state, "a.txt", koi8());
         let effects = gitattributes_rule_written(&mut repos, &mut state);
         let diff_state = &state.repos[0].diff_state;
-        assert!(diff_state.text_override.is_none());
-        // Views wait for the rule instead of decoding once more without it.
-        assert!(diff_state.text_attributes.is_loading());
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadSelectedDiff { .. }))
-        );
+        assert_eq!(diff_state.selected_encoding_override(), koi8().encoding);
+        assert!(matches!(diff_state.text_attributes, Loadable::Ready(_)));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSelectedDiff {
+                load_patch_diff: false,
+                load_file_text: false,
+                ..
+            }
+        )));
     }
 
     #[test]
     fn a_written_gitattributes_rule_reloads_an_open_conflict_as_a_conflict() {
         let (mut repos, mut state) = selected("a.txt");
         state.repos[0].conflict_state.conflict_file_path = Some(PathBuf::from("a.txt"));
+        attributes_loaded(&mut repos, &mut state, "a.txt", TextAttributes::default());
         set(&mut repos, &mut state, "a.txt", koi8());
-        let effects = gitattributes_rule_written(&mut repos, &mut state);
-        assert!(state.repos[0].diff_state.text_override.is_none());
+        gitattributes_rule_written(&mut repos, &mut state);
+        // Content is reloaded only after resolving the effective attributes.
+        let effects = attributes_loaded(
+            &mut repos,
+            &mut state,
+            "a.txt",
+            TextAttributes {
+                encoding: Some(gitcomet_core::text_format::EncodingAttr::from_label(
+                    "koi8-r",
+                )),
+                ..TextAttributes::default()
+            },
+        );
+        assert_eq!(
+            state.repos[0].diff_state.selected_encoding_override(),
+            koi8().encoding
+        );
         assert!(
             effects.iter().any(|effect| matches!(
                 effect,
@@ -5924,6 +5942,54 @@ mod text_override {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadSelectedDiff { .. }))
         );
+    }
+
+    #[test]
+    fn only_decoding_changes_reload_content_and_replies_do_not_loop() {
+        use gitcomet_core::text_format::{EncodingAttr, TabWidth, TabWidthSource};
+        let (mut repos, mut state) = selected("a.txt");
+        let original = TextAttributes {
+            encoding: Some(EncodingAttr::from_label("windows-1252")),
+            ..TextAttributes::default()
+        };
+        assert!(attributes_loaded(&mut repos, &mut state, "a.txt", original.clone()).is_empty());
+        let mut metadata = original.clone();
+        metadata.encoding = Some(EncodingAttr::from_label("cp1252"));
+        metadata.tab_width = Some(TabWidth {
+            columns: 8,
+            source: TabWidthSource::Attribute,
+        });
+        assert!(attributes_loaded(&mut repos, &mut state, "a.txt", metadata).is_empty());
+
+        for changed in [
+            TextAttributes {
+                encoding: Some(EncodingAttr::from_label("koi8-r")),
+                ..original.clone()
+            },
+            TextAttributes {
+                gui_encoding: Some(EncodingAttr::from_label("koi8-r")),
+                ..original.clone()
+            },
+            TextAttributes {
+                working_tree_encoding: Some(EncodingAttr::from_label("UTF-16LE")),
+                ..original.clone()
+            },
+        ] {
+            state.repos[0].diff_state.text_attributes = Loadable::Ready(Arc::new(original.clone()));
+            let rev = state.repos[0].diff_state.diff_target_rev;
+            let effects = attributes_loaded(&mut repos, &mut state, "a.txt", changed.clone());
+            assert!(matches!(
+                effects.as_slice(),
+                [Effect::LoadSelectedDiff {
+                    load_patch_diff: true,
+                    load_file_text: true,
+                    ..
+                }]
+            ));
+            assert_eq!(state.repos[0].diff_state.diff_target_rev, rev + 1);
+            assert!(attributes_loaded(&mut repos, &mut state, "a.txt", changed).is_empty());
+            assert_eq!(state.repos[0].diff_state.diff_target_rev, rev + 1);
+        }
     }
 
     #[test]

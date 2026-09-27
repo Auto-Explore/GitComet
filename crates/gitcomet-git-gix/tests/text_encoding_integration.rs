@@ -222,6 +222,87 @@ fn encoding_attribute_is_followed() {
 }
 
 #[test]
+fn config_changes_refresh_attributes_and_decoding_without_reopening() {
+    use gitcomet_core::text_format::TabWidthSource;
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let workdir = dir.path();
+    git(workdir, &["config", "gui.encoding", "windows-1252"]);
+    git(workdir, &["config", "core.whitespace", "tabwidth=4"]);
+    fs::write(workdir.join("ru.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4\n").unwrap();
+    commit_all(workdir, "base");
+    fs::write(workdir.join("ru.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4!\n").unwrap();
+    let commit = commit_all(workdir, "change");
+    let repo = open(workdir);
+    let target = DiffTarget::Commit {
+        commit_id: commit,
+        path: Some("ru.txt".into()),
+    };
+    let original = file_text(&*repo, &target, None);
+    assert_eq!(
+        original
+            .new_source
+            .as_ref()
+            .unwrap()
+            .format
+            .unwrap()
+            .format
+            .encoding,
+        TextEncoding::WINDOWS_1252
+    );
+    assert_eq!(
+        repo.text_attributes(Path::new("ru.txt"))
+            .unwrap()
+            .tab_width
+            .unwrap()
+            .columns,
+        4
+    );
+
+    // Included configuration is resolved by gix too, rather than by a custom
+    // reader that only checks .git/config.
+    git(workdir, &["config", "include.path", "text-config"]);
+    fs::write(
+        workdir.join(".git/text-config"),
+        "[gui]\nencoding = KOI8-R\n[core]\nwhitespace = tabwidth=8\n",
+    )
+    .unwrap();
+    let attributes = repo.text_attributes(Path::new("ru.txt")).unwrap();
+    assert_eq!(
+        attributes.gui_encoding.unwrap().encoding,
+        TextEncoding::from_label("koi8-r")
+    );
+    let tab = attributes.tab_width.unwrap();
+    assert_eq!(tab.columns, 8);
+    assert_eq!(tab.source, TabWidthSource::CoreWhitespace);
+    assert_eq!(
+        read_side(file_text(&*repo, &target, None).new_source.as_ref()),
+        "Привет!\n"
+    );
+    assert_eq!(
+        changed_lines(&patch(&*repo, &target, None)),
+        vec!["-Привет", "+Привет!"]
+    );
+
+    // A later update of an existing include is visible through the same handle.
+    fs::write(
+        workdir.join(".git/text-config"),
+        "[gui]\nencoding = windows-1252\n[core]\nwhitespace = tabwidth=2\n",
+    )
+    .unwrap();
+    let attributes = repo.text_attributes(Path::new("ru.txt")).unwrap();
+    assert_eq!(
+        attributes.gui_encoding.unwrap().encoding,
+        Some(TextEncoding::WINDOWS_1252)
+    );
+    assert_eq!(attributes.tab_width.unwrap().columns, 2);
+    assert_eq!(
+        read_side(file_text(&*repo, &target, None).new_source.as_ref()),
+        read_side(original.new_source.as_ref())
+    );
+}
+
+#[test]
 fn working_tree_encoding_utf16_with_iconv_label_diffs_as_text() {
     test_git_env::ensure_initialized();
     let dir = init_repo();
@@ -605,6 +686,15 @@ fn written_gitattributes_patterns_match_exactly_their_path_in_git() {
         ("#hash.txt", "hash.txt"),
         ("!bang.txt", "bang.txt"),
         ("sub/dir/deep.txt", "other/sub/dir/deep.txt"),
+        ("café.txt", "cafe.txt"),
+        #[cfg(unix)]
+        (r"dir\name.txt", "dir/name.txt"),
+        #[cfg(unix)]
+        (r"dir\my file.txt", "dir/my file.txt"),
+        #[cfg(unix)]
+        ("a\tname.txt", "a name.txt"),
+        #[cfg(unix)]
+        ("a\"name.txt", "aname.txt"),
     ];
     for (path, decoy) in cases {
         let dir = init_repo();
@@ -725,6 +815,19 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
         text(session.current.as_ref().unwrap()).contains("<<<<<<<"),
         "the working-tree file with markers decodes too"
     );
+    git(repo_dir, &["config", "gui.encoding", "koi8-r"]);
+    let refreshed = repo
+        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .unwrap()
+        .unwrap();
+    let format = refreshed.current_format.unwrap();
+    assert_eq!(format.source, FormatSource::GuiEncoding);
+    assert_eq!(
+        Some(format.format.encoding),
+        TextEncoding::from_label("koi8-r")
+    );
+    assert_ne!(text(&refreshed.base), text(&session.base));
+    assert_eq!(refreshed.base_bytes(), session.base_bytes());
 }
 
 #[test]

@@ -783,7 +783,7 @@ pub enum Msg {
         patterns: Vec<String>,
     },
     /// Append one rule line to the repository-root `.gitattributes`, creating
-    /// it when absent; a line already there is not added again.
+    /// it when absent; skipped when it is already the last rule.
     AppendGitattributesRule {
         repo_id: RepoId,
         rule: String,

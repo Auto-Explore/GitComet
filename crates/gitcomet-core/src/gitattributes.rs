@@ -1,6 +1,6 @@
 //! Writing rules into `.gitattributes`.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 pub const GITATTRIBUTES_FILE_NAME: &str = ".gitattributes";
 pub const NOTHING_TO_ADD: &str = "nothing to add";
@@ -17,33 +17,22 @@ fn escape_glob(text: &str) -> String {
     out
 }
 
-/// A pattern token for a rule line. Git reads a pattern with whitespace or a
-/// quote only in C quotes, and inside them every backslash — the glob escapes
-/// included — is itself escaped.
+/// Git's C quoting also escapes the backslashes introduced by glob escaping.
 fn pattern_token(pattern: String) -> String {
-    if !pattern.chars().any(|ch| ch.is_whitespace() || ch == '"') {
-        return pattern;
+    match gix_quote::ansi_c::quote(pattern.as_bytes().into()) {
+        // Spaces alone do not require C escaping, but they separate tokens in
+        // an attributes rule, so the pattern still needs quotes.
+        Cow::Borrowed(_) if pattern.contains(' ') => format!("\"{pattern}\""),
+        quoted => quoted.to_string(),
     }
-    let mut out = String::with_capacity(pattern.len() + 4);
-    out.push('"');
-    for ch in pattern.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 /// A pattern matching exactly `repo_path` (repo-relative), for the root
 /// `.gitattributes`.
 pub fn pattern_for_path(repo_path: &Path) -> String {
-    let path = repo_path.to_string_lossy().replace('\\', "/");
+    let path = repo_path.to_string_lossy();
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
     pattern_token(format!("/{}", escape_glob(path.trim_start_matches('/'))))
 }
 
@@ -83,7 +72,10 @@ mod tests {
     #[test]
     fn path_patterns_are_anchored_and_escaped() {
         assert_eq!(pattern_for_path(Path::new("src/a.txt")), "/src/a.txt");
-        assert_eq!(pattern_for_path(Path::new("x[1]*.txt")), "/x\\[1\\]\\*.txt");
+        assert_eq!(
+            pattern_for_path(Path::new("x[1]*.txt")),
+            r#""/x\\[1\\]\\*.txt""#
+        );
         assert_eq!(
             pattern_for_path(Path::new("dir/my file.txt")),
             "\"/dir/my file.txt\""
@@ -93,6 +85,15 @@ mod tests {
             pattern_for_path(Path::new("a b[1].txt")),
             "\"/a b\\\\[1\\\\].txt\""
         );
+    }
+
+    #[test]
+    fn backslashes_follow_platform_path_semantics() {
+        let pattern = pattern_for_path(Path::new(r"dir\name.txt"));
+        #[cfg(windows)]
+        assert_eq!(pattern, "/dir/name.txt");
+        #[cfg(not(windows))]
+        assert_eq!(pattern, r#""/dir\\\\name.txt""#);
     }
 
     #[test]

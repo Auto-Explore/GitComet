@@ -954,11 +954,32 @@ pub(super) fn text_attributes_loaded(
         (Loadable::Ready(current), Loadable::Ready(new)) => current == new,
         _ => false,
     };
+    // Initial loads already request content. A refresh of an open file must
+    // replace decoded content when its encoding changes, including immutable
+    // commit and staged views. Tab/EOL metadata and label aliases alone do not
+    // change decoding.
+    let decoding = |attributes: &gitcomet_core::text_format::TextAttributes| {
+        (
+            attributes.working_tree_encoding(),
+            attributes.encoding.as_ref().and_then(|attr| attr.encoding),
+            attributes
+                .gui_encoding
+                .as_ref()
+                .and_then(|attr| attr.encoding),
+        )
+    };
+    let decoding_changed = matches!(
+        (&repo_state.diff_state.text_attributes, &next),
+        (Loadable::Ready(current), Loadable::Ready(new)) if decoding(current) != decoding(new)
+    );
     if !unchanged {
         repo_state.diff_state.text_attributes = next;
         repo_state.diff_state.text_attributes_rev =
             repo_state.diff_state.text_attributes_rev.wrapping_add(1);
         repo_state.bump_diff_state_rev();
+    }
+    if decoding_changed && let Some(target) = repo_state.diff_state.diff_target.clone() {
+        return super::util::reload_selected_file_text(repo_state, &target);
     }
     Vec::new()
 }
@@ -992,7 +1013,7 @@ pub(super) fn set_text_override(
     if previous.and_then(|previous| previous.encoding) == value.encoding {
         return Vec::new();
     }
-    super::util::reload_selected_file_text(repo_state, repo_id, &target, false)
+    super::util::reload_selected_file_text(repo_state, &target)
 }
 
 pub(super) fn diff_file_loaded(

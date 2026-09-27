@@ -423,12 +423,9 @@ pub(super) fn reload_selected_text_attributes(repo_state: &mut RepoState) -> Opt
 /// Read the open file again because what decides its decoding changed: as a
 /// conflict when it is one, otherwise as a new generation that keeps the
 /// content on screen and drops loads still reading it the old way.
-/// `attributes_changed` also makes the views wait for the new attributes.
 pub(super) fn reload_selected_file_text(
     repo_state: &mut RepoState,
-    repo_id: RepoId,
     target: &DiffTarget,
-    attributes_changed: bool,
 ) -> Vec<Effect> {
     if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
         return match conflict_target {
@@ -437,11 +434,6 @@ pub(super) fn reload_selected_file_text(
         };
     }
     repo_state.diff_state.diff_target_rev = repo_state.diff_state.diff_target_rev.wrapping_add(1);
-    if attributes_changed && target.file_path().is_some() {
-        repo_state.diff_state.text_attributes = Loadable::Loading;
-        repo_state.diff_state.text_attributes_rev =
-            repo_state.diff_state.text_attributes_rev.wrapping_add(1);
-    }
     let load_plan = selected_diff_load_plan(repo_state, target);
     apply_selected_diff_load_plan_state_with_reload_mode(
         repo_state,
@@ -450,7 +442,7 @@ pub(super) fn reload_selected_file_text(
     );
     repo_state.bump_diff_state_rev();
     vec![Effect::LoadSelectedDiff {
-        repo_id,
+        repo_id: repo_state.id,
         load_patch_diff: load_plan.load_patch_diff,
         load_file_text: load_plan.load_file_text,
         preview_text_side: load_plan.preview_text_side,

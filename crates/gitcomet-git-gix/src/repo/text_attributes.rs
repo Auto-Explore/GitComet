@@ -23,7 +23,9 @@ const TEXT_ATTRIBUTES: [&str; 9] = [
 impl GixRepo {
     pub(super) fn text_attributes_impl(&self, path: &Path) -> Result<TextAttributes> {
         let repo_path = super::diff::to_repo_path(path, &self.spec.workdir)?;
-        Ok(resolve_text_attributes(&self.repo(), &repo_path))
+        // Configuration snapshots belong to the opened handle. Attribute
+        // refreshes must also observe config changes made while it was open.
+        Ok(resolve_text_attributes(&self.reopen_repo()?, &repo_path))
     }
 }
 

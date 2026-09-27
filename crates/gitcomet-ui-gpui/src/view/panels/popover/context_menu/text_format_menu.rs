@@ -181,7 +181,13 @@ fn remember_items(state: &TextEncodingMenuState, chosen: TextEncoding) -> Vec<Co
         ));
     }
     if !chosen.is_utf8() {
-        let label = working_tree_encoding_label(chosen, state.had_bom);
+        let Some(label) = working_tree_encoding_label(chosen, state.had_bom) else {
+            items.push(ContextMenuItem::Description(
+                "Git conversion cannot preserve a UTF-16BE byte-order mark. Save as UTF-16LE with BOM to enable it."
+                    .into(),
+            ));
+            return items;
+        };
         items.push(ContextMenuItem::Description(
             "working-tree-encoding= makes Git store the file as UTF-8 from the next add: run git add --renormalize, old commits keep their bytes, and everyone's Git must support the encoding."
                 .into(),
@@ -194,12 +200,16 @@ fn remember_items(state: &TextEncodingMenuState, chosen: TextEncoding) -> Vec<Co
     items
 }
 
-/// Git's spelling, keeping a UTF-16 byte-order mark the file already has.
-fn working_tree_encoding_label(encoding: TextEncoding, had_bom: bool) -> String {
-    if encoding.is_utf16() && had_bom {
-        format!("{}-BOM", encoding.git_label())
+/// Only offer labels that Git can use without changing the byte order.
+/// `UTF-16BE-BOM` is not an iconv label, and generic `UTF-16` checks out in
+/// native byte order, so neither can preserve BOM-marked big-endian files.
+fn working_tree_encoding_label(encoding: TextEncoding, had_bom: bool) -> Option<&'static str> {
+    if had_bom && encoding == TextEncoding::UTF_16BE {
+        None
+    } else if had_bom && encoding == TextEncoding::UTF_16LE {
+        Some("UTF-16LE-BOM")
     } else {
-        encoding.git_label().to_string()
+        Some(encoding.git_label())
     }
 }
 
@@ -299,15 +309,31 @@ mod tests {
     }
 
     #[test]
-    fn utf16_with_bom_keeps_it_in_the_git_label() {
-        assert_eq!(
-            working_tree_encoding_label(TextEncoding::UTF_16LE, true),
-            "UTF-16LE-BOM"
-        );
-        assert_eq!(
-            working_tree_encoding_label(TextEncoding::UTF_16LE, false),
-            "UTF-16LE"
-        );
+    fn utf16_rules_use_supported_labels_and_preserve_byte_order() {
+        for (encoding, had_bom, label) in [
+            (TextEncoding::UTF_16LE, true, Some("UTF-16LE-BOM")),
+            (TextEncoding::UTF_16LE, false, Some("UTF-16LE")),
+            (TextEncoding::UTF_16BE, true, None),
+            (TextEncoding::UTF_16BE, false, Some("UTF-16BE")),
+        ] {
+            let mut state = state(Some(encoding));
+            state.had_bom = had_bom;
+            let rules = rules(&encoding_model(&state));
+            let conversion = rules
+                .iter()
+                .find(|rule| rule.contains("working-tree-encoding="));
+            assert_eq!(
+                conversion.map(String::as_str),
+                label
+                    .map(|label| format!("\"/docs/read me.txt\" working-tree-encoding={label}"))
+                    .as_deref()
+            );
+            assert!(
+                rules
+                    .iter()
+                    .any(|rule| rule.ends_with(&format!(" encoding={}", encoding.git_label())))
+            );
+        }
     }
 
     #[test]
