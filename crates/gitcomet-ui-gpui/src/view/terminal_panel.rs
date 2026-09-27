@@ -832,22 +832,20 @@ impl GitCometView {
         let moving_repo = action.moving_repo();
         let checkpoint = self.file_edit_write_checkpoint(moving_repo, cx);
         let flushed_a_pending_write = self.main_pane.update(cx, |pane, cx| {
-            let pending = pane.auto_save_file_edits
-                && moving_repo.map_or_else(
-                    || !pane.unsaved_file_edit_labels().is_empty(),
-                    |repo_id| !pane.unsaved_file_edit_labels_for_repo(repo_id).is_empty(),
-                );
-            if pane.auto_save_file_edits
-                && let Some(repo_id) = moving_repo
-            {
-                // A moved repository can have dirty buffers in the stash as
-                // well as on screen; adopt both before detachment without
-                // writing unrelated repositories in the same window.
-                pane.save_file_edits_for_repo(repo_id, cx);
-            } else {
+            let pending_count = pane.unsaved_file_edit_keys().len();
+            if moving_repo.is_none_or(|repo_id| {
+                pane.file_editor_key
+                    .as_ref()
+                    .is_some_and(|(editing_repo, _)| *editing_repo == repo_id)
+            }) {
+                // Moving is an automatic flush, not permission to overwrite a
+                // disk conflict. Dirty stashed buffers can also be held behind
+                // a conflict, so leave those for the explicit Save/Discard prompt.
                 pane.flush_file_editor_buffer(cx);
             }
-            pending
+            // A protected buffer stays dirty. Only wait and retry when a write
+            // was dispatched; otherwise present the unsaved-edits prompt now.
+            pane.unsaved_file_edit_keys().len() < pending_count
         });
         if flushed_a_pending_write {
             self.retry_once_file_edit_writes_drain(action, checkpoint, cx);

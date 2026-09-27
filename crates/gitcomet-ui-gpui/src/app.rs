@@ -670,35 +670,39 @@ fn open_initial_gitcomet_windows_after_workspace_initialization(
     let restored_any_repository = restorable_workspaces
         .iter()
         .any(|workspace| !workspace.repositories.is_empty());
-    if !restored_any_workspace {
+    let startup_window = if !restored_any_workspace {
         let mut initial_launch = launch.clone();
         initial_launch.view_config.workspace = WorkspaceBootstrap::Empty;
-        open_gitcomet_window(cx, Arc::clone(&backend), &initial_launch);
+        Some(open_gitcomet_window(
+            cx,
+            Arc::clone(&backend),
+            &initial_launch,
+        ))
     } else {
         let startup_crash_report = launch.view_config.startup_crash_report.clone();
         let final_workspace_index = restorable_workspaces.len().saturating_sub(1);
-        let mut frontmost_window = None;
+        let mut startup_window = None;
         for (index, workspace) in restorable_workspaces.into_iter().enumerate() {
             let report = (index == final_workspace_index)
                 .then(|| startup_crash_report.clone())
                 .flatten();
             let workspace_launch = launch_config_for_workspace(launch, workspace, report);
-            frontmost_window = Some(open_gitcomet_window(
+            startup_window = Some(open_gitcomet_window(
                 cx,
                 Arc::clone(&backend),
                 &workspace_launch,
             ));
         }
-        // The last-activated workspace is opened last and explicitly activated so
-        // an initial command-line path is routed to that workspace rather than an
-        // arbitrary hash-map entry before the OS posts its first focus event.
-        if let Some(window) = frontmost_window {
+        // Activation is asynchronous on Linux. Keep the last-activated
+        // workspace's handle as the routing target until focus catches up.
+        if let Some(window) = startup_window {
             activate_gitcomet_window(cx, window.into());
         }
-    }
+        startup_window
+    };
 
     if let Some(path) = requested_repository {
-        handle_browser_open_request(
+        handle_browser_open_request_with_window(
             cx,
             backend,
             BrowserOpenRequest {
@@ -712,6 +716,7 @@ fn open_initial_gitcomet_windows_after_workspace_initialization(
                     BrowserOpenTarget::ExistingWindow
                 },
             },
+            startup_window.map(|window| window.window_id()),
         );
     }
 
@@ -2932,6 +2937,15 @@ fn handle_browser_open_request(
     backend: Arc<dyn GitBackend>,
     request: BrowserOpenRequest,
 ) {
+    handle_browser_open_request_with_window(cx, backend, request, None);
+}
+
+fn handle_browser_open_request_with_window(
+    cx: &mut App,
+    backend: Arc<dyn GitBackend>,
+    request: BrowserOpenRequest,
+    preferred_window: Option<gpui::WindowId>,
+) {
     let Some(path) = request.path else {
         if let Some(window) = find_normal_gitcomet_window(cx) {
             activate_gitcomet_window(cx, window.handle);
@@ -2953,7 +2967,13 @@ fn handle_browser_open_request(
 
     match request.target {
         BrowserOpenTarget::ExistingWindow => {
-            open_repository_in_existing_or_new_window(cx, backend, path);
+            if let Some(window) =
+                preferred_window.and_then(|id| normal_gitcomet_window_by_id(cx, id))
+            {
+                open_repository_in_window(cx, &window, path);
+            } else {
+                open_repository_in_existing_or_new_window(cx, backend, path);
+            }
         }
         BrowserOpenTarget::NewWindow => {
             let launch = normal_launch_config_with_initial_repository(path, None);
@@ -3525,6 +3545,118 @@ mod tests {
             2,
             "the requested repository needs its own window beside the restored group"
         );
+    }
+
+    #[gpui::test]
+    fn review_regression_startup_path_uses_the_last_activated_restored_workspace(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let mut older = session::Workspace::new(vec![
+            std::env::temp_dir().join("gitcomet-startup-older-workspace"),
+        ]);
+        older.restore_on_launch = true;
+        older.last_activation_order = 1;
+        let mut latest = session::Workspace::new(vec![
+            std::env::temp_dir().join("gitcomet-startup-latest-workspace"),
+        ]);
+        latest.restore_on_launch = true;
+        latest.last_activation_order = 9;
+        let latest_id = latest.id;
+        // Saved order differs from activation order.
+        let workspaces = vec![latest, older];
+        let requested = std::env::temp_dir().join("gitcomet-startup-requested-repository");
+        let mut launch = normal_launch_config(Some(requested.clone()), None);
+        launch.browser_open_target = BrowserOpenTarget::ExistingWindow;
+
+        crate::ui_runtime::with_override(
+            crate::ui_runtime::UiRuntime::deterministic_auto_restore(),
+            || {
+                cx.update(|app| {
+                    crate::workspaces::initialize_for_test(app, workspaces.clone());
+                    open_initial_gitcomet_windows_after_workspace_initialization(
+                        app, backend, &launch, workspaces,
+                    );
+                    assert_eq!(app.windows().len(), 2);
+                    let owner = find_normal_gitcomet_window_for_repo(app, &requested).expect(
+                        "the startup request must have a window owner before focus events run",
+                    );
+                    assert_eq!(owner.workspace_id, Some(latest_id));
+                });
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn review_regression_startup_routing_does_not_depend_on_native_focus(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+        let launch = normal_empty_launch_config(None);
+        let first = cx.update(|app| open_gitcomet_window(app, Arc::clone(&backend), &launch));
+        let second = cx.update(|app| open_gitcomet_window(app, Arc::clone(&backend), &launch));
+        let mut window_cx = gpui::VisualTestContext::from_window(first.into(), cx);
+        window_cx.deactivate_window();
+
+        cx.update(|app| {
+            // Reproduce startup before Linux delivers either a native active
+            // window or the view's focus notification. Pick the window the
+            // arbitrary fallback would not choose, so the test is deterministic.
+            app.update_default_global::<GitCometWindowRegistry, _>(|registry, _| {
+                registry.last_focused_normal_window = None;
+            });
+            assert!(app.active_window().is_none());
+            let fallback = find_normal_gitcomet_window(app)
+                .expect("normal window")
+                .handle;
+            let preferred = if fallback.window_id() == first.window_id() {
+                second
+            } else {
+                first
+            };
+
+            for stale_focus in [false, true] {
+                if stale_focus {
+                    // A compositor can also still report the previous window
+                    // as active while the requested activation is pending.
+                    activate_gitcomet_window(app, fallback);
+                    mark_gitcomet_window_focused(app, fallback.window_id());
+                }
+                let path = std::env::temp_dir()
+                    .join(format!("gitcomet-startup-pending-focus-{stale_focus}"));
+                handle_browser_open_request_with_window(
+                    app,
+                    Arc::clone(&backend),
+                    BrowserOpenRequest {
+                        path: Some(path.clone()),
+                        target: BrowserOpenTarget::ExistingWindow,
+                    },
+                    Some(preferred.window_id()),
+                );
+                let owner =
+                    find_normal_gitcomet_window_for_repo(app, &path).expect("repository owner");
+                assert_eq!(owner.handle.window_id(), preferred.window_id());
+
+                // Existing ownership still wins over the preferred destination.
+                handle_browser_open_request_with_window(
+                    app,
+                    Arc::clone(&backend),
+                    BrowserOpenRequest {
+                        path: Some(path.clone()),
+                        target: BrowserOpenTarget::ExistingWindow,
+                    },
+                    Some(fallback.window_id()),
+                );
+                let owners: Vec<_> = gitcomet_window_entries(app)
+                    .into_iter()
+                    .filter(|entry| entry_contains_repo_path(entry, &path))
+                    .map(|entry| entry.handle.window_id())
+                    .collect();
+                assert_eq!(owners, vec![preferred.window_id()]);
+            }
+            assert_eq!(app.windows().len(), 2);
+        });
     }
 
     #[gpui::test]

@@ -1,5 +1,5 @@
 use gitcomet_state::session;
-use gpui::{BorrowAppContext, WindowButton, WindowButtonLayout};
+use gpui::{BorrowAppContext, Decorations, WindowButton, WindowButtonLayout};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum WindowControlsMode {
@@ -114,8 +114,14 @@ pub(crate) fn resolve_visibility(
     mode: WindowControlsMode,
     system_layout: Option<WindowButtonLayout>,
     system_layout_supported: bool,
-    system_window_is_tiled: bool,
+    decorations: Decorations,
+    is_maximized: bool,
 ) -> ResolvedWindowControls {
+    // Wayland reports every tiled edge for maximized windows too. Those
+    // windows still need their minimize and restore controls.
+    let system_window_is_tiled = !is_maximized
+        && matches!(decorations, Decorations::Client { tiling }
+            if tiling.top || tiling.bottom || tiling.left || tiling.right);
     let trailing = |minimize: bool, maximize: bool| ResolvedWindowControls {
         left: [None; 3],
         right: [
@@ -157,6 +163,15 @@ pub(crate) fn resolve_visibility(
 mod tests {
     use super::*;
 
+    const ALL_EDGES_TILED: Decorations = Decorations::Client {
+        tiling: gpui::Tiling {
+            top: true,
+            bottom: true,
+            left: true,
+            right: true,
+        },
+    };
+
     #[test]
     fn system_mode_uses_linux_desktop_button_layout() {
         let close_only = WindowButtonLayout {
@@ -164,7 +179,13 @@ mod tests {
             right: [None; 3],
         };
         assert_eq!(
-            resolve_visibility(WindowControlsMode::System, Some(close_only), true, false),
+            resolve_visibility(
+                WindowControlsMode::System,
+                Some(close_only),
+                true,
+                Decorations::Server,
+                false,
+            ),
             ResolvedWindowControls {
                 left: [Some(WindowButton::Close), None, None],
                 right: [None; 3],
@@ -176,7 +197,13 @@ mod tests {
             right: [Some(WindowButton::Close), None, None],
         };
         assert_eq!(
-            resolve_visibility(WindowControlsMode::System, Some(mixed), true, false),
+            resolve_visibility(
+                WindowControlsMode::System,
+                Some(mixed),
+                true,
+                Decorations::Server,
+                false,
+            ),
             ResolvedWindowControls {
                 left: [Some(WindowButton::Minimize), None, None],
                 right: [Some(WindowButton::Close), None, None],
@@ -191,7 +218,13 @@ mod tests {
             right: [None; 3],
         };
         assert_eq!(
-            resolve_visibility(WindowControlsMode::Show, Some(empty), true, true),
+            resolve_visibility(
+                WindowControlsMode::Show,
+                Some(empty),
+                true,
+                ALL_EDGES_TILED,
+                false
+            ),
             ResolvedWindowControls {
                 left: [None; 3],
                 right: [
@@ -202,7 +235,13 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve_visibility(WindowControlsMode::Hide, None, false, false),
+            resolve_visibility(
+                WindowControlsMode::Hide,
+                None,
+                false,
+                Decorations::Server,
+                false
+            ),
             ResolvedWindowControls {
                 left: [None; 3],
                 right: [None, None, Some(WindowButton::Close)],
@@ -213,7 +252,13 @@ mod tests {
     #[test]
     fn system_mode_keeps_windows_controls_on_platforms_without_a_layout_api() {
         assert_eq!(
-            resolve_visibility(WindowControlsMode::System, None, false, true),
+            resolve_visibility(
+                WindowControlsMode::System,
+                None,
+                false,
+                ALL_EDGES_TILED,
+                false
+            ),
             ResolvedWindowControls {
                 left: [None; 3],
                 right: [
@@ -228,7 +273,69 @@ mod tests {
     #[test]
     fn system_mode_hides_minimize_and_maximize_for_tiled_linux_windows() {
         assert_eq!(
-            resolve_visibility(WindowControlsMode::System, None, true, true),
+            resolve_visibility(
+                WindowControlsMode::System,
+                None,
+                true,
+                ALL_EDGES_TILED,
+                false
+            ),
+            ResolvedWindowControls {
+                left: [None; 3],
+                right: [None, None, Some(WindowButton::Close)],
+            }
+        );
+    }
+
+    #[test]
+    fn review_regression_maximized_linux_windows_keep_minimize_and_restore_controls() {
+        assert_eq!(
+            resolve_visibility(
+                WindowControlsMode::System,
+                None,
+                true,
+                ALL_EDGES_TILED,
+                true
+            ),
+            ResolvedWindowControls {
+                left: [None; 3],
+                right: [
+                    Some(WindowButton::Minimize),
+                    Some(WindowButton::Maximize),
+                    Some(WindowButton::Close),
+                ],
+            }
+        );
+
+        let layout = WindowButtonLayout {
+            left: [
+                Some(WindowButton::Close),
+                Some(WindowButton::Minimize),
+                None,
+            ],
+            right: [Some(WindowButton::Maximize), None, None],
+        };
+        assert_eq!(
+            resolve_visibility(
+                WindowControlsMode::System,
+                Some(layout),
+                true,
+                ALL_EDGES_TILED,
+                true
+            ),
+            ResolvedWindowControls {
+                left: layout.left,
+                right: layout.right
+            }
+        );
+        assert_eq!(
+            resolve_visibility(
+                WindowControlsMode::Hide,
+                Some(layout),
+                true,
+                ALL_EDGES_TILED,
+                true
+            ),
             ResolvedWindowControls {
                 left: [None; 3],
                 right: [None, None, Some(WindowButton::Close)],
@@ -267,18 +374,21 @@ mod tests {
             WindowControlsMode::System,
             Some(close_then_minimize_on_left),
             true,
+            Decorations::Server,
             false,
         );
         let left_minimize_first = resolve_visibility(
             WindowControlsMode::System,
             Some(minimize_then_close_on_left),
             true,
+            Decorations::Server,
             false,
         );
         let right_close_first = resolve_visibility(
             WindowControlsMode::System,
             Some(close_then_minimize_on_right),
             true,
+            Decorations::Server,
             false,
         );
 

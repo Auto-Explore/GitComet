@@ -82,7 +82,6 @@ impl AutosquashMode {
 pub(crate) enum RepoPickerScope {
     All,
     WorkspacesOnly,
-    ParentOf(CommitId),
 }
 
 /// The version of the repository a local markdown link opens.

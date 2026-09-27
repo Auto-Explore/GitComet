@@ -129,17 +129,14 @@ impl Render for SettingsWindowView {
                     .child(SETTINGS_WINDOW_TITLE),
             );
 
+        let is_maximized = window.is_maximized();
         let control_layout = crate::window_controls::resolve_visibility(
             self.window_controls_mode,
             cx.button_layout(),
             cfg!(any(target_os = "linux", target_os = "freebsd")),
-            matches!(
-                window.window_decorations(),
-                Decorations::Client { tiling }
-                    if tiling.top || tiling.bottom || tiling.left || tiling.right
-            ),
+            window.window_decorations(),
+            is_maximized,
         );
-        let is_maximized = window.is_maximized();
         let (left_controls, right_controls) = if is_macos {
             (Vec::new(), Vec::new())
         } else {
