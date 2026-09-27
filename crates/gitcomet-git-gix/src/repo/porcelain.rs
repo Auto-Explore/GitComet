@@ -13,7 +13,6 @@ use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, 
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 fn stash_spec(index: usize) -> String {
@@ -177,58 +176,27 @@ fn edit_local_config_with_policy(
     edit: impl FnOnce(&mut gix::config::File) -> Result<bool>,
 ) -> Result<()> {
     let config_path = repo.common_dir().join("config");
-    let mut config = match gix::config::File::from_path_no_includes(
-        config_path.clone(),
-        gix::config::Source::Local,
-    ) {
+    // Locks before reading, follows a symlinked config and keeps its mode.
+    let mut config = match repo.config_file_mut(&config_path) {
         Ok(config) => config,
-        Err(gix::config::file::init::from_paths::Error::Io { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound
-                && policy == LocalConfigEditPolicy::BestEffortCleanup =>
-        {
+        // Git still deletes the branch ref when branch-config cleanup can't
+        // take the config lock; it only warns and leaves the config in place.
+        Err(e) if e.is_retryable() && policy == LocalConfigEditPolicy::BestEffortCleanup => {
             return Ok(());
         }
         Err(e) => {
             return Err(Error::new(ErrorKind::Backend(format!(
-                "gix read local config {}: {e}",
+                "gix open local config {}: {e}",
                 config_path.display()
             ))));
         }
     };
 
     if edit(&mut config)? {
-        let serialized = config.to_bstring();
-        let mut lock = match gix::lock::File::acquire_to_update_resource(
-            &config_path,
-            gix::lock::acquire::Fail::Immediately,
-            None,
-        ) {
-            Ok(lock) => lock,
-            // Git still deletes the branch ref when branch-config cleanup can't
-            // take the config lock; it only warns and leaves the config in place.
-            Err(gix::lock::acquire::Error::PermanentlyLocked { .. })
-                if policy == LocalConfigEditPolicy::BestEffortCleanup =>
-            {
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "lock local config {}: {e}",
-                    config_path.display()
-                ))));
-            }
-        };
-        lock.write_all(serialized.as_ref() as &[u8]).map_err(|e| {
+        config.commit().map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "write local config {}: {e}",
                 config_path.display()
-            )))
-        })?;
-        lock.commit().map_err(|e| {
-            Error::new(ErrorKind::Backend(format!(
-                "commit local config {}: {}",
-                config_path.display(),
-                e.error
             )))
         })?;
     }
@@ -311,17 +279,18 @@ fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Resu
                 "gix rev-parse {target} object: {e}"
             )))
         })?;
-    let commit = object.peel_to_commit().map_err(|e| match e {
-        gix::object::peel::to_kind::Error::NotFound { oid, actual, .. } => create_branch_error(
-            format!(
-                "error: object {oid} is a {actual}, not a commit\nfatal: not a valid branch point: '{target}'"
-            ),
-        ),
-        other => Error::new(ErrorKind::Backend(format!(
-            "gix branch target {target} to commit: {other}"
-        ))),
+    let object = object.peel_tags_to_end().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix branch target {target} to commit: {e}"
+        )))
     })?;
-    Ok(commit.id)
+    if object.kind != gix::object::Kind::Commit {
+        return Err(create_branch_error(format!(
+            "error: object {} is a {}, not a commit\nfatal: not a valid branch point: '{target}'",
+            object.id, object.kind
+        )));
+    }
+    Ok(object.id)
 }
 
 fn resolve_stash_commit(repo: &gix::Repository, index: usize) -> Result<gix::Commit<'_>> {

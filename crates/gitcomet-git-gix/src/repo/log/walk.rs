@@ -57,10 +57,12 @@ impl gix::objs::Find for CancellableLogWalkFind {
         &self,
         id: &gix::oid,
         buffer: &'a mut Vec<u8>,
-    ) -> std::result::Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
+    ) -> gix::ExnResult<Option<gix::objs::Data<'a>>> {
+        use gix::error::ErrorExt as _;
         if self.cancellation.is_cancelled() {
             return Err(
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "log walk cancelled").into(),
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "log walk cancelled")
+                    .raise_erased(),
             );
         }
         gix::objs::Find::try_find(&self.inner, id, buffer)
@@ -245,15 +247,8 @@ pub(crate) fn new_log_paged_walk(
     })
 }
 
-pub(crate) fn topo_build_error_is_missing_object(
-    error: &gix::traverse::commit::topo::Error,
-) -> bool {
-    matches!(
-        error,
-        gix::traverse::commit::topo::Error::Find(
-            gix::objs::find::existing_iter::Error::NotFound { .. }
-        )
-    )
+pub(crate) fn topo_build_error_is_missing_object(error: &gix::Exn) -> bool {
+    error.is_not_found()
 }
 
 pub(crate) fn apply_first_parent_resume_hint(page: &mut LogPage) {

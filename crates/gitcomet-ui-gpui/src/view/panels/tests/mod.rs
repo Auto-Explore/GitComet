@@ -257,6 +257,135 @@ pub(super) fn set_ready_worktree_preview(
     cx.notify();
 }
 
+/// One row's text and its syntax colours (line-relative, background-only spans
+/// dropped), comparable across the paint log, the row caches and a document.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct LineSyntaxSnapshot {
+    pub(super) text: String,
+    pub(super) syntax: Vec<(std::ops::Range<usize>, Option<gpui::Hsla>)>,
+}
+
+pub(super) fn one_based_line_byte_range(
+    text: &str,
+    line_starts: &[usize],
+    line_no: u32,
+) -> Option<std::ops::Range<usize>> {
+    let line_ix = usize::try_from(line_no).ok()?.checked_sub(1)?;
+    let start = (*line_starts.get(line_ix)?).min(text.len());
+    let mut end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .unwrap_or(text.len())
+        .min(text.len());
+    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
+        end = end.saturating_sub(1);
+    }
+    Some(start..end)
+}
+
+pub(super) fn shared_text_and_line_starts(text: &str) -> (gpui::SharedString, Arc<[usize]>) {
+    let mut line_starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
+    line_starts.push(0usize);
+    for (ix, byte) in text.as_bytes().iter().enumerate() {
+        if *byte == b'\n' {
+            line_starts.push(ix.saturating_add(1));
+        }
+    }
+    (text.to_string().into(), Arc::from(line_starts))
+}
+
+pub(super) fn prepared_document_snapshot_for_line(
+    theme: AppTheme,
+    text: &str,
+    line_starts: &[usize],
+    document: rows::PreparedDiffSyntaxDocument,
+    language: rows::DiffSyntaxLanguage,
+    line_no: u32,
+) -> Option<LineSyntaxSnapshot> {
+    let byte_range = one_based_line_byte_range(text, line_starts, line_no)?;
+    let line_text = text.get(byte_range.clone())?.to_string();
+    let started = std::time::Instant::now();
+
+    loop {
+        let highlights = rows::request_syntax_highlights_for_prepared_document_byte_range(
+            theme,
+            text,
+            line_starts,
+            document,
+            language,
+            byte_range.clone(),
+        )?;
+
+        if !highlights.pending {
+            return Some(LineSyntaxSnapshot {
+                text: line_text.clone(),
+                syntax: highlights
+                    .highlights
+                    .into_iter()
+                    .filter(|(_, style)| style.background_color.is_none())
+                    .map(|(range, style)| {
+                        (
+                            range.start.saturating_sub(byte_range.start)
+                                ..range.end.saturating_sub(byte_range.start),
+                            style.color,
+                        )
+                    })
+                    .collect(),
+            });
+        }
+
+        let completed =
+            rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document);
+        if completed == 0 && started.elapsed() >= std::time::Duration::from_secs(2) {
+            return None;
+        }
+        if completed == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+/// Syntax colours of every line of `text` from a whole-document parse of its own.
+/// It parses `text` plus a newline: prepared documents and their token chunks are
+/// cached by content (per thread and shared), so parsing `text` itself would hand
+/// back the pane's document and compare it with itself.
+pub(super) fn fresh_document_line_snapshots(
+    theme: AppTheme,
+    language: rows::DiffSyntaxLanguage,
+    text: &str,
+) -> Vec<LineSyntaxSnapshot> {
+    let reference_text = format!("{text}\n");
+    let (shared_text, line_starts) = shared_text_and_line_starts(&reference_text);
+    let document = match rows::prepare_diff_syntax_document_with_budget_reuse_text(
+        language,
+        rows::DiffSyntaxMode::Auto,
+        shared_text,
+        Arc::clone(&line_starts),
+        rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::from_secs(1),
+        },
+        None,
+        None,
+    ) {
+        rows::PrepareDiffSyntaxDocumentResult::Ready(document) => document,
+        other => panic!("expected a prepared {language:?} document, got {other:?}"),
+    };
+    (1..=text.split('\n').count())
+        .map(|line_no| {
+            let line_no = u32::try_from(line_no).expect("line number fits u32");
+            prepared_document_snapshot_for_line(
+                theme,
+                &reference_text,
+                &line_starts,
+                document,
+                language,
+                line_no,
+            )
+            .unwrap_or_else(|| panic!("line {line_no} of the reference parse never highlighted"))
+        })
+        .collect()
+}
+
 pub(super) fn build_large_json_array_lines(
     object_count: usize,
     payload_bytes: usize,
