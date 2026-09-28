@@ -1517,6 +1517,8 @@ impl MainPaneView {
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,
+            output_save_format: None,
+            output_saved_format: None,
         };
         // Populate mode-dependent visible state using the same code path as
         // later rebuilds (hide-resolved toggle, conflict picks, etc.). The

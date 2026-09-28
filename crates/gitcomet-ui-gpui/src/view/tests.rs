@@ -5287,6 +5287,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
                     crate::view::panes::main::StashedFileEdit {
                         text: SharedString::from("edited\n"),
                         text_format: None,
+                        source_text_format: None,
                         cursor: 0,
                         text_fingerprint: 1,
                         saved_fingerprint: 2,
@@ -5466,6 +5467,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
                     crate::view::panes::main::StashedFileEdit {
                         text: SharedString::from("edited\n"),
                         text_format: None,
+                        source_text_format: None,
                         cursor: 0,
                         text_fingerprint: 1,
                         saved_fingerprint: 2,

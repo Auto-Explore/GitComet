@@ -395,10 +395,10 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
         assert!(
             root.toast_host
                 .read(app)
-                .error_notices()
+                .toasts_for_tests(app)
                 .iter()
-                .any(|(_, notice)| notice.repo_id == Some(repo_id)
-                    && notice.message.contains("Save or discard your edits"))
+                .any(|(kind, message)| *kind == components::ToastKind::Warning
+                    && message.contains("Save or discard your edits"))
         );
     });
     // Once the output has been saved, the same request can reload normally.
@@ -470,6 +470,26 @@ fn conflict_save_uses_output_encoding_without_reopening_sources(cx: &mut gpui::T
                 .conflict_output_bytes_for_save("日本語\n".into(), cx)
                 .unwrap();
             assert_eq!(bytes.as_bytes(), "日本語\n".as_bytes());
+            pane.set_save_text_format(
+                gitcomet_core::text_format::TextFormat {
+                    encoding: TextEncoding::WINDOWS_1252,
+                    bom: false,
+                },
+                cx,
+            );
+            let first = pane
+                .conflict_output_bytes_for_save("café\n".into(), cx)
+                .unwrap();
+            pane.mark_conflict_resolved_output_saved(cx);
+            assert!(pane.conflict_resolver.output_save_format.is_none());
+            let second = pane
+                .conflict_output_bytes_for_save("café\n".into(), cx)
+                .unwrap();
+            assert_eq!(
+                second.as_bytes(),
+                first.as_bytes(),
+                "saving again must keep the encoding just written"
+            );
         })
     });
 }
@@ -1500,4 +1520,291 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
         assert_eq!(root.popover_host.read(app).popover_kind_for_tests(), None);
     });
     let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn review_editor_returning_to_lossy_encoding_stays_read_only(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_format::TextFormat;
+    let _guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let original = b"\x87\x90\n";
+    std::fs::write(workdir.path().join(FILE), original).unwrap();
+    let encoding = TextEncoding::from_label("shift_jis").unwrap();
+    show(
+        cx,
+        &view,
+        file_state(
+            RepoId(9690),
+            workdir.path(),
+            true,
+            Loadable::NotLoaded,
+            Some(encoding),
+        ),
+        true,
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert!(pane.file_editor_text_format.unwrap().lossy);
+            pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
+            assert!(!pane.file_editor_input.read(cx).is_read_only());
+            pane.set_file_editor_save_format(
+                TextFormat {
+                    encoding,
+                    bom: false,
+                },
+                cx,
+            );
+            assert!(
+                pane.file_editor_input.read(cx).is_read_only(),
+                "the original bytes still do not round trip"
+            );
+            assert!(!pane.save_file_editor_buffer(cx));
+        });
+    });
+    assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
+}
+
+#[gpui::test]
+fn review_conflict_returning_to_lossy_encoding_cannot_save(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_format::{SideKind, TextFormat, decode_bytes};
+    let _guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(9691);
+    let mut repo = conflict_compare_repo_state(
+        repo_id,
+        workdir.path(),
+        Path::new(FILE),
+        "base\n",
+        "ours\n",
+        "theirs\n",
+        "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n",
+    );
+    set_test_conflict_status(&mut repo, FILE, gitcomet_core::domain::DiffArea::Unstaged);
+    let encoding = TextEncoding::from_label("shift_jis").unwrap();
+    let format = decode_bytes(
+        b"\x87\x90\n",
+        SideKind::Worktree,
+        &TextAttributes::default(),
+        Some(encoding),
+    )
+    .format;
+    let mut session = gitcomet_core::conflict_session::ConflictSession::from_stage_inputs(
+        FILE.into(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        gitcomet_core::conflict_session::ConflictPayload::Text("base\n".into()),
+        gitcomet_core::conflict_session::ConflictPayload::Text("ours\n".into()),
+        gitcomet_core::conflict_session::ConflictPayload::Text("theirs\n".into()),
+    );
+    session.current_format = Some(format);
+    repo.conflict_state.conflict_session = Some(session);
+    show(cx, &view, app_state_with_repo(repo, repo_id), false);
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert!(pane.conflict_output_text_format().unwrap().lossy);
+            pane.set_save_text_format(TextFormat::UTF_8, cx);
+            pane.set_save_text_format(format.format, cx);
+            assert!(
+                pane.conflict_output_bytes_for_save("≒\n".into(), cx)
+                    .is_none()
+            );
+        })
+    });
+}
+
+#[gpui::test]
+fn review_conflict_encoding_choice_is_cleared_with_conflict_lifecycle(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(9692);
+    let mut repo = conflict_compare_repo_state(
+        repo_id,
+        workdir.path(),
+        Path::new(FILE),
+        "base\n",
+        "ours\n",
+        "theirs\n",
+        "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n",
+    );
+    set_test_conflict_status(&mut repo, FILE, gitcomet_core::domain::DiffArea::Unstaged);
+    let state = app_state_with_repo(repo, repo_id);
+    show(cx, &view, state.clone(), false);
+    let original = cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .conflict_output_text_format()
+    });
+    for transition in ["save", "close", "resolve"] {
+        show(cx, &view, Arc::new(AppState::test_default()), false);
+        show(cx, &view, state.clone(), false);
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                pane.set_save_text_format(
+                    gitcomet_core::text_format::TextFormat {
+                        encoding: koi8(),
+                        bom: false,
+                    },
+                    cx,
+                );
+            })
+        });
+        match transition {
+            "save" => cx.update(|_, app| {
+                view.read(app)
+                    .main_pane
+                    .clone()
+                    .update(app, |pane, cx| pane.mark_conflict_resolved_output_saved(cx))
+            }),
+            "close" => show(cx, &view, Arc::new(AppState::test_default()), false),
+            "resolve" => {
+                let mut next = (*state).clone();
+                next.repos[0].diff_state.diff_target = None;
+                show(cx, &view, Arc::new(next), false);
+            }
+            _ => unreachable!(),
+        }
+        show(cx, &view, state.clone(), false);
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert!(pane.conflict_resolver.output_save_format.is_none());
+            if transition == "save" {
+                assert_eq!(
+                    pane.conflict_output_text_format().unwrap().format.encoding,
+                    koi8()
+                );
+            } else {
+                assert_eq!(pane.conflict_output_text_format(), original);
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn review_detect_encoding_with_edits_is_a_warning(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join(FILE), "text\n").unwrap();
+    show(
+        cx,
+        &view,
+        file_state(
+            RepoId(9693),
+            workdir.path(),
+            true,
+            Loadable::NotLoaded,
+            None,
+        ),
+        true,
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "edit ", cx);
+            });
+            pane.on_file_editor_edited(cx);
+            pane.set_text_encoding_override(None, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let host = view.read(app).toast_host.read(app);
+        assert!(
+            host.error_notices().is_empty(),
+            "a refused UI action must not create a sticky error"
+        );
+        assert!(
+            host.toasts_for_tests(app)
+                .iter()
+                .any(|(kind, message)| *kind == components::ToastKind::Warning
+                    && message.contains("Save or discard"))
+        );
+    });
+}
+
+#[gpui::test]
+fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_format::TextFormat;
+    let _guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
+    let repo_id = RepoId(9695);
+    for attribute_encoding in [None, Some(EncodingAttr::from_label("windows-1252"))] {
+        let saved_override = attribute_encoding.as_ref().map(|_| TextEncoding::UTF_8);
+        let attributes = Arc::new(TextAttributes {
+            encoding: attribute_encoding,
+            ..TextAttributes::default()
+        });
+        let state = file_state(
+            repo_id,
+            workdir.path(),
+            true,
+            Loadable::Ready(attributes.clone()),
+            Some(TextEncoding::WINDOWS_1252),
+        );
+        show(cx, &view, state, true);
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "saved ", cx);
+                });
+                pane.on_file_editor_edited(cx);
+                pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
+            })
+        });
+        show(
+            cx,
+            &view,
+            file_state(
+                repo_id,
+                workdir.path(),
+                true,
+                Loadable::Loading,
+                Some(TextEncoding::WINDOWS_1252),
+            ),
+            true,
+        );
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                let expected = pane
+                    .file_editor_decode_key
+                    .unwrap()
+                    .with_encoding(saved_override);
+                assert!(pane.save_file_editor_buffer(cx));
+                assert_eq!(
+                    pane.file_editor_decode_key,
+                    Some(expected),
+                    "the optimistic save must keep the read identity until the write lands"
+                );
+            })
+        });
+        // The store has accepted the write, but disk still contains the old
+        // bytes. Attribute completion must not read them over the saved buffer.
+        show(
+            cx,
+            &view,
+            file_state(
+                repo_id,
+                workdir.path(),
+                true,
+                Loadable::Ready(attributes.clone()),
+                saved_override,
+            ),
+            true,
+        );
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(pane.file_editor_input.read(app).text(), "saved café\n");
+            assert_eq!(
+                pane.file_editor_text_format.unwrap().format,
+                TextFormat::UTF_8
+            );
+        });
+    }
 }

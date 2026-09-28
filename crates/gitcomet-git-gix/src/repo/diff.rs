@@ -901,18 +901,19 @@ impl GixRepo {
             return Ok(None);
         };
         let attributes = super::text_attributes::resolve_text_attributes(&repo, &repo_path);
-        let stage = |bytes: Option<Vec<u8>>| {
-            ConflictPayload::decode(
-                bytes.map(Arc::<[u8]>::from),
-                None,
-                SideKind::GitInternal,
-                &attributes,
-                encoding,
-            )
-        };
-        let (base, base_format) = stage(stage_data.base_bytes);
-        let (ours, ours_format) = stage(stage_data.ours_bytes);
-        let (theirs, theirs_format) = stage(stage_data.theirs_bytes);
+        let [
+            (base, base_format),
+            (ours, ours_format),
+            (theirs, theirs_format),
+        ] = super::text_decode::decode_conflict_stages(
+            [
+                stage_data.base_bytes,
+                stage_data.ours_bytes,
+                stage_data.theirs_bytes,
+            ],
+            &attributes,
+            encoding,
+        );
         let (mut current, current_format) = match std::fs::read(self.spec.workdir.join(&repo_path))
         {
             Ok(bytes) => {
@@ -956,15 +957,20 @@ impl GixRepo {
         };
         let mixed_encodings = non_ascii_encodings()
             .any(|encoding| non_ascii_encodings().any(|other| encoding != other));
-        let mixed_current = if automatic_text
+        let decode_mixed = automatic_text
             && mixed_encodings
             && stage_formats
                 .into_iter()
                 .flatten()
-                .all(|format| format.format.encoding.is_ascii_compatible())
-        {
+                .all(|format| format.format.encoding.is_ascii_compatible());
+        let mixed_current = if decode_mixed {
             current.as_ref().and_then(|payload| {
-                super::text_decode::decode_mixed_conflict(payload, stage_formats, &attributes)
+                super::text_decode::decode_mixed_conflict(
+                    payload,
+                    stage_formats,
+                    stages.map(|(payload, _)| payload),
+                    &attributes,
+                )
             })
         } else {
             None
@@ -985,11 +991,17 @@ impl GixRepo {
                             })
                         })
                 });
+        let ambiguous_mixed = decode_mixed && mixed_current.is_none()
+            && current.as_ref().and_then(ConflictPayload::as_bytes).is_some_and(|bytes| {
+                gitcomet_core::conflict_session::parse_conflict_marker_ranges_bytes(bytes).iter().any(|segment| {
+                    matches!(segment, gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Conflict(_))
+                })
+            });
         if let Some(decoded) = mixed_current {
             current = Some(decoded);
         }
-        let output_format = needs_utf8.then(|| {
-            gitcomet_core::text_format::SideTextFormat::utf8(
+        let output_format = (needs_utf8 || ambiguous_mixed).then(|| {
+            let mut format = gitcomet_core::text_format::SideTextFormat::utf8(
                 gitcomet_core::text_format::LineEndingStats::from_bytes(
                     current
                         .as_ref()
@@ -997,7 +1009,10 @@ impl GixRepo {
                         .unwrap_or_default()
                         .as_bytes(),
                 ),
-            )
+            );
+            // Unknown context cannot be safely saved as guessed text.
+            format.malformed = ambiguous_mixed;
+            format
         });
         let current_payload = current.clone();
         let session = if strategy == ConflictResolverStrategy::FullTextResolver {

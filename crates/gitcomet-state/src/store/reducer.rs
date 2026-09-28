@@ -1177,13 +1177,18 @@ fn reduce_inner(
                         | crate::msg::InternalMsg::RepoPathsActionFinished { .. }
                         | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
                 );
-            let previous_diagnostic_len = suppress_nested_diagnostics
+            let previous_diagnostics = suppress_nested_diagnostics
                 .then(|| {
                     state
                         .repos
                         .iter()
                         .find(|repo| repo.id == repo_id)
-                        .map(|repo| repo.feedback.diagnostics.len())
+                        .map(|repo| {
+                            (
+                                repo.feedback.diagnostics.clone(),
+                                repo.feedback.diagnostics_seq,
+                            )
+                        })
                 })
                 .flatten();
             if has_hooks && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
@@ -1195,8 +1200,9 @@ fn reduce_inner(
 
             if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
                 repo.feedback.command_log_operation_id = None;
-                if let Some(previous_diagnostic_len) = previous_diagnostic_len {
-                    repo.feedback.diagnostics.truncate(previous_diagnostic_len);
+                if let Some((entries, seq)) = previous_diagnostics {
+                    repo.feedback.diagnostics = entries;
+                    repo.feedback.diagnostics_seq = seq;
                 }
                 git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
             }

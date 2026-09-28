@@ -496,3 +496,38 @@ fn measure_text_format_throughput() {
         encode(&sjis_text, sjis_format).unwrap();
     });
 }
+
+#[test]
+fn streaming_binary_rejection_respects_boms_overrides_and_chunk_boundaries() {
+    let attributes = TextAttributes::default();
+    let mut sniffer = ContentSniffer::new();
+    sniffer.feed(&b"\0\xff\n".repeat(4096));
+    assert!(sniffer.is_binary(SideKind::Worktree, &attributes, None));
+    assert!(!sniffer.is_binary(
+        SideKind::Worktree,
+        &attributes,
+        Some(TextEncoding::WINDOWS_1252)
+    ));
+    let mut text = vec![b'a'; 8192];
+    text[0] = 0;
+    text.push(0xc3);
+    let mut sniffer = ContentSniffer::new();
+    sniffer.feed(&text);
+    assert!(!sniffer.is_binary(SideKind::Worktree, &attributes, None));
+    sniffer.feed(b"\xa4");
+    assert!(sniffer.finish().utf8_valid);
+    for encoding in [TextEncoding::UTF_16LE, TextEncoding::UTF_16BE] {
+        let bytes = encode(
+            &"hello\n".repeat(2048),
+            TextFormat {
+                encoding,
+                bom: true,
+            },
+        )
+        .unwrap()
+        .into_owned();
+        let mut sniffer = ContentSniffer::new();
+        sniffer.feed(&bytes);
+        assert!(!sniffer.is_binary(SideKind::Worktree, &attributes, None));
+    }
+}

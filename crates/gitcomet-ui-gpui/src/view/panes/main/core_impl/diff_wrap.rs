@@ -46,10 +46,29 @@ pub(super) fn diff_wrap_byte_ranges_for_revealed_text(
 ) -> Vec<rows::DiffWrapByteRange> {
     let marker_text = raw_text
         .filter(|raw| {
-            crate::view::diff_utils::diff_text_display_len(tab_width, raw) == source_text.len()
+            crate::view::tab_width::expanded_len(tab_width, raw) == source_text.len()
+                || crate::view::tab_width::expanded_patch_len(tab_width, raw) == source_text.len()
         })
         .unwrap_or(source_text);
-    let offset_map = rows::whitespace_visible_diff_offset_map(tab_width, marker_text, true);
+    // Patch signs are copied with the line but do not advance its tab stops.
+    // Map the content separately, then put the sign's byte back in the ranges.
+    let prefix = usize::from(
+        crate::view::tab_width::expanded_len(tab_width, marker_text) != source_text.len(),
+    );
+    let offset_map =
+        rows::whitespace_visible_diff_offset_map(tab_width, &marker_text[prefix..], true);
+    let source_offset = |offset: usize| {
+        if offset < prefix {
+            return 0;
+        }
+        let offset = offset - prefix;
+        prefix
+            + if offset >= offset_map.display_len() {
+                offset_map.source_len()
+            } else {
+                offset_map.source_offset_for_display(offset)
+            }
+    };
     let mut ranges = rows::diff_wrap_ranges_for_text(
         tab_width,
         rows::whitespace_visible_line_text(marker_text).as_ref(),
@@ -57,12 +76,8 @@ pub(super) fn diff_wrap_byte_ranges_for_revealed_text(
     )
     .into_iter()
     .map(|display_range| {
-        let start = offset_map.source_offset_for_display(display_range.start);
-        let end = if display_range.end >= offset_map.display_len() {
-            offset_map.source_len()
-        } else {
-            offset_map.source_offset_for_display(display_range.end)
-        };
+        let start = source_offset(display_range.start);
+        let end = source_offset(display_range.end);
         rows::DiffWrapByteRange { start, end }
     })
     .collect::<Vec<_>>();
@@ -674,6 +689,19 @@ mod tests {
     /// Annotation lives inside the left split column. Charging it to whichever
     /// column is narrower left no room at all and wrapped every line to one
     /// character.
+    #[test]
+    fn review_revealed_patch_tabs_keep_the_raw_marker_offsets() {
+        for raw in ["+a\tb", "-日\tb", " a\tb"] {
+            for width in [4, 8] {
+                let source = crate::view::tab_width::expand_patch_tabs(width, raw);
+                let ranges = diff_wrap_byte_ranges_for_revealed_text(width, &source, Some(raw), 4);
+                // The sign, letter, tab marker and final letter fill row one;
+                // only the EOL marker wraps. Byte offsets cover the full source.
+                assert_eq!(ranges[0].end, source.len(), "{raw:?}, tab width {width}");
+            }
+        }
+    }
+
     #[test]
     fn annotation_only_narrows_the_left_split_column() {
         let (text_start, pad) = (px(40.0), px(8.0));

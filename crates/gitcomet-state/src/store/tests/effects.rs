@@ -180,7 +180,7 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
 
 #[test]
 fn saving_attributes_preserves_choices_even_when_the_rule_is_shadowed() {
-    use gitcomet_core::text_format::{LineEnding, TextEncoding, TextOverride};
+    use gitcomet_core::text_format::{TextEncoding, TextOverride};
     for shadow in [
         None,
         Some("sub/.gitattributes"),
@@ -217,7 +217,6 @@ fn saving_attributes_preserves_choices_even_when_the_rule_is_shadowed() {
         let chosen = TextOverride {
             encoding: TextEncoding::from_label("koi8-r"),
             tab_size: Some(3),
-            line_ending: Some(LineEnding::CrLf),
         };
         repo_state.diff_state.text_override = Some(crate::model::OpenFileTextOverride {
             path: path.clone(),

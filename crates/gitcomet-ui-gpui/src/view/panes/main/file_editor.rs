@@ -56,6 +56,7 @@ pub(in crate::view) struct StashedFileEdit {
     pub(in crate::view) disk: DiskIdentity,
     /// How the file was read, so it is written back the same way.
     pub(in crate::view) text_format: Option<SideTextFormat>,
+    pub(in crate::view) source_text_format: Option<SideTextFormat>,
 }
 
 /// Why text cannot be written in its file's encoding.
@@ -640,6 +641,7 @@ impl MainPaneView {
                 // The buffer keeps the encoding it was read in; the current
                 // choice must not re-read over it.
                 self.set_file_editor_text_format(stashed.text_format, cx);
+                self.file_editor_source_text_format = stashed.source_text_format;
                 self.file_editor_decode_key = self
                     .selected_text_decode_request(SideKind::Worktree)
                     .map(|(_, key)| key);
@@ -828,6 +830,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.file_editor_text_format = format;
+        self.file_editor_source_text_format = format;
         let read_only = format.is_some_and(|format| !format.is_writable());
         self.file_editor_input
             .update(cx, |input, cx| input.set_read_only(read_only, cx));
@@ -1077,6 +1080,7 @@ impl MainPaneView {
                 first_dirty_line: None,
                 disk: self.file_editor_disk.clone(),
                 text_format: self.file_editor_text_format,
+                source_text_format: self.file_editor_source_text_format,
             },
         );
         // The read-only preview of the same path is now behind the file on
@@ -1127,6 +1131,7 @@ impl MainPaneView {
                 first_dirty_line: self.file_editor_first_dirty_line,
                 disk: self.file_editor_disk.clone(),
                 text_format: self.file_editor_text_format,
+                source_text_format: self.file_editor_source_text_format,
             },
         );
     }

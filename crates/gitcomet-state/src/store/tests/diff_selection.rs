@@ -5805,7 +5805,7 @@ mod text_override {
     }
 
     #[test]
-    fn tab_size_or_line_ending_only_does_not_reload() {
+    fn tab_size_only_does_not_reload() {
         let (mut repos, mut state) = selected("a.txt");
         let override_rev = state.repos[0].diff_state.text_override_rev;
         let effects = set(
@@ -5814,7 +5814,6 @@ mod text_override {
             "a.txt",
             TextOverride {
                 tab_size: Some(8),
-                line_ending: Some(gitcomet_core::text_format::LineEnding::CrLf),
                 ..TextOverride::default()
             },
         );

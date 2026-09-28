@@ -173,13 +173,18 @@ pub(super) fn apply_tab_stops(
     let tab_size = tab_size.max(1);
     let mut runs = layout.runs.clone();
     let mut shift = 0.0f32;
+    let mut logical_column = 0usize;
+    let mut after_tab = 0usize;
     for k in 0..glyphs.len() {
         let x = x_of(k) + shift;
         runs[glyphs[k].0].glyphs[glyphs[k].1].position.x = px(x);
         if is_tab(k) {
-            let at = (x / column).round() as usize;
-            let target = ((at / tab_size + 1) * tab_size) as f32 * column;
-            shift += (target - x) - advance_of(k);
+            let index = glyph(k).index;
+            logical_column += text[after_tab..index].chars().count();
+            let spaces = tab_size - logical_column % tab_size;
+            shift += spaces as f32 * column - advance_of(k);
+            logical_column += spaces;
+            after_tab = index + 1;
         }
     }
     Some(gpui::LineLayout {
@@ -634,6 +639,27 @@ mod tab_stop_tests {
             .iter()
             .map(|glyph| f32::from(glyph.position.x))
             .collect()
+    }
+
+    #[test]
+    fn review_wide_characters_use_the_same_tab_columns_as_diff() {
+        let text = "日本\tx";
+        let mut layout = mono_layout("abcd", 10.0);
+        layout.len = text.len();
+        layout.width = px(60.0);
+        for (glyph, (index, x)) in
+            layout.runs[0]
+                .glyphs
+                .iter_mut()
+                .zip([(0, 0.0), (3, 20.0), (6, 40.0), (7, 50.0)])
+        {
+            glyph.index = index;
+            glyph.position.x = px(x);
+        }
+        let layout = apply_tab_stops(&layout, text, 4).unwrap();
+        // The diff expands two characters plus a tab to 日本<space><space>x.
+        assert_eq!(xs(&layout)[3], 60.0);
+        assert_eq!(layout.runs[0].glyphs[3].index, 7);
     }
 
     #[test]

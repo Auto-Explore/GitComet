@@ -749,6 +749,10 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.conflict_resolver.output_save_format.is_some() {
+            self.conflict_resolver.output_saved_format = self.conflict_output_text_format();
+            self.conflict_resolver.output_save_format = None;
+        }
         self.conflict_resolved_output_saved_snapshot =
             (!self.conflict_resolved_output_is_streamed()).then(|| {
                 self.conflict_resolver_input

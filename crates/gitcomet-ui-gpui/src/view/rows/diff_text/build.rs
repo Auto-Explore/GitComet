@@ -3,16 +3,6 @@ use crate::kit::click::PointerClickExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 use palette::IntoColor;
 
-/// A whole line with its tabs expanded to tab stops.
-fn maybe_expand_tabs(tab_width: usize, s: &str) -> SharedString {
-    if !s.contains('\t') {
-        return SharedString::new(s);
-    }
-    crate::view::tab_width::expand_tabs(tab_width, s)
-        .into_owned()
-        .into()
-}
-
 #[inline]
 pub(super) fn segment_overlaps_sorted_ranges(
     segment_start: usize,
@@ -50,7 +40,9 @@ pub(super) fn build_diff_text_segments(
         && syntax_tokens_override.is_none()
     {
         return vec![CachedDiffTextSegment {
-            text: maybe_expand_tabs(tab_width, text),
+            text: crate::view::tab_width::expand_tabs(tab_width, text)
+                .into_owned()
+                .into(),
             in_word: false,
             in_query: false,
             syntax: SyntaxTokenKind::None,
@@ -117,7 +109,9 @@ pub(super) fn build_diff_text_segments(
             let b = b.min(text.len());
             let Some(seg) = text.get(a..b) else {
                 return vec![CachedDiffTextSegment {
-                    text: maybe_expand_tabs(tab_width, text),
+                    text: crate::view::tab_width::expand_tabs(tab_width, text)
+                        .into_owned()
+                        .into(),
                     in_word: false,
                     in_query: false,
                     syntax: SyntaxTokenKind::None,
@@ -522,7 +516,9 @@ pub(super) fn build_styled_text_fused(
         && language.is_none()
         && syntax_tokens_override.is_none()
     {
-        let expanded = maybe_expand_tabs(tab_width, text);
+        let expanded = crate::view::tab_width::expand_tabs(tab_width, text)
+            .into_owned()
+            .into();
         return styled_text_to_cached(expanded, Vec::new());
     }
 
@@ -595,7 +591,9 @@ pub(super) fn build_styled_text_fused(
             let b = b.min(text.len());
             let Some(seg) = text.get(a..b) else {
                 // Fallback: return whole text expanded, no highlights.
-                let expanded = maybe_expand_tabs(tab_width, text);
+                let expanded = crate::view::tab_width::expand_tabs(tab_width, text)
+                    .into_owned()
+                    .into();
                 return styled_text_to_cached(expanded, Vec::new());
             };
 

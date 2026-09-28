@@ -105,6 +105,15 @@ impl SideTextFormat {
         }
     }
 
+    /// Choose a save format using the original read's safety information.
+    /// A BOM change alone cannot repair a lossy legacy encoding.
+    pub fn for_save_as(mut self, format: TextFormat) -> Self {
+        self.lossy &= self.format.encoding == format.encoding;
+        self.format = format;
+        self.source = FormatSource::Override;
+        self
+    }
+
     /// Writing the decoded text back is known to reproduce the bytes.
     pub fn is_writable(&self) -> bool {
         !self.binary && !self.malformed && !self.lossy
@@ -115,7 +124,6 @@ impl SideTextFormat {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TextOverride {
     pub encoding: Option<TextEncoding>,
-    pub line_ending: Option<LineEnding>,
     pub tab_size: Option<u8>,
 }
 
@@ -141,7 +149,12 @@ pub fn decode_bytes<'a>(
     override_encoding: Option<TextEncoding>,
 ) -> DecodedText<'a> {
     let sniff = ContentSniff::of(bytes);
-    let mut format = sniff.resolve(kind, attributes, override_encoding);
+    decode_in_format(bytes, sniff.resolve(kind, attributes, override_encoding))
+}
+
+/// Decode a resolved format and finish its line-ending and round-trip checks.
+/// Callers with a streaming sniff or a known source format need no second guess.
+pub fn decode_in_format(bytes: &[u8], mut format: SideTextFormat) -> DecodedText<'_> {
     let decoded = decode(bytes, format.format);
     format.malformed = decoded.malformed;
     if !format.format.encoding.is_ascii_compatible() {

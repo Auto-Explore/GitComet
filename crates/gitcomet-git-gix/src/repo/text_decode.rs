@@ -18,12 +18,62 @@ use std::sync::Arc;
 
 const SNIFF_READ_BYTES: usize = 64 * 1024;
 
+/// Pool uncertain legacy samples across stages. UTF-8, BOMs and explicit
+/// encoding policies remain per-side; a short edit cannot independently
+/// change a legacy file's encoding and trigger an implicit UTF-8 conversion.
+pub(super) fn decode_conflict_stages(
+    mut bytes: [Option<Vec<u8>>; 3],
+    attributes: &TextAttributes,
+    encoding: Option<TextEncoding>,
+) -> [(
+    gitcomet_core::conflict_session::ConflictPayload,
+    Option<SideTextFormat>,
+); 3] {
+    use gitcomet_core::text_format::{ContentSniff, FormatSource};
+    let mut pooled = ContentSniffer::new();
+    let uncertain = bytes.each_ref().map(|bytes| {
+        let Some(bytes) = bytes else {
+            return false;
+        };
+        let format = ContentSniff::of(bytes).resolve(SideKind::GitInternal, attributes, encoding);
+        let uncertain = matches!(format.source, FormatSource::Detected { confident: false });
+        if uncertain {
+            pooled.feed(bytes);
+            pooled.feed(b"\n");
+        }
+        uncertain
+    });
+    let common = pooled
+        .finish()
+        .resolve(SideKind::GitInternal, attributes, encoding);
+    std::array::from_fn(|ix| {
+        let (payload, mut format) = gitcomet_core::conflict_session::ConflictPayload::decode(
+            bytes[ix].take().map(Arc::from),
+            None,
+            SideKind::GitInternal,
+            attributes,
+            if uncertain[ix] {
+                Some(common.format.encoding)
+            } else {
+                encoding
+            },
+        );
+        if uncertain[ix]
+            && let Some(format) = format.as_mut()
+        {
+            format.source = common.source;
+        }
+        (payload, format)
+    })
+}
+
 /// Git's marker file combines original stage bytes. Decode its side ranges
 /// before treating the document as a single encoding, retaining the original
 /// bytes and any manual text outside the markers.
 pub(super) fn decode_mixed_conflict(
     payload: &gitcomet_core::conflict_session::ConflictPayload,
     formats: [Option<SideTextFormat>; 3],
+    stages: [&gitcomet_core::conflict_session::ConflictPayload; 3],
     attributes: &TextAttributes,
 ) -> Option<gitcomet_core::conflict_session::ConflictPayload> {
     use gitcomet_core::conflict_session::{
@@ -39,9 +89,58 @@ pub(super) fn decode_mixed_conflict(
     {
         return None;
     }
+    let mut context_lines = rustc_hash::FxHashMap::default();
+    for (stage, format) in stages.into_iter().zip(formats) {
+        let (Some(bytes), Some(format)) = (stage.as_bytes(), format) else {
+            continue;
+        };
+        for line in bytes
+            .split_inclusive(|&byte| byte == b'\n')
+            .filter(|line| !line.is_ascii())
+        {
+            context_lines
+                .entry(line)
+                .and_modify(|known| {
+                    if *known != Some(format.format.encoding) {
+                        *known = None;
+                    }
+                })
+                .or_insert(Some(format.format.encoding));
+        }
+    }
+    let context_encoding = |range: &std::ops::Range<usize>| {
+        let line = &bytes[range.clone()];
+        // Unchanged context keeps its stage's encoding even if its bytes also
+        // happen to form valid UTF-8. Conflicting evidence must remain read-only.
+        if let Some(encoding) = context_lines.get(line) {
+            return *encoding;
+        }
+        // Manual edits may already be UTF-8. Otherwise use the known legacy
+        // encoding, never a fresh guess from a tiny range.
+        if std::str::from_utf8(line).is_ok() {
+            return Some(TextEncoding::UTF_8);
+        }
+        let mut candidates = formats
+            .into_iter()
+            .flatten()
+            .map(|format| format.format.encoding)
+            .filter(|encoding| !encoding.is_utf8());
+        let first = candidates.next()?;
+        candidates
+            .all(|encoding| encoding == first)
+            .then_some(first)
+    };
     let mut out = String::with_capacity(bytes.len());
     let mut append = |range: std::ops::Range<usize>, encoding| -> Option<()> {
-        let decoded = decode_bytes(&bytes[range], SideKind::Worktree, attributes, encoding);
+        if range.is_empty() {
+            return Some(());
+        }
+        let decoded = decode_bytes(
+            &bytes[range],
+            SideKind::Worktree,
+            attributes,
+            Some(encoding?),
+        );
         if !decoded.format.is_writable() {
             return None;
         }
@@ -50,15 +149,26 @@ pub(super) fn decode_mixed_conflict(
     };
     for segment in segments {
         match segment {
-            ParsedConflictSegmentRanges::Text(range) => append(range, None)?,
+            ParsedConflictSegmentRanges::Text(range) => {
+                let mut start = range.start;
+                for line in bytes[range].split_inclusive(|&byte| byte == b'\n') {
+                    let end = start + line.len();
+                    let encoding = context_encoding(&(start..end))?;
+                    append(start..end, Some(encoding))?;
+                    start = end;
+                }
+            }
             ParsedConflictSegmentRanges::Conflict(block) => {
-                append(block.marker_start..block.ours.start, None)?;
+                append(
+                    block.marker_start..block.ours.start,
+                    Some(TextEncoding::UTF_8),
+                )?;
                 append(
                     block.ours.clone(),
                     formats[1].map(|format| format.format.encoding),
                 )?;
                 let last = if let Some(base) = block.base {
-                    append(block.ours.end..base.start, None)?;
+                    append(block.ours.end..base.start, Some(TextEncoding::UTF_8))?;
                     append(
                         base.clone(),
                         formats[0].map(|format| format.format.encoding),
@@ -67,12 +177,15 @@ pub(super) fn decode_mixed_conflict(
                 } else {
                     block.ours.end
                 };
-                append(last..block.theirs.start, None)?;
+                append(last..block.theirs.start, Some(TextEncoding::UTF_8))?;
                 append(
                     block.theirs.clone(),
                     formats[2].map(|format| format.format.encoding),
                 )?;
-                append(block.theirs.end..block.marker_end, None)?;
+                append(
+                    block.theirs.end..block.marker_end,
+                    Some(TextEncoding::UTF_8),
+                )?;
             }
         }
     }
@@ -269,6 +382,49 @@ mod tests {
     use gitcomet_core::text_format::decode_bytes;
 
     #[test]
+    fn review_mixed_conflict_context_uses_known_stage_encoding() {
+        use gitcomet_core::text_format::{TextFormat, encode};
+        let attributes = TextAttributes::default();
+        let encoding = TextEncoding::from_label("windows-1250").unwrap();
+        let format = TextFormat {
+            encoding,
+            bom: false,
+        };
+        // ą alone is guessed incorrectly; Âą's legacy bytes also form valid
+        // UTF-8, so unchanged context must win over UTF-8 sniffing as well.
+        for context_text in ["ą\n", "Âą\n"] {
+            let context = encode(context_text, format).unwrap();
+            let ours =
+                decode_bytes(&context, SideKind::GitInternal, &attributes, Some(encoding)).format;
+            let utf8 = SideTextFormat::utf8(LineEndingStats::default());
+            let raw = [
+                "manual 日本語\n".as_bytes(),
+                context.as_ref(),
+                b"<<<<<<< ours\nlocal\n=======\n",
+                "日本語\n>>>>>>> theirs\n".as_bytes(),
+            ]
+            .concat();
+            let stage = ConflictPayload::Binary(context.as_ref().into());
+            let utf8_stage = ConflictPayload::Text("日本語\n".into());
+            let decoded = decode_mixed_conflict(
+                &ConflictPayload::Binary(raw.into()),
+                [Some(ours), Some(ours), Some(utf8)],
+                [&stage, &stage, &utf8_stage],
+                &attributes,
+            )
+            .expect("known encodings decode the marker file");
+            assert!(
+                decoded
+                    .as_text()
+                    .unwrap()
+                    .starts_with(&format!("manual 日本語\n{context_text}")),
+                "{:?}",
+                decoded.as_text()
+            );
+        }
+    }
+
+    #[test]
     fn mixed_markers_preserve_manual_text_and_original_bytes() {
         let attributes = TextAttributes::default();
         let latin1 = decode_bytes(
@@ -279,7 +435,13 @@ mod tests {
         )
         .format;
         let utf8 = SideTextFormat::utf8(LineEndingStats::default());
-        for base in [b"".as_slice(), b"||||||| base\ncaf\xe9\n"] {
+        let latin1_stage = ConflictPayload::Binary(Arc::from(b"caf\xe9\n".as_slice()));
+        let utf8_stage = ConflictPayload::Text("café remote 日本語\n".into());
+        for base in [
+            b"".as_slice(),
+            b"||||||| base\ncaf\xe9\n",
+            b"||||||| base\n",
+        ] {
             let raw: Arc<[u8]> = [
                 "my manual edit 日本語\n<<<<<<< ours\n".as_bytes(),
                 b"caf\xe9 local\n",
@@ -292,7 +454,12 @@ mod tests {
             let payload = ConflictPayload::Binary(Arc::clone(&raw));
             let decoded = decode_mixed_conflict(
                 &payload,
-                [Some(latin1), Some(latin1), Some(utf8)],
+                [
+                    (base != b"||||||| base\n").then_some(latin1),
+                    Some(latin1),
+                    Some(utf8),
+                ],
+                [&latin1_stage, &latin1_stage, &utf8_stage],
                 &attributes,
             )
             .unwrap();
@@ -315,6 +482,7 @@ mod tests {
             decode_mixed_conflict(
                 &resolved,
                 [Some(latin1), Some(latin1), Some(utf8)],
+                [&latin1_stage, &latin1_stage, &utf8_stage],
                 &attributes
             )
             .is_none()

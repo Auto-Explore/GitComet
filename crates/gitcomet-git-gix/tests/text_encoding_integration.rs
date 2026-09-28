@@ -934,3 +934,49 @@ fn exported_patch_keeps_latin1_bytes_and_applies() {
     );
     let _ = fs::remove_file(&patch_path);
 }
+
+#[test]
+fn review_conflict_stages_share_legacy_detection_evidence() {
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let root = dir.path();
+    for (branch, bytes) in [
+        ("base", b"Caf\xe9 cr\xe8me br\xfbl\xe9e\n".as_slice()),
+        ("theirs", b"\xf8\n".as_slice()),
+        ("ours", b"Caf\xe9 cr\xe8me br\xfbl\xe9e maison\n".as_slice()),
+    ] {
+        if branch == "theirs" {
+            git(root, &["checkout", "-q", "-b", "theirs"]);
+        }
+        if branch == "ours" {
+            git(root, &["checkout", "-q", "-"]);
+        }
+        fs::write(root.join("menu.txt"), bytes).unwrap();
+        commit_all(root, branch);
+    }
+    let mut merge = Command::new("git");
+    test_git_env::apply(&mut merge);
+    assert!(
+        !merge
+            .arg("-C")
+            .arg(root)
+            .args(["merge", "-q", "theirs"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let session = open(root)
+        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.theirs.as_text(), Some("ø\n"));
+    assert!(
+        session.output_format.is_none(),
+        "one legacy encoding must not trigger UTF-8 conversion"
+    );
+    assert_eq!(
+        session.current_format.unwrap().format.encoding,
+        TextEncoding::WINDOWS_1252
+    );
+}

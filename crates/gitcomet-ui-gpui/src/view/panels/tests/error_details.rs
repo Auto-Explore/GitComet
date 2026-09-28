@@ -212,3 +212,74 @@ fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
     left.sort();
     assert_eq!(left, vec!["app failed", "first repo failed"]);
 }
+
+#[gpui::test]
+fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppContext) {
+    use gitcomet_state::model::{DiagnosticEntry, DiagnosticKind};
+    let _guard = lock_visual_test();
+    let (view, cx) = open_view(cx);
+    let id = RepoId(9694);
+    let mut repo = opening_repo_state(id, Path::new("/tmp/review-diagnostics"));
+    repo.feedback.diagnostics = (0..200)
+        .map(|i| DiagnosticEntry {
+            time: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(i),
+            kind: DiagnosticKind::Info,
+            message: format!("old {i}"),
+        })
+        .collect();
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo.clone(), id));
+    cx.update(|_, app| {
+        view.read(app).store.dispatch(Msg::ReportError {
+            repo_id: Some(id),
+            message: "new offline failure".into(),
+        })
+    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let state = cx.update(|_, app| view.read(app).store.snapshot());
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 200);
+    assert_eq!(state.repos[0].feedback.diagnostics_seq, 1);
+    super::shortcuts::apply_state(cx, &view, state.clone());
+    assert_eq!(errors(cx, &view).len(), 1);
+    super::shortcuts::apply_state(cx, &view, state);
+    assert_eq!(
+        errors(cx, &view)[0].2,
+        1,
+        "an unchanged snapshot is not another error"
+    );
+}
+
+#[gpui::test]
+fn review_error_toasts_hide_during_authentication(cx: &mut gpui::TestAppContext) {
+    use gitcomet_state::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation};
+    let _guard = lock_visual_test();
+    let (view, cx) = open_view(cx);
+    report(cx, &view, "authentication failed");
+    let id = errors(cx, &view)[0].0;
+    let mut state = AppState::test_default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "authentication failed".into(),
+        operation: AuthRetryOperation::Clone {
+            url: "https://example.test/repo.git".into(),
+            dest: "/tmp/review-auth".into(),
+        },
+    });
+    super::shortcuts::apply_state(cx, &view, Arc::new(state));
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("toast_error_show_{id}")))
+            .is_none(),
+        "errors are hidden while the authentication prompt is open"
+    );
+    assert_eq!(
+        errors(cx, &view).len(),
+        1,
+        "hiding must not dismiss a sticky error"
+    );
+    super::shortcuts::apply_state(cx, &view, Arc::new(AppState::test_default()));
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("toast_error_show_{id}")))
+            .is_some()
+    );
+}

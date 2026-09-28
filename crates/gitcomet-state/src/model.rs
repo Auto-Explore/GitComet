@@ -1670,6 +1670,8 @@ pub struct RepoFeedbackState {
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
+    /// Number appended, including entries evicted from the bounded history.
+    pub diagnostics_seq: u64,
     pub command_log: Vec<CommandLogEntry>,
     pub hook_activity: Vec<GitHookOperation>,
     pub hook_activity_rev: u64,

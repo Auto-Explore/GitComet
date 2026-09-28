@@ -876,7 +876,11 @@ impl MainPaneView {
                     if (wrapped || view == DiffViewMode::Split || !file_view)
                         && raw.as_ref().contains('\t')
                     {
-                        Some(expand_tabs_to_string(tab_width, raw.as_ref()).into())
+                        Some(
+                            crate::view::tab_width::expand_tabs(tab_width, raw.as_ref())
+                                .into_owned()
+                                .into(),
+                        )
                     } else {
                         Some(raw)
                     }

@@ -115,19 +115,34 @@ impl GitCometView {
         }
 
         for next_repo in &next.repos {
-            let (old_diag_len, old_cmd_len) = self
+            let (old_diag_len, old_diag_seq, old_cmd_len) = self
                 .state
                 .repos
                 .iter()
                 .find(|r| r.id == next_repo.id)
-                .map(|r| (r.feedback.diagnostics.len(), r.feedback.command_log.len()))
-                .unwrap_or((0, 0));
+                .map(|r| {
+                    (
+                        r.feedback.diagnostics.len(),
+                        r.feedback.diagnostics_seq,
+                        r.feedback.command_log.len(),
+                    )
+                })
+                .unwrap_or((0, 0, 0));
+            let diagnostics = &next_repo.feedback.diagnostics;
+            let appended = usize::try_from(
+                next_repo
+                    .feedback
+                    .diagnostics_seq
+                    .wrapping_sub(old_diag_seq),
+            )
+            .unwrap_or(usize::MAX)
+            .max(diagnostics.len().saturating_sub(old_diag_len));
 
             let new_diag_messages = next_repo
                 .feedback
                 .diagnostics
                 .iter()
-                .skip(old_diag_len.min(next_repo.feedback.diagnostics.len()))
+                .skip(diagnostics.len().saturating_sub(appended))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
@@ -347,6 +362,7 @@ impl GitCometView {
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
         self.toast_host.update(cx, |host, cx| {
+            host.set_errors_hidden(next.auth_prompt.is_some(), cx);
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
             host.sync_hook_progress(next_hook_progress, cx);

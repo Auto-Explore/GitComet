@@ -1114,6 +1114,7 @@ pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind,
 
 pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
     const MAX_DIAGNOSTICS: usize = 200;
+    repo_state.feedback.diagnostics_seq = repo_state.feedback.diagnostics_seq.wrapping_add(1);
     repo_state.feedback.diagnostics.push(DiagnosticEntry {
         time: SystemTime::now(),
         kind,

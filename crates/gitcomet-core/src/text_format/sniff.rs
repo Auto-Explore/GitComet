@@ -189,22 +189,39 @@ impl ContentSniffer {
         self.sample.extend_from_slice(&chunk[start..start + take]);
     }
 
-    pub fn finish(mut self) -> ContentSniff {
-        if self.utf8_tail_len > 0 {
-            self.utf8_valid = false;
+    /// Whether the completed binary prefix already rules out text. Wait for
+    /// the full prefix (UTF-16 detection needs it) and a definite UTF-8 error,
+    /// not a character split across read buffers.
+    pub fn is_binary(
+        &self,
+        kind: SideKind,
+        attributes: &TextAttributes,
+        encoding: Option<TextEncoding>,
+    ) -> bool {
+        if self.prefix_len < BINARY_SNIFF_BYTES || self.utf8_valid || !self.prefix_has_nul {
+            return false;
         }
+        self.snapshot(Vec::new())
+            .resolve(kind, attributes, encoding)
+            .binary
+    }
+
+    pub fn finish(mut self) -> ContentSniff {
+        let sample = std::mem::take(&mut self.sample);
+        self.snapshot(sample)
+    }
+
+    fn snapshot(&self, sample: Vec<u8>) -> ContentSniff {
         let head = &self.head[..self.head_len];
-        let bom = TextEncoding::for_bom(head);
-        let utf16 = self.utf16_guess();
         ContentSniff {
-            bom,
+            bom: TextEncoding::for_bom(head),
             unsupported_bom: TextEncoding::has_unsupported_bom(head),
-            utf16,
+            utf16: self.utf16_guess(),
             has_nul: self.prefix_has_nul,
-            utf8_valid: self.utf8_valid,
+            utf8_valid: self.utf8_valid && self.utf8_tail_len == 0,
             ascii_only: self.ascii_only,
             escape_seen: self.escape_seen,
-            sample: self.sample,
+            sample,
             line_endings: self.line_endings.finish(),
             len: self.len,
         }

@@ -12,6 +12,7 @@ pub(super) struct ToastHost {
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
+    errors_hidden: bool,
     /// Monotonic, so an id is never reused. Deriving the next id from
     /// `toasts.last()` restarted numbering whenever the list emptied, and both
     /// removal paths are deferred — the TTL timer below and the launch
@@ -192,6 +193,7 @@ impl ToastHost {
             theme,
             root_view,
             toasts: Vec::new(),
+            errors_hidden: false,
             next_toast_id: 1,
             clone_progress: None,
             clone_progress_last_seq: 0,
@@ -199,6 +201,13 @@ impl ToastHost {
             submodule_add_progress: Vec::new(),
             hook_progress: Vec::new(),
             hook_activity_dialog_repo: None,
+        }
+    }
+
+    pub(super) fn set_errors_hidden(&mut self, hidden: bool, cx: &mut gpui::Context<Self>) {
+        if self.errors_hidden != hidden {
+            self.errors_hidden = hidden;
+            cx.notify();
         }
     }
 
@@ -1174,18 +1183,14 @@ impl Render for ToastHost {
         }
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
-        let mut displayed = self
+        let visible = self
             .toasts
             .iter()
             .rev()
-            .take(max_other)
-            .cloned()
-            .collect::<Vec<_>>();
+            .filter(|toast| !self.errors_hidden || !matches!(toast.body, ToastBody::Error(_)));
+        let mut displayed = visible.clone().take(max_other).cloned().collect::<Vec<_>>();
         // Errors never expire, so ones pushed out of view must stay reachable.
-        let hidden_errors = self
-            .toasts
-            .iter()
-            .rev()
+        let hidden_errors = visible
             .skip(max_other)
             .filter(|toast| matches!(toast.body, ToastBody::Error(_)))
             .map(|toast| toast.id)

@@ -204,10 +204,6 @@ fn diff_search_displayed_text_matches_query(
     query.is_match(expanded_tabs.as_str())
 }
 
-fn expand_tabs_to_string(tab_width: usize, text: &str) -> String {
-    crate::view::tab_width::expand_tabs(tab_width, text).into_owned()
-}
-
 pub(in crate::view) fn diff_search_split_row_texts_match_query(
     tab_width: usize,
     query: AsciiCaseInsensitiveNeedle<'_>,
@@ -1859,10 +1855,16 @@ impl MainPaneView {
                     Some((
                         visible_ix,
                         left.map(|left| {
-                            Cow::Owned(expand_tabs_to_string(tab_width, left.as_ref()))
+                            Cow::Owned(
+                                crate::view::tab_width::expand_tabs(tab_width, left.as_ref())
+                                    .into_owned(),
+                            )
                         }),
                         right.map(|right| {
-                            Cow::Owned(expand_tabs_to_string(tab_width, right.as_ref()))
+                            Cow::Owned(
+                                crate::view::tab_width::expand_tabs(tab_width, right.as_ref())
+                                    .into_owned(),
+                            )
                         }),
                     ))
                 })

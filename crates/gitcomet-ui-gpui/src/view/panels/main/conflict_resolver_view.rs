@@ -413,6 +413,7 @@ impl MainPaneView {
                         contents,
                         stage: false,
                     });
+                    this.mark_conflict_resolved_output_saved(cx);
                 });
             controls = controls
                 .child(
@@ -452,6 +453,7 @@ impl MainPaneView {
                                             contents,
                                             stage: true,
                                         });
+                                        this.mark_conflict_resolved_output_saved(cx);
                                     }
                                 }
                             });

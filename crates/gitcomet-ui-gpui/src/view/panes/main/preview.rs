@@ -8,7 +8,6 @@ use gitcomet_core::text_format::{
 };
 #[cfg(test)]
 use std::borrow::Cow;
-use std::io::Read;
 
 #[cfg(test)]
 thread_local! {
@@ -86,6 +85,23 @@ pub(in crate::view) struct TextDecodeKey {
 }
 
 impl TextDecodeKey {
+    /// Decoding policies from the last read, while refreshed attributes are
+    /// in flight. Display-only attributes are deliberately absent from a key.
+    pub(in crate::view) fn decoding_attributes(self) -> TextAttributes {
+        let attribute = |encoding: Option<TextEncoding>| {
+            encoding.map(|encoding| gitcomet_core::text_format::EncodingAttr {
+                label: encoding.name().into(),
+                encoding: Some(encoding),
+            })
+        };
+        TextAttributes {
+            working_tree_encoding: attribute(self.attributes[0]),
+            encoding: attribute(self.attributes[1]),
+            gui_encoding: attribute(self.attributes[2]),
+            ..TextAttributes::default()
+        }
+    }
+
     /// The same inputs with another encoding choice.
     pub(in crate::view) fn with_encoding(self, encoding: Option<TextEncoding>) -> Self {
         Self { encoding, ..self }
@@ -211,11 +227,18 @@ fn index_worktree_preview_file(
             "Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string(),
         );
     }
-    let stamp = disk_stamp(&metadata);
-
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut reader =
-        std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
+    let reader = std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
+    index_worktree_preview_reader(path, request, &metadata, reader)
+}
+
+fn index_worktree_preview_reader(
+    path: &std::path::Path,
+    request: &TextDecodeRequest,
+    metadata: &std::fs::Metadata,
+    mut reader: impl std::io::Read,
+) -> Result<IndexedWorktreePreview, String> {
+    let stamp = disk_stamp(metadata);
     let source_len_hint = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
     let line_capacity_hint = worktree_preview_index_line_capacity_hint(source_len_hint);
     let mut line_starts = Vec::with_capacity(line_capacity_hint);
@@ -226,7 +249,7 @@ fn index_worktree_preview_file(
     let mut line_ascii_only = true;
     let mut line_has_tabs = false;
     let mut source_bytes = (source_len_hint <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES)
-        .then(|| Vec::with_capacity(source_len_hint));
+        .then(|| Vec::with_capacity(source_len_hint.min(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES)));
 
     if source_len_hint > 0 {
         line_starts.push(0);
@@ -244,6 +267,9 @@ fn index_worktree_preview_file(
         }
         let chunk = &scan_buffer[..read_len];
         sniffer.feed(chunk);
+        if sniffer.is_binary(request.kind, &request.attributes, request.encoding) {
+            return Err(BINARY_PREVIEW_MESSAGE.to_string());
+        }
         if let Some(bytes) = source_bytes.as_mut() {
             if bytes.len().saturating_add(chunk.len())
                 <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
@@ -316,15 +342,8 @@ fn index_worktree_preview_file(
             ));
         }
     };
-    let decoded = gitcomet_core::text_format::decode(&raw, format.format);
-    format.malformed = decoded.malformed;
-    if !format.format.encoding.is_ascii_compatible() {
-        format.line_endings =
-            gitcomet_core::text_format::LineEndingStats::from_bytes(decoded.text.as_bytes());
-    }
-    if !decoded.malformed {
-        format.lossy = !gitcomet_core::text_format::round_trips(&raw, &decoded.text, format.format);
-    }
+    let decoded = gitcomet_core::text_format::decode_in_format(&raw, format);
+    format = decoded.format;
     let text = decoded.text.into_owned();
     let (line_starts, line_flags) = index_text_lines(&text);
     Ok(IndexedWorktreePreview {
@@ -2132,6 +2151,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn review_binary_preview_stops_before_indexing_the_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"\0\xff\n".repeat(1024 * 1024)).unwrap();
+        let request = TextDecodeRequest {
+            kind: gitcomet_core::text_format::SideKind::Worktree,
+            attributes: Arc::default(),
+            encoding: None,
+        };
+        struct CountReads<R> {
+            reader: R,
+            bytes: usize,
+        }
+        impl<R: std::io::Read> std::io::Read for CountReads<R> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.reader.read(out)?;
+                self.bytes += n;
+                Ok(n)
+            }
+        }
+        let mut reader = CountReads {
+            reader: std::fs::File::open(file.path()).unwrap(),
+            bytes: 0,
+        };
+        let result = index_worktree_preview_reader(
+            file.path(),
+            &request,
+            &file.as_file().metadata().unwrap(),
+            &mut reader,
+        );
+        assert_eq!(result.err().as_deref(), Some(BINARY_PREVIEW_MESSAGE));
+        assert!(
+            reader.bytes <= WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES,
+            "read {} bytes of a known binary file",
+            reader.bytes
+        );
+    }
+
+    #[test]
     fn conflict_preview_mapping_decodes_identical_payloads_once() {
         let decodes = std::cell::Cell::new(0_usize);
         let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -2399,9 +2456,14 @@ fn toggle_task_marker_in_format(
         let contents = text.as_str().into();
         return Some((text, contents));
     }
-    let decoded = gitcomet_core::text_format::decode(&bytes, format);
-    if decoded.malformed || !gitcomet_core::text_format::round_trips(&bytes, &decoded.text, format)
-    {
+    let decoded = gitcomet_core::text_format::decode_in_format(
+        &bytes,
+        SideTextFormat {
+            format,
+            ..SideTextFormat::utf8(Default::default())
+        },
+    );
+    if !decoded.format.is_writable() {
         return None;
     }
     let text = toggle_task_marker(decoded.text.into_owned().into_bytes(), task)?;

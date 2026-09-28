@@ -128,13 +128,17 @@ impl MainPaneView {
         });
     }
 
-    pub(super) fn show_text_format_error(
-        &self,
-        message: impl Into<String>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let report = ErrorReport::message(self.active_repo_id(), message);
-        self.show_error_report(report, cx);
+    fn show_text_format_warning(&self, message: &'static str, cx: &mut gpui::Context<Self>) {
+        let root = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.push_toast(
+                    crate::view::components::ToastKind::Warning,
+                    message.to_string(),
+                    cx,
+                );
+            });
+        });
     }
 
     /// Encoding for the resolver output, independent of a mixed marker file.
@@ -145,21 +149,17 @@ impl MainPaneView {
             .conflict_session
             .as_ref()
             .and_then(|session| session.output_format.or(session.current_format));
-        let Some((repo_id, path, chosen)) = &self.conflict_output_save_format else {
+        let stored = self.conflict_resolver.output_saved_format.or(stored);
+        let Some(chosen) = self.conflict_resolver.output_save_format else {
             return stored;
         };
-        if self.conflict_resolver.repo_id != Some(*repo_id)
-            || self.conflict_resolver.path.as_ref() != Some(path)
-        {
-            return stored;
-        }
-        // No stored format means plain UTF-8.
-        let mut format = stored.unwrap_or_else(|| SideTextFormat::utf8(LineEndingStats::default()));
-        format.format = *chosen;
-        format.source = FormatSource::Override;
-        // The old encoding's round-trip worry does not apply to the new one.
-        format.lossy = false;
-        Some(format)
+        // Check against the last read or save: toggling a pending choice must
+        // not forget that the source bytes could not be reproduced.
+        Some(
+            stored
+                .unwrap_or_else(|| SideTextFormat::utf8(LineEndingStats::default()))
+                .for_save_as(chosen),
+        )
     }
 
     /// Save the resolved output as `format` from now on.
@@ -168,19 +168,16 @@ impl MainPaneView {
         format: gitcomet_core::text_format::TextFormat,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (Some(repo_id), Some(path)) = (
-            self.conflict_resolver.repo_id,
-            self.conflict_resolver.path.clone(),
-        ) else {
+        if self.conflict_resolver.repo_id.is_none() || self.conflict_resolver.path.is_none() {
             return;
-        };
+        }
         let current = self
             .conflict_output_text_format()
             .unwrap_or_else(|| SideTextFormat::utf8(LineEndingStats::default()));
         if current.malformed || current.binary || current.format == format {
             return;
         }
-        self.conflict_output_save_format = Some((repo_id, path, format));
+        self.conflict_resolver.output_save_format = Some(format);
         cx.notify();
     }
 
@@ -471,7 +468,7 @@ impl MainPaneView {
                     },
                     cx,
                 ),
-                None => self.show_text_format_error(
+                None => self.show_text_format_warning(
                     "Save or discard your edits before detecting the encoding again",
                     cx,
                 ),
@@ -490,7 +487,7 @@ impl MainPaneView {
                     },
                     cx,
                 ),
-                None => self.show_text_format_error(
+                None => self.show_text_format_warning(
                     "Save or discard your edits before detecting the encoding again",
                     cx,
                 ),
@@ -525,11 +522,17 @@ impl MainPaneView {
         if current.malformed || current.binary || current.format == format {
             return;
         }
-        current.format = format;
-        current.source = FormatSource::Override;
-        // The old encoding's round-trip worry does not apply to the new one.
-        current.lossy = false;
-        self.set_file_editor_text_format(Some(current), cx);
+        current = SideTextFormat {
+            line_endings: current.line_endings,
+            ..self
+                .file_editor_source_text_format
+                .unwrap_or(current)
+                .for_save_as(format)
+        };
+        self.file_editor_text_format = Some(current);
+        self.file_editor_input.update(cx, |input, cx| {
+            input.set_read_only(!current.is_writable(), cx)
+        });
         self.file_editor_dirty = true;
         self.file_editor_saved_fingerprint = None;
         self.file_editor_save_error = None;
@@ -556,7 +559,20 @@ impl MainPaneView {
         };
         let repo_id = repo.id;
         let current = repo.diff_state.text_override_for(path).unwrap_or_default();
-        let attributes = self.selected_text_attributes();
+        let request = self.selected_text_decode_request(SideKind::Worktree);
+        let decode_key = request
+            .as_ref()
+            .map(|(_, key)| *key)
+            .or(self.file_editor_decode_key);
+        let attributes = request
+            .map(|(request, _)| request.attributes)
+            .unwrap_or_else(|| {
+                Arc::new(
+                    decode_key
+                        .map(|key| key.decoding_attributes())
+                        .unwrap_or_default(),
+                )
+            });
         let sniff = ContentSniff::of(bytes);
         let reads_as = |encoding| {
             sniff
@@ -573,9 +589,7 @@ impl MainPaneView {
                 .resolve(SideKind::Worktree, &attributes, encoding)
                 .source;
         }
-        self.file_editor_decode_key = self
-            .selected_text_decode_request(SideKind::Worktree)
-            .map(|(_, key)| key.with_encoding(encoding));
+        self.file_editor_decode_key = decode_key.map(|key| key.with_encoding(encoding));
         self.store.dispatch(Msg::SetTextOverride {
             repo_id,
             path: path.to_path_buf(),

@@ -3499,6 +3499,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_error: Option<SharedString>,
     /// How the buffer's file was read, and so how it is written back.
     pub(in crate::view) file_editor_text_format: Option<gitcomet_core::text_format::SideTextFormat>,
+    pub(in crate::view) file_editor_source_text_format:
+        Option<gitcomet_core::text_format::SideTextFormat>,
     /// What the buffer was decoded with; a new choice re-reads it.
     pub(in crate::view) file_editor_decode_key: Option<super::preview::TextDecodeKey>,
     /// A read is waiting for the file's attributes.
@@ -3602,13 +3604,6 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in crate::view) conflict_resolver: ConflictResolverUiState,
-    /// The encoding picked for a resolved output, for the file it was picked
-    /// for. Kept outside the resolver state, which is rebuilt on every reload.
-    pub(in crate::view) conflict_output_save_format: Option<(
-        RepoId,
-        std::path::PathBuf,
-        gitcomet_core::text_format::TextFormat,
-    )>,
     pub(in crate::view) conflict_open_summary_toasted_files:
         FxHashSet<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) conflict_resolver_vsplit_ratio: f32,

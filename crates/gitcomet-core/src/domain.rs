@@ -670,6 +670,7 @@ impl DiffSectionFormats {
         use crate::text_format::{ContentSniffer, SideKind};
         let mut old = ContentSniffer::new();
         let mut new = ContentSniffer::new();
+        let mut headers = ContentSniffer::new();
         for line in section.split_inclusive(|&byte| byte == b'\n') {
             match Diff::classify_unified_line_bytes(line) {
                 DiffLineKind::Remove => old.feed(&line[1..]),
@@ -683,22 +684,30 @@ impl DiffSectionFormats {
                         .get(2..)
                         .and_then(|rest| memchr::memmem::find(rest, b"@@"))
                     {
-                        old.feed(&line[offset + 4..]);
+                        // A truncated function name cannot override complete
+                        // file content. It only supplies evidence when the old
+                        // content is ASCII and encoding has no effect on it.
+                        headers.feed(&line[offset + 4..]);
                     }
                 }
                 _ => {}
             }
         }
-        let resolve = |sniffer: ContentSniffer| TextFormat {
+        let resolve = |sniff: crate::text_format::ContentSniff| TextFormat {
             bom: false,
-            ..sniffer
-                .finish()
+            ..sniff
                 .resolve(SideKind::GitInternal, attributes, encoding)
                 .format
         };
+        let old = old.finish();
+        let plain_ascii = old.ascii_only
+            && old
+                .resolve(SideKind::GitInternal, attributes, encoding)
+                .source
+                == crate::text_format::FormatSource::Utf8;
         Self {
-            old: resolve(old),
-            new: resolve(new),
+            old: resolve(if plain_ascii { headers.finish() } else { old }),
+            new: resolve(new.finish()),
         }
     }
 }
@@ -1526,6 +1535,12 @@ mod tests {
     use std::io::Cursor;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn review_truncated_hunk_context_does_not_change_side_encoding() {
+        let patch = b"@@ -1 +1 @@ function \xc3\n-\xc3\xa4\n+\xc3\xb6\n";
+        assert_eq!(DiffSectionFormats::sniff(patch), DiffSectionFormats::UTF_8);
+    }
 
     #[test]
     fn uncommitted_commit_id_detects_zero_and_empty_for_any_hash_length() {
