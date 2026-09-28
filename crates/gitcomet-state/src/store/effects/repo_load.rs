@@ -987,7 +987,7 @@ pub(super) fn schedule_load_conflict_file(
                 repo_id,
                 path,
                 result: Box::new(result),
-                conflict_session,
+                conflict_session: conflict_session.map(Box::new),
             }),
         );
     });

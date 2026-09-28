@@ -1300,7 +1300,7 @@ pub enum InternalMsg {
         repo_id: RepoId,
         path: PathBuf,
         result: Box<Result<Option<crate::model::ConflictFile>, Error>>,
-        conflict_session: Option<ConflictSession>,
+        conflict_session: Option<Box<ConflictSession>>,
     },
     WorktreesLoaded {
         repo_id: RepoId,

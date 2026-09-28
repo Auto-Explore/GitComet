@@ -110,7 +110,6 @@ impl ConfigRepo {
             let name = symbolic_head(&path);
             (path, name)
         });
-        drop(config);
         Self {
             repo: Arc::new(repo.into_sync()),
             inputs,

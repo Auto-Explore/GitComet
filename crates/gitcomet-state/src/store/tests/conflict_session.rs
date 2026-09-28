@@ -239,7 +239,7 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
-            conflict_session: Some(backend_session),
+            conflict_session: Some(Box::new(backend_session)),
         }),
     );
 
@@ -882,7 +882,7 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
-            conflict_session: Some(provided_session.clone()),
+            conflict_session: Some(Box::new(provided_session.clone())),
         }),
     );
 
