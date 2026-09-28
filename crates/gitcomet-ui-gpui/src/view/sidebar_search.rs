@@ -162,7 +162,6 @@ impl SidebarSearch {
         for (ix, row) in rows.iter().enumerate() {
             let (level, header) = match row {
                 BranchSidebarRow::SectionHeader { .. }
-                | BranchSidebarRow::PinnedHeader { .. }
                 | BranchSidebarRow::WorktreesHeader { .. }
                 | BranchSidebarRow::SubmodulesHeader { .. }
                 | BranchSidebarRow::StashHeader { .. } => (0, true),

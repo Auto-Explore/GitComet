@@ -25,7 +25,6 @@ mod history_branch_filter;
 mod history_refs;
 mod local_file_link;
 mod mergetool_settings;
-mod pinned_section;
 mod previous_commit_messages;
 mod pull;
 mod push;
@@ -654,14 +653,12 @@ impl PopoverHost {
                 section,
                 remote,
                 path,
-                from_pins,
             } => Some(branch_group::model(
                 self,
                 *repo_id,
                 *section,
                 remote.as_deref(),
                 path,
-                *from_pins,
             )),
             PopoverKind::SidebarAncestorMenu { section, .. } => {
                 let mut items = vec![ContextMenuItem::Header("Active branch groups".into())];
@@ -675,15 +672,13 @@ impl PopoverHost {
                         icon: Some("icons/chevron_down.svg".into()),
                         shortcut: None,
                         disabled: false,
-                        action: Box::new(ContextMenuAction::ToggleSidebarCollapseKey {
+                        action: Box::new(ContextMenuAction::SetSidebarCollapseKey {
                             collapse_key: key,
+                            collapsed: true,
                         }),
                     });
                 }
                 Some(ContextMenuModel::new(items))
-            }
-            PopoverKind::PinnedSectionMenu { repo_id, section } => {
-                Some(pinned_section::model(self, *repo_id, *section))
             }
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 Some(browse_history::model(self, *repo_id))
@@ -919,10 +914,6 @@ impl PopoverHost {
             }
             // The branch tree's collapse state is view-owned rather than a
             // store message, so these four go through the sidebar pane.
-            ContextMenuAction::UnpinAllFixedBranches { repo_id, section } => {
-                self.sidebar_pane
-                    .update(cx, |pane, cx| pane.unpin_all_branches(repo_id, section, cx));
-            }
             ContextMenuAction::ToggleSidebarCollapseKey { collapse_key } => {
                 self.sidebar_pane.update(cx, |pane, cx| {
                     pane.toggle_active_repo_collapse_key(collapse_key, cx);
@@ -957,7 +948,6 @@ impl PopoverHost {
                 remote,
                 path,
                 group_label,
-                from_pins,
             } => {
                 let names = branch_group::deletable_branches(
                     self,
@@ -965,7 +955,6 @@ impl PopoverHost {
                     section,
                     remote.as_deref(),
                     &path,
-                    from_pins,
                 );
                 // The entry is disabled at zero, so this only fires if the group
                 // emptied between the last repaint and the click.
@@ -2469,6 +2458,10 @@ impl PopoverHost {
                         };
                         let row =
                             components::ContextMenuEntry::new(("context_menu_entry", ix), label)
+                                .group_header(matches!(
+                                    action.as_ref(),
+                                    ContextMenuAction::ToggleHistoryRefGroup { .. }
+                                ))
                                 .icon(icon_slot)
                                 .shortcut(shortcut)
                                 .shortcut_keycaps(shortcut_keycaps)

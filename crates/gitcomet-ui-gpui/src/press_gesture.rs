@@ -67,7 +67,6 @@ fn set_pointer_down(down: bool, window: &mut Window, cx: &mut App) {
     };
     if next != previous {
         cx.set_global(PointerPress { window: next });
-        window.refresh();
     }
 }
 

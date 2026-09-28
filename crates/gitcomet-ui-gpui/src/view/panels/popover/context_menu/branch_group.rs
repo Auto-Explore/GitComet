@@ -13,10 +13,8 @@ pub(super) fn model(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
-    from_pins: bool,
 ) -> ContextMenuModel {
-    let (member_count, deletable_count) =
-        member_counts(this, repo_id, section, remote, path, from_pins);
+    let (member_count, deletable_count) = member_counts(this, repo_id, section, remote, path);
     let filtered = this.active_branch_filter().is_some();
     let collapse_key = match section {
         BranchSection::Local => branch_sidebar::local_group_storage_key(path),
@@ -141,7 +139,6 @@ pub(super) fn model(
             remote: remote.map(ToOwned::to_owned),
             path: path.to_owned(),
             group_label,
-            from_pins,
         }),
     });
 
@@ -179,14 +176,12 @@ fn for_each_member(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
-    from_pins: bool,
     mut visit: impl FnMut(&str),
 ) {
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
         return;
     };
     let needle = format!("{path}/");
-    let _ = from_pins;
     let search = &this.branch_search;
 
     match section {
@@ -248,11 +243,10 @@ fn member_counts(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
-    from_pins: bool,
 ) -> (usize, usize) {
     let current_branch = current_branch_name(this, repo_id);
     let (mut members, mut deletable) = (0, 0);
-    for_each_member(this, repo_id, section, remote, path, from_pins, |name| {
+    for_each_member(this, repo_id, section, remote, path, |name| {
         members += 1;
         if is_deletable(section, name, current_branch) {
             deletable += 1;
@@ -269,11 +263,10 @@ pub(super) fn deletable_branches(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
-    from_pins: bool,
 ) -> Vec<String> {
     let current_branch = current_branch_name(this, repo_id);
     let mut names = Vec::new();
-    for_each_member(this, repo_id, section, remote, path, from_pins, |name| {
+    for_each_member(this, repo_id, section, remote, path, |name| {
         if is_deletable(section, name, current_branch) {
             names.push(name.to_owned());
         }

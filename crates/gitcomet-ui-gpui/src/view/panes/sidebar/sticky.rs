@@ -211,6 +211,17 @@ impl SidebarPaneView {
     }
 
     pub(super) fn update_sticky_context(&mut self, presentation: &SidebarPresentation) {
+        // A selected pin can disappear after unpinning, collapsing or filtering.
+        // Reconcile once per presentation change, not on every scroll frame.
+        if let Some(key) = &self.selected_branch_pin_key
+            && !self
+                .sticky_context
+                .as_ref()
+                .is_some_and(|context| Rc::ptr_eq(&context.rows, &presentation.rows))
+            && !presentation.row_keys[..presentation.pins.len()].contains(key)
+        {
+            self.selected_branch_pin_key = None;
+        }
         let tip = self.sidebar_selected_tip();
         let Some(repo) = self.active_repo() else {
             return;
@@ -365,7 +376,9 @@ impl SidebarPaneView {
         let Some(size) = handle.last_item_size else {
             return Rc::from([]);
         };
-        let row_height = f32::from(size.contents.height) / context.rows.len().max(1) as f32;
+        let Some(row_height) = context.row_height else {
+            return Rc::from([]);
+        };
         context
             .layout(
                 f32::from(size.item.height),
@@ -577,9 +590,12 @@ impl gpui::UniformListDecoration for StickyRows {
             let Some(presentation) = this.branch_sidebar_presentation_cached() else {
                 return div().into_any();
             };
-            let Some(context) = &this.sticky_context else {
+            let Some(context) = &mut this.sticky_context else {
                 return div().into_any();
             };
+            // Keep the actual uniform-list measurement. Multiplying it by the
+            // row count and dividing again can lose precision at fractional DPI.
+            context.row_height = Some(f32::from(row_height));
             let layout = context.layout(
                 f32::from(bounds.size.height),
                 f32::from(row_height),
@@ -830,5 +846,43 @@ impl StickyRows {
                 row.into_any_element()
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+#[gpui::test]
+fn review_fractional_sidebar_rows_share_the_decoration_geometry(cx: &mut gpui::TestAppContext) {
+    use crate::view::test_support::{self, TestBackend};
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = super::long_list_tests::branch_fixture(18);
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    for (scale, display_scale) in [(100, 1.0), (139, 1.25), (139, 1.5), (133, 1.25)] {
+        cx.update(|window, app| {
+            window.set_scale_factor(display_scale);
+            ui_scale::set_current(app, scale);
+            view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            let pane = pane.read(app);
+            let context = pane.sticky_context.as_ref().unwrap();
+            let before = context.layout_cache.borrow().as_ref().unwrap().0;
+            pane.decorated_sidebar_rows();
+            let after = context.layout_cache.borrow().as_ref().unwrap().0;
+            assert_eq!(
+                before, after,
+                "row rendering and decoration disagree at {scale}% / {display_scale}x"
+            );
+        });
     }
 }

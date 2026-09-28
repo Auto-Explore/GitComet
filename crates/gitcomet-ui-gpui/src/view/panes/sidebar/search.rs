@@ -867,7 +867,7 @@ mod tests {
                 view.sidebar_pane.update(cx, |pane, cx| {
                     pane.branch_filter_query = "hidden".into();
                     pane.set_collapsed_keys_for_test(&[
-                        "remote:origin",
+                        "group:remote-header:origin",
                         "group:remote:origin:shared",
                     ]);
                     cx.notify();
@@ -885,6 +885,11 @@ mod tests {
                     Some(CollapsedSidebarSection::Remote)
                 );
                 assert!(pane.branch_filter_query.is_empty());
+                assert!(
+                    !pane
+                        .collapsed_items_for_test()
+                        .contains("group:remote-header:origin")
+                );
                 assert!(pane.branches_scroll.0.borrow().base_handle.offset().y < px(0.0));
                 assert!(
                     pane.section_locator_target(CollapsedSidebarSection::Stashes)

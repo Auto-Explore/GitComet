@@ -209,11 +209,7 @@ impl SidebarStructure {
                 if matches!(
                     row,
                     BranchSidebarRow::Branch { depth: 0, .. }
-                        | BranchSidebarRow::GroupHeader {
-                            depth: 0,
-                            collapsed: false,
-                            ..
-                        }
+                        | BranchSidebarRow::GroupHeader { depth: 0, .. }
                 ) {
                     result.pin_roots.push(ix);
                 }
@@ -378,6 +374,29 @@ pub(super) fn owning_section(row: &BranchSidebarRow) -> Option<BranchSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_collapsed_pinned_groups_remain_sticky_and_count_toward_overflow() {
+        let rows: Vec<_> = (0..20)
+            .map(|ix| BranchSidebarRow::GroupHeader {
+                label: format!("feat-{ix}").into(),
+                path: format!("feat-{ix}").into(),
+                remote: None,
+                section: BranchSection::Local,
+                depth: 0,
+                collapsed: true,
+                collapse_key: format!("group:local:feat-{ix}").into(),
+            })
+            .collect();
+        let structure = SidebarStructure::with_pins(&rows, rows.len());
+        assert_eq!(structure.pin_roots.len(), 20);
+        let layout = fit_pins(&[], &structure.pin_roots, None, 600.0, 480.0, 24.0);
+        assert!(
+            layout.slots.iter().any(
+                |slot| matches!(slot, StickySlot::Overflow { roots, .. } if roots.len() == 20)
+            )
+        );
+    }
 
     #[test]
     fn many_pins_fit_both_edges_without_covering_the_body() {

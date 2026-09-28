@@ -2,8 +2,8 @@ use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, DispatchPhase, Div, MouseMoveEvent, SharedString, Window, canvas, div, fill,
-    point, px, size,
+    App, Bounds, DispatchPhase, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    SharedString, Window, canvas, div, fill, point, px, size,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,12 +125,34 @@ pub fn resize_grip(
                     .corner_radii(radii),
                 );
             }
+            // Dirty only this grip's owning view. A window refresh also throws
+            // away unrelated cached history and diff views on every click.
+            let view = window.current_view();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture
+                    && event.button == MouseButton::Left
+                    && shown
+                    && !dragging
+                {
+                    cx.notify(view);
+                }
+            });
+            let release_group = group.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                    let released = dragging
+                        || (!cx.has_active_drag() && group_is_hovered(&release_group, window));
+                    if released != shown {
+                        cx.notify(view);
+                    }
+                }
+            });
             let group = group.clone();
             window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                 if phase == DispatchPhase::Capture
                     && show_grip(group.as_ref(), dragging, window, cx) != shown
                 {
-                    window.refresh();
+                    cx.notify(view);
                 }
             });
         },

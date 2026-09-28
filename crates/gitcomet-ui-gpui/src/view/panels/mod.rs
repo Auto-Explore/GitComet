@@ -100,10 +100,6 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
-    UnpinAllFixedBranches {
-        repo_id: RepoId,
-        section: BranchSection,
-    },
     /// Flip one sidebar collapse key — the branch tree's counterpart to
     /// clicking a group chevron or a rail section header.
     ToggleSidebarCollapseKey {
@@ -112,7 +108,7 @@ pub(in crate::view) enum ContextMenuAction {
     /// Drive one sidebar collapse key to an explicit state.
     ///
     /// For rows whose rendered state can diverge from the stored key — a live
-    /// branch filter force-expands the pinned sections — where a flip would
+    /// branch filter force-expands groups — where a flip would
     /// move the key the opposite way from what the entry's label promised.
     SetSidebarCollapseKey {
         collapse_key: SharedString,
@@ -142,7 +138,6 @@ pub(in crate::view) enum ContextMenuAction {
         remote: Option<String>,
         path: String,
         group_label: String,
-        from_pins: bool,
     },
     /// Open or close a folder together with every directory beneath it.
     SetFileBrowserDirExpandedRecursive {

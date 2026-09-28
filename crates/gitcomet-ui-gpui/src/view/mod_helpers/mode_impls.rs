@@ -380,8 +380,6 @@ pub(crate) enum PopoverKind {
         remote: Option<String>,
         /// Full slash path with no trailing separator (`feat`, `feat/sub`).
         path: String,
-        /// Whether the context menu was opened from a pinned copy of the group.
-        from_pins: bool,
     },
     /// Pinned roots that do not fit in the sidebar's sticky pin budget.
     SidebarPinnedOverflow {
@@ -390,11 +388,6 @@ pub(crate) enum PopoverKind {
     },
     /// Folder toggles for active paths when the sidebar is too short to stack them.
     SidebarAncestorMenu {
-        repo_id: RepoId,
-        section: BranchSection,
-    },
-    /// Menu for the rail's "Pinned Local/Remote Branches" header row.
-    PinnedSectionMenu {
         repo_id: RepoId,
         section: BranchSection,
     },

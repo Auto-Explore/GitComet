@@ -3194,8 +3194,7 @@ impl PopoverHost {
         crate::view::branch_sidebar::is_collapsed(items, collapse_key)
     }
 
-    /// How many pinned branches the section is actually showing, for the pinned
-    /// header's "Unpin all (N)".
+    /// Visible pinned roots for the branch section's "Unpin all (N)".
     ///
     /// Counting raw pin keys would overcount: the row builder skips a pin whose
     /// branch no longer exists, and skips one filtered out by the branch
@@ -3212,37 +3211,6 @@ impl PopoverHost {
             crate::view::branch_sidebar::matching_pinned_roots(repo, items, &self.branch_search).iter()
                 .filter(|row| matches!(row, BranchSidebarRow::Branch { section: candidate, .. } | BranchSidebarRow::GroupHeader { section: candidate, .. } if *candidate == section)).count()
         })
-    }
-
-    pub(in crate::view) fn fixed_pinned_branch_counts(&self, repo_id: RepoId) -> (usize, usize) {
-        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
-            return (0, 0);
-        };
-        self.pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .map_or((0, 0), |items| {
-                crate::view::branch_sidebar::matching_pinned_roots(repo, items, &self.branch_search)
-                    .into_iter()
-                    .fold((0, 0), |(local, remote), row| match row {
-                        BranchSidebarRow::Branch {
-                            section: BranchSection::Local,
-                            ..
-                        }
-                        | BranchSidebarRow::GroupHeader {
-                            section: BranchSection::Local,
-                            ..
-                        } => (local + 1, remote),
-                        BranchSidebarRow::Branch {
-                            section: BranchSection::Remote,
-                            ..
-                        }
-                        | BranchSidebarRow::GroupHeader {
-                            section: BranchSection::Remote,
-                            ..
-                        } => (local, remote + 1),
-                        _ => (local, remote),
-                    })
-            })
     }
 
     pub(in crate::view) fn is_branch_pinned(

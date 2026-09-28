@@ -530,7 +530,11 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let surface = SidebarRowSurface::Tree;
+        let surface = if this.collapsed_popover_section.is_some() {
+            SidebarRowSurface::Rail
+        } else {
+            SidebarRowSurface::Tree
+        };
         let Some(presentation) = this.branch_sidebar_presentation_cached() else {
             return Vec::new();
         };
@@ -684,7 +688,7 @@ impl SidebarPaneView {
                 })
             })
             .map(|(ix, row, stuck)| {
-                let surface = if ix < pin_count {
+                let surface = if ix < pin_count && surface != SidebarRowSurface::Rail {
                     SidebarRowSurface::Pins
                 } else {
                     surface
@@ -694,82 +698,6 @@ impl SidebarPaneView {
                 (ix, row, row_style, row_surface, stuck)
             })
             .map(|(ix, row, row_style, row_surface, stuck)| match row {
-                BranchSidebarRow::PinnedHeader {
-                    section,
-                    top_border: _,
-                    collapsed,
-                    collapse_key,
-                } => {
-                    let (label, selector_suffix): (SharedString, &'static str) = match section {
-                        BranchSection::Local => ("Pinned Local Branches".into(), "local"),
-                        BranchSection::Remote => ("Pinned Remote Branches".into(), "remote"),
-                    };
-                    let context_menu_invoker: SharedString =
-                        format!("pinned_section_menu_{}_{selector_suffix}", repo_id.0).into();
-                    let context_menu_active =
-                        this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
-                    let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let menu_kind = PopoverKind::PinnedSectionMenu { repo_id, section };
-                    let menu_kind_for_right_click = menu_kind.clone();
-                    div()
-                        .id(("pinned_section", ix))
-                        .debug_selector(move || format!("pinned_section_{selector_suffix}"))
-                        .relative()
-                        .h(sidebar_list_row_height(theme, ui_scale_percent))
-                        .w_full()
-                        .pl(indent_px(0))
-                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
-                        .flex()
-                        .items_center()
-                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .interactive_row(
-                            row_style,
-                            components::InteractiveRowState::default().open(context_menu_active),
-                        )
-                        .child(tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
-                        .child(tree_icon_slot("icons/pin.svg", icon_primary, 14.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .text_size(theme.ui_text(14.0))
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.colors.foreground.primary)
-                                .child(label.clone()),
-                        )
-                        .gitcomet_tooltip(theme, label)
-                        .on_activate(
-                            false,
-                            header_activation,
-                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                                if !e.standard_click() || e.click_count() != 1 {
-                                    return;
-                                }
-                                if is_collapsed_popover {
-                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                                } else {
-                                    this.navigate_sidebar_row(ix, cx);
-                                }
-                            }),
-                        )
-                        .on_pointer_click(
-                            MouseButton::Right,
-                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.open_popover_at(
-                                    menu_kind_for_right_click
-                                        .clone()
-                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .into_any_element()
-                }
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border: _,
@@ -1775,7 +1703,6 @@ impl SidebarPaneView {
                         section,
                         remote: remote.as_ref().map(|remote| remote.to_string()),
                         path: path.to_string(),
-                        from_pins,
                     };
                     let menu_kind_for_right_click = menu_kind.clone();
                     let row_state =

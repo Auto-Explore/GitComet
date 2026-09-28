@@ -5,11 +5,7 @@ pub(super) fn model(
     repo_id: RepoId,
     section: BranchSection,
 ) -> ContextMenuModel {
-    let (local, remote) = this.fixed_pinned_branch_counts(repo_id);
-    let pins = match section {
-        BranchSection::Local => local,
-        BranchSection::Remote => remote,
-    };
+    let pins = this.pinned_branch_count(repo_id, section);
     model_for_section(repo_id, section, pins)
 }
 
@@ -75,7 +71,7 @@ fn model_for_section(repo_id: RepoId, section: BranchSection, pins: usize) -> Co
         icon: Some("icons/pin.svg".into()),
         shortcut: None,
         disabled: pins == 0,
-        action: Box::new(ContextMenuAction::UnpinAllFixedBranches { repo_id, section }),
+        action: Box::new(ContextMenuAction::UnpinAllBranches { repo_id, section }),
     });
     ContextMenuModel::new(items)
 }

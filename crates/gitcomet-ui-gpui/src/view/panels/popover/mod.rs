@@ -536,7 +536,6 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::FileBrowserFileMenu { .. }
             | PopoverKind::FileBrowserFolderMenu { .. }
             | PopoverKind::BranchGroupMenu { .. }
-            | PopoverKind::PinnedSectionMenu { .. }
             | PopoverKind::SidebarPinnedOverflow { .. }
             | PopoverKind::SidebarAncestorMenu { .. }
             | PopoverKind::BrowseHistoryMenu { .. }
@@ -1015,7 +1014,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }
-        | PopoverKind::PinnedSectionMenu { .. }
         | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ReflogEntryMenu { .. }

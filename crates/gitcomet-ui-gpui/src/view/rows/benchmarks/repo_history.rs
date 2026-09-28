@@ -560,9 +560,6 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
                 tooltip.len().hash(&mut h);
             }
-            BranchSidebarRow::PinnedHeader { collapsed, .. } => {
-                collapsed.hash(&mut h);
-            }
             BranchSidebarRow::SectionSpacer
             | BranchSidebarRow::WorktreesHeader { .. }
             | BranchSidebarRow::WorktreePlaceholder { .. }

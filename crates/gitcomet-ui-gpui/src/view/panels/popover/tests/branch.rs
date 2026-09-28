@@ -2616,6 +2616,78 @@ fn branch_group_entry_action(model: &ContextMenuModel, starts_with: &str) -> Con
         })
 }
 
+#[gpui::test]
+fn review_ancestor_collapse_during_search_preserves_saved_collapse(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(529);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/ancestor-collapse"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("feat/a".into());
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feat/a".into(),
+        target: CommitId("a".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    let state = Arc::new(AppState {
+        active_repo: Some(repo_id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    });
+    let (pane, host) = cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            crate::view::test_support::push_test_state(view, state, cx);
+            (view.sidebar_pane.clone(), view.popover_host.clone())
+        })
+    });
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            pane.set_collapsed_keys_for_test(&["group:local:feat"]);
+            pane.set_branch_filter_query_for_test("feat");
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            assert!(
+                presentation.rows.iter().any(|row| matches!(
+                    row,
+                    BranchSidebarRow::GroupHeader { path, collapsed: false, .. } if path == "feat"
+                )),
+                "search must reveal the saved collapsed group"
+            );
+        })
+    });
+    // Activate the action taken from the real menu model. A synthetic pointer
+    // click can dismiss a popover without ever invoking its entry.
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            let model = host
+                .context_menu_model(
+                    &PopoverKind::SidebarAncestorMenu {
+                        repo_id,
+                        section: BranchSection::Local,
+                    },
+                    cx,
+                )
+                .unwrap();
+            let action = branch_group_entry_action(&model, "Collapse feat/");
+            host.context_menu_activate_action(action, window, cx);
+        })
+    });
+    cx.update(|_, app| {
+        assert!(
+            pane.read(app)
+                .collapsed_items_for_test()
+                .contains("group:local:feat"),
+            "Collapse must leave the saved group collapsed even while search reveals it"
+        )
+    });
+}
+
 /// Builds a repo whose branch list is `main`, `feat/a`, `feat/b/c` and
 /// `features/x`, plus `origin/feat/a`, then returns the group menu's model.
 fn branch_group_menu_model(
@@ -2702,7 +2774,6 @@ fn branch_group_menu_model_filtered(
                         section,
                         remote: remote.map(ToOwned::to_owned),
                         path: path.to_string(),
-                        from_pins: false,
                     },
                     cx,
                 )
@@ -2724,19 +2795,9 @@ fn branch_group_delete_confirm_names(
     path: &str,
     filter: &str,
 ) -> Vec<String> {
-    branch_group_delete_confirm_names_with_head(
-        cx,
-        section,
-        remote,
-        path,
-        filter,
-        "main",
-        false,
-        |_| {},
-    )
+    branch_group_delete_confirm_names_with_head(cx, section, remote, path, filter, "main", |_| {})
 }
 
-#[allow(clippy::too_many_arguments)]
 fn branch_group_delete_confirm_names_with_head(
     cx: &mut gpui::TestAppContext,
     section: BranchSection,
@@ -2744,7 +2805,6 @@ fn branch_group_delete_confirm_names_with_head(
     path: &str,
     filter: &str,
     head: &str,
-    from_pins: bool,
     configure: impl FnOnce(&mut RepoState),
 ) -> Vec<String> {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -2809,7 +2869,6 @@ fn branch_group_delete_confirm_names_with_head(
                         section,
                         remote: remote.map(ToOwned::to_owned),
                         path: path.to_string(),
-                        from_pins,
                     },
                     cx,
                 )
@@ -2969,7 +3028,6 @@ fn branch_group_menu_counts_a_branch_named_exactly_the_group(cx: &mut gpui::Test
         "feat",
         "",
         "main",
-        false,
         add_bare,
     );
     assert_eq!(
@@ -3029,8 +3087,8 @@ fn branch_group_menu_create_entry_seeds_the_group_prefix(cx: &mut gpui::TestAppC
     }
 }
 
-/// Builds the pinned-header menu for `section` with `pins` already pinned.
-fn pinned_section_menu_model(
+/// Builds the branch section menu with `pins` already pinned.
+fn branch_section_menu_model(
     cx: &mut gpui::TestAppContext,
     section: BranchSection,
     pins: &[(BranchSection, &str)],
@@ -3100,16 +3158,16 @@ fn pinned_section_menu_model(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
-                host.context_menu_model(&PopoverKind::PinnedSectionMenu { repo_id, section }, cx)
+                host.context_menu_model(&PopoverKind::BranchSectionMenu { repo_id, section }, cx)
             })
         })
-        .expect("expected a pinned section context menu model")
+        .expect("expected a branch section context menu model")
     })
 }
 
 #[gpui::test]
-fn pinned_section_menu_counts_only_its_own_section(cx: &mut gpui::TestAppContext) {
-    let model = pinned_section_menu_model(
+fn branch_section_menu_counts_only_its_own_section(cx: &mut gpui::TestAppContext) {
+    let model = branch_section_menu_model(
         cx,
         BranchSection::Local,
         &[
@@ -3120,18 +3178,22 @@ fn pinned_section_menu_counts_only_its_own_section(cx: &mut gpui::TestAppContext
         ],
     );
 
-    assert_eq!(branch_group_entry(&model, "Unpin all").0, "Unpin all (2)");
+    assert_eq!(
+        branch_group_entry(&model, "Unpin all").0,
+        "Unpin all local (2)"
+    );
     assert!(!branch_group_entry(&model, "Unpin all").1);
 }
 
 #[gpui::test]
-fn pinned_section_menu_disables_unpin_all_when_nothing_is_pinned(cx: &mut gpui::TestAppContext) {
-    let model = pinned_section_menu_model(cx, BranchSection::Local, &[]);
+fn branch_section_menu_disables_unpin_all_when_nothing_is_pinned(cx: &mut gpui::TestAppContext) {
+    let model = branch_section_menu_model(cx, BranchSection::Local, &[]);
 
-    assert_eq!(branch_group_entry(&model, "Unpin all").0, "Unpin all (0)");
+    assert_eq!(
+        branch_group_entry(&model, "Unpin all").0,
+        "Unpin all local (0)"
+    );
     assert!(branch_group_entry(&model, "Unpin all").1);
-    // The collapse toggle stays live regardless of pins.
-    assert!(!branch_group_entry(&model, "Collapse").1);
 }
 
 /// Drives a context-menu action through the real host → sidebar-pane path and
@@ -3392,73 +3454,6 @@ fn unpin_all_action_leaves_pins_for_branches_that_no_longer_exist(cx: &mut gpui:
     );
 }
 
-/// A live filter force-expands the pinned section regardless of the stored key,
-/// so the menu reads "Collapse" while the key already says collapsed. A blind
-/// toggle would clear the key there and leave the section expanded once the
-/// filter cleared — the opposite of the label the user clicked.
-#[gpui::test]
-fn pinned_section_collapse_entry_matches_its_label_under_a_filter(cx: &mut gpui::TestAppContext) {
-    let (collapsed, _pins) = activate_sidebar_action_with(
-        cx,
-        &[(BranchSection::Local, "feat/a")],
-        "feat",
-        &["section:pinned/local"],
-        |host, cx| {
-            let model = host
-                .context_menu_model(
-                    &PopoverKind::PinnedSectionMenu {
-                        repo_id: RepoId(83),
-                        section: BranchSection::Local,
-                    },
-                    cx,
-                )
-                .expect("expected a pinned section context menu model");
-            let labels = branch_group_entry_labels(&model);
-            assert!(
-                labels.iter().any(|label| label == "Collapse"),
-                "a force-expanded section must offer to collapse, got {labels:?}"
-            );
-            branch_group_entry_action(&model, "Collapse")
-        },
-    );
-
-    assert!(
-        collapsed.contains("section:pinned/local"),
-        "activating Collapse must leave the section collapsed, got {collapsed:?}"
-    );
-}
-
-/// The same entry from the other side: with nothing stored the section renders
-/// expanded, so "Collapse" has to write the key.
-#[gpui::test]
-fn pinned_section_collapse_entry_stores_the_key_when_nothing_is_stored(
-    cx: &mut gpui::TestAppContext,
-) {
-    let (collapsed, _pins) = activate_sidebar_action_with(
-        cx,
-        &[(BranchSection::Local, "feat/a")],
-        "",
-        &[],
-        |host, cx| {
-            let model = host
-                .context_menu_model(
-                    &PopoverKind::PinnedSectionMenu {
-                        repo_id: RepoId(83),
-                        section: BranchSection::Local,
-                    },
-                    cx,
-                )
-                .expect("expected a pinned section context menu model");
-            branch_group_entry_action(&model, "Collapse")
-        },
-    );
-
-    assert!(
-        collapsed.contains("section:pinned/local"),
-        "got {collapsed:?}"
-    );
-}
-
 /// The tree filters branch names before building the group tree, so a filtered
 /// `feat/` row lists only its matches. A menu counting the whole group would
 /// offer to delete branches that are not on screen.
@@ -3494,83 +3489,13 @@ fn branch_group_menu_treats_a_blank_filter_as_no_filter(cx: &mut gpui::TestAppCo
     );
 }
 
-/// The pinned section force-expands under a live filter, so reading the stored
-/// collapse key alone would offer "Expand" on a visibly open section.
-#[gpui::test]
-fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
-    let repo_id = RepoId(84);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_pinned_filter",
-        std::process::id()
-    ));
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let repo = RepoState::new_opening(
-                repo_id,
-                RepoSpec {
-                    workdir: workdir.clone(),
-                },
-            );
-            let state = Arc::new(AppState {
-                repos: vec![repo],
-                active_repo: Some(repo_id),
-                ..AppState::test_default()
-            });
-            this.state = Arc::clone(&state);
-            this.ui_model
-                .update(cx, |model, cx| model.set_state(state, cx));
-            this.popover_host.update(cx, |host, cx| {
-                // Persisted as collapsed…
-                host.set_collapsed_items(
-                    [(
-                        workdir.clone(),
-                        ["section:pinned/local".to_string()].into_iter().collect(),
-                    )]
-                    .into_iter()
-                    .collect(),
-                    cx,
-                );
-                // …but a filter is live, so the row renders expanded.
-                host.set_branch_filter_query("feat".to_string(), cx);
-            });
-            cx.notify();
-        });
-    });
-
-    let model = cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.popover_host.update(cx, |host, cx| {
-                host.context_menu_model(
-                    &PopoverKind::PinnedSectionMenu {
-                        repo_id,
-                        section: BranchSection::Local,
-                    },
-                    cx,
-                )
-            })
-        })
-        .expect("expected a pinned section context menu model")
-    });
-
-    let labels = branch_group_entry_labels(&model);
-    assert!(
-        labels.iter().any(|label| label == "Collapse"),
-        "a force-expanded section must offer to collapse, got {labels:?}"
-    );
-}
-
 /// The row builder drops a pin whose branch is gone, so counting raw keys would
 /// put "Unpin all (3)" above a single row.
 #[gpui::test]
-fn pinned_section_menu_ignores_pins_for_branches_that_no_longer_exist(
+fn branch_section_menu_ignores_pins_for_branches_that_no_longer_exist(
     cx: &mut gpui::TestAppContext,
 ) {
-    let model = pinned_section_menu_model(
+    let model = branch_section_menu_model(
         cx,
         BranchSection::Local,
         &[
@@ -3581,7 +3506,10 @@ fn pinned_section_menu_ignores_pins_for_branches_that_no_longer_exist(
         ],
     );
 
-    assert_eq!(branch_group_entry(&model, "Unpin all").0, "Unpin all (1)");
+    assert_eq!(
+        branch_group_entry(&model, "Unpin all").0,
+        "Unpin all local (1)"
+    );
 }
 
 /// The create prompt can open pre-filled with a group prefix, and git rejects a
@@ -3626,7 +3554,6 @@ fn branch_group_delete_excludes_the_current_branch_at_resolution_time(
         "feat",
         "",
         "feat/a",
-        false,
         |_| {},
     );
 
@@ -3650,7 +3577,6 @@ fn branch_group_delete_keeps_a_remote_member_matching_the_current_branch(
         "feat",
         "",
         "feat/a",
-        false,
         |_| {},
     );
 
@@ -3903,7 +3829,6 @@ fn branch_group_menu_pin_action_persists_the_group_key(cx: &mut gpui::TestAppCon
                         section,
                         remote: remote.map(str::to_owned),
                         path: "feat".into(),
-                        from_pins: false,
                     },
                     cx,
                 )
@@ -3923,7 +3848,6 @@ fn pinned_branch_group_actions_use_the_shared_branch_filter(cx: &mut gpui::TestA
         "feat",
         "b/c",
         "main",
-        true,
         |_| {},
     );
     assert_eq!(local, vec!["feat/b/c".to_string()]);
@@ -3934,7 +3858,6 @@ fn pinned_branch_group_actions_use_the_shared_branch_filter(cx: &mut gpui::TestA
         "feat",
         "origin/feat/",
         "main",
-        true,
         |_| {},
     );
     assert_eq!(remote, vec!["feat/a".to_string()]);

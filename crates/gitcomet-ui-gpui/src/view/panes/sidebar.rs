@@ -260,7 +260,10 @@ pub(in super::super) struct SidebarPaneView {
     pub(in super::super) theme: AppTheme,
     sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
+    // Only one surface is mounted at a time. Park the other handle when
+    // switching between the expanded tree and a rail popover.
     branches_scroll: UniformListScrollHandle,
+    inactive_branches_scroll: UniformListScrollHandle,
     sticky_context: Option<sticky::StickyContext>,
     sidebar_selection_cache: Option<sticky::SelectionCache>,
     pending_sidebar_navigation: Option<sticky::NavigationTarget>,
@@ -298,7 +301,7 @@ pub(in super::super) struct SidebarPaneView {
     /// When set (and the sidebar is collapsed), this pane renders only the given
     /// section as popover content instead of the full sidebar. The root view
     /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
-    collapsed_popover_section: Option<CollapsedSidebarSection>,
+    pub(in crate::view) collapsed_popover_section: Option<CollapsedSidebarSection>,
     /// A file the explorer has been asked to scroll to, held until the store
     /// snapshot with its folders expanded arrives.
     pending_file_browser_reveal: Option<std::path::PathBuf>,
@@ -410,6 +413,8 @@ impl SidebarPaneView {
                 this.pending_sidebar_navigation = None;
                 this.branches_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                this.inactive_branches_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 this.sync_search_input_with_state(cx);
             }
 
@@ -488,6 +493,7 @@ impl SidebarPaneView {
             sidebar_focus: cx.focus_handle(),
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
+            inactive_branches_scroll: UniformListScrollHandle::default(),
             sticky_context: None,
             sidebar_selection_cache: None,
             pending_sidebar_navigation: None,
@@ -548,10 +554,18 @@ impl SidebarPaneView {
         if self.collapsed_popover_section == section {
             return;
         }
+        if self.collapsed_popover_section.is_some() != section.is_some() {
+            std::mem::swap(
+                &mut self.branches_scroll,
+                &mut self.inactive_branches_scroll,
+            );
+        }
         self.collapsed_popover_section = section;
         self.sticky_context = None;
-        self.branches_scroll
-            .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        if section.is_some() {
+            self.branches_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        }
         cx.notify();
     }
 
@@ -903,7 +917,7 @@ impl SidebarPaneView {
 
     /// Drive a collapse key to an explicit state instead of flipping it.
     ///
-    /// The pinned sections render force-expanded while a branch filter is live,
+    /// Branch groups render force-expanded while a branch filter is live,
     /// no matter what the stored key says, so a menu labelling itself from the
     /// rendered state has to send the state it means — a flip would move the
     /// key the opposite way from the label the user clicked.
@@ -1695,7 +1709,9 @@ impl SidebarPaneView {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(&self.branches_scroll)
-        .with_decoration(sticky::StickyRows { view: cx.entity() });
+        .when(self.collapsed_popover_section.is_none(), |list| {
+            list.with_decoration(sticky::StickyRows { view: cx.entity() })
+        });
         let list = restrict_scroll_to_vertical_axis(list);
         let view = cx.entity();
         let row_height = sidebar_list_row_height(theme, ui_scale_percent);
@@ -1705,7 +1721,10 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .child(
                 gpui::canvas(
-                    move |bounds, _, cx| {
+                    move |bounds, window, cx| {
+                        // Match the list's device-pixel rounding before it
+                        // measures and renders the first row of this frame.
+                        let row_height = window.pixel_snap(row_height);
                         view.update(cx, |this, cx| {
                             this.prepare_sidebar_scroll(bounds, row_height, cx)
                         });

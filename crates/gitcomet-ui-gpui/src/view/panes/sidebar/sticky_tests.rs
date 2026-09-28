@@ -32,6 +32,220 @@ fn selector(ix: usize) -> &'static str {
 }
 
 #[gpui::test]
+fn review_selected_pin_falls_back_to_tree_when_its_copy_disappears(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(10);
+    Arc::make_mut(&mut state).repos[0]
+        .history_state
+        .selected_commit = Some(CommitId("a".into()));
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    for removal in ["unpin", "collapse", "filter"] {
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                let target = BranchMenuTarget::local("shared/topic-000001");
+                pane.sidebar_pinned_branches_by_repo.insert(
+                    state.repos[0].spec.workdir.clone(),
+                    BTreeSet::from(["group:local:shared".into()]),
+                );
+                pane.set_collapsed_keys_for_test(&[]);
+                pane.branch_filter_query.clear();
+                let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+                let ix = presentation
+                    .pins
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row, BranchSidebarRow::Branch { target: t, .. } if *t == target
+                        )
+                    })
+                    .unwrap();
+                pane.set_selected_branch(
+                    state.repos[0].id,
+                    target.clone(),
+                    Some(presentation.row_keys[ix].clone()),
+                    cx,
+                );
+                assert!(pane.selected_branch_for_row(None).is_none());
+                match removal {
+                    "unpin" => {
+                        pane.toggle_sidebar_pin(state.repos[0].id, "group:local:shared".into(), cx)
+                    }
+                    "collapse" => pane.set_collapsed_keys_for_test(&["group:local:shared"]),
+                    _ => pane.branch_filter_query = "no matching branches".into(),
+                }
+                pane.branch_sidebar_presentation_cached().unwrap();
+                assert!(
+                    pane.selected_branch_pin_key.is_none(),
+                    "stale copy after {removal}"
+                );
+                assert_eq!(pane.selected_branch_for_row(None).unwrap().target, target);
+
+                pane.set_collapsed_keys_for_test(&[]);
+                pane.branch_filter_query.clear();
+                let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+                let ix = presentation
+                    .rows
+                    .iter()
+                    .rposition(|row| {
+                        matches!(
+                            row, BranchSidebarRow::Branch { target: t, .. } if *t == target
+                        )
+                    })
+                    .unwrap();
+                assert!(
+                    pane.sticky_context
+                        .as_ref()
+                        .unwrap()
+                        .eligible_rows
+                        .contains(&ix),
+                    "restored tree selection after {removal}"
+                );
+            })
+        });
+    }
+}
+
+#[gpui::test]
+fn review_rail_popovers_preserve_expanded_tree_scroll(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = fixture(1_000);
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.branches_scroll
+                .scroll_to_item_strict(500, gpui::ScrollStrategy::Top);
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+    let before = cx.update(|_, app| {
+        pane.read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    assert!(before.y < px(-1_000.0));
+    for section in [
+        CollapsedSidebarSection::Local,
+        CollapsedSidebarSection::Remote,
+    ] {
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.set_sidebar_collapsed(true, cx);
+                view.open_sidebar_collapsed_popover(section, cx);
+            })
+        });
+        test_support::redraw(cx);
+    }
+    cx.update(|_, app| view.update(app, |view, cx| view.set_sidebar_collapsed(false, cx)));
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            pane.read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset(),
+            before
+        )
+    });
+
+    // A repository switch must reset the parked tree as well as the popover.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.set_sidebar_collapsed(true, cx);
+            view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
+        })
+    });
+    test_support::redraw(cx);
+    let mut next = fixture(1_000);
+    let next_state = Arc::make_mut(&mut next);
+    next_state.repos[0].id = RepoId(82);
+    next_state.active_repo = Some(RepoId(82));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(next.clone());
+            test_support::push_test_state(view, next, cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| view.update(app, |view, cx| view.set_sidebar_collapsed(false, cx)));
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            pane.read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y,
+            px(0.0)
+        )
+    });
+}
+
+#[gpui::test]
+fn review_rail_group_rows_use_the_popover_surface(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = fixture(4);
+    let theme = AppTheme::from_key("sunset_veil").unwrap();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_theme(theme, cx);
+            view.set_sidebar_collapsed(true, cx);
+            view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    test_support::redraw(cx);
+    let fills = crate::test_support::painted_control_quads(cx, "branch_group_0");
+    // Rail rows inherit the popover's raised surface. Compare RGB independently
+    // of the opening animation's opacity so a faint chrome band also fails.
+    assert!(
+        !fills.iter().any(|(fill, _)| {
+            let Some(mut color) = fill.as_solid() else {
+                return false;
+            };
+            color.alpha = 1.0;
+            gpui::Background::from(color) == theme.colors.surface.chrome.into()
+        }),
+        "expanded-tree bands were painted in the rail: {fills:?}"
+    );
+}
+
+#[gpui::test]
 fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1642,7 +1856,7 @@ fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
     assert!(cx.update(|_, app| matches!(
         test_support::popover_kind(view.read(app), app),
         Some(PopoverKind::BranchGroupMenu {
-            from_pins: true,
+            section: BranchSection::Local,
             ..
         })
     )));

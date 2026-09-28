@@ -238,6 +238,7 @@ pub struct ContextMenuEntry {
     icon: ContextMenuIconSlot,
     shortcut: Option<SharedString>,
     shortcut_keycaps: bool,
+    group_header: bool,
     selected: bool,
     disabled: bool,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
@@ -251,6 +252,7 @@ impl ContextMenuEntry {
             icon: ContextMenuIconSlot::None,
             shortcut: None,
             shortcut_keycaps: false,
+            group_header: false,
             selected: false,
             disabled: false,
             tooltip_host: None,
@@ -274,6 +276,11 @@ impl ContextMenuEntry {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn group_header(mut self, group_header: bool) -> Self {
+        self.group_header = group_header;
         self
     }
 
@@ -324,6 +331,7 @@ fn context_menu_entry<V: 'static>(
         icon,
         shortcut,
         shortcut_keycaps,
+        group_header,
         selected,
         disabled,
         tooltip_host,
@@ -337,14 +345,7 @@ fn context_menu_entry<V: 'static>(
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
-    // Expand/collapse rows are group headers. Resolve their surface here so
-    // every menu host (including ref groups and picker menus) gets the same
-    // treatment as sidebar headers, in both open and closed states.
-    let group_background = matches!(
-        icon_path,
-        Some("icons/chevron_down.svg" | "icons/chevron_right.svg")
-    )
-    .then_some(theme.colors.surface.panel);
+    let group_background = group_header.then_some(theme.colors.surface.panel);
     let mut row = crate::kit::menu::menu_item_with_background(
         id,
         theme,
@@ -720,19 +721,28 @@ mod tests {
                         .debug_selector(|| "row_keycap".to_string()),
                 )
                 .child(
+                    ContextMenuEntry::new("collapse_command", "Collapse feat/")
+                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_collapse_command".to_string()),
+                )
+                .child(
                     ContextMenuEntry::new("closed_group", "Remote branch origin/main")
+                        .group_header(true)
                         .icon(ContextMenuIconSlot::Icon("icons/chevron_right.svg".into()))
                         .render(theme, scale, cx)
                         .debug_selector(|| "row_closed_group".to_string()),
                 )
                 .child(
                     ContextMenuEntry::new("open_group", "Remote branch upstream/main")
+                        .group_header(true)
                         .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
                         .render(theme, scale, cx)
                         .debug_selector(|| "row_open_group".to_string()),
                 )
                 .child(
                     ContextMenuEntry::new("selected_group", "Selected group")
+                        .group_header(true)
                         .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
                         .selected(true)
                         .render(theme, scale, cx)
@@ -744,6 +754,21 @@ mod tests {
                         .debug_selector(|| "row_header".to_string()),
                 )
         }
+    }
+
+    #[gpui::test]
+    fn review_collapse_commands_do_not_inherit_group_header_background(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _guard = crate::test_support::lock_visual_test();
+        let theme = AppTheme::from_key("sunset_veil").unwrap();
+        let (_view, cx) = cx.add_window_view(|_, _| RowKinds { theme });
+        crate::view::test_support::redraw(cx);
+        assert!(
+            !crate::test_support::painted_control_quads(cx, "row_collapse_command")
+                .iter()
+                .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
+        );
     }
 
     /// Every kind of menu row is one height, at both densities. Keycaps and

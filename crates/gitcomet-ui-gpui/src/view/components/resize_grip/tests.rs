@@ -10,6 +10,53 @@ struct DragFeedbackView {
     input: Entity<TextInput>,
 }
 
+#[derive(Default)]
+struct CachedSibling {
+    renders: usize,
+}
+
+impl gpui::Render for CachedSibling {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.renders += 1;
+        div().size_full()
+    }
+}
+
+struct CachedFeedbackRoot {
+    feedback: Entity<DragFeedbackView>,
+    sibling: Entity<CachedSibling>,
+}
+
+impl gpui::Render for CachedFeedbackRoot {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.feedback.clone()).child(
+            gpui::AnyView::from(self.sibling.clone()).cached(gpui::StyleRefinement::default()),
+        )
+    }
+}
+
+#[gpui::test]
+fn review_pointer_presses_do_not_redraw_unrelated_cached_views(cx: &mut gpui::TestAppContext) {
+    let theme = AppTheme::from_key("gitcomet_light").unwrap();
+    let (root, cx) = cx.add_window_view(|window, cx| CachedFeedbackRoot {
+        feedback: cx.new(|cx| DragFeedbackView::new(theme, ScrollbarAxis::Vertical, window, cx)),
+        sibling: cx.new(|_| CachedSibling::default()),
+    });
+    draw(cx);
+    let sibling = cx.update(|_, app| root.read(app).sibling.clone());
+    let renders = cx.update(|_, app| sibling.read(app).renders);
+    let empty = point(px(400.0), px(400.0));
+    cx.simulate_mouse_down(empty, MouseButton::Left, Default::default());
+    draw(cx);
+    cx.simulate_mouse_up(empty, MouseButton::Left, Default::default());
+    draw(cx);
+    assert_eq!(
+        cx.update(|_, app| sibling.read(app).renders),
+        renders,
+        "an ordinary click invalidated unrelated cached views"
+    );
+}
+
 impl DragFeedbackView {
     fn new(
         theme: AppTheme,

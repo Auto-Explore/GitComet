@@ -72,13 +72,6 @@ impl BranchMenuTarget {
 
 type BranchSidebarDepth = u16;
 
-pub(super) const fn pinned_section_storage_key(section: BranchSection) -> &'static str {
-    match section {
-        BranchSection::Local => PINNED_LOCAL_SECTION_KEY,
-        BranchSection::Remote => PINNED_REMOTE_SECTION_KEY,
-    }
-}
-
 /// Build the persisted key identifying a pinned branch (`local:<name>` or
 /// `remote:<remote>/<name>`).
 pub(super) fn branch_pin_storage_key(section: BranchSection, name: &str) -> String {
@@ -241,12 +234,6 @@ pub(super) fn remote_group_storage_key(remote: &str, path: &str) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum BranchSidebarRow {
-    PinnedHeader {
-        section: BranchSection,
-        top_border: bool,
-        collapsed: bool,
-        collapse_key: SharedString,
-    },
     SectionHeader {
         section: BranchSection,
         top_border: bool,
@@ -922,7 +909,14 @@ pub(super) fn branch_sidebar_rows(
     pinned_branches: &BTreeSet<String>,
     branch_filter: &str,
 ) -> Vec<BranchSidebarRow> {
-    sidebar_rows(repo, collapsed_items, pinned_branches, branch_filter, false)
+    let mut rows = pinned_rows(
+        repo,
+        pinned_branches,
+        &branch_filter.trim().to_ascii_lowercase(),
+        Some(collapsed_items),
+    );
+    rows.extend(sidebar_rows(repo, collapsed_items, branch_filter, false));
+    rows
 }
 
 /// Base tree with open top-level sections. The shared presentation adds pins,
@@ -932,7 +926,7 @@ pub(super) fn expanded_sidebar_rows(
     collapsed_items: &BTreeSet<String>,
     branch_filter: &str,
 ) -> Vec<BranchSidebarRow> {
-    sidebar_rows(repo, collapsed_items, &BTreeSet::new(), branch_filter, true)
+    sidebar_rows(repo, collapsed_items, branch_filter, true)
 }
 
 pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
@@ -952,7 +946,6 @@ pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
 fn sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
-    pinned_branches: &BTreeSet<String>,
     branch_filter: &str,
     always_expanded: bool,
 ) -> Vec<BranchSidebarRow> {
@@ -1021,37 +1014,6 @@ fn sidebar_rows(
             record_local_branch_sidebar_metadata(branch, head, &mut head_upstream_full);
         }
     }
-
-    // Pinned branches surface in a Pinned section directly above their home
-    // Local/Remote section, while still remaining in that home section below.
-    let (pinned_local_rows, pinned_remote_rows) =
-        build_pinned_branch_rows(repo, head, pinned_branches, &filter, Some(collapsed_items));
-    let emit_pinned_section = |rows: &mut Vec<BranchSidebarRow>,
-                               section: BranchSection,
-                               pinned_rows: Vec<BranchSidebarRow>,
-                               top_border: bool|
-     -> bool {
-        if pinned_rows.is_empty() {
-            return false;
-        }
-        let key = pinned_section_storage_key(section);
-        let pinned_collapsed = !filtering && is_collapsed(collapsed_items, key);
-        rows.push(BranchSidebarRow::PinnedHeader {
-            section,
-            top_border,
-            collapsed: pinned_collapsed,
-            collapse_key: key.into(),
-        });
-        if !pinned_collapsed {
-            rows.extend(pinned_rows);
-        }
-        rows.push(BranchSidebarRow::SectionSpacer);
-        true
-    };
-
-    // The pinned local section leads the whole list, so it needs no divider and
-    // the Local header joins it without one either.
-    let _ = emit_pinned_section(&mut rows, BranchSection::Local, pinned_local_rows, false);
 
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Local,
@@ -1124,15 +1086,9 @@ fn sidebar_rows(
 
     rows.push(BranchSidebarRow::SectionSpacer);
 
-    // The Remote area's divider sits above the pinned remote section (when it
-    // exists) so the pins live under it, grouped with Remote Branches; otherwise
-    // the Remote header carries the divider itself.
-    let has_pinned_remote =
-        emit_pinned_section(&mut rows, BranchSection::Remote, pinned_remote_rows, true);
-
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Remote,
-        top_border: !has_pinned_remote,
+        top_border: true,
         collapsed: remote_collapsed,
         collapse_key: remote_section_storage_key().into(),
     });
@@ -2522,198 +2478,31 @@ mod tests {
     }
 
     #[test]
-    fn pinned_branches_render_in_a_pinned_section_above_their_home_section() {
+    fn pinned_branches_keep_their_tree_copies_without_extra_headers() {
         let repo = populated_repo();
         let pinned = BTreeSet::from([
             branch_pin_storage_key(BranchSection::Local, "main"),
             branch_pin_storage_key(BranchSection::Remote, "origin/main"),
         ]);
-        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &pinned, "");
-
-        // The pinned local section leads the whole list.
-        assert!(
-            matches!(
-                rows.first(),
-                Some(BranchSidebarRow::PinnedHeader {
-                    section: BranchSection::Local,
-                    ..
-                })
-            ),
-            "the pinned local section header should be the first row"
-        );
-
-        let pinned_headers: Vec<BranchSection> = rows
-            .iter()
-            .filter_map(|row| match row {
-                BranchSidebarRow::PinnedHeader { section, .. } => Some(*section),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            pinned_headers,
-            vec![BranchSection::Local, BranchSection::Remote],
-            "there should be one pinned local header then one pinned remote header"
-        );
-
-        // The pinned local branch sits under the local pinned header, the remote
-        // one under the remote pinned header — never mixed together.
-        let local_pin_pos = rows
-            .iter()
-            .position(|row| {
-                matches!(
-                    row,
-                    BranchSidebarRow::PinnedHeader {
-                        section: BranchSection::Local,
-                        ..
-                    }
-                )
-            })
-            .expect("pinned local header should exist");
-        let remote_pin_pos = rows
-            .iter()
-            .position(|row| {
-                matches!(
-                    row,
-                    BranchSidebarRow::PinnedHeader {
-                        section: BranchSection::Remote,
-                        ..
-                    }
-                )
-            })
-            .expect("pinned remote header should exist");
-        let local_header_pos_for_order = rows
-            .iter()
-            .position(|row| {
-                matches!(
-                    row,
-                    BranchSidebarRow::SectionHeader {
-                        section: BranchSection::Local,
-                        ..
-                    }
-                )
-            })
-            .expect("local section header should exist");
-        let remote_header_pos_for_order = rows
-            .iter()
-            .position(|row| {
-                matches!(
-                    row,
-                    BranchSidebarRow::SectionHeader {
-                        section: BranchSection::Remote,
-                        ..
-                    }
-                )
-            })
-            .expect("remote section header should exist");
-        // Each pinned section sits directly above its home section: pinned-local
-        // above Local, and pinned-remote between the Local and Remote sections.
-        assert!(
-            local_pin_pos < local_header_pos_for_order,
-            "the pinned local section should render above the Local Branches section"
-        );
-        assert!(
-            local_header_pos_for_order < remote_pin_pos
-                && remote_pin_pos < remote_header_pos_for_order,
-            "the pinned remote section should render above the Remote Branches section, \
-             not at the very top"
-        );
-
-        // The Remote area's divider sits above the pinned remote header (grouping
-        // the pins with Remote Branches), so the pinned remote header carries the
-        // top border and the Remote header does not. The pinned local section
-        // leads the list, so neither it nor the Local header draws a divider.
-        let header_top_border = |pos: usize| match &rows[pos] {
-            BranchSidebarRow::PinnedHeader { top_border, .. }
-            | BranchSidebarRow::SectionHeader { top_border, .. } => *top_border,
-            other => panic!("expected a header row, got {other:?}"),
-        };
-        assert!(
-            !header_top_border(local_pin_pos),
-            "the pinned local header should not draw a divider"
-        );
-        assert!(
-            !header_top_border(local_header_pos_for_order),
-            "the Local Branches header should not draw a divider"
-        );
-        assert!(
-            header_top_border(remote_pin_pos),
-            "the pinned remote header should carry the Remote area divider"
-        );
-        assert!(
-            !header_top_border(remote_header_pos_for_order),
-            "the Remote Branches header should not draw a second divider below the pins"
-        );
-
-        let local_pin_entries: Vec<(&str, BranchSection)> = rows[local_pin_pos + 1..]
-            .iter()
-            .take_while(|row| !matches!(row, BranchSidebarRow::SectionSpacer))
-            .filter_map(|row| match row {
-                BranchSidebarRow::Branch { name, section, .. } => Some((name.as_ref(), *section)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            local_pin_entries,
-            vec![("main", BranchSection::Local)],
-            "the pinned local section should hold only the pinned local branch"
-        );
-        let remote_pin_entries: Vec<(&str, BranchSection)> = rows[remote_pin_pos + 1..]
-            .iter()
-            .take_while(|row| !matches!(row, BranchSidebarRow::SectionSpacer))
-            .filter_map(|row| match row {
-                BranchSidebarRow::Branch { name, section, .. } => Some((name.as_ref(), *section)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            remote_pin_entries,
-            vec![("origin/main", BranchSection::Remote)],
-            "the pinned remote section should hold only the pinned remote branch"
-        );
-
-        // The pinned branch also remains in its home Local section below.
-        let local_header_pos = rows
-            .iter()
-            .position(|row| {
-                matches!(
-                    row,
-                    BranchSidebarRow::SectionHeader {
-                        section: BranchSection::Local,
-                        ..
-                    }
-                )
-            })
-            .expect("local section header should exist");
-        let main_below_header = rows[local_header_pos..].iter().any(|row| {
-            matches!(
-                row,
-                BranchSidebarRow::Branch {
-                    name,
-                    section: BranchSection::Local,
-                    ..
-                } if name.as_ref() == "main"
-            )
-        });
-        assert!(
-            main_below_header,
-            "a pinned branch should still appear in its home section"
-        );
+        let pins = expanded_pinned_rows(&repo, &pinned, &BTreeSet::new());
+        assert_eq!(pins.len(), 2);
+        let tree = expanded_sidebar_rows(&repo, &BTreeSet::new(), "");
+        for pin in pins {
+            let BranchSidebarRow::Branch { target, .. } = pin else {
+                panic!("expected a branch pin")
+            };
+            assert!(tree.iter().any(|row| matches!(row, BranchSidebarRow::Branch { target: candidate, .. } if *candidate == target)));
+        }
     }
 
     #[test]
-    fn pins_for_missing_branches_produce_no_pinned_section() {
+    fn pins_for_missing_branches_produce_no_rows() {
         let repo = populated_repo();
         let pinned = BTreeSet::from([branch_pin_storage_key(
             BranchSection::Local,
             "branch-that-was-deleted",
         )]);
-        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &pinned, "");
-        assert!(
-            !rows
-                .iter()
-                .any(|row| matches!(row, BranchSidebarRow::PinnedHeader { .. })),
-            "a pin for a nonexistent branch should not create a Pinned section"
-        );
+        assert!(expanded_pinned_rows(&repo, &pinned, &BTreeSet::new()).is_empty());
     }
 
     #[test]

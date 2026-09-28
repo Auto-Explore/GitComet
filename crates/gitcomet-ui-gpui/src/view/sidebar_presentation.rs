@@ -67,10 +67,9 @@ pub(in crate::view) struct SidebarPresentation {
 pub(in crate::view) struct SidebarPresentationCache {
     branch_rows: Option<BranchSidebarCache>,
     workspace_badges: Option<WorkspaceBadgeCache>,
+    search: Option<Rc<SidebarSearch>>,
     // Pin/collapse mutations explicitly invalidate this view-owned cache.
     // Comparing entire pin sets here would make every scroll frame O(pins).
-    pinned_rows: Option<(RepoId, BranchSidebarFingerprint, Rc<[BranchSidebarRow]>)>,
-    search: Option<Rc<SidebarSearch>>,
     projection: Option<SidebarProjection>,
 }
 
@@ -245,10 +244,15 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
     if !cache.search.as_ref().is_some_and(|search| {
         search.query == branch_filter.trim() && search.matcher.options() == options
     }) {
-        cache.search = Some(Rc::new(SidebarSearch::new(branch_filter, options)));
-        cache.branch_rows = None;
-        cache.pinned_rows = None;
-        cache.projection = None;
+        let search = Rc::new(SidebarSearch::new(branch_filter, options));
+        if cache
+            .search
+            .as_ref()
+            .is_none_or(|old| old.matcher.is_empty() != search.matcher.is_empty())
+        {
+            cache.branch_rows = None;
+        }
+        cache.search = Some(search);
     }
     let search = Rc::clone(cache.search.as_ref().unwrap());
     let repo_id = state.active_repo?;
@@ -268,23 +272,21 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
         &empty
     };
     let tree = branch_sidebar_rows_cached(&mut cache.branch_rows, repo, collapsed_items);
-    let fingerprint = BranchSidebarFingerprint::from_repo(repo);
-    if !cache
-        .pinned_rows
+    // The base tree already tracks content, including identical repo refreshes.
+    // Its identity also tells us whether the unfiltered pinned rows can be reused.
+    let raw_pins = cache
+        .projection
         .as_ref()
-        .is_some_and(|(id, rev, _)| *id == repo.id && *rev == fingerprint)
-    {
-        cache.pinned_rows = Some((
-            repo.id,
-            fingerprint,
-            branch_sidebar::expanded_pinned_rows(repo, pinned_branches, collapsed_items).into(),
-        ));
-    }
-    let raw_pins = Rc::clone(&cache.pinned_rows.as_ref().unwrap().2);
+        .filter(|cached| Rc::ptr_eq(&cached.tree, &tree))
+        .map(|cached| Rc::clone(&cached.pins))
+        .unwrap_or_else(|| {
+            branch_sidebar::expanded_pinned_rows(repo, pinned_branches, collapsed_items).into()
+        });
     let badges = workspace_badges_cached(&mut cache.workspace_badges, repo, state.repos.as_slice());
     if let Some(cached) = &cache.projection
         && Rc::ptr_eq(&tree, &cached.tree)
         && Rc::ptr_eq(&raw_pins, &cached.pins)
+        && Rc::ptr_eq(&search, &cached.presentation.search)
         && cached.scope.as_deref() == scope
     {
         return Some(SidebarPresentation {
@@ -430,6 +432,114 @@ fn branch_sidebar_rows_cached(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn review_cache_fixture() -> (AppState, BTreeMap<PathBuf, BTreeSet<String>>) {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.branches = Loadable::Ready(Arc::new(
+            ["feat/A", "feat/B"]
+                .map(|name| gitcomet_core::domain::Branch {
+                    name: name.into(),
+                    target: CommitId("a".into()),
+                    upstream: None,
+                    divergence: None,
+                })
+                .to_vec(),
+        ));
+        let pins = BTreeMap::from([(
+            repo.spec.workdir.clone(),
+            BTreeSet::from(["group:local:feat".into()]),
+        )]);
+        (
+            AppState {
+                active_repo: Some(repo.id),
+                repos: vec![repo],
+                ..AppState::test_default()
+            },
+            pins,
+        )
+    }
+
+    #[test]
+    fn review_search_edits_reuse_unfiltered_tree_and_pins() {
+        let (state, pins) = review_cache_fixture();
+        let collapsed = BTreeMap::from([(
+            state.repos[0].spec.workdir.clone(),
+            BTreeSet::from(["group:local:feat".into()]),
+        )]);
+        let mut cache = SidebarPresentationCache::default();
+        let closed = build_sidebar_presentation(&mut cache, &state, &collapsed, &pins, "").unwrap();
+        let first =
+            build_sidebar_presentation(&mut cache, &state, &collapsed, &pins, "feat").unwrap();
+        assert!(first.rows.len() > closed.rows.len());
+        let tree = cache.projection.as_ref().unwrap().tree.clone();
+        let raw_pins = cache.projection.as_ref().unwrap().pins.clone();
+        let second =
+            build_sidebar_presentation(&mut cache, &state, &collapsed, &pins, "feat/A").unwrap();
+        assert!(second.match_count < first.match_count);
+        assert!(
+            Rc::ptr_eq(&tree, &cache.projection.as_ref().unwrap().tree),
+            "query edits rebuilt the branch tree"
+        );
+        assert!(
+            Rc::ptr_eq(&raw_pins, &cache.projection.as_ref().unwrap().pins),
+            "query edits rebuilt pinned groups"
+        );
+        let restored =
+            build_sidebar_presentation(&mut cache, &state, &collapsed, &pins, "").unwrap();
+        assert_eq!(restored.rows, closed.rows);
+    }
+
+    #[test]
+    fn review_identical_repo_refresh_reuses_pins_and_row_keys() {
+        let (mut state, pins) = review_cache_fixture();
+        let empty = BTreeMap::new();
+        let mut cache = SidebarPresentationCache::default();
+        let first = build_sidebar_presentation(&mut cache, &state, &empty, &pins, "").unwrap();
+        let tree = cache.projection.as_ref().unwrap().tree.clone();
+        state.repos[0].branches_rev += 1;
+        state.repos[0].branch_sidebar_rev += 1;
+        if let Loadable::Ready(branches) = &mut state.repos[0].branches {
+            *branches = Arc::new(branches.as_ref().clone());
+        }
+        let second = build_sidebar_presentation(&mut cache, &state, &empty, &pins, "").unwrap();
+        assert!(Rc::ptr_eq(&tree, &cache.projection.as_ref().unwrap().tree));
+        assert!(
+            Rc::ptr_eq(&first.pins, &second.pins),
+            "unchanged refresh rebuilt pinned rows"
+        );
+        assert!(
+            Rc::ptr_eq(&first.row_keys, &second.row_keys),
+            "unchanged refresh reformatted every row key"
+        );
+    }
+
+    #[test]
+    fn review_sidebar_requests_follow_the_visible_top_level_sections() {
+        let (state, _) = review_cache_fixture();
+        let empty = BTreeMap::new();
+        let (_, hidden) = active_sidebar_data_request(&state, &empty, false).unwrap();
+        assert!(!hidden.submodules && !hidden.stashes);
+        let (_, visible) = active_sidebar_data_request(&state, &empty, true).unwrap();
+        let rows = branch_sidebar::expanded_sidebar_rows(&state.repos[0], &BTreeSet::new(), "");
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::SubmodulesHeader {
+                collapsed: false,
+                ..
+            }
+        )));
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::StashHeader {
+                collapsed: false,
+                ..
+            }
+        )));
+        assert!(
+            visible.submodules && visible.stashes,
+            "the expanded sidebar must load its open sections"
+        );
+    }
 
     #[test]
     fn scoped_flyout_keeps_nested_folder_state_and_shares_section_rows() {
@@ -585,8 +695,8 @@ mod tests {
         assert_eq!(closed.pins.len(), 2);
         assert_eq!(
             closed.structure.pin_roots.len(),
-            1,
-            "closed group is never sticky"
+            2,
+            "closed groups remain pinned roots"
         );
     }
 
