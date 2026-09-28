@@ -348,6 +348,36 @@ fn settings_theme_modes_include_automatic_and_all_available_named_themes() {
 }
 
 #[gpui::test]
+fn settings_window_blur_requires_deliberate_input_focus(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let input = cx.update(|window, app| {
+        let input = view.read(app).search_input.clone();
+        window.focus(&input.read(app).focus_handle(), app);
+        let _ = window.draw(app);
+        input
+    });
+    cx.simulate_keystrokes("a");
+    cx.deactivate_window();
+    cx.update(|window, app| {
+        assert!(window.focused(app).is_none());
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    crate::test_support::refresh_and_draw(cx);
+    cx.simulate_keystrokes("b");
+    cx.update(|window, app| {
+        assert_eq!(input.read(app).text(), "a");
+        window.focus(&input.read(app).focus_handle(), app);
+    });
+    crate::test_support::refresh_and_draw(cx);
+    cx.simulate_keystrokes("c");
+    cx.update(|_, app| assert_eq!(input.read(app).text(), "ac"));
+}
+
+#[gpui::test]
 fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));

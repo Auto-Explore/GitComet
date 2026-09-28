@@ -4128,6 +4128,7 @@ fn amend_prefills_commit_message_once_recent_messages_load(cx: &mut gpui::TestAp
 fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 

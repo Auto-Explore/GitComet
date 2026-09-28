@@ -818,6 +818,8 @@ pub(crate) struct TerminalRenderCache {
 pub(crate) struct TerminalViewportView {
     pub(crate) theme: AppTheme,
     pub(crate) focus_handle: FocusHandle,
+    pub(crate) focus_subscriptions: Option<[gpui::Subscription; 2]>,
+    pub(crate) took_press: bool,
     pub(crate) term_lock: Option<AlacrittyTermLock>,
     pub(crate) pty_sender: Option<super::terminal_alacritty::PtySender>,
     pub(crate) layout_cache: Option<TerminalLayoutCache>,

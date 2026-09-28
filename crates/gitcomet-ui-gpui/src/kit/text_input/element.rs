@@ -695,11 +695,13 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(bounds, self.input.clone()),
-            cx,
-        );
+        if crate::window_focus::is_active(&focus_handle, window) {
+            window.handle_input(
+                &focus_handle,
+                ElementInputHandler::new(bounds, self.input.clone()),
+                cx,
+            );
+        }
 
         // Clicking away blurs, as a browser does. Window-level rather than
         // hitbox-gated, so it also sees surfaces that take no focus of their own.
@@ -859,7 +861,7 @@ impl Element for TextElement {
         }
 
         let cursor_blink_visible = self.input.read(cx).interaction.cursor_blink_visible;
-        if focus_handle.is_focused(window)
+        if crate::window_focus::is_active(&focus_handle, window)
             && cursor_blink_visible
             && let Some(cursor) = prepaint.cursor.take()
         {

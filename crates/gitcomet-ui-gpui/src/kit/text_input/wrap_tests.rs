@@ -11,6 +11,7 @@ struct WrappedInputView {
 
 impl WrappedInputView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        window.activate_window();
         let scroll = ScrollHandle::new();
         let input = cx.new(|cx| {
             let mut input = TextInput::new(

@@ -647,6 +647,7 @@ pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
 }
 
 fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    crate::window_focus::observe_tab_navigation(cx).detach();
     install_global_diff_shortcut_fallback(cx);
 
     let new_window_backend = Arc::clone(&backend);

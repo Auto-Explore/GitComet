@@ -1337,10 +1337,11 @@ impl GitCometView {
                 // and an external edit to the same file could land first.
                 this.main_pane
                     .update(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
-                // Capture the focused element before the platform blur() fires and clears it.
+                // Capture the focused element before our blur policy clears it.
                 // This is the restore target when opening the palette via a global hotkey while
                 // this window is in the background.
                 this.pre_palette_focus = window.focused(cx);
+                crate::window_focus::reset_on_deactivation(window, cx);
                 // A deactivation right after we asked for a move/resize grab is
                 // the compositor taking focus for the drag, not the user leaving
                 // the app. Remember it so the matching re-activation does not
