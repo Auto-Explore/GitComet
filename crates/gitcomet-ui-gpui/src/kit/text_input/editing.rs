@@ -774,7 +774,6 @@ impl TextInput {
         self.interaction.submit_on_enter = submit_on_enter;
     }
 
-    #[cfg(test)]
     pub fn is_read_only(&self) -> bool {
         self.read_only
     }
