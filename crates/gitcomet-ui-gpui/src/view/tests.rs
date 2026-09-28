@@ -3032,6 +3032,64 @@ fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
+fn pane_resize_grips_paint_on_hover_in_the_application_layout(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
+    test_support::redraw(cx);
+
+    for selector in ["pane_resize_sidebar", "pane_resize_details"] {
+        let handle = cx
+            .debug_bounds(selector)
+            .expect("resize strip should be present");
+        assert!(handle.size.width > px(0.0) && handle.size.height > px(44.0));
+        cx.simulate_mouse_move(handle.center(), None, gpui::Modifiers::default());
+        for pressed in [false, true] {
+            if pressed {
+                cx.simulate_mouse_down(
+                    handle.center(),
+                    gpui::MouseButton::Left,
+                    gpui::Modifiers::default(),
+                );
+            }
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+                let theme = view.read(app).theme;
+                let tint = if pressed {
+                    theme.colors.accent.foreground
+                } else {
+                    with_alpha(theme.colors.foreground.primary, if theme.is_dark { 0.34 } else { 0.30 })
+                };
+                let scale = window.scale_factor();
+                let quad = window.painted_quads().into_iter()
+                    .find(|quad| {
+                        let bounds = quad.bounds;
+                        quad.background == tint.into()
+                            && bounds.size.width.0 > 0.0 && bounds.size.height.0 > 0.0
+                            && (bounds.center().x.0 - f32::from(handle.center().x) * scale).abs() < 1.0
+                            && (bounds.center().y.0 - f32::from(handle.center().y) * scale).abs() < 1.0
+                    }).unwrap_or_else(|| panic!("{selector}: no grip centered in {handle:?}, pressed={pressed}"));
+                let max_radius = quad.bounds.size.width.0.min(quad.bounds.size.height.0) / 2.0;
+                for radius in [quad.corner_radii.top_left, quad.corner_radii.top_right, quad.corner_radii.bottom_left, quad.corner_radii.bottom_right] {
+                    assert!(radius.0 <= max_radius + 0.5,
+                        "{selector}: radius {radius:?} exceeds grip bounds {:?} and makes the grip invisible", quad.bounds);
+                }
+            });
+        }
+        cx.simulate_mouse_up(
+            handle.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+    }
+}
+
+#[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -4965,6 +5023,71 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
         assert!(expanded.contains(&Arc::new(PathBuf::from("src"))));
         assert!(expanded.contains(&Arc::new(PathBuf::from("src/inner"))));
     });
+}
+
+#[gpui::test]
+fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_, app| view.update(app, |view, cx| view.set_sidebar_collapsed(false, cx)));
+    cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
+
+    for scale in [100, 150] {
+        let mut previous: Option<[gpui::Size<Pixels>; 2]> = None;
+        for density in [
+            crate::appearance::UiDensity::Compact,
+            crate::appearance::UiDensity::Comfortable,
+            crate::appearance::UiDensity::Spacious,
+        ] {
+            cx.update(|_, app| {
+                app.set_global(crate::appearance::Appearance {
+                    density,
+                    ..Default::default()
+                });
+                ui_scale::set_current(app, scale);
+                view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+            });
+            test_support::redraw(cx);
+            let sizes = ["sidebar_tab_branches", "sidebar_tab_files"]
+                .map(|selector| cx.debug_bounds(selector).unwrap().size);
+            if let Some(previous) = previous {
+                for (current, previous) in sizes.iter().zip(previous) {
+                    assert!(
+                        current.width > previous.width,
+                        "tab width must grow at {density:?}"
+                    );
+                    assert!(
+                        current.height > previous.height,
+                        "tab height must grow at {density:?}"
+                    );
+                }
+            }
+            previous = Some(sizes);
+        }
+    }
+}
+
+#[gpui::test]
+fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, _| window.activate_window());
+    test_support::redraw(cx);
+    cx.simulate_mouse_down(
+        point(px(300.0), px(300.0)),
+        gpui::MouseButton::Left,
+        Default::default(),
+    );
+    cx.update(|window, app| assert!(crate::press_gesture::pointer_is_down(window, app)));
+    cx.deactivate_window();
+    cx.update(|window, app| assert!(!crate::press_gesture::pointer_is_down(window, app)));
 }
 
 #[gpui::test]

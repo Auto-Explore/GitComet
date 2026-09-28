@@ -1868,7 +1868,7 @@ impl SidebarPaneView {
                 .on_click(theme, cx, move |_, _, _, _| {
                     store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
                 })
-                .px(scaled_px(8.0))
+                .px(scaled_px(theme.metrics.ramp(8.0, 12.0)))
                 .h(components::control_height(ui_scale))
                 .text_size(theme.ui_text(12.0))
         };

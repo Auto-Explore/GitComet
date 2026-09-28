@@ -1810,7 +1810,11 @@ impl SidebarPaneView {
                         .interactive_row(row_style, row_state)
                         .text_size(theme.ui_text(12.0))
                         .font_weight(FontWeight::NORMAL)
-                        .text_color(theme.colors.foreground.secondary)
+                        .text_color(if from_pins {
+                            theme.colors.foreground.primary
+                        } else {
+                            theme.colors.foreground.secondary
+                        })
                         .child(if is_collapsed_popover {
                             tree_toggle_slot(Some(collapsed)).into_any_element()
                         } else {
@@ -1985,7 +1989,9 @@ impl SidebarPaneView {
                         format!("branch_row_{}_{}", repo_id.0, ix).into()
                     };
                     let row_debug_selector = row_group.as_ref().to_owned();
-                    let branch_text_color = if muted {
+                    let branch_text_color = if surface == SidebarRowSurface::Pins {
+                        theme.colors.foreground.primary
+                    } else if muted {
                         theme.colors.foreground.secondary
                     } else {
                         branch_tree_color(section)

@@ -1414,48 +1414,82 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                     .iter()
                     .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
             );
-            let headers = cx.update(|_, app| {
-                pane.update(app, |pane, _| {
-                    let p = pane.branch_sidebar_presentation_cached().unwrap();
-                    pane.sticky_context
-                        .as_ref()
-                        .unwrap()
-                        .eligible_rows
-                        .iter()
-                        .copied()
-                        .filter_map(|ix| {
-                            crate::view::sidebar_sticky::header_key(&p.rows[ix])?;
-                            let group = matches!(
-                                &p.rows[ix],
-                                BranchSidebarRow::GroupHeader { .. }
-                                    | BranchSidebarRow::RemoteHeader { .. }
-                            );
-                            let handle = pane.branches_scroll.0.borrow();
-                            let row_height = handle.last_item_size.unwrap().contents.height
-                                / p.rows.len() as f32;
-                            let natural_top = handle.base_handle.bounds().top()
-                                + handle.base_handle.offset().y
-                                + row_height * ix;
-                            Some((ix, group, natural_top))
-                        })
-                        .collect::<Vec<_>>()
-                })
-            });
-            for (ix, group, natural_top) in headers {
-                let stuck =
-                    (cx.debug_bounds(selector(ix)).unwrap().top() - natural_top).abs() > px(0.5);
-                let background = if group && !stuck {
-                    theme.colors.surface.chrome
-                } else {
-                    theme.colors.surface.panel
-                };
-                assert!(
-                    paint(cx, selector(ix))
-                        .iter()
-                        .any(|(fill, _)| *fill == background.into()),
-                    "groups should use the header background only when held at a sticky edge",
-                );
+            let mut saw_top_stuck = false;
+            let mut saw_bottom_stuck = false;
+            for offset in [px(0.0), sidebar_list_row_height(theme, scale) * 6] {
+                cx.update(|_, app| {
+                    pane.read(app)
+                        .branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(point(px(0.0), -offset));
+                });
+                test_support::redraw(cx);
+                let headers = cx.update(|_, app| {
+                    pane.update(app, |pane, _| {
+                        let p = pane.branch_sidebar_presentation_cached().unwrap();
+                        pane.sticky_context
+                            .as_ref()
+                            .unwrap()
+                            .eligible_rows
+                            .iter()
+                            .copied()
+                            .filter_map(|ix| {
+                                crate::view::sidebar_sticky::header_key(&p.rows[ix])?;
+                                let group = matches!(
+                                    &p.rows[ix],
+                                    BranchSidebarRow::GroupHeader { .. }
+                                        | BranchSidebarRow::RemoteHeader { .. }
+                                );
+                                let handle = pane.branches_scroll.0.borrow();
+                                let row_height = handle.last_item_size.unwrap().contents.height
+                                    / p.rows.len() as f32;
+                                let natural_top = handle.base_handle.bounds().top()
+                                    + handle.base_handle.offset().y
+                                    + row_height * ix;
+                                Some((ix, group, natural_top))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                });
+                for (ix, group, natural_top) in headers {
+                    let header = cx.debug_bounds(selector(ix)).unwrap();
+                    let stuck = (header.top() - natural_top).abs() > px(0.5);
+                    let background = if group && !stuck {
+                        theme.colors.surface.chrome
+                    } else {
+                        theme.colors.surface.panel
+                    };
+                    assert!(
+                        paint(cx, selector(ix))
+                            .iter()
+                            .any(|(fill, _)| *fill == background.into()),
+                        "groups should use the header background only when held at a sticky edge",
+                    );
+                    saw_top_stuck |= stuck && header.top() > natural_top;
+                    saw_bottom_stuck |= stuck && header.top() < natural_top;
+                    let divider_selector = format!("sidebar_sticky_divider_{ix}").leak();
+                    let divider = cx.debug_bounds(divider_selector);
+                    assert_eq!(divider.is_some(), stuck && !theme.is_dark);
+                    if let Some(divider) = divider {
+                        assert_eq!(divider.size.height, px(1.0));
+                        assert_eq!(divider.left(), header.left());
+                        assert_eq!(divider.right(), header.right());
+                        if header.top() > natural_top {
+                            assert_eq!(divider.bottom(), header.bottom());
+                        } else {
+                            assert_eq!(divider.top(), header.top());
+                        }
+                        assert!(
+                            paint(cx, divider_selector)
+                                .iter()
+                                .any(|(fill, _)| *fill == theme.colors.stroke.subtle.into())
+                        );
+                    }
+                }
             }
+            assert!(saw_top_stuck && saw_bottom_stuck);
             assert!(
                 paint(cx, "sidebar_sticky_selected_branch")
                     .iter()

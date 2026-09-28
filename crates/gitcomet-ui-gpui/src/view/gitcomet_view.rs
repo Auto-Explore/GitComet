@@ -1333,6 +1333,7 @@ impl GitCometView {
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             let now = Instant::now();
             if !window.is_window_active() {
+                crate::press_gesture::clear_pointer_press(window, cx);
                 // Leaving the app is one of the two moments auto-save has to
                 // mean more than "after a pause": the pending timer would
                 // otherwise fire against a window the user has already left,

@@ -664,6 +664,20 @@ impl StickyRows {
                             ),
                     );
                 }
+                if is_header && stuck && !this.theme.is_dark {
+                    let natural_y = ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
+                    row = row.child(
+                        div()
+                            .debug_selector(move || format!("sidebar_sticky_divider_{ix}"))
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .h(px(1.0))
+                            .when(y > natural_y, |line| line.bottom_0())
+                            .when(y < natural_y, |line| line.top_0())
+                            .bg(this.theme.colors.stroke.subtle),
+                    );
+                }
                 row.into_any_element()
             })
             .collect()
