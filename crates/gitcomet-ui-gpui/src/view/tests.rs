@@ -4333,6 +4333,49 @@ fn confirm_terminal_shutdown_close_window_removes_the_window(cx: &mut gpui::Test
     assert_eq!(cx.cx.update(|app| app.windows().len()), 0);
 }
 
+/// Terminating a workspace's terminals to delete it, in the only window, takes
+/// that window back to Home instead of closing it.
+#[gpui::test]
+fn confirm_terminal_shutdown_delete_workspace_keeps_the_last_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Alpha".into());
+    let workspace_id = workspace.id;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| view.update(app, |view, cx| view.adopt_workspace(workspace, cx)));
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.confirm_terminal_shutdown(
+                TerminalShutdownPrompt {
+                    action: TerminalShutdownAction::DeleteWorkspace { workspace_id },
+                    summary: TerminalShutdownSummary {
+                        terminal_count: 1,
+                        running_command_count: 1,
+                        repo_names: vec![],
+                    },
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(app.windows().len(), 1, "the last window stays open");
+        assert!(crate::workspaces::workspace(app, workspace_id).is_none());
+        assert_eq!(view.read(app).workspace_id, None);
+    });
+}
+
 #[gpui::test]
 fn cancel_pending_terminal_shutdown_clears_prompt(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();

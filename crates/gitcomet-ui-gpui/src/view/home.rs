@@ -298,9 +298,14 @@ impl GitCometView {
     }
 
     fn remove_home_workspace(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
-        crate::workspaces::discard_workspace(cx, id);
-        self.sync_home_rows(cx);
-        cx.notify();
+        let view = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            crate::app::delete_workspace(cx, id);
+            let _ = view.update(cx, |this, cx| {
+                this.sync_home_rows(cx);
+                cx.notify();
+            });
+        });
     }
 
     /// Drop a repository from Home: forget it and, if pinned, unpin it too,
@@ -372,7 +377,6 @@ impl GitCometView {
         let (title, detail) = text;
         let debug_id = id.clone();
         let group = id.clone();
-        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         div()
             .group(group)
             .id(id)
@@ -387,24 +391,10 @@ impl GitCometView {
             .gap(px(10.0))
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
-            // The accent bar marks the selection, as in the repository picker.
             .control_interaction(
                 components::InteractionStyle::new(theme).selection_outline(false),
                 components::InteractionState::default().selected(selected, theme.active_overlay()),
             )
-            .when(selected, |row| {
-                row.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(scaled_px(3.0))
-                        .rounded_tr(px(theme.radii.row))
-                        .rounded_br(px(theme.radii.row))
-                        .bg(theme.colors.accent.foreground),
-                )
-            })
             .child(leading)
             .child(
                 div()
@@ -439,34 +429,11 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let ui_scale = crate::ui_scale::UiScale::from_percent(this.ui_scale_percent);
         range
             .filter_map(|ix| this.home_rows.workspaces.get(ix).cloned().map(|w| (ix, w)))
             .map(|(ix, workspace)| {
                 let id = workspace.id;
-                let dot = div()
-                    .size(px(10.0))
-                    .mx(px(4.0))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(crate::view::chrome::workspace_color(workspace.color, theme))
-                    .into_any_element();
-                let state = if workspace.restore_on_launch {
-                    "Open"
-                } else {
-                    "Saved"
-                };
-                let names = workspace
-                    .repositories
-                    .iter()
-                    .map(|path| repo_name(path))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let count = crate::workspaces::repository_count_label(workspace.repositories.len());
-                let detail = if names.is_empty() {
-                    format!("{state} · {count}")
-                } else {
-                    format!("{state} · {count} · {names}")
-                };
                 let row_id: SharedString = format!("home_workspace_{id}").into();
                 let selected = this.home_selected == Some(ix);
                 // A workspace open in another window would reappear at once.
@@ -482,14 +449,25 @@ impl GitCometView {
                     )
                 });
                 let trailing = this.home_row_trailing(row_id.clone(), ix, selected, remove, cx);
-                this.home_row(
-                    row_id,
-                    dot,
-                    (workspace.display_name(), detail),
-                    selected,
-                    trailing,
+                components::picker_row(
                     theme,
+                    ui_scale,
+                    &components::workspace_picker_item(&workspace),
+                    components::PickerRowSpec {
+                        id: row_id.clone().into(),
+                        selector_prefix: "home",
+                        key: components::PickerRowKey::Text(id.to_string().into()),
+                        row_selector: Some(row_id.clone()),
+                        selected,
+                        marked: false,
+                        match_range: None,
+                        leading_icon: None,
+                    },
+                    Some(this.tooltip_host.downgrade()),
+                    cx,
                 )
+                .group(row_id)
+                .children(trailing)
                 .on_activate(
                     false,
                     controls::ControlActivation::PreserveFocus,
@@ -579,6 +557,7 @@ impl GitCometView {
         &self,
         labels: HomeColumn,
         count: usize,
+        row_height: gpui::AbsoluteLength,
         scroll: UniformListScrollHandle,
         rows: HomeRowsRenderer,
         cx: &mut gpui::Context<Self>,
@@ -588,7 +567,11 @@ impl GitCometView {
         let body = if count == 0 {
             frame.child(self.home_empty(labels.empty_text, theme))
         } else {
-            let height = self.home_row_height() * count.min(HOME_LIST_MAX_ROWS) as f32;
+            let visible = count.min(HOME_LIST_MAX_ROWS) as f32;
+            let height: gpui::AbsoluteLength = match row_height {
+                gpui::AbsoluteLength::Pixels(row) => (row * visible).into(),
+                gpui::AbsoluteLength::Rems(row) => (row * visible).into(),
+            };
             let gutter = Scrollbar::visible_gutter(scroll.clone(), ScrollbarAxis::Vertical);
             let list = uniform_list(labels.list_id, count, cx.processor(rows))
                 .h(height)
@@ -723,6 +706,12 @@ impl GitCometView {
                 },
             },
             self.home_rows.workspaces.len(),
+            // Workspace rows are the shared picker rows, repositories Home's own.
+            components::picker_row_height(
+                crate::ui_scale::UiScale::from_percent(self.ui_scale_percent),
+                true,
+            )
+            .into(),
             self.home_workspaces_scroll.clone(),
             Self::render_home_workspace_rows,
             cx,
@@ -740,6 +729,7 @@ impl GitCometView {
                 },
             },
             self.home_rows.repositories.len(),
+            self.home_row_height().into(),
             self.home_repositories_scroll.clone(),
             Self::render_home_repository_rows,
             cx,

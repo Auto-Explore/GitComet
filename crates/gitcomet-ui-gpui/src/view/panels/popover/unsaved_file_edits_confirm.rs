@@ -13,6 +13,9 @@ pub(super) fn panel(
     let theme = this.theme;
     let (title, discard_label) = match &prompt.action {
         UnsavedFileEditsAction::CloseWindow(_) => ("Close window?", "Discard and close"),
+        UnsavedFileEditsAction::DeleteWorkspace { .. } => {
+            ("Delete workspace?", "Discard and delete")
+        }
         UnsavedFileEditsAction::QuitApp => ("Quit GitComet?", "Discard and quit"),
         UnsavedFileEditsAction::MoveRepo { .. } => ("Move repository?", "Discard and move"),
     };

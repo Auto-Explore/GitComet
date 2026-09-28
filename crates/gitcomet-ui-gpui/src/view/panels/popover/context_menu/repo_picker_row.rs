@@ -36,6 +36,15 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
                 disabled: false,
                 action: Box::new(ContextMenuAction::OpenWorkspaceSettings { workspace_id }),
             },
+            // Destructive last, as on repository rows; the trash icon makes it red.
+            ContextMenuItem::Separator,
+            ContextMenuItem::Entry {
+                label: "Delete workspace".into(),
+                icon: Some("icons/trash.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::DeleteWorkspace { workspace_id }),
+            },
         ]);
     }
 

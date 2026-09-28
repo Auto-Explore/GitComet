@@ -3619,6 +3619,21 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
     );
     let row: &'static str = format!("settings_window_workspace_{id}").leak();
     assert!(settings_cx.debug_bounds(row).is_some());
+    let dot: &'static str = format!("settings_window_workspace_dot_{id}").leak();
+    assert!(
+        settings_cx.debug_bounds(dot).is_some(),
+        "rows are the picker's workspace rows, colour dot included"
+    );
+    let open = settings_cx
+        .debug_bounds("settings_window_workspace_open")
+        .expect("open action");
+    let delete = settings_cx
+        .debug_bounds("settings_window_workspace_delete")
+        .expect("delete button");
+    assert!(
+        delete.top() > open.bottom(),
+        "delete sits apart, below open"
+    );
 
     click(&mut settings_cx, "settings_window_workspace_color_blue");
     let read = |settings_cx: &mut gpui::VisualTestContext| {
@@ -3667,6 +3682,15 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
         read(&mut settings_cx).is_some(),
         "delete asks for confirmation first"
     );
+    click(&mut settings_cx, "settings_window_workspace_delete_cancel");
+    assert!(read(&mut settings_cx).is_some());
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_workspace_delete")
+            .is_some(),
+        "cancel brings the delete button back"
+    );
+    click(&mut settings_cx, "settings_window_workspace_delete");
     click(&mut settings_cx, "settings_window_workspace_delete_confirm");
     assert!(read(&mut settings_cx).is_none());
     let selected = settings_window
@@ -3676,6 +3700,78 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
         selected.is_some_and(|selected| selected != id),
         "the selection moves to a remaining workspace"
     );
+}
+
+/// Deleting the workspace of an open window closes that window rather than
+/// leaving it to re-create the workspace on its next sync.
+#[gpui::test]
+fn deleting_an_open_workspace_from_settings_closes_its_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Doomed".into());
+    let id = workspace.id;
+    let backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend> =
+        std::sync::Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(std::sync::Arc::clone(&backend));
+    let (main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let main_window = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
+        crate::app::install_app_shortcuts_for_test(app, backend);
+        let _ = window.draw(app);
+        window.window_handle().window_id()
+    });
+    cx.update(|_window, app| {
+        main_view.update(app, |view, cx| view.adopt_workspace(workspace, cx));
+    });
+    cx.run_until_parked();
+    // A second main window, so the deleted one closes instead of going Home.
+    cx.update(|_window, app| crate::app::open_new_empty_window(app));
+    cx.update(|_window, app| open_settings_window(app));
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1400.0)));
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+        settings.select_workspace(id, cx);
+    });
+    let click = |settings_cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let bounds = settings_cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        settings_cx.simulate_click(bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+    };
+    click(&mut settings_cx, "settings_window_workspace_delete");
+    click(&mut settings_cx, "settings_window_workspace_delete_confirm");
+
+    settings_cx.update(|_window, app| {
+        assert!(crate::workspaces::workspace(app, id).is_none());
+        assert!(
+            app.windows()
+                .iter()
+                .all(|window| window.window_id() != main_window),
+            "the workspace's window closes"
+        );
+        assert_eq!(
+            app.windows()
+                .iter()
+                .filter(|window| window.downcast::<GitCometView>().is_some())
+                .count(),
+            1,
+            "the other main window stays"
+        );
+    });
 }
 
 #[gpui::test]

@@ -16,19 +16,6 @@ fn sorted_workspaces(cx: &App) -> Vec<Workspace> {
     workspaces
 }
 
-fn workspace_summary(workspace: &Workspace) -> SharedString {
-    let state = if workspace.restore_on_launch {
-        "Open"
-    } else {
-        "Saved"
-    };
-    format!(
-        "{state} · {}",
-        crate::workspaces::repository_count_label(workspace.repositories.len())
-    )
-    .into()
-}
-
 fn workspace_theme_label(workspace: &Workspace) -> SharedString {
     workspace
         .theme_mode
@@ -113,11 +100,10 @@ impl SettingsWindowView {
     }
 
     fn delete_workspace(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
-        crate::workspaces::discard_workspace(cx, id);
-        // A live window drops its colour, theme and name on the next repaint.
-        crate::app::notify_workspace_changed_from_view(cx, id);
+        // Closes its window first when one is open; the workspace observer
+        // moves the selection once it is gone.
+        crate::app::delete_workspace_from_view(cx, id);
         self.workspace_delete_confirm = None;
-        self.reconcile_selected_workspace(cx);
         cx.notify();
     }
 
@@ -237,16 +223,31 @@ impl SettingsWindowView {
             );
         }
 
-        let mut list = self.detail_container("settings_window_workspaces_list", theme);
+        let ui_scale = self.row_scale(theme);
+        let mut list = self
+            .detail_container("settings_window_workspaces_list", theme)
+            .p(ui_scale.px(4.0));
         for workspace in &workspaces {
             let id = workspace.id;
+            let item = components::workspace_picker_item(workspace);
+            let row_selector: SharedString = format!("settings_window_workspace_{id}").into();
             list = list.child(
-                self.option_row(
-                    format!("settings_window_workspace_{id}"),
-                    workspace.display_name(),
-                    Some(workspace_summary(workspace)),
-                    self.selected_workspace == Some(id),
+                components::picker_row(
                     theme,
+                    ui_scale,
+                    &item,
+                    components::PickerRowSpec {
+                        id: row_selector.clone().into(),
+                        selector_prefix: "settings_window",
+                        key: components::PickerRowKey::Text(id.to_string().into()),
+                        row_selector: Some(row_selector),
+                        selected: self.selected_workspace == Some(id),
+                        marked: false,
+                        match_range: None,
+                        leading_icon: None,
+                    },
+                    None,
+                    cx,
                 )
                 .on_activate(
                     false,
@@ -274,6 +275,25 @@ impl SettingsWindowView {
                 "Selected workspace",
                 theme,
             ))
+            .child(
+                self.detail_container("settings_window_workspace_actions", theme)
+                    .child(
+                        self.option_row(
+                            "settings_window_workspace_open",
+                            "Open workspace",
+                            Some("Focus its window, or open one with its repositories.".into()),
+                            false,
+                            theme,
+                        )
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                                crate::app::activate_workspace_from_view(cx, id);
+                            }),
+                        ),
+                    ),
+            )
             .child(self.field_label("Name", theme))
             .child(
                 div()
@@ -361,82 +381,94 @@ impl SettingsWindowView {
             card = card.child(detail);
         }
 
-        let mut actions = self
-            .detail_container("settings_window_workspace_actions", theme)
-            .child(
-                self.option_row(
-                    "settings_window_workspace_open",
-                    "Open workspace",
-                    Some("Focus its window, or open one with its repositories.".into()),
-                    false,
-                    theme,
-                )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
-                        crate::app::activate_workspace_from_view(cx, id);
-                    }),
-                ),
-            );
+        card.child(self.workspace_delete_zone(&selected, theme, cx))
+    }
+
+    /// Delete sits apart at the bottom, well away from Open, and asks once.
+    fn workspace_delete_zone(
+        &self,
+        workspace: &Workspace,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let id = workspace.id;
+        let danger = theme.colors.status.danger.foreground;
+        let icon_size = self.row_scale(theme).px(14.0);
+        let trash = || crate::view::icons::svg_icon("icons/trash.svg", danger, icon_size);
+        let note = |text: String| {
+            div()
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child(text)
+        };
+        let zone = div()
+            .id("settings_window_workspace_delete_zone")
+            .debug_selector(|| "settings_window_workspace_delete_zone".to_string())
+            .mt_4()
+            .pt_4()
+            .px_2()
+            .border_t_1()
+            .border_color(theme.colors.stroke.subtle)
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap_2();
         if self.workspace_delete_confirm == Some(id) {
-            actions = actions
+            return zone
+                .child(note(format!(
+                    "Delete \u{201c}{}\u{201d}? Its name, colour, theme and layout are \
+                     forgotten. Repositories and their files are not touched.",
+                    workspace.display_name()
+                )))
                 .child(
-                    self.option_row(
-                        "settings_window_workspace_delete_confirm",
-                        "Confirm delete",
-                        Some(
-                            "Forgets its name, colour and theme. Repositories open in its \
-                             window stay open."
-                                .into(),
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            components::Button::new(
+                                "settings_window_workspace_delete_confirm",
+                                "Delete",
+                            )
+                            .style(components::ButtonStyle::Danger)
+                            .start_slot(trash())
+                            .on_click(
+                                theme,
+                                cx,
+                                move |this, _e, _window, cx| {
+                                    this.delete_workspace(id, cx);
+                                },
+                            ),
+                        )
+                        .child(
+                            components::Button::new(
+                                "settings_window_workspace_delete_cancel",
+                                "Cancel",
+                            )
+                            .style(components::ButtonStyle::Outlined)
+                            .on_click(
+                                theme,
+                                cx,
+                                |this, _e, _window, cx| {
+                                    this.workspace_delete_confirm = None;
+                                    cx.notify();
+                                },
+                            ),
                         ),
-                        false,
-                        theme,
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                            this.delete_workspace(id, cx);
-                        }),
-                    ),
-                )
-                .child(
-                    self.option_row(
-                        "settings_window_workspace_delete_cancel",
-                        "Cancel",
-                        None,
-                        false,
-                        theme,
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                            this.workspace_delete_confirm = None;
-                            cx.notify();
-                        }),
-                    ),
                 );
-        } else {
-            actions = actions.child(
-                self.option_row(
-                    "settings_window_workspace_delete",
-                    "Delete workspace…",
-                    None,
-                    false,
-                    theme,
-                )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                        this.workspace_delete_confirm = Some(id);
-                        cx.notify();
-                    }),
-                ),
-            );
         }
-        card.child(actions)
+        zone.child(
+            components::Button::new("settings_window_workspace_delete", "Delete workspace")
+                .style(components::ButtonStyle::Danger)
+                .start_slot(trash())
+                .on_click(theme, cx, move |this, _e, _window, cx| {
+                    this.workspace_delete_confirm = Some(id);
+                    cx.notify();
+                }),
+        )
+        .child(note(
+            "Closes its window (the last window returns to Home) and forgets its name, \
+             colour, theme and layout. Repositories and their files are not touched."
+                .to_string(),
+        ))
     }
 }

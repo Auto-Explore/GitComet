@@ -2278,6 +2278,67 @@ pub(crate) fn activate_workspace_from_view<T>(
     });
 }
 
+/// Forget a workspace. Its window closes, or returns to Home when it is the
+/// last one, once that window's unsaved-edit and terminal guards agree.
+pub(crate) fn delete_workspace(cx: &mut App, workspace_id: session::WorkspaceId) {
+    let Some(owner) = live_normal_windows(cx)
+        .into_iter()
+        .find(|entry| entry.workspace_id == Some(workspace_id))
+    else {
+        crate::workspaces::discard_workspace(cx, workspace_id);
+        return;
+    };
+    let window_id = owner.handle.window_id();
+    let prompted = owner
+        .view
+        .update(cx, |view, cx| {
+            view.request_delete_workspace_or_warn(window_id, workspace_id, cx)
+        })
+        .unwrap_or(false);
+    if prompted {
+        // The prompt lives in that window; the request may come from another.
+        activate_gitcomet_window(cx, owner.handle);
+    } else {
+        finish_workspace_delete(cx, window_id, workspace_id);
+    }
+}
+
+pub(crate) fn delete_workspace_from_view<T>(
+    cx: &mut gpui::Context<T>,
+    workspace_id: session::WorkspaceId,
+) where
+    T: 'static,
+{
+    cx.defer(move |cx| delete_workspace(cx, workspace_id));
+}
+
+/// The guards passed. Decided now rather than at request time, since a prompt
+/// can sit open while other windows come and go.
+pub(crate) fn finish_workspace_delete(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+    workspace_id: session::WorkspaceId,
+) {
+    let live = live_normal_windows(cx);
+    let last_window = live.len() == 1;
+    let Some(owner) = live.into_iter().find(|entry| {
+        entry.handle.window_id() == window_id && entry.workspace_id == Some(workspace_id)
+    }) else {
+        crate::workspaces::discard_workspace(cx, workspace_id);
+        return;
+    };
+    if last_window {
+        let _ = owner
+            .view
+            .update(cx, |view, cx| view.reset_to_home_after_workspace_delete(cx));
+    } else {
+        crate::workspaces::discard_workspace_for_window(cx, window_id);
+        let _ = owner
+            .handle
+            .update(cx, |_, window, _| window.remove_window());
+    }
+}
+
 fn move_repository_to_workspace(
     cx: &mut App,
     source_window_id: gpui::WindowId,
@@ -5921,6 +5982,130 @@ mod tests {
             !cfg!(target_os = "macos"),
             "closing the only window quits off macOS, so only there is it restored"
         );
+    }
+
+    #[gpui::test]
+    fn deleting_a_workspace_closes_its_window_when_another_window_remains(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let mut alpha = session::Workspace::new(Vec::new());
+        alpha.custom_name = Some("Alpha".into());
+        let alpha_id = alpha.id;
+        let (view, cx, window_id) = empty_window_for_adoption(cx, vec![alpha.clone()]);
+        cx.update(|_window, app| view.update(app, |view, cx| view.adopt_workspace(alpha, cx)));
+        cx.run_until_parked();
+        cx.cx.update(open_new_empty_window);
+        cx.run_until_parked();
+        let other = cx.cx.update(|app| {
+            app.windows()
+                .into_iter()
+                .map(|window| window.window_id())
+                .find(|id| *id != window_id)
+                .expect("a second window")
+        });
+
+        cx.cx.update(|app| delete_workspace(app, alpha_id));
+        cx.run_until_parked();
+
+        cx.cx.update(|app| {
+            let open: Vec<_> = app
+                .windows()
+                .iter()
+                .map(|window| window.window_id())
+                .collect();
+            assert_eq!(
+                open,
+                vec![other],
+                "only the deleted workspace's window closes"
+            );
+            assert!(crate::workspaces::workspace(app, alpha_id).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn deleting_the_last_windows_workspace_returns_it_to_home(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+        let window_id = cx.update(|window, app| {
+            crate::workspaces::initialize_for_test(app, Vec::new());
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.window_handle().window_id()
+        });
+        seed_worktree_repo(cx, &store, view.clone());
+        let workspace_id = cx.cx.update(|app| {
+            crate::workspaces::workspace_for_window(app, window_id)
+                .expect("the seeded repository makes the window durable")
+                .id
+        });
+        cx.cx
+            .update(|app| crate::workspaces::set_workspace_name(app, workspace_id, "Alpha"));
+
+        cx.cx.update(|app| delete_workspace(app, workspace_id));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.update(|window, app| {
+                view.update(app, |view, cx| {
+                    crate::view::test_support::sync_store_snapshot(view, cx)
+                });
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            let emptied = cx.cx.update(|app| {
+                normal_gitcomet_window_by_id(app, window_id)
+                    .is_some_and(|entry| entry.repo_paths.is_empty())
+            });
+            if emptied {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the window's repositories close");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        cx.cx.update(|app| {
+            assert!(
+                app.windows()
+                    .iter()
+                    .any(|window| window.window_id() == window_id),
+                "the last window stays open on Home"
+            );
+            // Still gone once the repositories have closed, even customized.
+            assert!(crate::workspaces::workspace(app, workspace_id).is_none());
+            assert!(crate::workspaces::workspace_for_window(app, window_id).is_none());
+            assert!(crate::workspaces::workspaces(app).is_empty());
+            assert_eq!(
+                normal_gitcomet_window_by_id(app, window_id).and_then(|entry| entry.workspace_id),
+                None
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn deleting_a_saved_workspace_only_forgets_it(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let mut saved = session::Workspace::new(vec![PathBuf::from("/tmp/saved-workspace")]);
+        saved.restore_on_launch = false;
+        let saved_id = saved.id;
+        let (_view, cx, window_id) = empty_window_for_adoption(cx, vec![saved]);
+
+        cx.cx.update(|app| delete_workspace(app, saved_id));
+        cx.run_until_parked();
+
+        cx.cx.update(|app| {
+            assert!(crate::workspaces::workspace(app, saved_id).is_none());
+            let open: Vec<_> = app
+                .windows()
+                .iter()
+                .map(|window| window.window_id())
+                .collect();
+            assert_eq!(open, vec![window_id], "no window owned it");
+        });
     }
 
     #[gpui::test]

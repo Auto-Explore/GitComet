@@ -338,22 +338,7 @@ fn workspace_rows(
 }
 
 fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
-    let name = workspace.display_name();
-    let repositories = workspace
-        .repositories
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let state = if workspace.restore_on_launch {
-        "Open"
-    } else {
-        "Saved"
-    };
-    let detail = format!(
-        "{state} · {}",
-        crate::workspaces::repository_count_label(workspace.repositories.len())
-    );
+    let name_key = workspace.display_name().to_lowercase();
     let path_key = workspace
         .repositories
         .iter()
@@ -363,17 +348,8 @@ fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
         .to_lowercase();
     SortableRow {
         entry: RepoPickerEntry::Workspace(workspace.id),
-        item: components::PickerPromptItem::from_parts([
-            components::PickerPromptItemPart::new(name.clone())
-                .profile(components::TextTruncationProfile::End)
-                .flexible(false),
-            components::PickerPromptItemPart::separator(" - "),
-            components::PickerPromptItemPart::path(detail),
-        ])
-        .secondary_parts([components::PickerPromptItemPart::path(repositories)])
-        .workspace_color(workspace.color)
-        .section(WORKSPACES_SECTION),
-        name_key: name.to_lowercase(),
+        item: components::workspace_picker_item(&workspace).section(WORKSPACES_SECTION),
+        name_key,
         path_key,
         recency,
     }

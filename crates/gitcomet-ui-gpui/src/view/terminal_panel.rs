@@ -24,6 +24,9 @@ fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
         UnsavedFileEditsAction::CloseWindow(window_id) => {
             crate::app::close_window_by_id_or_warn(cx, window_id)
         }
+        UnsavedFileEditsAction::DeleteWorkspace { workspace_id, .. } => {
+            crate::app::delete_workspace(cx, workspace_id)
+        }
         UnsavedFileEditsAction::QuitApp => crate::app::quit_app_or_warn(cx),
         UnsavedFileEditsAction::MoveRepo {
             window_id,
@@ -737,9 +740,9 @@ impl GitCometView {
                 }
                 summary
             }
-            TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
-                self.running_terminal_summary()
-            }
+            TerminalShutdownAction::CloseWindow
+            | TerminalShutdownAction::DeleteWorkspace { .. }
+            | TerminalShutdownAction::QuitApp => self.running_terminal_summary(),
         }
     }
 
@@ -778,6 +781,29 @@ impl GitCometView {
             return true;
         }
         self.request_terminal_shutdown_action(TerminalShutdownAction::CloseWindow, cx)
+    }
+
+    /// The close guards, for deleting this window's workspace. Nothing is
+    /// flushed: the layout is about to be forgotten.
+    pub(crate) fn request_delete_workspace_or_warn(
+        &mut self,
+        window_id: gpui::WindowId,
+        workspace_id: gitcomet_state::session::WorkspaceId,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.request_unsaved_file_edits_prompt(
+            UnsavedFileEditsAction::DeleteWorkspace {
+                window_id,
+                workspace_id,
+            },
+            cx,
+        ) {
+            return true;
+        }
+        self.request_terminal_shutdown_action(
+            TerminalShutdownAction::DeleteWorkspace { workspace_id },
+            cx,
+        )
     }
 
     /// [`Self::request_unsaved_file_edits_prompt`] for a quit, callable from
@@ -1040,6 +1066,13 @@ impl GitCometView {
                 self.flush_workspace_environment(cx);
                 crate::app::mark_window_closing(cx, window.window_handle().window_id());
                 window.remove_window();
+            }
+            TerminalShutdownAction::DeleteWorkspace { workspace_id } => {
+                // Deferred: finishing may update this view to reset it.
+                let window_id = window.window_handle().window_id();
+                cx.defer(move |cx| {
+                    crate::app::finish_workspace_delete(cx, window_id, workspace_id);
+                });
             }
             TerminalShutdownAction::QuitApp => {
                 for weak in self.pending_quit_other_views.drain(..) {
@@ -1759,7 +1792,9 @@ fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShut
                 terminate_terminal_process_group(instance.child_pid);
             }
         }
-        TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
+        TerminalShutdownAction::CloseWindow
+        | TerminalShutdownAction::DeleteWorkspace { .. }
+        | TerminalShutdownAction::QuitApp => {
             for session in view.terminal_sessions.values() {
                 for instance in &session.instances {
                     shutdown_terminal_instance(instance, true);

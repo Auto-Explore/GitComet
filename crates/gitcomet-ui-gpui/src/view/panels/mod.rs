@@ -201,6 +201,10 @@ pub(in crate::view) enum ContextMenuAction {
     ActivateWorkspace {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
+    /// Forget the workspace; its window closes, or returns to Home if last.
+    DeleteWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     /// Settings › Workspaces with this workspace selected.
     OpenWorkspaceSettings {
         workspace_id: gitcomet_state::session::WorkspaceId,

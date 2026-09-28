@@ -404,6 +404,33 @@ impl GitCometView {
         self.sync_workspace_and_registry(cx);
     }
 
+    /// The last window outlives its deleted workspace: it forgets it and
+    /// returns to Home instead of closing.
+    pub(crate) fn reset_to_home_after_workspace_delete(&mut self, cx: &mut gpui::Context<Self>) {
+        crate::workspaces::discard_workspace_for_window(cx, self.window_handle.window_id());
+        // The window no longer claims the deleted id, in its syncs or the
+        // window registry. A stale snapshot that still lists repositories can
+        // briefly create an anonymous workspace; it goes once they close.
+        self.workspace_id = None;
+        self.pending_repo_open_reservations.clear();
+        self.pending_repo_open_active = None;
+        let repo_ids: Vec<RepoId> = self
+            .store
+            .snapshot()
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect();
+        if !repo_ids.is_empty() {
+            self.store.dispatch(Msg::CloseRepos {
+                repo_ids,
+                activate_after: None,
+            });
+        }
+        self.workspace_changed(cx);
+        cx.notify();
+    }
+
     /// Take `workspace` as this (empty) window's workspace. The window keeps
     /// its own placement; layout, repositories, colour and theme come along.
     pub(crate) fn adopt_workspace(

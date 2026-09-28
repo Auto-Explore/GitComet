@@ -965,6 +965,10 @@ pub(in crate::view) enum TerminalShutdownAction {
         session_seq: u64,
     },
     CloseWindow,
+    /// Closes the window (or empties the last one) and forgets its workspace.
+    DeleteWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     QuitApp,
 }
 
@@ -983,6 +987,10 @@ pub(in crate::view) enum UnsavedFileEditsAction {
     /// Carries the window that asked: the retry can run seconds later, after a
     /// slow write drains, by which time "the active window" may be another one.
     CloseWindow(gpui::WindowId),
+    DeleteWorkspace {
+        window_id: gpui::WindowId,
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     QuitApp,
     MoveRepo {
         window_id: gpui::WindowId,
@@ -997,7 +1005,7 @@ impl UnsavedFileEditsAction {
     pub(in crate::view) fn moving_repo(&self) -> Option<RepoId> {
         match self {
             Self::MoveRepo { repo_id, .. } => Some(*repo_id),
-            Self::CloseWindow(_) | Self::QuitApp => None,
+            Self::CloseWindow(_) | Self::DeleteWorkspace { .. } | Self::QuitApp => None,
         }
     }
 }

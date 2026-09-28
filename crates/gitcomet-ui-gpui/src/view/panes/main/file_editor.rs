@@ -951,9 +951,9 @@ impl MainPaneView {
                     repo_id: moving_repo,
                     ..
                 } => repo_id == moving_repo,
-                UnsavedFileEditsAction::CloseWindow(_) | UnsavedFileEditsAction::QuitApp => {
-                    !save.discarded
-                }
+                UnsavedFileEditsAction::CloseWindow(_)
+                | UnsavedFileEditsAction::DeleteWorkspace { .. }
+                | UnsavedFileEditsAction::QuitApp => !save.discarded,
             })
     }
 

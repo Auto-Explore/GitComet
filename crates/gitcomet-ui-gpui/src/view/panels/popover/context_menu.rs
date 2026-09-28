@@ -962,6 +962,10 @@ impl PopoverHost {
             ContextMenuAction::ActivateWorkspace { workspace_id } => {
                 repo_picker::activate_workspace(self, workspace_id, cx);
             }
+            ContextMenuAction::DeleteWorkspace { workspace_id } => {
+                // Deferred: it may close or reset the window this host is in.
+                cx.defer(move |cx| crate::app::delete_workspace(cx, workspace_id));
+            }
             ContextMenuAction::OpenWorkspaceSettings { workspace_id } => {
                 cx.defer(move |cx| {
                     crate::view::open_settings_window_to_workspace(cx, workspace_id);

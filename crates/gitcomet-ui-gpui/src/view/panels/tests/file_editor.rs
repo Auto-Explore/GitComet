@@ -1935,7 +1935,7 @@ fn request_action_with_dirty_auto_saved_buffer(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
     state: Arc<AppState>,
-    make_action: impl FnOnce(gpui::WindowId) -> UnsavedFileEditsAction,
+    make_action: impl FnOnce(gpui::WindowId, &gpui::App) -> UnsavedFileEditsAction,
 ) -> (UnsavedFileEditsAction, smol::channel::Sender<bool>) {
     let window_id = cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -1958,7 +1958,7 @@ fn request_action_with_dirty_auto_saved_buffer(
         });
     });
     cx.run_until_parked();
-    let action = make_action(window_id);
+    let action = cx.update(|_window, app| make_action(window_id, app));
     let completion = cx.update(|_window, app| {
         view.update(app, |this, cx| {
             assert!(
@@ -2187,12 +2187,10 @@ async fn review_regression_unrelated_repo_action_does_not_block_close(
     .clone();
     state.repos[1].local_actions_in_flight = 1;
 
-    let (action, completion) = request_action_with_dirty_auto_saved_buffer(
-        cx,
-        &view,
-        Arc::new(state),
-        UnsavedFileEditsAction::CloseWindow,
-    );
+    let (action, completion) =
+        request_action_with_dirty_auto_saved_buffer(cx, &view, Arc::new(state), |window_id, _| {
+            UnsavedFileEditsAction::CloseWindow(window_id)
+        });
     let UnsavedFileEditsAction::CloseWindow(window_id) = action else {
         unreachable!()
     };
@@ -2231,6 +2229,7 @@ fn check_discard_after_save_timeout(
         gpui::WindowId,
         gitcomet_state::model::RepoId,
         &Path,
+        &gpui::App,
     ) -> UnsavedFileEditsAction,
 ) {
     let _visual_guard = lock_visual_test();
@@ -2255,7 +2254,7 @@ fn check_discard_after_save_timeout(
         cx,
         &view,
         editor_state(repo_id, &workdir, &file),
-        |window_id| make_action(window_id, repo_id, &workdir),
+        |window_id, app| make_action(window_id, repo_id, &workdir, app),
     );
     advance_file_edit_drain(cx, std::time::Duration::from_secs(6));
 
@@ -2308,6 +2307,19 @@ fn check_discard_after_save_timeout(
                 "discard must close the window without waiting for the wedged save"
             );
         }
+        UnsavedFileEditsAction::DeleteWorkspace { workspace_id, .. } => {
+            // The only window returns to Home instead of closing.
+            assert!(
+                app.windows()
+                    .iter()
+                    .any(|window| window.window_id() == window_id)
+            );
+            assert!(
+                crate::workspaces::workspace(app, workspace_id).is_none(),
+                "discard must delete the workspace without waiting for the wedged save"
+            );
+            assert_eq!(view.read(app).workspace_id, None);
+        }
         UnsavedFileEditsAction::QuitApp => {
             // GPUI's test platform stubs quit, so verify the quit guard lets
             // the retried action through without another drain or prompt.
@@ -2344,21 +2356,35 @@ fn check_discard_after_save_timeout(
 
 #[gpui::test]
 fn review_regression_discard_after_save_timeout_allows_close(cx: &mut gpui::TestAppContext) {
-    check_discard_after_save_timeout(cx, |window_id, _, _| {
+    check_discard_after_save_timeout(cx, |window_id, _, _, _| {
         UnsavedFileEditsAction::CloseWindow(window_id)
     });
 }
 
 #[gpui::test]
 fn review_regression_discard_after_save_timeout_allows_quit(cx: &mut gpui::TestAppContext) {
-    check_discard_after_save_timeout(cx, |_, _, _| UnsavedFileEditsAction::QuitApp);
+    check_discard_after_save_timeout(cx, |_, _, _, _| UnsavedFileEditsAction::QuitApp);
+}
+
+#[gpui::test]
+fn review_regression_discard_after_save_timeout_allows_workspace_delete(
+    cx: &mut gpui::TestAppContext,
+) {
+    check_discard_after_save_timeout(cx, |window_id, _, _, app| {
+        UnsavedFileEditsAction::DeleteWorkspace {
+            window_id,
+            workspace_id: crate::workspaces::workspace_for_window(app, window_id)
+                .expect("the window's workspace")
+                .id,
+        }
+    });
 }
 
 #[gpui::test]
 fn review_regression_discard_after_save_timeout_still_waits_before_move(
     cx: &mut gpui::TestAppContext,
 ) {
-    check_discard_after_save_timeout(cx, |window_id, repo_id, path| {
+    check_discard_after_save_timeout(cx, |window_id, repo_id, path, _| {
         UnsavedFileEditsAction::MoveRepo {
             window_id,
             repo_id,
