@@ -180,6 +180,20 @@ fn dispatch_file_drop(cx: &mut gpui::VisualTestContext, event: gpui::FileDropEve
     cx.run_until_parked();
 }
 
+fn assert_external_drag_cleared(view: &GitCometView, app: &gpui::App) {
+    assert!(
+        view.external_drag_paths.is_none(),
+        "clear the dragged paths"
+    );
+    assert!(
+        view.external_drag_payload.is_none(),
+        "clear the classified payload"
+    );
+    assert!(!view.external_drag_drop_pending, "clear the pending drop");
+    assert!(!test_support::repo_external_folder_drag_active(view, app));
+    assert!(!test_support::repo_external_folder_drag_hovered(view, app));
+}
+
 fn install_repo_tab_test_state(
     store: &AppStore,
     view: &gpui::Entity<GitCometView>,
@@ -666,15 +680,190 @@ fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     dispatch_file_drop(cx, gpui::FileDropEvent::Exited);
     test_support::redraw(cx);
     cx.update(|_window, app| {
-        assert!(!test_support::repo_external_folder_drag_active(
+        assert_external_drag_cleared(view.read(app), app);
+    });
+}
+
+fn check_folder_drop_clears_highlight(
+    cx: &mut gpui::TestAppContext,
+    on_home: bool,
+    classify_before_drop: bool,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let initial = tempfile::tempdir().expect("create the initial repository");
+    if !on_home {
+        let repo_id = RepoId(100);
+        let path = initial.path().canonicalize().unwrap();
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: path.clone(),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        store.insert_repo_for_test(
+            repo_id,
+            Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                path,
+            )),
+        );
+        store.replace_snapshot_for_test(Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        }));
+    }
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    test_support::redraw(cx);
+    let folder = tempfile::tempdir().expect("create dropped folder");
+    let path = folder.path().canonicalize().unwrap();
+    let target = if on_home {
+        "repository_entry_screen"
+    } else {
+        "repo_external_folder_drop_target"
+    };
+    let position = cx
+        .debug_bounds(target)
+        .expect("render drop target")
+        .center();
+    let entered = gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths(vec![path.clone()].into()),
+    };
+    if classify_before_drop {
+        dispatch_file_drop(cx, entered.clone());
+        pump_until(cx, "classify the folder before dropping", |cx| {
+            cx.update(|_, app| view.read(app).external_drag_payload.is_some())
+        });
+    }
+    cx.update(|window, app| {
+        if !classify_before_drop {
+            let _ = window.dispatch_event(gpui::PlatformInput::FileDrop(entered), app);
+            assert!(view.read(app).external_drag_payload.is_none());
+        }
+        assert!(test_support::repo_external_folder_drag_active(
             view.read(app),
             app
         ));
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Submit { position }),
+            app,
+        );
+        assert!(
+            !test_support::repo_external_folder_drag_active(view.read(app), app),
+            "clear the highlight immediately, before repository loading or classification completes"
+        );
         assert!(!test_support::repo_external_folder_drag_hovered(
             view.read(app),
             app
         ));
+        let _ = window.draw(app);
     });
+    cx.run_until_parked();
+    pump_until(cx, "finish the dropped folder's classification", |cx| {
+        cx.update(|_, app| view.read(app).external_drag_paths.is_none())
+    });
+    // Apply the loaded snapshot deterministically: this visual transition does
+    // not need to wait for the process-wide repository-load worker pool.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            assert_external_drag_cleared(view, cx);
+            let repo_id = RepoId(1);
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: path.clone(),
+                },
+            );
+            repo.open = Loadable::Ready(());
+            let mut snapshot = view.state.as_ref().clone();
+            snapshot.repos.retain(|repo| repo.id != repo_id);
+            snapshot.repos.push(repo);
+            snapshot.active_repo = Some(repo_id);
+            test_support::apply_state_snapshot_for_test(view, Arc::new(snapshot), cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).state.repos.len(),
+            if on_home { 1 } else { 2 }
+        )
+    });
+    assert!(
+        cx.debug_bounds("repo_external_folder_drop_target")
+            .is_some()
+    );
+    cx.update(|_, app| assert_external_drag_cleared(view.read(app), app));
+
+    // A fresh drag of the same folder must highlight again and clear on exit.
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position,
+            paths: gpui::ExternalPaths(vec![path].into()),
+        },
+    );
+    cx.update(|_, app| {
+        assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ))
+    });
+    dispatch_file_drop(cx, gpui::FileDropEvent::Exited);
+    test_support::redraw(cx);
+    cx.update(|_, app| assert_external_drag_cleared(view.read(app), app));
+}
+
+#[gpui::test]
+fn home_folder_drop_clears_highlight_before_and_after_classification(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    for classified in [true, false] {
+        check_folder_drop_clears_highlight(cx, true, classified);
+    }
+}
+
+#[gpui::test]
+fn repository_bar_folder_drop_clears_highlight_before_and_after_classification(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    for classified in [true, false] {
+        check_folder_drop_clears_highlight(cx, false, classified);
+    }
+}
+
+#[gpui::test]
+fn home_folder_drag_exit_ignores_late_classification(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let folder = tempfile::tempdir().unwrap();
+    let position = cx.debug_bounds("repository_entry_screen").unwrap().center();
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Entered {
+                position,
+                paths: gpui::ExternalPaths(vec![folder.path().to_path_buf()].into()),
+            }),
+            app,
+        );
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Exited),
+            app,
+        );
+        let _ = window.draw(app);
+        assert_external_drag_cleared(view.read(app), app);
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    cx.update(|_, app| assert_external_drag_cleared(view.read(app), app));
 }
 
 #[gpui::test]

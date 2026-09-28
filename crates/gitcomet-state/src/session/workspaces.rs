@@ -35,12 +35,18 @@ impl std::fmt::Display for WorkspaceId {
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceColor {
     Gray,
+    Brown,
     Red,
     Orange,
     Yellow,
+    Lime,
     Green,
+    Teal,
+    Cyan,
     Blue,
+    Indigo,
     Purple,
+    Magenta,
     Pink,
 }
 

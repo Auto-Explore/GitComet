@@ -359,12 +359,18 @@ pub(in crate::view) fn workspace_color(
     use gitcomet_state::session::WorkspaceColor;
     match color {
         Some(WorkspaceColor::Gray) => theme.colors.foreground.secondary,
+        Some(WorkspaceColor::Brown) => gpui::rgba(0xA47551FF),
         Some(WorkspaceColor::Red) => gpui::rgba(0xE05252FF),
         Some(WorkspaceColor::Orange) => gpui::rgba(0xE08A3EFF),
         Some(WorkspaceColor::Yellow) => gpui::rgba(0xD2A83AFF),
+        Some(WorkspaceColor::Lime) => gpui::rgba(0x90B43CFF),
         Some(WorkspaceColor::Green) => gpui::rgba(0x48A868FF),
+        Some(WorkspaceColor::Teal) => gpui::rgba(0x2E9E8FFF),
+        Some(WorkspaceColor::Cyan) => gpui::rgba(0x39B0D0FF),
         Some(WorkspaceColor::Blue) => gpui::rgba(0x4B8DDBFF),
+        Some(WorkspaceColor::Indigo) => gpui::rgba(0x4E66D0FF),
         Some(WorkspaceColor::Purple) => gpui::rgba(0x956EDBFF),
+        Some(WorkspaceColor::Magenta) => gpui::rgba(0xC757C7FF),
         Some(WorkspaceColor::Pink) => gpui::rgba(0xD866A4FF),
         None => theme.colors.accent.foreground,
     }
@@ -398,6 +404,20 @@ pub(in crate::view) fn title_bar_background(
         workspace_color(Some(group_color), theme),
         if window_is_active { 0.18 } else { 0.12 },
     )
+}
+
+/// A workspace's row in a popover list wears its active title bar's tint,
+/// flattened onto the popover surface so hover and selection can composite over
+/// it. `None` when no colour is chosen: the row stays plain.
+pub(in crate::view) fn workspace_row_tint(
+    color: Option<gitcomet_state::session::WorkspaceColor>,
+    theme: AppTheme,
+) -> Option<gpui::Rgba> {
+    let color = color?;
+    Some(crate::theme::composite_over(
+        theme.colors.surface.raised,
+        title_bar_background(theme, true, Some(color)),
+    ))
 }
 
 fn window_frame_visual_inset(ui_scale_percent: u32) -> Pixels {
@@ -1198,6 +1218,24 @@ mod tests {
                 base,
                 "Default must preserve the existing theme-derived title bar"
             );
+        }
+    }
+
+    #[test]
+    fn workspace_row_tint_is_the_active_title_bar_and_opaque_in_every_theme() {
+        for option in crate::theme::available_themes() {
+            let theme = AppTheme::from_key(&option.key).expect("bundled theme");
+            assert_eq!(workspace_row_tint(None, theme), None, "{}", option.key);
+            for (color, label) in crate::workspaces::WORKSPACE_COLORS {
+                let Some(color) = color else { continue };
+                let tint = workspace_row_tint(Some(color), theme).expect("a chosen colour tints");
+                // `InteractionStyle::on_surface` asserts an opaque backing.
+                assert_eq!(tint.alpha, 1.0, "{} {label}", option.key);
+                let title_bar = title_bar_background(theme, true, Some(color));
+                if title_bar.alpha >= 1.0 {
+                    assert_eq!(tint, title_bar, "{} {label}", option.key);
+                }
+            }
         }
     }
 

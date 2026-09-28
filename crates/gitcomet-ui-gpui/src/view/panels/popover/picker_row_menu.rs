@@ -374,6 +374,12 @@ pub(super) fn layer(
             4.0,
             ui_scale_percent,
         ));
+    // Same rule as the shared context menu: once any entry has an icon, the
+    // icon-less ones keep its column so every label starts at one edge.
+    let reserve_icon_column = model
+        .items
+        .iter()
+        .any(|item| matches!(item, ContextMenuItem::Entry { icon: Some(_), .. }));
     // Only enabled entries are keyboard targets, so the menu's own selection
     // index counts those alone.
     let mut nav_ix = 0usize;
@@ -411,21 +417,23 @@ pub(super) fn layer(
                 if !disabled {
                     nav_ix += 1;
                 }
-                let mut entry = components::ContextMenuEntry::new(
-                    ("picker_row_action", ix),
-                    components::ContextMenuText::new(label),
-                );
-                if let Some(icon) = icon {
-                    entry = entry.icon(components::ContextMenuIconSlot::Icon(icon));
-                }
+                let icon_slot = match icon {
+                    Some(icon) => components::ContextMenuIconSlot::Icon(icon),
+                    None if reserve_icon_column => components::ContextMenuIconSlot::Reserved,
+                    None => components::ContextMenuIconSlot::None,
+                };
                 list = list.child(
-                    entry
-                        .disabled(disabled)
-                        .selected(selected)
-                        .on_select(theme, ui_scale_percent, cx, move |this, _e, window, cx| {
-                            activate(this, (*action).clone(), window, cx);
-                        })
-                        .debug_selector(move || format!("picker_row_action_{ix}")),
+                    components::ContextMenuEntry::new(
+                        ("picker_row_action", ix),
+                        components::ContextMenuText::new(label),
+                    )
+                    .icon(icon_slot)
+                    .disabled(disabled)
+                    .selected(selected)
+                    .on_select(theme, ui_scale_percent, cx, move |this, _e, window, cx| {
+                        activate(this, (*action).clone(), window, cx);
+                    })
+                    .debug_selector(move || format!("picker_row_action_{ix}")),
                 );
             }
             // Clicked rather than keyboard-selected, and no row menu has one.

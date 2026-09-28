@@ -399,7 +399,6 @@ pub(super) fn ref_picker_prompt(
         .marked_index(built.marked_index)
         .leading_icon("icons/git_branch.svg")
         .selected_hint("Enter")
-        .accent_selection()
         .attached_list_surface()
 }
 

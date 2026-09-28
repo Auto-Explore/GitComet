@@ -1771,10 +1771,7 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
     let file = std::path::PathBuf::from("main.rs");
     std::fs::write(workdir.join(&file), "fn main() {}\n").expect("write fixture");
 
-    let mut saved = gitcomet_state::session::Workspace::new(vec![workdir.clone()]);
-    saved.restore_on_launch = false;
-    let saved_id = saved.id;
-    cx.update(|app| crate::workspaces::initialize_for_test(app, vec![saved]));
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
 
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1804,10 +1801,11 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.request_move_repo_to_workspace(repo_id, workdir.clone(), Some(saved_id), cx);
+            let own_workspace = this.workspace_id.expect("source workspace");
+            this.request_move_repo_to_workspace(repo_id, workdir.clone(), Some(own_workspace), cx);
             assert!(
                 this.pending_unsaved_file_edits_prompt.is_none(),
-                "a move that resolves back to its source must not offer to discard edits"
+                "a move within the same workspace must not offer to discard edits"
             );
             assert_eq!(
                 this.main_pane

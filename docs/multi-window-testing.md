@@ -6,15 +6,16 @@ This document is the release test plan for GitComet's multi-window support. It c
 
 - A new window starts empty on the Home page (Open, Clone, Initialize, saved workspaces, recent repositories) and does not create a saved workspace until its first repository is added.
 - Every non-empty window is an independent workspace with its own active tab and layout.
+- The same repository can be open in several windows or saved workspaces. Opening it again within one window selects that window's existing tab.
 - Quitting GitComet restores every window that was open at quit time on the next launch.
 - Closing a window before quitting keeps its workspace recoverable in the repository picker but does not restore it automatically. On Linux and Windows, closing the last window quits the app, so that window is restored like any other quit.
 - Closing the final repository in a window removes an anonymous empty workspace. Moving the final repository out closes the empty source window.
 - A customized workspace (a name, a title-bar color, or a theme override) outlives its last repository: its window stays open on Home, keeps its title-bar chip, and the empty workspace is saved and restored until it is deleted in Settings.
 - Saved windowed bounds, display, maximized state, fullscreen state, and relative stacking order are restored when possible. Bounds are rebased and clamped when the saved display is missing or smaller.
 - Tiled or snapped placement (tiling window managers, Windows Snap) is owned by the window manager and cannot be requested back. The tiled edges are recorded for diagnostics and the window reopens at its last frame.
-- `gitcomet <repository>` sends the request to the running browser process. The default target is the active window; the General setting can instead request a new window. A repository already open in any window is focused instead of duplicated.
+- `gitcomet <repository>` sends the request to the running browser process. The default target is the active window; the General setting can instead request a new window. Both destinations are honored even when the repository is already open in another window.
 - Zoom is process-wide, so it lives in menus (the in-app menu on Linux and Windows, the Window menu on macOS), shortcuts, the command palette, and Settings, never in an individual window's footer.
-- Right-clicking a workspace in the repository picker offers **Activate** (disabled for the window's own workspace) and **Workspace Settings…**, which opens Settings › Workspaces with that workspace selected. Title-bar color is set there; it is per workspace, survives closing/relaunching, and **Default** returns to the theme-derived color.
+- Right-clicking a workspace in the repository picker offers **Activate** (disabled for the window's own workspace) and **Workspace Settings**, which opens Settings › Workspaces with that workspace selected. Title-bar color is set there; it is per workspace, survives closing/relaunching, and **Default** returns to the theme-derived color.
 - **Settings › Workspaces** explains how to start a workspace (New Window, its shortcut, and a **New Workspace** button that opens an empty window), and renames a workspace (the **Save** button beside the name is enabled once the name changes), sets its title-bar color and an optional theme override, opens it, or deletes it. A theme override applies only to that workspace's window; changing the app theme leaves overridden windows alone.
 - **Open Workspace** (`Ctrl/Cmd+Shift+R`, the command palette, the app menu) lists only workspaces. From an empty window the chosen workspace opens in that window; otherwise its own window is focused or opened.
 - On Linux and FreeBSD, **Follow system** uses the desktop button layout and hides minimize/maximize while tiled. Explicit Show/Hide modes override that behavior. macOS keeps native traffic lights.
@@ -66,7 +67,7 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 6. Open the repository picker and recover the saved A/B/C workspace. Verify it opens once and focuses if selected again.
 7. Quit while both windows are open, relaunch, and verify both return.
 8. Focus a new empty window, add its first repository, click back to the previous window, and quit. Verify the previously clicked window is restored frontmost.
-9. With A open in the first window, use both the manual path field and a pinned/recent repository row for A from the second window. Verify both focus A in the first window and never create a second owner. Repeat with a worktree or submodule of A opened from the second window's pickers, and by dropping A's folder onto the second window.
+9. With A open in the first window, use the folder picker, manual path field, and pinned/recent repository row for A from the second window. Verify A opens in the second window and repeated opens select its existing tab. Repeat with a worktree or submodule opened from both windows' pickers, and by dropping A's folder onto the second window. Select different tabs in each window, then close one copy and verify the other remains open. Quit and relaunch with overlapping repository lists and verify both workspaces restore with their own active tabs.
 10. On Linux and Windows, close the only open window with its title-bar close button. Relaunch and verify that window's workspace is restored.
 
 ### 2. Window geometry and stacking
@@ -84,15 +85,15 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 2. Move C to a new window and verify the new workspace contains only C.
 3. Move A, the last source tab, to another window and verify the empty source window closes and is not offered as a saved empty workspace.
 4. Repeat a move while that repository has a running terminal. Cancel once, then confirm termination; verify no move occurs on cancel and the confirmed move completes after shutdown.
-5. Attempt to move a repository to a window that already contains it and verify GitComet focuses the existing tab without duplication.
+5. Move a repository to a window that already contains it and verify GitComet focuses the destination's existing tab and removes only the source copy after its save/terminal guards complete. A third window with the same repository is unaffected.
 6. Disable auto-save, dirty both the current editor and a stashed editor in the repository, and request a move. Also dirty a file in a repository that will remain in the source window. Verify Cancel leaves all buffers in place, Save writes only files owned by the moved repository before moving it, and Discard moves it without affecting the other repository's dirty buffers.
-7. Close a workspace containing repository B, open B in the source window, then attempt to move B to that saved workspace. Verify recovery resolves to the source and the move becomes a no-op rather than closing the source or removing B.
+7. Close a workspace containing repository B, open B in the source window, then move B to that saved workspace. Verify the saved workspace reopens with its original identity and B is removed from the source after its guards complete. Moving within the source's own workspace remains a no-op and must not prompt to discard edits or terminate terminals.
 
 ### 4. Command-line routing
 
 1. Keep two windows open and active in turn. Run `gitcomet .` from a third repository and verify the default behavior adds it to the currently active GitComet window.
 2. Change **Command-line repository opens** to **New window** and repeat with another repository. Verify one new window is created.
-3. Run the command again for a repository already open elsewhere. Verify its existing window/tab is focused.
+3. Run the command again for a repository already open elsewhere. With **Active window**, verify it opens in the last-focused GitComet window and repeated requests reuse that window's tab. With **New window**, verify every request opens a separate window, including requests made while an earlier copy is still loading.
 4. Focus each GitComet window in turn, then focus an external terminal and run `gitcomet .`. Verify the repository opens in the last-focused GitComet window even though the app itself is no longer active.
 5. Quit with a saved workspace present, keep **Command-line repository opens** set to **New window**, and launch GitComet with a repository path. Verify the requested repository opens in its own window beside the restored workspace.
 6. Save a workspace with A active and B inactive, quit, then launch with `gitcomet <path-to-B>`. Verify restoration finishes with B active rather than reverting to A.
@@ -104,7 +105,7 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 ### 5. Window controls, title-bar colors, and zoom
 
 1. Verify the footer has no zoom control in any window and menu/shortcut zoom changes all windows consistently.
-2. Open the repository picker and right-click the current window's workspace: **Activate** is disabled. Right-click a recoverable closed workspace: **Activate** opens it, and **Workspace Settings…** opens Settings on that workspace. Choose different title-bar colors for two workspaces there and verify only the selected workspace's title bar changes.
+2. Open the repository picker and right-click the current window's workspace: **Activate** is disabled. Right-click a recoverable closed workspace: **Activate** opens it, and **Workspace Settings** opens Settings on that workspace. Choose different title-bar colors for two workspaces there and verify only the selected workspace's title bar changes.
 3. Close/recover one colored workspace and quit/relaunch with the other open. Verify both colors persist. Choose **Default** and verify that workspace returns to the current theme's title-bar color.
 4. On Linux/FreeBSD, test floating and tiled states with **Follow system**, including a desktop layout that places/reorders buttons on the left. Verify side and order are preserved, then test explicit Show and Hide. Hide must leave Close available.
 5. On Windows, verify minimize, maximize/restore, close, title dragging, and double-click maximize in Show and Hide modes.
@@ -112,7 +113,7 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 
 ### 5a. Workspaces, Home, and Open Workspace
 
-1. Launch with no session. Verify Home shows Open, Clone, and Initialize, empty Workspaces and Recent repositories lists, and the app menu in the title bar. Drop a repository folder on Home and verify it opens.
+1. Launch with no session. Verify Home shows Open, Clone, and Initialize, empty Workspaces and Recent repositories lists, and the app menu in the title bar. Drop a repository folder on Home and verify it opens with no remaining drag highlight in the repository bar. Repeat with both an immediate drop and a pause before releasing. Drag the same folder again, cancel or leave the window, and verify the highlight clears; repeat over the repository bar and with invalid folders, files, and multiple paths.
 2. Open A and B in one window. In **Settings › Workspaces** verify that workspace is preselected; rename it, pick a title-bar color, and choose a theme different from the app theme. Verify only that window re-themes and its title and chip update. Change the app theme and verify the overridden window keeps its theme while other windows follow.
 3. Close B, then A. Verify the window stays on Home with the workspace's name and chip. Quit and relaunch; verify the empty workspace reopens on Home. Delete it in Settings and verify it disappears everywhere.
 4. Close a window holding C and D. From a new empty window, choose that workspace on Home and verify C and D open in the same window (no second window) with the saved pane layout, while the window keeps its own position.
@@ -125,7 +126,7 @@ Create six small repositories named A, B, C, F, G, and H. Make at least one repo
 2. Verify the first version 5 write creates the one-time `.v3.bak` backup (a version 4 file from an earlier build of this branch gets `.v4.bak` and its `window_groups` key is read as `workspaces`).
 3. Close one migrated workspace, quit, and relaunch to verify closed-versus-restorable state survives another write.
 4. Temporarily make one saved repository unavailable. Verify the rest of the workspace remains recoverable and is not erased while startup loading is pending.
-5. Close a workspace, open one of its repositories in another live window, then recover the closed workspace. Verify the repository stays in its existing window and is not duplicated; any remaining unique repositories still recover.
+5. Close a workspace, open one of its repositories in another live window, then recover the closed workspace. Verify the recovered workspace keeps its full repository list and active tab, including a separate copy of the shared repository. Repeat from an empty Home window and verify it adopts the saved workspace in place.
 6. Resize the sidebar/details/status layout and immediately close or quit, without waiting for the debounce. Recover or relaunch and verify the latest layout was persisted.
 7. Drop a folder that is not a Git repository and close or quit while validation is still pending. Relaunch or inspect saved workspaces and verify the provisional path was never persisted.
 

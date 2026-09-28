@@ -21,7 +21,8 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
             ContextMenuItem::Header(workspace.display_name().into()),
             ContextMenuItem::Entry {
                 label: "Activate".into(),
-                icon: None,
+                // Same icon as a repository row's Activate.
+                icon: Some("icons/check.svg".into()),
                 shortcut: None,
                 // This window already is that workspace.
                 disabled: host.cached_workspace_id == Some(workspace_id),
@@ -29,7 +30,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
             },
             ContextMenuItem::Separator,
             ContextMenuItem::Entry {
-                label: "Workspace Settings…".into(),
+                label: "Workspace Settings".into(),
                 icon: Some("icons/cog.svg".into()),
                 shortcut: None,
                 disabled: false,

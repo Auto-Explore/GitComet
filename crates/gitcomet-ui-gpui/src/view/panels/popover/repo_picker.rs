@@ -371,7 +371,7 @@ fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
             components::PickerPromptItemPart::path(detail),
         ])
         .secondary_parts([components::PickerPromptItemPart::path(repositories)])
-        .repository_initials(&name)
+        .workspace_color(workspace.color)
         .section(WORKSPACES_SECTION),
         name_key: name.to_lowercase(),
         path_key,
@@ -856,7 +856,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     .or(this.repo_picker_selected_index),
             )
             .marked_index(built.marked_index)
-            .accent_selection()
             .padded_query_row()
             .remove_tooltip("Remove from recently closed")
             .on_context_menu(cx.listener(
@@ -884,6 +883,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 },
             ));
         }
+        // The row a menu was opened on gets the plain highlight every other
+        // right-clicked row in the app gets: no Enter hint.
         if row_menu.is_none() {
             prompt = prompt.selected_hint("Enter");
         }

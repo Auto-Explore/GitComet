@@ -3146,9 +3146,9 @@ impl GitCometView {
         repository_bar_already_cleared: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let changed = self.external_drag_paths.take().is_some()
-            || self.external_drag_payload.take().is_some()
-            || self.external_drag_drop_pending;
+        let had_paths = self.external_drag_paths.take().is_some();
+        let had_payload = self.external_drag_payload.take().is_some();
+        let changed = had_paths || had_payload || self.external_drag_drop_pending;
         self.external_drag_drop_pending = false;
         self.external_drag_classification_seq =
             self.external_drag_classification_seq.wrapping_add(1);
@@ -3178,7 +3178,19 @@ impl GitCometView {
         }
     }
 
-    /// Called by the repository bar after it has cleared its own highlight, so
+    pub(super) fn submit_external_drag_payload_from_home(
+        &mut self,
+        paths: gpui::ExternalPaths,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.repo_tabs_bar.update(cx, |bar, cx| {
+            bar.set_external_folder_drag_active(false, cx);
+        });
+        self.submit_external_drag_payload_after_repo_drop(paths, cx);
+    }
+
+    /// Called after the drop target has cleared the repository bar's highlight.
+    /// The repository bar itself can still be on the entity update stack, so
     /// this must not update that entity re-entrantly from its drop handler.
     pub(in crate::view) fn submit_external_drag_payload_after_repo_drop(
         &mut self,

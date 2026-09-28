@@ -273,7 +273,8 @@ fn model_with_header(
         let label = format!("Squash {} commits", plan.commit_count).into();
         items.push(ContextMenuItem::Entry {
             label,
-            icon: Some("icons/git_commit.svg".into()),
+            // The branch menu's "Squash into current" icon.
+            icon: Some("icons/arrow_right.svg".into()),
             shortcut: None,
             disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),

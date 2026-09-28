@@ -1005,12 +1005,12 @@ fn workspace_row_menu_activates_other_workspaces_and_links_to_settings(
     };
     assert_eq!(
         as_str_pairs(&menu(cx, work_id)),
-        vec![("Activate", false), ("Workspace Settings…", false)],
+        vec![("Activate", false), ("Workspace Settings", false)],
         "no colour choices; activate and a link to settings"
     );
     assert_eq!(
         as_str_pairs(&menu(cx, mine_id)),
-        vec![("Activate", true), ("Workspace Settings…", false)],
+        vec![("Activate", true), ("Workspace Settings", false)],
         "the window's own workspace cannot be activated again"
     );
 
@@ -1058,6 +1058,71 @@ fn workspace_row_menu_activates_other_workspaces_and_links_to_settings(
         }),
         Some(work_id),
         "activating from an empty window adopts the workspace there"
+    );
+}
+
+/// A workspace row shows its colour dot in place of initials, and its menu gives
+/// both entries a visible icon in one column. The right-clicked row gets the
+/// plain highlight; the Enter hint stays for keyboard selection only.
+#[gpui::test]
+fn workspace_row_shows_colour_dot_and_its_menu_icons_share_a_column(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut work = session::Workspace::new(vec!["/tmp/workspace-row-dot".into()]);
+    work.custom_name = Some("Work".into());
+    work.color = Some(session::WorkspaceColor::Blue);
+    work.restore_on_launch = false;
+    let work_id = work.id;
+    cx.update(|_window, app| crate::workspaces::initialize_for_test(app, vec![work]));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    // The only row, so it is index 0 in both index spaces.
+    assert_eq!(
+        cx.update(|_window, app| repo_picker::filtered_layout(popover_host.read(app), "").0),
+        vec![repo_picker::RepoPickerEntry::Workspace(work_id)]
+    );
+    assert!(cx.debug_bounds("picker_prompt_workspace_dot_0").is_some());
+    assert!(
+        cx.debug_bounds("picker_prompt_repository_badge_0")
+            .is_none()
+    );
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            let target = picker_row_menu::PickerRowMenuTarget::Repo(
+                repo_picker::RepoPickerEntry::Workspace(work_id),
+            );
+            picker_row_menu::open(host, target, 0, gpui::point(px(120.0), px(120.0)), cx);
+        });
+    });
+    draw(cx);
+    let activate = cx
+        .debug_bounds("context_menu_entry_icon_Activate")
+        .expect("Activate has an icon");
+    let settings = cx
+        .debug_bounds("context_menu_entry_icon_Workspace Settings")
+        .expect("Workspace Settings has an icon");
+    assert_eq!(activate.origin.x, settings.origin.x);
+    assert!(
+        cx.debug_bounds("picker_prompt_selected_hint_0").is_none(),
+        "a right-clicked row has no Enter hint"
+    );
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| picker_row_menu::close(host, cx));
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("picker_prompt_selected_hint_0").is_some(),
+        "keyboard selection, restored on the row after the menu, keeps its hint"
     );
 }
 

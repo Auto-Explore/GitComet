@@ -1799,11 +1799,8 @@ fn entry_contains_repo_path(entry: &GitCometWindowEntry, path: &Path) -> bool {
     entry.repo_paths.iter().any(|repo_path| repo_path == path)
 }
 
-/// Resolve the non-mutating part of a repository move before the view runs
-/// save/discard and terminal-shutdown guards. A saved workspace can reconcile
-/// entirely to an already-live owner; when that owner is the source (or the
-/// workspace no longer exists), there is no move whose guards should be allowed to
-/// destroy editor or terminal state.
+/// Reject a missing destination or a move within the same workspace before
+/// save/discard and terminal-shutdown guards can change editor or terminal state.
 pub(crate) fn repository_move_target_is_noop<C>(
     cx: &mut C,
     source_window_id: gpui::WindowId,
@@ -1832,14 +1829,7 @@ where
         return target.handle.window_id() == source_window_id;
     }
 
-    let Some(workspace) = crate::workspaces::workspace(cx.borrow(), target_workspace) else {
-        return true;
-    };
-    // The move opens the workspace unless it settles on a live owner.
-    let (workspace, duplicate_owner) =
-        reconcile_workspace_against_live_windows(&live_windows, workspace);
-    workspace_is_fully_owned(&workspace, &duplicate_owner)
-        && duplicate_owner.is_none_or(|(owner, _)| owner.handle.window_id() == source_window_id)
+    crate::workspaces::workspace(cx.borrow(), target_workspace).is_none()
 }
 
 fn active_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
@@ -2170,6 +2160,7 @@ fn find_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
         .find(|entry| entry.view_mode == GitCometViewMode::Normal)
 }
 
+#[cfg(test)]
 fn find_normal_gitcomet_window_for_repo(cx: &mut App, path: &Path) -> Option<GitCometWindowEntry> {
     let entries = gitcomet_window_entries(cx);
     let active_window_id = cx.active_window().map(|window| window.window_id());
@@ -2215,74 +2206,6 @@ fn live_normal_windows(cx: &mut App) -> Vec<GitCometWindowEntry> {
         .collect()
 }
 
-/// Drop repositories a live window already owns from a saved workspace and
-/// report the live owner of its active (or first) repository.
-fn reconcile_workspace_against_live_windows(
-    live_windows: &[GitCometWindowEntry],
-    mut workspace: session::Workspace,
-) -> (session::Workspace, Option<(GitCometWindowEntry, PathBuf)>) {
-    let duplicate_owner = workspace
-        .active_repository
-        .as_deref()
-        .and_then(|active| {
-            live_windows
-                .iter()
-                .find(|entry| entry_contains_repo_path(entry, active))
-                .cloned()
-                .map(|entry| (entry, active.to_path_buf()))
-        })
-        .or_else(|| {
-            workspace.repositories.iter().find_map(|path| {
-                live_windows
-                    .iter()
-                    .find(|entry| entry_contains_repo_path(entry, path))
-                    .cloned()
-                    .map(|entry| (entry, path.clone()))
-            })
-        });
-    workspace.repositories.retain(|path| {
-        !live_windows
-            .iter()
-            .any(|entry| entry_contains_repo_path(entry, path))
-    });
-    workspace.active_repository = workspace
-        .active_repository
-        .filter(|active| workspace.repositories.contains(active))
-        .or_else(|| workspace.repositories.first().cloned());
-    (workspace, duplicate_owner)
-}
-
-/// Whether a reconciled workspace has nothing left to open: its repositories
-/// all live elsewhere (an empty customized one still opens on Home).
-fn workspace_is_fully_owned(
-    workspace: &session::Workspace,
-    duplicate_owner: &Option<(GitCometWindowEntry, PathBuf)>,
-) -> bool {
-    workspace.repositories.is_empty() && (!workspace.is_customized() || duplicate_owner.is_some())
-}
-
-/// A workspace whose repositories all live elsewhere: focus their owner. A
-/// customized workspace keeps its identity; an anonymous one is discarded.
-/// Returns `None` when there is still something to open.
-fn settle_fully_owned_workspace(
-    cx: &mut App,
-    workspace: &session::Workspace,
-    duplicate_owner: &Option<(GitCometWindowEntry, PathBuf)>,
-) -> Option<Option<GitCometWindowEntry>> {
-    if !workspace_is_fully_owned(workspace, duplicate_owner) {
-        return None;
-    }
-    if !workspace.is_customized() {
-        crate::workspaces::discard_workspace(cx, workspace.id);
-    }
-    let Some((owner, path)) = duplicate_owner.clone() else {
-        return Some(None);
-    };
-    focus_existing_repository_window(cx, &owner, &path);
-    cx.activate(true);
-    Some(Some(owner))
-}
-
 /// Open a workspace from a window: an empty window adopts it in place (no
 /// second window); otherwise focus its owner or open a new window.
 pub(crate) fn open_workspace_in_window(
@@ -2306,11 +2229,6 @@ pub(crate) fn open_workspace_in_window(
     let Some(workspace) = crate::workspaces::workspace(cx, workspace_id) else {
         return;
     };
-    let (workspace, duplicate_owner) =
-        reconcile_workspace_against_live_windows(&live_normal_windows(cx), workspace);
-    if settle_fully_owned_workspace(cx, &workspace, &duplicate_owner).is_some() {
-        return;
-    }
     if target
         .workspace_id
         .is_some_and(|current| current != workspace_id)
@@ -2336,12 +2254,6 @@ fn activate_or_open_workspace(
     }
 
     let workspace = crate::workspaces::workspace(cx, workspace_id)?;
-    let (workspace, duplicate_owner) =
-        reconcile_workspace_against_live_windows(&live_normal_windows(cx), workspace);
-
-    if let Some(settled) = settle_fully_owned_workspace(cx, &workspace, &duplicate_owner) {
-        return settled;
-    }
 
     let backend = cx
         .try_global::<GitCometBackendGlobal>()
@@ -2412,10 +2324,6 @@ fn move_repository_to_workspace(
         return;
     };
     if target.handle.window_id() == source_window_id {
-        // Recovering a closed workspace can reconcile all of its repositories to
-        // live owners. If the owner is this source, there is no target to move
-        // to; detaching would merely delete the repository from its only
-        // window.
         return;
     }
 
@@ -2500,11 +2408,6 @@ pub(crate) fn open_repository_from_view<T>(
 {
     cx.defer(move |cx| {
         let path = normalize_repository_open_path(path);
-        if let Some(owner) = find_normal_gitcomet_window_for_repo(cx, &path) {
-            focus_existing_repository_window(cx, &owner, &path);
-            return;
-        }
-
         let source = normal_gitcomet_window_by_id(cx, source_window_id)
             .or_else(|| find_normal_gitcomet_window(cx));
         if let Some(source) = source {
@@ -2513,8 +2416,8 @@ pub(crate) fn open_repository_from_view<T>(
     });
 }
 
-/// A dropped folder that another window already owns focuses that window;
-/// otherwise the drop opens provisionally in the window it landed on.
+/// Reuse a tab in the drop's destination window, or open the folder there
+/// provisionally until the backend validates it.
 pub(crate) fn open_dropped_repository_from_view<T>(
     cx: &mut gpui::Context<T>,
     source_window_id: gpui::WindowId,
@@ -2524,21 +2427,21 @@ pub(crate) fn open_dropped_repository_from_view<T>(
 {
     cx.defer(move |cx| {
         let path = normalize_repository_open_path(path);
-        if let Some(owner) = find_normal_gitcomet_window_for_repo(cx, &path) {
-            focus_existing_repository_window(cx, &owner, &path);
-            return;
-        }
         if let Some(source) = normal_gitcomet_window_by_id(cx, source_window_id) {
-            let _ = source
-                .view
-                .update(cx, |view, cx| view.open_dropped_repo_locally(path, cx));
+            if entry_contains_repo_path(&source, &path) {
+                focus_existing_repository_window(cx, &source, &path);
+            } else {
+                let _ = source
+                    .view
+                    .update(cx, |view, cx| view.open_dropped_repo_locally(path, cx));
+            }
         }
     });
 }
 
 fn open_repository_in_window(cx: &mut App, window: &GitCometWindowEntry, path: PathBuf) {
     let _ = window.view.update(cx, |view, cx| {
-        view.open_repo_path_locally(path, cx);
+        view.activate_or_open_repo_path(path, cx);
     });
     if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
         activate_gitcomet_window(cx, window.handle);
@@ -2863,12 +2766,6 @@ fn open_repositories_in_existing_or_new_window(
     let mut target_window = find_normal_gitcomet_window(cx);
 
     for path in paths {
-        if let Some(window) = find_normal_gitcomet_window_for_repo(cx, path.as_path()) {
-            focus_existing_repository_window(cx, &window, path.as_path());
-            target_window = Some(window);
-            continue;
-        }
-
         if let Some(window) = target_window.as_ref() {
             open_repository_in_window(cx, window, path);
             continue;
@@ -2930,34 +2827,29 @@ fn handle_browser_open_request_and_activate(
                 activate_gitcomet_window(cx, window.into());
             }
         }
-        Some(path) => {
-            if let Some(window) = find_normal_gitcomet_window_for_repo(cx, &path) {
-                focus_existing_repository_window(cx, &window, &path);
-            } else {
-                match request.target {
-                    BrowserOpenTarget::ExistingWindow => {
-                        if let Some(window) =
-                            preferred_window.and_then(|id| normal_gitcomet_window_by_id(cx, id))
-                        {
-                            open_repository_in_window(cx, &window, path);
-                        } else {
-                            open_repository_in_existing_or_new_window(cx, backend, path);
-                        }
-                    }
-                    BrowserOpenTarget::NewWindow => {
-                        let launch = normal_launch_config_with_initial_repository(path, None);
-                        let window = open_gitcomet_window(cx, backend, &launch);
-                        activate_gitcomet_window(cx, window.into());
-                    }
+        Some(path) => match request.target {
+            BrowserOpenTarget::ExistingWindow => {
+                if let Some(window) =
+                    preferred_window.and_then(|id| normal_gitcomet_window_by_id(cx, id))
+                {
+                    open_repository_in_window(cx, &window, path);
+                } else {
+                    open_repository_in_existing_or_new_window(cx, backend, path);
                 }
             }
-        }
+            BrowserOpenTarget::NewWindow => {
+                let launch = normal_launch_config_with_initial_repository(path, None);
+                let window = open_gitcomet_window(cx, backend, &launch);
+                activate_gitcomet_window(cx, window.into());
+            }
+        },
     }
     // On macOS, making a window key does not unhide or foreground the app.
     activate(cx, true);
 }
 
 fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    let source_window_id = find_normal_gitcomet_window(cx).map(|entry| entry.handle.window_id());
     let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
         files: false,
         directories: true,
@@ -2972,10 +2864,16 @@ fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
             Ok(Ok(None)) => return,
             Ok(Err(_)) | Err(_) => {
                 cx.update(move |cx| {
-                    show_open_repository_manual_entry_in_existing_or_new_window(
-                        cx,
-                        Arc::clone(&backend),
-                    );
+                    if let Some(window) =
+                        source_window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id))
+                    {
+                        show_open_repository_manual_entry_in_window(cx, &window, true);
+                    } else {
+                        show_open_repository_manual_entry_in_existing_or_new_window(
+                            cx,
+                            Arc::clone(&backend),
+                        );
+                    }
                 });
                 return;
             }
@@ -2985,7 +2883,13 @@ fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
         };
 
         cx.update(move |cx| {
-            open_repository_in_existing_or_new_window(cx, Arc::clone(&backend), path);
+            if let Some(window) =
+                source_window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id))
+            {
+                open_repository_in_window(cx, &window, normalize_repository_open_path(path));
+            } else {
+                open_repository_in_existing_or_new_window(cx, Arc::clone(&backend), path);
+            }
         });
     })
     .detach();
@@ -3514,7 +3418,7 @@ mod tests {
     ) {
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
         let restored_path = std::env::temp_dir().join("gitcomet-cold-start-restored");
-        let requested_path = std::env::temp_dir().join("gitcomet-cold-start-requested");
+        let requested_path = restored_path.clone();
         let mut saved = session::Workspace::new(vec![restored_path]);
         saved.restore_on_launch = true;
         saved.last_activation_order = 7;
@@ -3630,7 +3534,7 @@ mod tests {
                     find_normal_gitcomet_window_for_repo(app, &path).expect("repository owner");
                 assert_eq!(owner.handle.window_id(), preferred.window_id());
 
-                // Existing ownership still wins over the preferred destination.
+                // The destination wins even when another window has the path.
                 handle_browser_open_request_with_window(
                     app,
                     Arc::clone(&backend),
@@ -3645,7 +3549,9 @@ mod tests {
                     .filter(|entry| entry_contains_repo_path(entry, &path))
                     .map(|entry| entry.handle.window_id())
                     .collect();
-                assert_eq!(owners, vec![preferred.window_id()]);
+                assert_eq!(owners.len(), 2);
+                assert!(owners.contains(&preferred.window_id()));
+                assert!(owners.contains(&fallback.window_id()));
             }
             assert_eq!(app.windows().len(), 2);
         });
@@ -3682,7 +3588,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn review_regression_followup_manual_and_picker_opens_use_the_existing_window_owner(
+    fn review_regression_manual_and_picker_opens_use_the_initiating_window(
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = lock_visual_test();
@@ -3696,6 +3602,7 @@ mod tests {
             GitCometView::new(first_store, first_events, None, window, cx)
         });
         let (second_store, second_events) = AppStore::new_test(Arc::clone(&backend));
+        let second_store_for_assertions = second_store.clone();
         let second = cx.add_window(|window, cx| {
             GitCometView::new(second_store, second_events, None, window, cx)
         });
@@ -3737,10 +3644,11 @@ mod tests {
             .expect("activate a closed repository-picker row");
         cx.background_executor.run_until_parked();
 
-        let unexpected = opened_rx.recv_timeout(Duration::from_millis(500)).ok();
-        assert!(
-            unexpected.is_none(),
-            "the second store attempted to open an app-wide owned repository: {unexpected:?}"
+        assert_eq!(
+            opened_rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("open in the second window"),
+            path
         );
         let owners = cx.update(|app| {
             gitcomet_window_entries(app)
@@ -3749,7 +3657,14 @@ mod tests {
                 .map(|entry| entry.handle.window_id())
                 .collect::<Vec<_>>()
         });
-        assert_eq!(owners, vec![first.window_id()]);
+        assert_eq!(owners.len(), 2);
+        assert!(owners.contains(&first.window_id()));
+        assert!(owners.contains(&second.window_id()));
+        assert_eq!(second_store_for_assertions.snapshot().repos.len(), 1);
+        assert!(
+            opened_rx.try_recv().is_err(),
+            "reopening in the same window must reuse its tab"
+        );
     }
 
     #[gpui::test]
@@ -3784,6 +3699,194 @@ mod tests {
             1,
             "survey and update startup hooks are process work, not per-window work"
         );
+    }
+
+    #[gpui::test]
+    fn review_regression_restoring_overlapping_workspaces_keeps_both_windows(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let shared = std::env::temp_dir().join("gitcomet-restored-shared");
+        let other = std::env::temp_dir().join("gitcomet-restored-other");
+        let mut first = session::Workspace::new(vec![shared.clone(), other.clone()]);
+        first.active_repository = Some(shared.clone());
+        first.last_activation_order = 1;
+        let mut second = session::Workspace::new(vec![shared.clone(), other.clone()]);
+        second.active_repository = Some(other);
+        second.last_activation_order = 2;
+        let workspaces = vec![first, second];
+        crate::ui_runtime::with_override(
+            crate::ui_runtime::UiRuntime::deterministic_auto_restore(),
+            || {
+                cx.update(|app| {
+                    crate::workspaces::initialize_for_test(app, workspaces.clone());
+                    open_initial_gitcomet_windows_after_workspace_initialization(
+                        app,
+                        backend,
+                        &normal_empty_launch_config(None),
+                        workspaces.clone(),
+                    );
+                })
+            },
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            let restored = cx.update(|app| {
+                let windows = gitcomet_window_entries(app);
+                assert_eq!(windows.len(), 2);
+                windows.iter().all(|entry| {
+                    let saved = workspaces
+                        .iter()
+                        .find(|workspace| Some(workspace.id) == entry.workspace_id)
+                        .unwrap();
+                    entry
+                        .view
+                        .update(app, |view, cx| {
+                            crate::view::test_support::sync_store_snapshot(view, cx);
+                            let (pending, count, active) =
+                                crate::view::test_support::startup_repository_state_for_test(view);
+                            !pending && count == 2 && active == saved.active_repository
+                        })
+                        .unwrap()
+                })
+            });
+            if restored {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "restore each workspace's independent active tab"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cx.update(|app| {
+            assert_eq!(windows_owning_repo_for_test(app, &shared).len(), 2);
+            for saved in workspaces {
+                let restored = crate::workspaces::workspace(app, saved.id).unwrap();
+                assert_eq!(restored.repositories, saved.repositories);
+                assert_eq!(restored.active_repository, saved.active_repository);
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn review_regression_native_picker_keeps_its_initiating_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+        let launch = normal_empty_launch_config(None);
+        let first = cx.update(|app| open_gitcomet_window(app, Arc::clone(&backend), &launch));
+        let second = cx.update(|app| open_gitcomet_window(app, Arc::clone(&backend), &launch));
+        let path = std::env::temp_dir().join("gitcomet-picker-shared");
+        cx.update(|app| {
+            let first_entry = normal_gitcomet_window_by_id(app, first.window_id()).unwrap();
+            open_repository_in_window(app, &first_entry, path.clone());
+            activate_gitcomet_window(app, second.into());
+            prompt_open_repository(app, Arc::clone(&backend));
+            // Focus can change while the native dialog is open.
+            activate_gitcomet_window(app, first.into());
+        });
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+        cx.run_until_parked();
+        cx.update(|app| {
+            let owners = windows_owning_repo_for_test(app, &path);
+            assert_eq!(owners.len(), 2);
+            assert!(owners.contains(&first.window_id()));
+            assert!(owners.contains(&second.window_id()));
+            assert_eq!(app.active_window().unwrap().window_id(), second.window_id());
+        });
+    }
+
+    #[gpui::test]
+    fn review_regression_folder_drop_reuses_only_the_destination_windows_tab(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (opened_tx, opened_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let backend: Arc<dyn GitBackend> = Arc::new(ControlledOpenBackend {
+            opened: opened_tx,
+            result: Mutex::new(result_rx),
+        });
+        cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().canonicalize().unwrap();
+        let (first_store, first_events) = AppStore::new_test(Arc::new(TestBackend));
+        let first = cx.add_window(|window, cx| {
+            GitCometView::new(first_store, first_events, None, window, cx)
+        });
+        first
+            .update(cx, |view, _, cx| view.open_repo_path(path.clone(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let (store, events) = AppStore::new_test(backend);
+        let store_for_view = store.clone();
+        let second =
+            cx.add_window(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+        for dropped_path in [path.clone(), path.join(".")] {
+            second
+                .update(cx, |_, _, cx| {
+                    open_dropped_repository_from_view(cx, second.window_id(), dropped_path);
+                })
+                .unwrap();
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            opened_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            path
+        );
+        assert_eq!(store.snapshot().repos.len(), 1);
+        cx.update(|app| {
+            let windows = windows_owning_repo_for_test(app, &path);
+            assert_eq!(windows.len(), 2);
+            assert!(windows.contains(&first.window_id()));
+            assert!(windows.contains(&second.window_id()));
+            assert!(
+                crate::workspaces::workspace_for_window(app, second.window_id()).is_none(),
+                "the dropped copy must validate before it is saved"
+            );
+        });
+        result_tx.send(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            second
+                .update(cx, |view, _, cx| {
+                    crate::view::test_support::sync_store_snapshot(view, cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            if cx.update(|app| {
+                crate::workspaces::workspace_for_window(app, second.window_id()).is_some()
+            }) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "save the validated drop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            opened_rx.try_recv().is_err(),
+            "same-window drops must share one validation"
+        );
+        first
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|app| {
+            assert_eq!(
+                windows_owning_repo_for_test(app, &path),
+                vec![second.window_id()]
+            );
+            assert_eq!(
+                crate::workspaces::workspace_for_window(app, second.window_id())
+                    .unwrap()
+                    .repositories,
+                vec![path]
+            );
+        });
+        assert_eq!(store.snapshot().repos.len(), 1);
     }
 
     #[gpui::test]
@@ -3836,7 +3939,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn review_regression_recovering_a_saved_workspace_does_not_duplicate_a_live_repository(
+    fn review_regression_recovering_a_saved_workspace_keeps_overlapping_repositories(
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = lock_visual_test();
@@ -3862,20 +3965,34 @@ mod tests {
             find_normal_gitcomet_window_for_repo(app, &duplicate_path).is_some()
         }));
 
-        cx.cx.update(|app| {
-            let _ = activate_or_open_workspace(app, saved_id);
-        });
+        let recovered = crate::ui_runtime::with_override(
+            crate::ui_runtime::UiRuntime::deterministic_auto_restore(),
+            || {
+                cx.cx.update(|app| {
+                    activate_or_open_workspace(app, saved_id).expect("open the saved workspace")
+                })
+            },
+        );
         cx.run_until_parked();
 
         assert_eq!(
             cx.cx.update(|app| app.windows().len()),
-            1,
-            "recovering the group should focus the repository's live owner, not open a duplicate"
+            2,
+            "each workspace needs its own window even when its repositories overlap"
         );
+        cx.cx.update(|app| {
+            let saved =
+                crate::workspaces::workspace(app, saved_id).expect("retain saved workspace");
+            assert_eq!(saved.repositories, vec![duplicate_path.clone()]);
+            assert_eq!(recovered.workspace_id, Some(saved_id));
+            let again = activate_or_open_workspace(app, saved_id).expect("focus the workspace");
+            assert_eq!(again.handle.window_id(), recovered.handle.window_id());
+            assert_eq!(app.windows().len(), 2);
+        });
     }
 
     #[gpui::test]
-    fn review_regression_lifecycle_move_to_a_recovered_workspace_owned_by_the_source_is_a_no_op(
+    fn review_regression_move_to_a_saved_workspace_with_the_same_repository(
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = lock_visual_test();
@@ -3900,15 +4017,20 @@ mod tests {
         seed_worktree_repo(cx, &store, view);
         let repo_id = store.snapshot().repos[0].id;
 
-        cx.cx.update(|app| {
-            move_repository_to_workspace(
-                app,
-                source_window_id,
-                repo_id,
-                path.clone(),
-                Some(saved_id),
-            );
-        });
+        crate::ui_runtime::with_override(
+            crate::ui_runtime::UiRuntime::deterministic_auto_restore(),
+            || {
+                cx.cx.update(|app| {
+                    move_repository_to_workspace(
+                        app,
+                        source_window_id,
+                        repo_id,
+                        path.clone(),
+                        Some(saved_id),
+                    );
+                })
+            },
+        );
         cx.run_until_parked();
 
         let (window_count, owners) = cx.cx.update(|app| {
@@ -3921,12 +4043,14 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
         });
-        assert_eq!(window_count, 1, "a no-op move must not close its source");
-        assert_eq!(
-            owners,
-            vec![source_window_id],
-            "the source must retain the repository when recovery resolves back to it"
-        );
+        assert_eq!(window_count, 1, "moving the only tab closes the source");
+        assert_eq!(owners.len(), 1);
+        assert_ne!(owners[0], source_window_id);
+        cx.cx.update(|app| {
+            let destination = normal_gitcomet_window_by_id(app, owners[0]).unwrap();
+            assert_eq!(destination.workspace_id, Some(saved_id));
+            assert_eq!(destination.repo_paths.as_ref(), &[path]);
+        });
     }
 
     /// Closing the last window quits on Linux/Windows, so it must keep the
@@ -3971,9 +4095,8 @@ mod tests {
         );
     }
 
-    /// The pre-move guard must agree with the move. A closed window's registry
-    /// entry that still names the target is ignored by the move (it settles on
-    /// the source), so the guard must also call the move a no-op.
+    /// A stale registry entry must not prevent reopening a distinct workspace,
+    /// even when that workspace contains the same repository as the source.
     #[gpui::test]
     fn review_regression_move_noop_check_ignores_closed_windows(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
@@ -4020,12 +4143,12 @@ mod tests {
         });
 
         assert!(
-            cx.cx.update(|app| repository_move_target_is_noop(
+            !cx.cx.update(|app| repository_move_target_is_noop(
                 app,
                 source_window_id,
                 Some(saved_id)
             )),
-            "the move resolves to the source, so its guards must not run"
+            "a closed workspace with the same repository is a valid move destination"
         );
     }
 
@@ -4095,13 +4218,13 @@ mod tests {
             }
             assert_eq!(
                 app.windows().len(),
-                2,
-                "only the new repository targeting a new window creates one"
+                3,
+                "every request targeting a new window creates one"
             );
         });
     }
 
-    fn check_provisional_drop_ownership(cx: &mut gpui::TestAppContext, succeeds: bool) {
+    fn check_provisional_drop_window_locality(cx: &mut gpui::TestAppContext, succeeds: bool) {
         let _visual_guard = lock_visual_test();
         let (opened_tx, opened_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
@@ -4145,7 +4268,7 @@ mod tests {
         let store_for_view = store.clone();
         let source =
             cx.add_window(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
-        let (other_store, other_events) = AppStore::new_test(Arc::clone(&backend));
+        let (other_store, other_events) = AppStore::new_test(Arc::new(TestBackend));
         let other = cx.add_window(|window, cx| {
             GitCometView::new(other_store, other_events, None, window, cx)
         });
@@ -4238,20 +4361,23 @@ mod tests {
             other
                 .update(cx, |view, _, cx| view.open_repo_path(dropped.clone(), cx))
                 .unwrap();
+            source
+                .update(cx, |view, _, cx| {
+                    view.open_repo_path(dropped.clone(), cx);
+                    open_dropped_repository_from_view(cx, source.window_id(), dropped.clone());
+                })
+                .unwrap();
             cx.run_until_parked();
             cx.update(|app| {
-                for target in [
-                    BrowserOpenTarget::ExistingWindow,
-                    BrowserOpenTarget::NewWindow,
-                ] {
+                for window in [source.window_id(), other.window_id()] {
                     handle_browser_open_request_with_window(
                         app,
                         Arc::clone(&backend),
                         BrowserOpenRequest {
                             path: Some(dropped.clone()),
-                            target,
+                            target: BrowserOpenTarget::ExistingWindow,
                         },
-                        Some(other.window_id()),
+                        Some(window),
                     );
                 }
                 let owners: Vec<_> = gitcomet_window_entries(app)
@@ -4259,15 +4385,13 @@ mod tests {
                     .filter(|entry| entry_contains_repo_path(entry, &dropped))
                     .map(|entry| entry.handle.window_id())
                     .collect();
-                assert_eq!(
-                    owners,
-                    vec![source.window_id()],
-                    "a queued or validating drop must keep its original owner"
-                );
+                assert_eq!(owners.len(), 2);
+                assert!(owners.contains(&source.window_id()));
+                assert!(owners.contains(&other.window_id()));
                 assert_eq!(
                     app.windows().len(),
                     2,
-                    "forwarding must not create a duplicate window"
+                    "existing-window requests must reuse their destination window"
                 );
                 let workspace = crate::workspaces::workspace_for_window(app, source.window_id())
                     .expect("original workspace");
@@ -4277,7 +4401,12 @@ mod tests {
                     "unvalidated paths must stay out of saved workspaces"
                 );
                 assert_eq!(workspace.active_repository, Some(base.clone()));
-                assert!(crate::workspaces::workspace_for_window(app, other.window_id()).is_none());
+                assert_eq!(
+                    crate::workspaces::workspace_for_window(app, other.window_id())
+                        .expect("independent explicit open")
+                        .repositories,
+                    vec![dropped.clone()]
+                );
             });
         }
 
@@ -4312,11 +4441,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         cx.update(|app| {
-            let owner = find_normal_gitcomet_window_for_repo(app, &dropped);
-            assert_eq!(
-                owner.map(|entry| entry.handle.window_id()),
-                succeeds.then_some(source.window_id())
-            );
+            let source_entry = normal_gitcomet_window_by_id(app, source.window_id()).unwrap();
+            assert_eq!(entry_contains_repo_path(&source_entry, &dropped), succeeds);
+            let other_entry = normal_gitcomet_window_by_id(app, other.window_id()).unwrap();
+            assert!(entry_contains_repo_path(&other_entry, &dropped));
             let workspace = crate::workspaces::workspace_for_window(app, source.window_id())
                 .expect("original workspace");
             assert_eq!(
@@ -4331,26 +4459,26 @@ mod tests {
         });
         assert!(
             opened_rx.try_recv().is_err(),
-            "only the original store may validate the dropped repository"
+            "reopening a provisional tab in the same window must not restart validation"
         );
     }
 
     #[gpui::test]
-    fn review_regression_provisional_drop_keeps_one_live_owner_until_validation_succeeds(
+    fn review_regression_provisional_drop_stays_window_local_until_validation_succeeds(
         cx: &mut gpui::TestAppContext,
     ) {
-        check_provisional_drop_ownership(cx, true);
+        check_provisional_drop_window_locality(cx, true);
     }
 
     #[gpui::test]
-    fn review_regression_failed_provisional_drop_releases_live_owner(
+    fn review_regression_failed_provisional_drop_does_not_remove_another_windows_copy(
         cx: &mut gpui::TestAppContext,
     ) {
-        check_provisional_drop_ownership(cx, false);
+        check_provisional_drop_window_locality(cx, false);
     }
 
     #[gpui::test]
-    fn review_regression_confirmed_pending_new_window_open_reserves_the_path(
+    fn review_regression_pending_new_window_opens_allow_the_same_repository(
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = lock_visual_test();
@@ -4372,14 +4500,14 @@ mod tests {
 
             assert_eq!(
                 app.windows().len(),
-                1,
-                "a second request must see ownership reserved by the first pending open"
+                2,
+                "new-window requests must open separate windows even while loading"
             );
             let owners = gitcomet_window_entries(app)
                 .into_iter()
                 .filter(|entry| entry_contains_repo_path(entry, &path))
                 .count();
-            assert_eq!(owners, 1, "the pending path must have one app-wide owner");
+            assert_eq!(owners, 2, "each destination reserves its own pending tab");
         });
     }
 
@@ -5657,22 +5785,29 @@ mod tests {
     }
 
     #[gpui::test]
-    fn adopting_a_workspace_into_an_empty_window_does_not_open_a_second_window(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn adopting_an_overlapping_workspace_reuses_the_empty_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let repositories = vec![PathBuf::from("/tmp/adopt-a"), PathBuf::from("/tmp/adopt-b")];
         let mut workspace = session::Workspace::new(repositories.clone());
         workspace.restore_on_launch = false;
         let id = workspace.id;
         let (_view, cx, window_id) = empty_window_for_adoption(cx, vec![workspace]);
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let other = cx
+            .cx
+            .add_window(|window, cx| GitCometView::new(store, events, None, window, cx));
+        other
+            .update(&mut cx.cx, |view, _, cx| {
+                view.open_repo_path_locally(repositories[0].clone(), cx)
+            })
+            .unwrap();
 
         cx.update(|_window, app| open_workspace_in_window(app, window_id, id));
 
         cx.cx.update(|app| {
             assert_eq!(
                 app.windows().len(),
-                1,
+                2,
                 "adoption must reuse the empty window"
             );
             let adopted = crate::workspaces::workspace_for_window(app, window_id)
@@ -5682,6 +5817,7 @@ mod tests {
             // during adoption must not have emptied (and so deleted) it.
             assert_eq!(adopted.repositories, repositories);
             assert!(adopted.restore_on_launch);
+            assert_eq!(windows_owning_repo_for_test(app, &repositories[0]).len(), 2);
         });
     }
 

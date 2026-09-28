@@ -909,10 +909,10 @@ impl GitBackend for RecordingOpenBackend {
     }
 }
 
-/// Picking a worktree another window already owns focuses that window; it
-/// must not open a second copy in this window's store.
+/// Picking a worktree opens it in the invoking window even when another
+/// workspace already contains it.
 #[gpui::test]
-fn review_regression_picking_a_worktree_owned_elsewhere_does_not_duplicate_it(
+fn review_regression_picking_a_worktree_open_elsewhere_uses_the_invoking_window(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -959,13 +959,15 @@ fn review_regression_picking_a_worktree_owned_elsewhere_does_not_duplicate_it(
     });
     cx.run_until_parked();
 
-    let unexpected = opened_rx
-        .recv_timeout(std::time::Duration::from_millis(500))
-        .ok();
-    assert!(
-        unexpected.is_none(),
-        "the picker's store opened a repository another window owns: {unexpected:?}"
+    assert_eq!(
+        opened_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("open in the invoking window"),
+        feature
     );
     let owners = cx.update(|_window, app| crate::app::windows_owning_repo_for_test(app, &feature));
-    assert_eq!(owners, vec![owner.window_id()]);
+    let invoking_window = cx.update(|window, _| window.window_handle().window_id());
+    assert_eq!(owners.len(), 2);
+    assert!(owners.contains(&owner.window_id()));
+    assert!(owners.contains(&invoking_window));
 }

@@ -689,15 +689,21 @@ pub(crate) fn rebase_window_frame(
 }
 
 /// Title-bar colours offered for a workspace, `None` being the theme default.
-pub(crate) const WORKSPACE_COLORS: [(Option<session::WorkspaceColor>, &str); 9] = [
+pub(crate) const WORKSPACE_COLORS: [(Option<session::WorkspaceColor>, &str); 15] = [
     (None, "Default"),
     (Some(session::WorkspaceColor::Gray), "Gray"),
+    (Some(session::WorkspaceColor::Brown), "Brown"),
     (Some(session::WorkspaceColor::Red), "Red"),
     (Some(session::WorkspaceColor::Orange), "Orange"),
     (Some(session::WorkspaceColor::Yellow), "Yellow"),
+    (Some(session::WorkspaceColor::Lime), "Lime"),
     (Some(session::WorkspaceColor::Green), "Green"),
+    (Some(session::WorkspaceColor::Teal), "Teal"),
+    (Some(session::WorkspaceColor::Cyan), "Cyan"),
     (Some(session::WorkspaceColor::Blue), "Blue"),
+    (Some(session::WorkspaceColor::Indigo), "Indigo"),
     (Some(session::WorkspaceColor::Purple), "Purple"),
+    (Some(session::WorkspaceColor::Magenta), "Magenta"),
     (Some(session::WorkspaceColor::Pink), "Pink"),
 ];
 

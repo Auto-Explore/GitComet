@@ -448,12 +448,7 @@ impl GitCometView {
                     .mx(px(4.0))
                     .flex_none()
                     .rounded_full()
-                    // No colour chosen: a neutral dot, not the theme accent a
-                    // chosen Blue would also resemble.
-                    .bg(match workspace.color {
-                        Some(color) => crate::view::chrome::workspace_color(Some(color), theme),
-                        None => theme.colors.foreground.disabled,
-                    })
+                    .bg(crate::view::chrome::workspace_color(workspace.color, theme))
                     .into_any_element();
                 let state = if workspace.restore_on_launch {
                     "Open"
@@ -761,7 +756,7 @@ impl GitCometView {
             .bg(self.splash_backdrop_base())
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
-                    this.submit_external_drag_payload_after_repo_drop(paths.clone(), cx);
+                    this.submit_external_drag_payload_from_home(paths.clone(), cx);
                 }),
             )
             .child(self.interstitial_backdrop())

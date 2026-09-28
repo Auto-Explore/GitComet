@@ -45,7 +45,6 @@ pub struct PickerPrompt {
     marked_index: Option<usize>,
     leading_icon: Option<&'static str>,
     selected_hint: Option<SharedString>,
-    accent_selection: bool,
     attached_list_surface: bool,
     padded_query_row: bool,
     query_row_trailing: Option<gpui::AnyElement>,
@@ -75,9 +74,16 @@ pub struct PickerPromptItem {
     secondary: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
     repository_initials: Option<SharedString>,
+    workspace_swatch: Option<WorkspaceSwatch>,
     section: Option<SharedString>,
     removable: bool,
 }
+
+/// A workspace row's colour: a dot in the leading slot and, once one is chosen,
+/// its window's title-bar tint behind the row. Resolved against the theme at
+/// render time, so a cached row follows a theme switch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkspaceSwatch(Option<gitcomet_state::session::WorkspaceColor>);
 
 /// Row and header metrics, taken from Zed's title-bar menus so the two read the
 /// same: a row's fill is inset from the popover edge rather than spanning it, and
@@ -532,7 +538,6 @@ impl PickerPrompt {
             marked_index: None,
             leading_icon: None,
             selected_hint: None,
-            accent_selection: false,
             attached_list_surface: false,
             padded_query_row: false,
             query_row_trailing: None,
@@ -599,11 +604,6 @@ impl PickerPrompt {
 
     pub fn selected_hint(mut self, hint: impl Into<SharedString>) -> Self {
         self.selected_hint = Some(hint.into());
-        self
-    }
-
-    pub fn accent_selection(mut self) -> Self {
-        self.accent_selection = true;
         self
     }
 
@@ -687,7 +687,6 @@ impl PickerPrompt {
         let scroll_handle = self.scroll_handle;
         let leading_icon = self.leading_icon;
         let selected_hint = self.selected_hint;
-        let accent_selection = self.accent_selection;
         let attached_list_surface = self.attached_list_surface;
         let padded_query_row = self.padded_query_row;
         let ui_scale = ui_scale.into();
@@ -844,7 +843,13 @@ impl PickerPrompt {
                 );
                 let on_select = Arc::clone(&on_select);
                 let row_initials = self.items[original_index].repository_initials.clone();
-                let has_initials = row_initials.is_some();
+                let row_swatch = self.items[original_index].workspace_swatch;
+                let has_initials = row_initials.is_some() || row_swatch.is_some();
+                // Opaque, so hover and selection below flatten onto it instead
+                // of replacing it.
+                let row_tint = row_swatch.and_then(|WorkspaceSwatch(color)| {
+                    crate::view::chrome::workspace_row_tint(color, theme)
+                });
                 let is_selected = selected_index == Some(display_ix);
                 let is_marked = self.marked_index == Some(original_index);
                 let row_icon = (!has_initials)
@@ -893,6 +898,13 @@ impl PickerPrompt {
                             }),
                         )
                     })
+                    .when_some(row_swatch, |row, WorkspaceSwatch(color)| {
+                        row.child(
+                            workspace_dot(theme, ui_scale, color).debug_selector(move || {
+                                format!("picker_prompt_workspace_dot_{original_index}")
+                            }),
+                        )
+                    })
                     .when_some(row_initials, |row, initials| {
                         row.child(
                             super::repository_initials_box(
@@ -907,8 +919,8 @@ impl PickerPrompt {
                         )
                     })
                     .child(div().flex_1().min_w(px(0.0)).child(label))
-                    // Only rows with repository initials still need this: they have
-                    // no icon slot to turn into a check.
+                    // Only rows with a repository or workspace badge still need
+                    // this: they have no icon slot to turn into a check.
                     .when(is_marked && has_initials, |row| {
                         row.child(
                             div()
@@ -926,7 +938,9 @@ impl PickerPrompt {
                     })
                     .when(is_selected, |row| {
                         row.when_some(selected_hint.clone(), |row, hint| {
-                            row.child(selected_hint_pill(theme, ui_scale, hint))
+                            row.child(selected_hint_pill(theme, ui_scale, hint).debug_selector(
+                                move || format!("picker_prompt_selected_hint_{original_index}"),
+                            ))
                         })
                     })
                     .when_some(row_group.clone(), |row, row_group| {
@@ -972,24 +986,19 @@ impl PickerPrompt {
                 // Text-alpha overlays keep the highlight visible on the
                 // elevated popover surface, unlike the canvas-tuned tokens.
                 let active_overlay = theme.active_overlay();
+                let selected_fill = row_tint.map_or(active_overlay, |tint| {
+                    crate::theme::composite_over(tint, active_overlay)
+                });
                 if is_selected {
-                    row = row.bg(active_overlay).when(accent_selection, |row| {
-                        row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(scaled_px(3.0))
-                                .rounded_tr(px(theme.radii.row))
-                                .rounded_br(px(theme.radii.row))
-                                .bg(theme.colors.accent.foreground),
-                        )
-                    });
+                    row = row.bg(selected_fill);
                 }
+                let style = InteractionStyle::new(theme).selection_outline(false);
                 row = row.control_interaction(
-                    InteractionStyle::new(theme).selection_outline(false),
-                    InteractionState::default().selected(is_selected, active_overlay),
+                    match row_tint {
+                        Some(tint) => style.on_surface(tint),
+                        None => style,
+                    },
+                    InteractionState::default().selected(is_selected, selected_fill),
                 );
                 list = list.child(row);
             }
@@ -1051,6 +1060,7 @@ impl PickerPromptItem {
             secondary: Vec::new(),
             icon: None,
             repository_initials: None,
+            workspace_swatch: None,
             section: None,
             removable: false,
         }
@@ -1082,6 +1092,17 @@ impl PickerPromptItem {
     /// This takes precedence over both item and picker-level SVG icons.
     pub fn repository_initials(mut self, repository_name: &str) -> Self {
         self.repository_initials = Some(super::repository_initials(repository_name).into());
+        self
+    }
+
+    /// Uses a workspace's colour dot in the row's leading slot, and tints the row
+    /// the way that workspace tints its title bar. Takes the leading slot the way
+    /// [`Self::repository_initials`] does.
+    pub fn workspace_color(
+        mut self,
+        color: Option<gitcomet_state::session::WorkspaceColor>,
+    ) -> Self {
+        self.workspace_swatch = Some(WorkspaceSwatch(color));
         self
     }
 
@@ -1387,6 +1408,28 @@ fn match_items(
         out.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
     }
     out
+}
+
+/// A workspace's colour dot, centred in a slot as wide as the repository badge so
+/// workspace and repository rows start their text at the same edge.
+fn workspace_dot(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    color: Option<gitcomet_state::session::WorkspaceColor>,
+) -> Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
+    div()
+        .flex_none()
+        .size(scaled_px(super::REPOSITORY_BADGE_SIZE_PX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .size(scaled_px(10.0))
+                .rounded_full()
+                .bg(crate::view::chrome::workspace_color(color, theme)),
+        )
 }
 
 /// The icon in a row's leading slot.

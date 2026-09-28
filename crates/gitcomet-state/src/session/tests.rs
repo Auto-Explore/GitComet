@@ -3099,6 +3099,30 @@ fn multiple_workspaces_round_trip_without_last_writer_loss() {
 }
 
 #[test]
+fn overlapping_workspaces_preserve_independent_membership_and_active_repositories() {
+    let path = unique_session_test_dir("overlapping-workspaces").join("session.json");
+    let shared = PathBuf::from("/work/shared");
+    let other = PathBuf::from("/work/other");
+    let mut first = Workspace::new(vec![shared.clone(), other.clone()]);
+    first.active_repository = Some(shared.clone());
+    first.layout.sidebar_width = Some(240);
+    let mut second = Workspace::new(vec![other.clone(), shared.clone()]);
+    second.active_repository = Some(other.clone());
+    second.layout.sidebar_width = Some(360);
+
+    persist_workspaces_to_path(&[first.clone(), second.clone()], &path).unwrap();
+    assert_eq!(
+        load_from_path(&path).workspaces,
+        vec![first.clone(), second.clone()]
+    );
+
+    first.repositories = vec![other.clone()];
+    first.active_repository = Some(other);
+    persist_workspaces_to_path(&[first.clone(), second.clone()], &path).unwrap();
+    assert_eq!(load_from_path(&path).workspaces, vec![first, second]);
+}
+
+#[test]
 fn closed_groups_remain_saved_but_do_not_project_as_open_repositories() {
     let path = unique_session_test_dir("closed-window-groups").join("session.json");
     let mut group = Workspace::new(vec![PathBuf::from("/work/closed")]);
@@ -3486,7 +3510,7 @@ fn unknown_or_broken_workspace_entries_do_not_reset_the_session() {
             {
                 "id": kept_id,
                 "custom_name": "Client work",
-                "color": "teal",
+                "color": "chartreuse",
                 "repositories": ["/work/alpha"],
                 "active_repository": "/work/alpha",
                 "restore_on_launch": true,
