@@ -3081,7 +3081,7 @@ impl GitCometView {
 
         let folder_active = payload
             .as_ref()
-            .is_some_and(|classified| classified.directory().is_some());
+            .is_some_and(external_drag::ClassifiedExternalPaths::has_directory);
         self.external_drag_payload = payload;
         self.repo_tabs_bar.update(cx, |bar, cx| {
             bar.set_external_folder_drag_active(folder_active, cx);
@@ -3109,7 +3109,8 @@ impl GitCometView {
             cx.notify();
         } else {
             self.external_drag_payload = None;
-            let show_drop_zone = matches!(paths.paths(), [_]);
+            // Classification narrows this to payloads with a folder in them.
+            let show_drop_zone = !paths.paths().is_empty();
             self.repo_tabs_bar.update(cx, |bar, cx| {
                 bar.set_external_folder_drag_active(show_drop_zone, cx);
             });
@@ -3167,14 +3168,17 @@ impl GitCometView {
         repository_bar_already_cleared: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let directory = self
+        let directories = self
             .external_drag_payload
             .as_ref()
-            .and_then(external_drag::ClassifiedExternalPaths::directory)
-            .cloned();
+            .map(|payload| payload.directories().to_vec())
+            .unwrap_or_default();
         self.clear_external_drag_state(repository_bar_already_cleared, cx);
-        if let Some(path) = directory {
-            crate::app::open_dropped_repository_from_view(cx, self.window_handle.window_id(), path);
+        // Each folder opens (or fails) on its own, in drop order, so the last
+        // one dropped ends up as the active tab.
+        let window_id = self.window_handle.window_id();
+        for path in directories {
+            crate::app::open_dropped_repository_from_view(cx, window_id, path);
         }
     }
 
@@ -3197,7 +3201,7 @@ impl GitCometView {
         paths: gpui::ExternalPaths,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !matches!(paths.paths(), [_]) {
+        if paths.paths().is_empty() {
             self.clear_external_drag_state(true, cx);
             return;
         }

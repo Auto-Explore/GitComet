@@ -1047,9 +1047,7 @@ fn review_regression_confirmed_focused_mergetool_bounds_persist_legacy_size(
 }
 
 #[gpui::test]
-fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
-    cx: &mut gpui::TestAppContext,
-) {
+fn repository_bar_ignores_files_and_drops_outside_the_bar(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let opened = Arc::new(Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
@@ -1061,8 +1059,7 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     install_repo_tab_test_state_with_count(&store_for_state, &view, cx, RepoId(1), 1);
 
-    let folder_a = tempfile::tempdir().expect("create first dropped folder");
-    let folder_b = tempfile::tempdir().expect("create second dropped folder");
+    let folder = tempfile::tempdir().expect("create dropped folder");
     let file = tempfile::NamedTempFile::new().expect("create dropped file");
     let bar_point = cx
         .debug_bounds("repo_external_folder_drop_target")
@@ -1073,36 +1070,31 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
         gpui::point(viewport.width / 2.0, viewport.height / 2.0)
     });
 
-    for paths in [
-        vec![file.path().to_path_buf()],
-        vec![folder_a.path().to_path_buf(), folder_b.path().to_path_buf()],
-    ] {
-        dispatch_file_drop(
-            cx,
-            gpui::FileDropEvent::Entered {
-                position: bar_point,
-                paths: gpui::ExternalPaths(paths.into_iter().collect()),
-            },
-        );
-        cx.update(|_window, app| {
-            assert!(!test_support::repo_external_folder_drag_active(
-                view.read(app),
-                app
-            ));
-        });
-        dispatch_file_drop(
-            cx,
-            gpui::FileDropEvent::Submit {
-                position: bar_point,
-            },
-        );
-    }
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position: bar_point,
+            paths: gpui::ExternalPaths([file.path().to_path_buf()].into_iter().collect()),
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+    });
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Submit {
+            position: bar_point,
+        },
+    );
 
     dispatch_file_drop(
         cx,
         gpui::FileDropEvent::Entered {
             position: outside_bar,
-            paths: gpui::ExternalPaths([folder_a.path().to_path_buf()].into_iter().collect()),
+            paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
         },
     );
     cx.update(|_window, app| {
@@ -1121,13 +1113,117 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
 
     assert!(
         opened.lock().expect("recording backend lock").is_empty(),
-        "unsupported payloads and drops outside the repository bar must remain unhandled"
+        "file-only payloads and drops outside the repository bar must remain unhandled"
     );
     cx.update(|_window, app| {
         assert!(!test_support::repo_external_folder_drag_active(
             view.read(app),
             app
         ));
+    });
+}
+
+/// Each folder in a drop opens on its own; files riding along are skipped.
+#[gpui::test]
+fn dropping_multiple_folders_on_repository_bar_opens_each(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
+        opened: Arc::clone(&opened),
+    });
+    let (store, events) = AppStore::new_test(backend);
+    // Seeded clear of the store's id allocator, which starts at 1: a shared id
+    // would make the drops' tabs alias the seeded one.
+    let seeded_id = RepoId(100);
+    let seeded_path = PathBuf::from("/tmp/multi-folder-drop-seeded");
+    let mut seeded = RepoState::new_opening(
+        seeded_id,
+        RepoSpec {
+            workdir: seeded_path.clone(),
+        },
+    );
+    seeded.open = Loadable::Ready(());
+    store.insert_repo_for_test(
+        seeded_id,
+        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+            seeded_path,
+        )),
+    );
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        repos: vec![seeded],
+        active_repo: Some(seeded_id),
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    }));
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+
+    let folder_a = tempfile::tempdir().expect("create first dropped folder");
+    let folder_b = tempfile::tempdir().expect("create second dropped folder");
+    let file = tempfile::NamedTempFile::new().expect("create dropped file");
+    let bar_point = cx
+        .debug_bounds("repo_external_folder_drop_target")
+        .expect("repository bar drop target should be rendered")
+        .center();
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position: bar_point,
+            paths: gpui::ExternalPaths(
+                [
+                    folder_a.path().to_path_buf(),
+                    file.path().to_path_buf(),
+                    folder_b.path().to_path_buf(),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        },
+    );
+    pump_until(cx, "classify the mixed payload", |cx| {
+        cx.update(|_, app| view.read(app).external_drag_payload.is_some())
+    });
+    cx.update(|_window, app| {
+        assert!(
+            test_support::repo_external_folder_drag_active(view.read(app), app),
+            "a payload with a folder in it highlights the bar"
+        );
+    });
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Submit {
+            position: bar_point,
+        },
+    );
+
+    // The shared repository-load pool can be saturated by other tests, so a
+    // folder counts as handled once the store has it in any form: a pending
+    // tab, a backend open, or the warning its failed open left behind.
+    let reached_store = |path: &Path| {
+        let snapshot = store_for_state.snapshot();
+        let shown = path.display().to_string();
+        snapshot.repos.iter().any(|repo| repo.spec.workdir == path)
+            || opened
+                .lock()
+                .expect("recording backend lock")
+                .iter()
+                .any(|opened| opened == path)
+            || snapshot
+                .notifications
+                .iter()
+                .any(|notification| notification.message.contains(&shown))
+    };
+    let folders =
+        [folder_a.path(), folder_b.path()].map(|path| canonicalize_or_original(path.to_path_buf()));
+    pump_until(cx, "both dropped folders to reach the store", |_| {
+        folders.iter().all(|folder| reached_store(folder))
+    });
+    let file_path = canonicalize_or_original(file.path().to_path_buf());
+    assert!(!reached_store(&file_path), "a dropped file is ignored");
+    cx.update(|_window, app| {
+        assert_external_drag_cleared(view.read(app), app);
     });
 }
 

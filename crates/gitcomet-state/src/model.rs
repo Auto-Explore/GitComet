@@ -1938,6 +1938,12 @@ impl RepoState {
         self.external_drop_previous_active_repo
     }
 
+    pub(crate) fn set_external_drop_previous_active_repo(&mut self, repo_id: Option<RepoId>) {
+        if self.provisional_external_drop_open {
+            self.external_drop_previous_active_repo = repo_id;
+        }
+    }
+
     /// Commits a successfully opened external-drop candidate. Returns whether
     /// the repository was provisional so the reducer can emit its deferred
     /// session and recent-repository persistence exactly once.

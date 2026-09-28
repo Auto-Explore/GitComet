@@ -278,6 +278,24 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
     }));
 }
 
+/// Cancels the loads of the tab being switched away from, except a dropped
+/// folder still being validated: its open is all it has in flight, and
+/// cancelling it would strand the tab unvalidated until it is clicked again.
+fn append_cancel_loads_for_deactivated_repo(
+    state: &mut AppState,
+    repo_id: Option<RepoId>,
+    effects: &mut impl Extend<Effect>,
+) {
+    let validating_drop = repo_id.is_some_and(|repo_id| {
+        state.repos.iter().any(|repo| {
+            repo.id == repo_id && repo.is_provisional_external_drop_open() && repo.open.is_loading()
+        })
+    });
+    if !validating_drop {
+        append_cancel_repo_loads_effect_for_repo(state, repo_id, effects);
+    }
+}
+
 fn append_open_repo_effect_if_not_loaded(
     repo_state: &mut RepoState,
     effects: &mut impl Extend<Effect>,
@@ -445,7 +463,7 @@ fn open_repo_with_mode(
     });
     state.active_repo = Some(repo_id);
     let mut effects = Vec::new();
-    append_cancel_repo_loads_effect_for_repo(state, previous_active, &mut effects);
+    append_cancel_loads_for_deactivated_repo(state, previous_active, &mut effects);
     effects.push(Effect::OpenRepo {
         repo_id,
         path: spec.workdir.clone(),
@@ -844,7 +862,7 @@ fn fill_set_active_repo_inline_impl(
         super::refresh_selected_head_gitlink(repos, state, repo_id);
     }
     if changed {
-        append_cancel_repo_loads_effect_for_repo(state, previous_active, effects);
+        append_cancel_loads_for_deactivated_repo(state, previous_active, effects);
     }
     if changed && state.git_log_settings.verify_commit_signatures {
         for repo in &mut state.repos {
@@ -1363,6 +1381,14 @@ fn discard_failed_repo_open(
 
     repos.remove(&repo_id);
     if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
+        // Drops opened after this one fall back past it, so several failed
+        // drops in a row still land on the tab that was active before them.
+        let fallback = state.repos[ix].external_drop_previous_active_repo();
+        for repo in &mut state.repos {
+            if repo.external_drop_previous_active_repo() == Some(repo_id) {
+                repo.set_external_drop_previous_active_repo(fallback);
+            }
+        }
         let was_active = state.active_repo == Some(repo_id);
         state.repos[ix]
             .history_state

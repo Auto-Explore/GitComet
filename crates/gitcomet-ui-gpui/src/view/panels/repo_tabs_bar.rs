@@ -1276,7 +1276,7 @@ impl Render for RepoTabsBarView {
             .can_drop(|dragged, _window, _cx| {
                 dragged
                     .downcast_ref::<gpui::ExternalPaths>()
-                    .is_some_and(|paths| matches!(paths.paths(), [_]))
+                    .is_some_and(|paths| !paths.paths().is_empty())
             })
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
