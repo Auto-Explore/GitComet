@@ -599,6 +599,7 @@ pub(crate) struct SettingsWindowView {
     _external_editor_custom_path_input_subscription: gpui::Subscription,
     _external_editor_custom_arguments_input_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
+    _activation_subscription: gpui::Subscription,
     _search_input_subscription: gpui::Subscription,
     #[cfg(test)]
     overflow_probe: bool,
@@ -990,6 +991,9 @@ impl SettingsWindowView {
             _ => String::new(),
         };
 
+        let activation_subscription = cx.observe_window_activation(window, |_this, window, cx| {
+            crate::window_focus::reset_on_deactivation(window, cx);
+        });
         let appearance_subscription = {
             let view = cx.weak_entity();
             let mut first = true;
@@ -1268,6 +1272,7 @@ impl SettingsWindowView {
             _external_editor_custom_arguments_input_subscription:
                 external_editor_custom_arguments_input_subscription,
             _appearance_subscription: appearance_subscription,
+            _activation_subscription: activation_subscription,
             _search_input_subscription: search_input_subscription,
             #[cfg(test)]
             overflow_probe: false,

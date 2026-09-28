@@ -1175,6 +1175,27 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// The search bar's match label: "Type to search", "Invalid regex",
+    /// "No matches" or "{current}/{total}".
+    fn diff_search_status(&self) -> components::QuickSearchStatus {
+        use components::QuickSearchStatus;
+        let total = self.diff_search_matches.len();
+        if self.diff_search_query.is_empty() {
+            QuickSearchStatus::Empty
+        } else if self.diff_search_regex_error.is_some() {
+            QuickSearchStatus::InvalidRegex
+        } else if total == 0 {
+            QuickSearchStatus::NoMatches
+        } else {
+            let current = self.diff_search_match_ix.unwrap_or(0).min(total - 1);
+            QuickSearchStatus::Position {
+                current: Some(current),
+                total,
+                complete: true,
+            }
+        }
+    }
+
     fn insert_diff_search_line_break(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_search_input.update(cx, |input, cx| {
             input.replace_selection_utf8("\n", cx);
@@ -1622,186 +1643,65 @@ impl MainPaneView {
             return None;
         }
 
-        let query = self.diff_search_query.as_ref();
-        let regex_invalid = self.diff_search_regex_error.is_some();
-        let match_label: SharedString = if query.is_empty() {
-            "Type to search".into()
-        } else if regex_invalid {
-            "Invalid regex".into()
-        } else if self.diff_search_matches.is_empty() {
-            "No matches".into()
-        } else {
-            let ix = self
-                .diff_search_match_ix
-                .unwrap_or(0)
-                .min(self.diff_search_matches.len().saturating_sub(1));
-            format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
-        };
-        let match_label_color = if regex_invalid && !query.is_empty() {
-            theme.colors.status.danger.foreground
-        } else {
-            theme.colors.foreground.secondary
-        };
-        let option_selected_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.34 } else { 0.24 },
-        );
-        let options = self.diff_search_options;
-        // A floating toolbar: its controls ride the same ramp as the toolbar
-        // buttons they mirror.
         let ui_scale =
             ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
-        let compact_control_height = ui_scale.row_height(26.0, 32.0);
-        let compact_icon_button_width = components::control_height(ui_scale);
-        let compact_option_button_width = ui_scale.row_height(24.0, 32.0);
         let max_search_input_height = ui_scale.px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
 
-        let panel = div()
-            .flex()
-            .items_start()
-            .gap(ui_scale.px(2.0))
-            .px(ui_scale.px(4.0))
-            .py(ui_scale.px(2.0))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .border_color(theme.colors.stroke.default)
-            .bg(theme.colors.surface.raised)
-            .shadow(crate::theme::shadow_surface(theme))
-            .child(
-                div()
-                    .relative()
-                    .w(ui_scale.px(220.0))
-                    .min_w(ui_scale.px(140.0))
-                    .debug_selector(|| "diff_search_input_slot".to_string())
-                    .child(
-                        div()
-                            .id("diff_search_input_scroll")
-                            .relative()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .max_h(max_search_input_height)
-                            .pr(components::Scrollbar::visible_gutter(
-                                self.diff_search_scroll.clone(),
-                                components::ScrollbarAxis::Vertical,
-                            ))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.diff_search_scroll)
-                            .child(self.diff_search_input.clone()),
-                    )
-                    .child(
-                        components::Scrollbar::new(
-                            "diff_search_scrollbar",
+        let panel =
+            components::QuickSearchBar::<Self>::new("diff_search", self.diff_search_status())
+                .input(
+                    div()
+                        .id("diff_search_input_scroll")
+                        .relative()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .max_h(max_search_input_height)
+                        .pr(components::Scrollbar::visible_gutter(
                             self.diff_search_scroll.clone(),
-                        )
-                        .render(theme),
-                    ),
-            )
-            .child(
-                components::Button::new("diff_search_newline", "")
-                    .start_slot(svg_icon(
-                        "icons/line_break.svg",
-                        theme.colors.foreground.primary,
-                        ui_scale.px(14.0),
-                    ))
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.insert_diff_search_line_break(window, cx);
-                    })
-                    .w(compact_icon_button_width)
-                    .h(compact_control_height)
-                    .gitcomet_tooltip(theme, "Insert newline (Shift+Enter)".into())
-                    .debug_selector(|| "diff_search_newline".to_string()),
-            )
-            .child(
-                components::Button::new("diff_search_match_case", "Aa")
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .selected(options.match_case)
-                    .selected_bg(option_selected_bg)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        let mut next = this.diff_search_options;
-                        next.match_case = !next.match_case;
-                        this.set_diff_search_options(next, window, cx);
-                    })
-                    .w(compact_option_button_width)
-                    .h(compact_control_height)
-                    .gitcomet_tooltip(theme, "Match case".into())
-                    .debug_selector(|| "diff_search_match_case".to_string()),
-            )
-            .child(
-                components::Button::new("diff_search_whole_word", "W")
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .selected(options.whole_word)
-                    .selected_bg(option_selected_bg)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        let mut next = this.diff_search_options;
-                        next.whole_word = !next.whole_word;
-                        this.set_diff_search_options(next, window, cx);
-                    })
-                    .w(compact_option_button_width)
-                    .h(compact_control_height)
-                    .gitcomet_tooltip(theme, "Match whole word".into())
-                    .debug_selector(|| "diff_search_whole_word".to_string()),
-            )
-            .child(
-                components::Button::new("diff_search_regex", ".*")
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .selected(options.regex)
-                    .selected_bg(option_selected_bg)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        let mut next = this.diff_search_options;
-                        next.regex = !next.regex;
-                        this.set_diff_search_options(next, window, cx);
-                    })
-                    .w(compact_option_button_width)
-                    .h(compact_control_height)
-                    .gitcomet_tooltip(theme, "Use regular expression".into())
-                    .debug_selector(|| "diff_search_regex".to_string()),
-            )
-            .child(
-                div()
-                    .w(ui_scale.px(104.0))
-                    .min_w(ui_scale.px(104.0))
-                    .max_w(ui_scale.px(104.0))
-                    .h(compact_control_height)
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_size(theme.ui_text(12.0))
-                    .text_color(match_label_color)
-                    .debug_selector(|| "diff_search_match_label".to_string())
-                    .child(match_label),
-            )
-            .child(
-                components::Button::new("diff_search_close", "")
-                    .start_slot(svg_icon(
-                        "icons/generic_close.svg",
-                        theme.colors.foreground.secondary,
-                        ui_scale.px(12.0),
-                    ))
-                    .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.deactivate_diff_search(window, cx);
+                            components::ScrollbarAxis::Vertical,
+                        ))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.diff_search_scroll)
+                        .child(self.diff_search_input.clone()),
+                )
+                .input(
+                    components::Scrollbar::new(
+                        "diff_search_scrollbar",
+                        self.diff_search_scroll.clone(),
+                    )
+                    .render(theme),
+                )
+                .newline(|this, window, cx| this.insert_diff_search_line_break(window, cx))
+                .options(self.diff_search_options, |this, next, window, cx| {
+                    this.set_diff_search_options(next, window, cx);
+                })
+                .navigation(
+                    !self.diff_search_matches.is_empty(),
+                    |this, window, cx| {
+                        this.diff_search_prev_match();
+                        this.focus_diff_search_input(window, cx);
                         cx.notify();
-                    })
-                    .w(compact_icon_button_width)
-                    .h(compact_control_height)
-                    .debug_selector(|| "diff_search_close".to_string()),
-            )
-            .occlude()
-            .with_animation(
-                "diff_search_overlay_mount",
-                Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
-                |panel, delta| {
-                    let slide_y = (1.0 - delta) * -8.0;
-                    panel.opacity(delta).relative().top(px(slide_y))
-                },
-            );
+                    },
+                    |this, window, cx| {
+                        this.diff_search_next_match();
+                        this.focus_diff_search_input(window, cx);
+                        cx.notify();
+                    },
+                )
+                .on_close(|this, window, cx| {
+                    this.deactivate_diff_search(window, cx);
+                    cx.notify();
+                })
+                .render(theme, ui_scale, cx)
+                .occlude()
+                .with_animation(
+                    "diff_search_overlay_mount",
+                    Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
+                    |panel, delta| {
+                        let slide_y = (1.0 - delta) * -8.0;
+                        panel.opacity(delta).relative().top(px(slide_y))
+                    },
+                );
 
         let overlay_panel = div()
             .id("diff_search_overlay_panel")

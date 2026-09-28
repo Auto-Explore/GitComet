@@ -389,7 +389,7 @@ mod tests {
             previous: Mutex::new(VecDeque::new()),
         };
         let mut matcher = DiffSearchMatcher::new("needle", DiffSearchOptions::default());
-        matcher.cancellation = Some(token);
+        matcher.set_cancellation(token);
         assert!(rows.search(&matcher).is_empty());
         assert_eq!(reads.load(Ordering::Relaxed), 3);
         assert!(rows.previous.lock().unwrap().is_empty());
@@ -441,7 +441,7 @@ impl SearchDocument {
         cancellation: CancellationToken,
     ) -> SearchResult {
         let mut matcher = DiffSearchMatcher::new(query, options);
-        matcher.cancellation = Some(cancellation);
+        matcher.set_cancellation(cancellation);
         let mut result = SearchResult {
             regex_error: matcher.regex_error().map(str::to_owned),
             ..Default::default()
@@ -519,7 +519,7 @@ impl RowDocument {
             if let Some(candidates) = previous
                 .iter()
                 .filter(|entry| {
-                    entry.options == matcher.options
+                    entry.options == matcher.options()
                         && diff_search_query_reuse(&entry.query, matcher.query())
                             != DiffSearchQueryReuse::None
                 })
@@ -561,11 +561,11 @@ impl RowDocument {
                 && matcher.query().len() <= QUERY_CACHE_MAX_QUERY_BYTES
             {
                 previous.retain(|entry| {
-                    entry.query != matcher.query() || entry.options != matcher.options
+                    entry.query != matcher.query() || entry.options != matcher.options()
                 });
                 previous.push_front(SearchCandidates {
                     query: matcher.query().to_owned(),
-                    options: matcher.options,
+                    options: matcher.options(),
                     rows: out.clone(),
                 });
                 previous.truncate(QUERY_CACHE_ENTRIES);
