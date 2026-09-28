@@ -3409,6 +3409,10 @@ impl TextInput {
 }
 
 impl EntityInputHandler for TextInput {
+    fn accepts_text_input(&self, window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        crate::window_focus::is_active(&self.focus_handle, window) && !self.read_only
+    }
+
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -3455,10 +3459,10 @@ impl EntityInputHandler for TextInput {
         &mut self,
         range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if !self.accepts_text_input(window, cx) {
             return;
         }
         let Some(new_text) = self.sanitize_insert_text(new_text) else {
@@ -3497,10 +3501,10 @@ impl EntityInputHandler for TextInput {
         range_utf16: Option<Range<usize>>,
         new_text: &str,
         new_selected_range_utf16: Option<Range<usize>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if !self.accepts_text_input(window, cx) {
             return;
         }
         let Some(new_text) = self.sanitize_insert_text(new_text) else {
