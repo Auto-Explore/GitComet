@@ -385,13 +385,7 @@ impl GitCometView {
         persist_in_workspace: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let failure_revision = self
-            .store
-            .snapshot()
-            .repo_open_failures
-            .get(path)
-            .copied()
-            .unwrap_or_default();
+        let failure_revision = self.store.snapshot().repo_open_failure_revision;
         self.pending_repo_open_reservations
             .entry(path.to_path_buf())
             .or_insert(PendingRepoOpen {

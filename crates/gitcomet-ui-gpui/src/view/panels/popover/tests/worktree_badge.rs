@@ -919,7 +919,7 @@ fn review_regression_picking_a_worktree_open_elsewhere_uses_the_invoking_window(
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
-    let feature = PathBuf::from("/tmp/ws/feature");
+    let feature = std::env::temp_dir().join("ws/feature");
 
     let (owner_store, owner_events) = AppStore::new_test(Arc::new(TestBackend));
     let owner =

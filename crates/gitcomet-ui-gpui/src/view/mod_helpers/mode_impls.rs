@@ -1015,6 +1015,8 @@ impl UnsavedFileEditsAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct UnsavedFileEditsPrompt {
     pub(in crate::view) action: UnsavedFileEditsAction,
+    /// Buffers were discarded, but a move still needs outstanding writes to finish.
+    pub(in crate::view) waiting_for_writes: bool,
     /// Display labels, repo-qualified when the list spans more than one repo.
     pub(in crate::view) files: Vec<SharedString>,
 }

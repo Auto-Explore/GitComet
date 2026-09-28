@@ -397,16 +397,14 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
 
         thread::spawn(move || {
-            // Each store (window) keeps its own reducer and state, but effect
-            // workers are process-wide so windows do not multiply the pools.
+            // General effects share process-wide workers. Repository loads
+            // need a bounded pool per window: blocking opens and filesystem
+            // scans in one window must not consume another window's capacity.
             let executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Primary,
                 default_worker_threads(),
             );
-            let repo_load_executor = TaskExecutor::shared_for_store(
-                StoreExecutorPool::RepoLoad,
-                repo_load_worker_threads(),
-            );
+            let repo_load_executor = TaskExecutor::new(repo_load_worker_threads());
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
                 metadata_worker_threads(),

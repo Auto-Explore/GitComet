@@ -228,7 +228,7 @@ fn main() {
                     path: path.clone(),
                     target: browser_open_target,
                 };
-                let browser_instance =
+                let mut browser_instance =
                     match browser_instance::start_or_forward(initial_browser_request.clone()) {
                         Ok(browser_instance::StartResult::Forwarded) => {
                             std::process::exit(exit_code::SUCCESS);
@@ -243,8 +243,8 @@ fn main() {
                         }
                     };
                 let browser_requests = browser_instance
-                    .as_ref()
-                    .map(browser_instance::PrimaryBrowserInstance::requests);
+                    .as_mut()
+                    .and_then(browser_instance::PrimaryBrowserInstance::take_requests);
 
                 let startup_crash_report = crashlog::take_startup_report();
                 if let Some(report) = startup_crash_report.as_ref() {

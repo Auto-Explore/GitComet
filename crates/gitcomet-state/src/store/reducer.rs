@@ -1014,6 +1014,17 @@ fn reduce_inner(
         Msg::OpenRepoFromExternalDrop(path) => {
             repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
         }
+        Msg::AcknowledgeRepoOpenFailures { through_revision } => {
+            if state
+                .repo_open_failures
+                .values()
+                .any(|revision| *revision <= through_revision)
+            {
+                Arc::make_mut(&mut state.repo_open_failures)
+                    .retain(|_, revision| *revision > through_revision);
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,
@@ -2925,16 +2936,6 @@ fn reduce_inner(
             command,
             result,
         }) => {
-            if let RepoCommandKind::SaveWorktreeFile { path, .. } = &command
-                && result.is_err()
-                && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
-            {
-                let failures = repo
-                    .worktree_file_save_failures
-                    .entry(path.clone())
-                    .or_default();
-                *failures = failures.wrapping_add(1);
-            }
             let auth_prompt = result
                 .as_ref()
                 .err()

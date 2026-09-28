@@ -720,7 +720,7 @@ fn open_initial_gitcomet_windows_after_workspace_initialization(
         );
     }
 
-    run_process_startup_hooks_once(cx);
+    run_process_startup_hooks_once(cx, startup_window.map(|window| window.window_id()));
 }
 
 fn should_quit_when_all_windows_closed(launch: &WindowLaunchConfig) -> bool {
@@ -1600,6 +1600,16 @@ fn register_browser_open_request_handler(
     backend: Arc<dyn GitBackend>,
     requests: smol::channel::Receiver<BrowserOpenRequest>,
 ) {
+    // The listener must reject new requests as soon as the app stops consuming
+    // them. A weak receiver does not keep this channel alive after the task exits.
+    let requests_on_quit = requests.downgrade();
+    cx.on_app_quit(move |_| {
+        if let Some(requests) = requests_on_quit.upgrade() {
+            requests.close();
+        }
+        async {}
+    })
+    .detach();
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {
         while let Ok(request) = requests.recv().await {
             let backend = Arc::clone(&backend);
@@ -1665,18 +1675,19 @@ impl gpui::Global for ProcessStartupHooksState {}
 
 #[cfg(test)]
 #[derive(Default)]
-struct StartupHookInvocationCount(usize);
+struct StartupHookInvocationCount(usize, Option<gpui::WindowId>);
 
 #[cfg(test)]
 impl gpui::Global for StartupHookInvocationCount {}
 
 #[cfg(test)]
-pub(crate) fn record_startup_hook_invocation_for_test<C>(cx: &mut C)
+pub(crate) fn record_startup_hook_invocation_for_test<C>(cx: &mut C, window_id: gpui::WindowId)
 where
     C: BorrowAppContext,
 {
     cx.update_default_global::<StartupHookInvocationCount, _>(|count, _cx| {
         count.0 += 1;
+        count.1 = Some(window_id);
     });
 }
 
@@ -1685,8 +1696,10 @@ fn startup_hook_invocation_count_for_test(cx: &mut App) -> usize {
     cx.update_default_global::<StartupHookInvocationCount, _>(|count, _cx| count.0)
 }
 
-fn run_process_startup_hooks_once(cx: &mut App) {
-    let Some(window) = find_normal_gitcomet_window(cx) else {
+fn run_process_startup_hooks_once(cx: &mut App, startup_window: Option<gpui::WindowId>) {
+    // Native activation can still be queued; route hooks to the chosen startup
+    // window directly instead of depending on whichever window has focus now.
+    let Some(window) = startup_window.and_then(|id| normal_gitcomet_window_by_id(cx, id)) else {
         return;
     };
     let should_run = cx.update_default_global::<ProcessStartupHooksState, _>(|state, _cx| {
@@ -1959,15 +1972,18 @@ where
     mark_clean_shutdown(cx);
 }
 
-/// Bookkeeping for a window about to close. Off macOS, closing the last window
-/// quits, so its workspace stays restorable like any other quit.
+/// Keep the last main workspace restorable off macOS, including when an
+/// auxiliary Settings window remains open during shutdown.
 pub(crate) fn mark_window_closing(cx: &mut App, window_id: gpui::WindowId) {
     let last_window = cx.windows().len() == 1;
-    let quits_app = last_window && !cfg!(target_os = "macos");
-    if !quits_app {
+    let normal_windows = live_normal_windows(cx);
+    let last_main_window =
+        normal_windows.len() == 1 && normal_windows[0].handle.window_id() == window_id;
+    let preserve_workspace = (last_window || last_main_window) && !cfg!(target_os = "macos");
+    if !preserve_workspace {
         crate::workspaces::mark_window_closed(cx, window_id);
     }
-    if last_window {
+    if last_window || last_main_window {
         mark_clean_shutdown(cx);
     }
 }
@@ -2163,35 +2179,15 @@ fn find_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
 
 #[cfg(test)]
 fn find_normal_gitcomet_window_for_repo(cx: &mut App, path: &Path) -> Option<GitCometWindowEntry> {
-    let entries = gitcomet_window_entries(cx);
     let active_window_id = cx.active_window().map(|window| window.window_id());
-    if let Some(active_window_id) = active_window_id
-        && let Some(entry) = entries
-            .iter()
-            .find(|entry| {
-                entry.handle.window_id() == active_window_id
-                    && entry.view_mode == GitCometViewMode::Normal
-                    && entry_contains_repo_path(entry, path)
-            })
-            .cloned()
-    {
-        return Some(entry);
-    }
-    if let Some(last_focused) = last_focused_normal_window_id(cx)
-        && let Some(entry) = entries
-            .iter()
-            .find(|entry| {
-                entry.handle.window_id() == last_focused
-                    && entry.view_mode == GitCometViewMode::Normal
-                    && entry_contains_repo_path(entry, path)
-            })
-            .cloned()
-    {
-        return Some(entry);
-    }
-    entries.into_iter().find(|entry| {
-        entry.view_mode == GitCometViewMode::Normal && entry_contains_repo_path(entry, path)
-    })
+    let last_focused = last_focused_normal_window_id(cx);
+    live_normal_windows(cx)
+        .into_iter()
+        .filter(|entry| entry_contains_repo_path(entry, path))
+        .min_by_key(|entry| {
+            let id = Some(entry.handle.window_id());
+            (id != active_window_id, id != last_focused)
+        })
 }
 
 fn activate_gitcomet_window(cx: &mut App, window: gpui::AnyWindowHandle) {
@@ -3757,11 +3753,15 @@ mod tests {
                 let mut workspace = session::Workspace::new(vec![
                     std::env::temp_dir().join(format!("gitcomet-startup-hook-group-{index}")),
                 ]);
+                // Test runtime disables automatic repo restore. Keep the named
+                // workspace mapped even while its window is empty.
+                workspace.custom_name = Some(format!("Startup {index}"));
                 workspace.restore_on_launch = true;
                 workspace.last_activation_order = index;
                 workspace
             })
             .collect::<Vec<_>>();
+        let expected_workspace = workspaces.last().unwrap().id;
         let launch = normal_empty_launch_config(None);
 
         cx.update(|app| {
@@ -3779,6 +3779,67 @@ mod tests {
             1,
             "survey and update startup hooks are process work, not per-window work"
         );
+        cx.update(|app| {
+            let window = app.global::<StartupHookInvocationCount>().1.unwrap();
+            assert_eq!(
+                crate::workspaces::workspace_for_window(app, window)
+                    .unwrap()
+                    .id,
+                expected_workspace,
+                "startup hooks belong to the most recently active restored workspace"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn pr530_browser_request_handler_closes_its_receiver_on_shutdown(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = cx.new_app();
+        let (requests, received) = smol::channel::unbounded();
+        app.update(|app| {
+            register_browser_open_request_handler(app, Arc::new(TestBackend), received)
+        });
+        app.background_executor.run_until_parked();
+        assert!(!requests.is_closed());
+        app.quit();
+        assert!(
+            requests.is_closed(),
+            "shutdown must stop accepting forwarded requests"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn pr530_closing_last_main_window_with_settings_keeps_workspace_restorable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _guard = lock_visual_test();
+        cx.update(|app| {
+            crate::workspaces::initialize_for_test(app, Vec::new());
+            let main = open_gitcomet_window(
+                app,
+                Arc::new(TestBackend),
+                &normal_empty_launch_config(None),
+            );
+            let workspace = crate::workspaces::sync_window(
+                app,
+                main.window_id(),
+                None,
+                vec![PathBuf::from("/tmp/pr530-last-main")],
+                None,
+            )
+            .unwrap();
+            crate::view::open_settings_window(app);
+            assert_eq!(app.windows().len(), 2);
+            mark_window_closing(app, main.window_id());
+            assert!(
+                crate::workspaces::workspace(app, workspace)
+                    .unwrap()
+                    .restore_on_launch,
+                "Settings must not turn last-main-window close into workspace removal"
+            );
+        });
     }
 
     #[gpui::test]
@@ -3893,7 +3954,7 @@ mod tests {
         });
         cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
         let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().canonicalize().unwrap();
+        let path = normalize_repository_open_path(folder.path().to_path_buf());
         let (first_store, first_events) = AppStore::new_test(Arc::new(TestBackend));
         let first = cx.add_window(|window, cx| {
             GitCometView::new(first_store, first_events, None, window, cx)
@@ -4320,7 +4381,7 @@ mod tests {
             app.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
         });
         let directory = tempfile::tempdir().expect("create repository directories");
-        let root = directory.path().canonicalize().unwrap();
+        let root = normalize_repository_open_path(directory.path().to_path_buf());
         let base = root.join("base");
         let dropped = root.join("dropped");
         std::fs::create_dir(&base).unwrap();
@@ -4643,15 +4704,7 @@ mod tests {
                         .iter()
                         .all(|workspace| !workspace.repositories.contains(&path))
             });
-            if released
-                && store
-                    .snapshot()
-                    .repo_open_failures
-                    .get(&path)
-                    .copied()
-                    .unwrap_or_default()
-                    > 0
-            {
+            if released && store.snapshot().repo_open_failure_revision > 0 {
                 break;
             }
             assert!(

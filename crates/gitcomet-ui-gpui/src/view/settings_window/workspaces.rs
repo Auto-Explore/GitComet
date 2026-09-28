@@ -7,12 +7,7 @@ use gitcomet_state::session::{Workspace, WorkspaceColor, WorkspaceId};
 /// Open workspaces first, then most recently used.
 fn sorted_workspaces(cx: &App) -> Vec<Workspace> {
     let mut workspaces = crate::workspaces::workspaces(cx);
-    workspaces.sort_by_key(|workspace| {
-        (
-            !workspace.restore_on_launch,
-            std::cmp::Reverse(workspace.last_activation_order),
-        )
-    });
+    crate::workspaces::sort_workspaces(&mut workspaces);
     workspaces
 }
 

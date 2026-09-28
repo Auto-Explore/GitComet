@@ -827,6 +827,18 @@ impl GitCometView {
         action: UnsavedFileEditsAction,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.pending_unsaved_file_edits_flush.is_some() {
+            // Closing the window or quitting supersedes a pending move. Keep
+            // the requested action until the existing receipts have drained.
+            let pending = self.pending_file_edits_action.as_ref();
+            if !matches!(pending, Some(UnsavedFileEditsAction::QuitApp))
+                && (action.moving_repo().is_none()
+                    || pending.is_none_or(|pending| pending.moving_repo().is_some()))
+            {
+                self.pending_file_edits_action = Some(action);
+            }
+            return true;
+        }
         // `pending_*_prompt` is `take()`n by `Render` when it opens the popover,
         // so it is `None` for as long as the dialog is actually on screen. Ask
         // the popover host whether the dialog is up rather than mirroring that
@@ -835,7 +847,6 @@ impl GitCometView {
         // would leave it stuck and the window permanently unclosable.
         if self.pending_unsaved_file_edits_prompt.is_some()
             || self.unsaved_file_edits_dialog_open(cx)
-            || self.pending_unsaved_file_edits_flush.is_some()
         {
             return true;
         }
@@ -870,7 +881,11 @@ impl GitCometView {
         if files.is_empty() {
             return false;
         }
-        self.pending_unsaved_file_edits_prompt = Some(UnsavedFileEditsPrompt { action, files });
+        self.pending_unsaved_file_edits_prompt = Some(UnsavedFileEditsPrompt {
+            action,
+            files,
+            waiting_for_writes: false,
+        });
         cx.notify();
         true
     }
@@ -949,6 +964,7 @@ impl GitCometView {
         action: UnsavedFileEditsAction,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.pending_file_edits_action = Some(action);
         self.pending_unsaved_file_edits_flush = Some(cx.spawn(async move |view, cx| {
             let deadline = cx.background_executor().now() + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
             loop {
@@ -957,9 +973,13 @@ impl GitCometView {
                     .await;
                 let timed_out = cx.background_executor().now() >= deadline;
                 let Ok(pending) = view.update(cx, |this, cx| {
+                    let action = this
+                        .pending_file_edits_action
+                        .as_ref()
+                        .expect("pending save action");
                     this.main_pane.update(cx, |pane, cx| {
                         pane.settle_file_editor_saves(cx);
-                        pane.file_editor_saves_block_action(&action)
+                        pane.file_editor_saves_block_action(action)
                     })
                 }) else {
                     return;
@@ -967,16 +987,29 @@ impl GitCometView {
                 if !pending || timed_out {
                     let _ = view.update(cx, |this, cx| {
                         this.pending_unsaved_file_edits_flush = None;
+                        let action = this
+                            .pending_file_edits_action
+                            .take()
+                            .expect("pending save action");
                         if pending {
                             this.main_pane.update(cx, |pane, cx| {
                                 pane.restore_pending_file_editor_saves(action.moving_repo(), cx);
                             });
-                            let files = this.unsaved_file_edit_labels_for(action.moving_repo(), cx);
+                            let mut files =
+                                this.unsaved_file_edit_labels_for(action.moving_repo(), cx);
+                            let waiting_for_writes = files.is_empty();
+                            if waiting_for_writes && let Some(repo_id) = action.moving_repo() {
+                                files = this
+                                    .main_pane
+                                    .read(cx)
+                                    .pending_file_edit_labels_for_repo(repo_id);
+                            }
                             if !files.is_empty() {
                                 this.pending_unsaved_file_edits_prompt =
                                     Some(UnsavedFileEditsPrompt {
-                                        action: action.clone(),
+                                        action,
                                         files,
+                                        waiting_for_writes,
                                     });
                                 cx.notify();
                             }

@@ -5184,6 +5184,45 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
 }
 
 #[test]
+fn pr530_slow_repository_loads_do_not_block_another_window() {
+    struct Backend {
+        started: std::sync::mpsc::Sender<PathBuf>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+    impl GitBackend for Backend {
+        fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            self.started.send(path.to_path_buf()).unwrap();
+            wait_for_release_signal(&self.release);
+            Err(Error::new(ErrorKind::NotARepository))
+        }
+    }
+    let (started, received) = std::sync::mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend { started, release });
+    let (first, _events) = AppStore::new_test(Arc::clone(&backend));
+    for index in 0..super::executor::repo_load_worker_threads() {
+        first.dispatch(Msg::OpenRepo(unique_temp_path(&format!(
+            "pr530-busy-{index}"
+        ))));
+        received
+            .recv_timeout(Duration::from_secs(3))
+            .expect("first window load started");
+    }
+    let (second, _events) = AppStore::new_test(backend);
+    let path = unique_temp_path("pr530-independent-window");
+    second.dispatch(Msg::OpenRepo(path.clone()));
+    assert_eq!(
+        received
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the second window must load while the first window's workers are busy"),
+        path
+    );
+}
+
+#[test]
 fn worktree_and_submodule_effects_report_missing_repo_handle() {
     struct Backend;
     impl GitBackend for Backend {

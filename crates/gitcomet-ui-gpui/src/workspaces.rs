@@ -28,6 +28,7 @@ struct ManagerState {
     focused_window: Option<WindowId>,
     active_workspace: Option<WorkspaceId>,
     next_activation_order: u64,
+    revision: u64,
     /// Bounds recorded in memory since the last write.
     placement_unsaved: bool,
 }
@@ -123,6 +124,9 @@ where
     let (result, change, write) = {
         let mut state = manager.state.borrow_mut();
         let (result, change) = edit(&mut state);
+        if change != Change::None {
+            state.revision = state.revision.wrapping_add(1);
+        }
         let write = (change == Change::Persist)
             .then(|| state.pending_write())
             .flatten();
@@ -362,7 +366,10 @@ where
         if manager.active_workspace == Some(workspace_id) {
             return ((), Change::None);
         }
-        ((), Change::of(manager.activate(workspace_id), false))
+        manager.activate(workspace_id);
+        // Focus order is immediately observable, but joins the next meaningful
+        // workspace write (or shutdown flush) instead of fsyncing on each focus.
+        ((), Change::Notify)
     });
 }
 
@@ -724,13 +731,36 @@ fn manager(cx: &App) -> Option<Ref<'_, ManagerState>> {
 }
 
 pub(crate) fn workspace_for_window(cx: &App, window_id: WindowId) -> Option<Workspace> {
+    with_workspace_for_window(cx, window_id, Clone::clone)
+}
+
+pub(crate) fn with_workspace_for_window<R>(
+    cx: &App,
+    window_id: WindowId,
+    read: impl FnOnce(&Workspace) -> R,
+) -> Option<R> {
     let manager = manager(cx)?;
     let id = manager.window_workspaces.get(&window_id)?;
     manager
         .workspaces
         .iter()
         .find(|workspace| workspace.id == *id)
-        .cloned()
+        .map(read)
+}
+
+pub(crate) fn revision(cx: &App) -> Option<u64> {
+    // Initialization must invalidate rows cached before a manager existed.
+    manager(cx).map(|manager| manager.revision)
+}
+
+/// Shared ordering for Home, Settings, and the workspace picker.
+pub(crate) fn sort_workspaces(workspaces: &mut [Workspace]) {
+    workspaces.sort_by_key(|workspace| {
+        (
+            !workspace.restore_on_launch,
+            std::cmp::Reverse(workspace.last_activation_order),
+        )
+    });
 }
 
 pub(crate) fn workspaces(cx: &App) -> Vec<Workspace> {
@@ -755,16 +785,70 @@ pub(crate) fn active_workspace_id(cx: &App) -> Option<WorkspaceId> {
 }
 
 pub(crate) fn workspace(cx: &App, id: WorkspaceId) -> Option<Workspace> {
+    with_workspace(cx, id, Clone::clone)
+}
+
+pub(crate) fn with_workspace<R>(
+    cx: &App,
+    id: WorkspaceId,
+    read: impl FnOnce(&Workspace) -> R,
+) -> Option<R> {
     manager(cx)?
         .workspaces
         .iter()
         .find(|workspace| workspace.id == id)
-        .cloned()
+        .map(read)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn pr530_focus_changes_persist_only_when_flushed(cx: &mut gpui::TestAppContext) {
+        let first = cx.add_window(|_, _| gpui::Empty);
+        let second = cx.add_window(|_, _| gpui::Empty);
+        cx.update(|cx| initialize_for_test(cx, Vec::new()));
+        for window in [first, second] {
+            cx.update(|cx| {
+                sync_window(
+                    cx,
+                    window.window_id(),
+                    None,
+                    vec![PathBuf::from(format!("/repo/{:?}", window.window_id()))],
+                    None,
+                )
+            });
+        }
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&writes);
+        cx.update(|cx| {
+            // Synchronous test sink makes every queued write observable.
+            cx.global::<WorkspaceManager>().state.borrow_mut().writer =
+                Some(Arc::new(WorkspaceWriter {
+                    pending: Mutex::new(None),
+                    wake: Condvar::new(),
+                    writing: Mutex::new(()),
+                    worker_running: AtomicBool::new(false),
+                    sink: Box::new(move |workspaces| lock(&recorded).push(workspaces.to_vec())),
+                }));
+            for window in [first, second, first, second] {
+                mark_window_active(cx, window.window_id());
+            }
+        });
+        assert!(
+            lock(&writes).is_empty(),
+            "focus alone must not rewrite session.json"
+        );
+        cx.update(flush_to_disk);
+        let writes = lock(&writes);
+        assert_eq!(writes.len(), 1);
+        let latest = writes[0]
+            .iter()
+            .max_by_key(|w| w.last_activation_order)
+            .unwrap();
+        assert_eq!(Some(latest.id), cx.update(|cx| active_workspace_id(cx)));
+    }
 
     fn path(value: &str) -> PathBuf {
         PathBuf::from(value)

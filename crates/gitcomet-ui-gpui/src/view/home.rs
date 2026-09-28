@@ -22,6 +22,17 @@ pub(super) const HOME_LIST_MAX_ROWS: usize = 8;
 pub(super) struct HomeRows {
     pub(super) workspaces: Vec<Workspace>,
     pub(super) repositories: Vec<PathBuf>,
+    inputs: Option<HomeRowsInputs>,
+}
+
+/// Repaints (including the search caret) reuse filtered rows. Only these
+/// inputs can change their contents or ordering.
+struct HomeRowsInputs {
+    workspace_revision: Option<u64>,
+    own: Option<WorkspaceId>,
+    query: String,
+    pinned: Vec<PathBuf>,
+    recent: Vec<PathBuf>,
 }
 
 impl HomeRows {
@@ -64,12 +75,7 @@ fn repo_name(path: &Path) -> String {
 pub(super) fn home_workspaces(cx: &App, own: Option<WorkspaceId>) -> Vec<Workspace> {
     let mut workspaces = crate::workspaces::workspaces(cx);
     workspaces.retain(|workspace| Some(workspace.id) != own);
-    workspaces.sort_by_key(|workspace| {
-        (
-            !workspace.restore_on_launch,
-            std::cmp::Reverse(workspace.last_activation_order),
-        )
-    });
+    crate::workspaces::sort_workspaces(&mut workspaces);
     workspaces
 }
 
@@ -166,12 +172,28 @@ impl GitCometView {
         HomeRows {
             workspaces,
             repositories,
+            inputs: Some(HomeRowsInputs {
+                workspace_revision: crate::workspaces::revision(cx),
+                own: self.workspace_id,
+                query: self.home_search_query.clone(),
+                pinned: self.home_pinned_repos.clone(),
+                recent: self.home_recent_repos.clone(),
+            }),
         }
     }
 
     /// Refresh the filtered rows and keep a row selected while any exist.
     pub(super) fn sync_home_rows(&mut self, cx: &App) {
-        self.home_rows = self.compute_home_rows(cx);
+        let current = self.home_rows.inputs.as_ref().is_some_and(|inputs| {
+            inputs.workspace_revision == crate::workspaces::revision(cx)
+                && inputs.own == self.workspace_id
+                && inputs.query == self.home_search_query
+                && inputs.pinned == self.home_pinned_repos
+                && inputs.recent == self.home_recent_repos
+        });
+        if !current {
+            self.home_rows = self.compute_home_rows(cx);
+        }
         let count = self.home_rows.len();
         self.home_selected = (count > 0).then(|| self.home_selected.unwrap_or(0).min(count - 1));
     }

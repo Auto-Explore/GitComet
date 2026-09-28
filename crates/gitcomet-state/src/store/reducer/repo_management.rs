@@ -490,16 +490,17 @@ fn open_repo_with_mode(
 }
 
 pub(super) fn restore_session(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    _repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     open_repos: Vec<PathBuf>,
     active_repo: Option<PathBuf>,
 ) -> Vec<Effect> {
     let now = SystemTime::now();
-    repos.clear();
-    state.repos.clear();
-    state.active_repo = None;
+    // Startup may wait for the Git probe while a drop or forwarded open is
+    // already loading. Keep those tabs, handles and IDs; their replies are
+    // still in flight, and an explicit selection takes precedence over restore.
+    let live_active_repo = state.active_repo;
 
     let session_preferences = session::load_repo_session_preferences();
     let default_history_mode = session_preferences.default_history_mode.unwrap_or_default();
@@ -509,7 +510,11 @@ pub(super) fn restore_session(
 
     let open_repos = dedup_paths_in_order(open_repos);
     let mut effects = Vec::with_capacity(4);
-    let mut seen_workdirs: FxHashSet<PathBuf> = FxHashSet::default();
+    let mut seen_workdirs: FxHashSet<PathBuf> = state
+        .repos
+        .iter()
+        .map(|repo| repo.spec.workdir.clone())
+        .collect();
     seen_workdirs.reserve(open_repos.len());
 
     for path in open_repos.into_iter().map(normalize_repo_path) {
@@ -556,11 +561,9 @@ pub(super) fn restore_session(
         }
     }
 
-    state.active_repo = if let Some(active_repo_id) = active_repo_id {
-        Some(active_repo_id)
-    } else {
-        state.repos.last().map(|r| r.id)
-    };
+    state.active_repo = live_active_repo
+        .or(active_repo_id)
+        .or_else(|| state.repos.last().map(|r| r.id));
     if let Some(active_repo_id) = state.active_repo
         && let Some(repo_state) = state
             .repos
@@ -1464,11 +1467,9 @@ pub(super) fn repo_opened_err(
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
-    let failures = state
-        .repo_open_failures
-        .entry(spec.workdir.clone())
-        .or_default();
-    *failures = failures.wrapping_add(1);
+    state.repo_open_failure_revision += 1;
+    Arc::make_mut(&mut state.repo_open_failures)
+        .insert(spec.workdir.clone(), state.repo_open_failure_revision);
     let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository);
     if not_a_repository || provisional_external_drop {
         let message = if not_a_repository {

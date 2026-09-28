@@ -746,9 +746,12 @@ impl Render for RepoTabsBarView {
         // Tabs are transparent, so a label fading out has to land on whatever
         // is actually behind it: the bar for an idle tab, the content strip
         // for the active one.
-        let workspace_color =
-            crate::workspaces::workspace_for_window(cx, window.window_handle().window_id())
-                .and_then(|workspace| workspace.color);
+        let workspace_color = crate::workspaces::with_workspace_for_window(
+            cx,
+            window.window_handle().window_id(),
+            |workspace| workspace.color,
+        )
+        .flatten();
         let strip_bg = crate::view::chrome::title_bar_background(
             theme,
             window.is_window_active(),

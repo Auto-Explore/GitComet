@@ -125,13 +125,13 @@ pub(crate) enum StartResult {
 }
 
 pub(crate) struct PrimaryBrowserInstance {
-    requests: Receiver<BrowserOpenRequest>,
+    requests: Option<Receiver<BrowserOpenRequest>>,
     _server: BrowserInstanceServer,
 }
 
 impl PrimaryBrowserInstance {
-    pub(crate) fn requests(&self) -> Receiver<BrowserOpenRequest> {
-        self.requests.clone()
+    pub(crate) fn take_requests(&mut self) -> Option<Receiver<BrowserOpenRequest>> {
+        self.requests.take()
     }
 }
 
@@ -154,6 +154,10 @@ enum BrowserInstanceClaim {
 impl Drop for BrowserInstanceServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        // Wake the blocking accept without periodic idle polling. The server
+        // checks `stop` before reading this connection.
+        let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, self.descriptor.port);
+        let _ = TcpStream::connect_timeout(&address.into(), CONNECT_TIMEOUT);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -176,7 +180,7 @@ pub(crate) fn normalize_browser_path(path: Option<PathBuf>) -> Option<PathBuf> {
         } else {
             path
         };
-        absolute.canonicalize().unwrap_or(absolute)
+        gitcomet_core::path_utils::canonicalize_or_original(absolute)
     })
 }
 
@@ -283,7 +287,6 @@ fn start_primary(
     port: u16,
     claim: fs::File,
 ) -> io::Result<StartResult> {
-    listener.set_nonblocking(true)?;
     let descriptor = InstanceDescriptor {
         version: PROTOCOL_VERSION,
         port,
@@ -301,7 +304,7 @@ fn start_primary(
         .spawn(move || server_loop(listener, server_descriptor, requests_tx, server_stop))?;
 
     Ok(StartResult::Primary(PrimaryBrowserInstance {
-        requests: requests_rx,
+        requests: Some(requests_rx),
         _server: BrowserInstanceServer {
             descriptor_path: descriptor_path.to_path_buf(),
             descriptor,
@@ -321,6 +324,9 @@ fn server_loop(
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, _address)) => {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
                 let _ = handle_connection(stream, &descriptor, &requests);
             }
             Err(err) if accept_error_is_retryable(&err) => {
@@ -344,8 +350,6 @@ fn handle_connection(
     descriptor: &InstanceDescriptor,
     requests: &Sender<BrowserOpenRequest>,
 ) -> io::Result<()> {
-    // macOS and Windows inherit the listener's non-blocking mode on accept,
-    // which would make reads fail with WouldBlock and ignore the timeout.
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -498,6 +502,65 @@ fn candidate_ports(path: &Path) -> impl Iterator<Item = u16> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn pr530_broker_rejects_requests_after_ui_receiver_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let descriptor = dir.path().join("instance.json");
+        let StartResult::Primary(mut primary) = start_or_forward_at(
+            &descriptor,
+            request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
+        )
+        .unwrap() else {
+            panic!("expected primary")
+        };
+        drop(primary.take_requests().unwrap());
+        let descriptor = read_descriptor(&descriptor).unwrap();
+        assert!(
+            forward_request(
+                &descriptor,
+                &request(
+                    PathBuf::from("after-quit"),
+                    BrowserOpenTarget::ExistingWindow,
+                )
+            )
+            .is_err(),
+            "a request with no UI consumer must not be acknowledged"
+        );
+    }
+
+    #[test]
+    fn pr530_idle_broker_shuts_down_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let descriptor = dir.path().join("instance.json");
+        let primary = start_or_forward_at(
+            &descriptor,
+            request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
+            CLAIM_WAIT_TIMEOUT,
+        )
+        .unwrap();
+        let started = Instant::now();
+        drop(primary);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!descriptor.exists());
+    }
+
+    #[test]
+    fn pr530_browser_path_uses_shared_normalization() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            normalize_browser_path(Some(dir.path().to_path_buf())),
+            Some(gitcomet_core::path_utils::canonicalize_or_original(
+                dir.path().to_path_buf()
+            ))
+        );
+        let relative = PathBuf::from("missing-browser-repository");
+        assert_eq!(
+            normalize_browser_path(Some(relative.clone())),
+            Some(std::env::current_dir().unwrap().join(relative))
+        );
+    }
+
     fn request(path: PathBuf, target: BrowserOpenTarget) -> BrowserOpenRequest {
         BrowserOpenRequest {
             path: Some(path),
@@ -521,7 +584,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor = dir.path().join("instance.json");
         let path = dir.path().join("repo");
-        let primary = match start_or_forward_at(
+        let mut primary = match start_or_forward_at(
             &descriptor,
             request(path.clone(), BrowserOpenTarget::ExistingWindow),
             CLAIM_WAIT_TIMEOUT,
@@ -541,7 +604,8 @@ mod tests {
             .expect("forward request"),
             StartResult::Forwarded
         ));
-        let received = smol::block_on(primary.requests().recv()).expect("forwarded request");
+        let received =
+            smol::block_on(primary.take_requests().unwrap().recv()).expect("forwarded request");
         assert_eq!(received.path.as_deref(), Some(path.as_path()));
         assert_eq!(received.target, BrowserOpenTarget::NewWindow);
     }
@@ -554,7 +618,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor = dir.path().join("instance.json");
         let path = PathBuf::from(std::ffi::OsString::from_vec(b"repo-\xff".to_vec()));
-        let primary = match start_or_forward_at(
+        let mut primary = match start_or_forward_at(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
             CLAIM_WAIT_TIMEOUT,
@@ -574,7 +638,8 @@ mod tests {
             .expect("forward non-UTF-8 path"),
             StartResult::Forwarded
         ));
-        let received = smol::block_on(primary.requests().recv()).expect("forwarded request");
+        let received =
+            smol::block_on(primary.take_requests().unwrap().recv()).expect("forwarded request");
         assert_eq!(
             received.path.expect("path").as_os_str().as_bytes(),
             path.as_os_str().as_bytes()
@@ -595,7 +660,7 @@ mod tests {
             b'o' as u16,
             0xd800,
         ]));
-        let primary = match start_or_forward_at(
+        let mut primary = match start_or_forward_at(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
             CLAIM_WAIT_TIMEOUT,
@@ -615,7 +680,8 @@ mod tests {
             .expect("forward Windows path"),
             StartResult::Forwarded
         ));
-        let received = smol::block_on(primary.requests().recv()).expect("forwarded request");
+        let received =
+            smol::block_on(primary.take_requests().unwrap().recv()).expect("forwarded request");
         assert_eq!(
             received
                 .path
@@ -698,7 +764,7 @@ mod tests {
         );
         assert!(!descriptor_path.exists());
 
-        let StartResult::Primary(primary) =
+        let StartResult::Primary(mut primary) =
             start_primary(&descriptor_path, listener, port, claim).expect("publish primary")
         else {
             panic!("publishing unexpectedly forwarded");
@@ -711,7 +777,11 @@ mod tests {
             StartResult::Forwarded
         ));
         second.join().expect("join second broker thread");
-        let received = primary.requests().try_recv().expect("forwarded request");
+        let received = primary
+            .take_requests()
+            .unwrap()
+            .try_recv()
+            .expect("forwarded request");
         assert_eq!(received.path, Some(PathBuf::from("second")));
         assert_eq!(received.target, BrowserOpenTarget::ExistingWindow);
     }
@@ -810,8 +880,8 @@ mod tests {
         drop(primary);
     }
 
-    // Guards against WouldBlock on macOS and Windows, where accepted sockets
-    // inherit the listener's non-blocking mode and read timeouts do not apply.
+    // Guards against WouldBlock when accepted sockets are non-blocking and
+    // read timeouts would otherwise be ignored.
     #[test]
     fn connection_handler_waits_for_a_request_split_across_writes() {
         let listener =
@@ -843,7 +913,7 @@ mod tests {
         });
 
         let (stream, _address) = listener.accept().expect("accept");
-        // What macOS and Windows hand out from start_primary's listener.
+        // Read timeouts must also work if a caller supplies a non-blocking socket.
         stream.set_nonblocking(true).expect("non-blocking stream");
         let (requests_tx, requests_rx) = smol::channel::unbounded();
         handle_connection(stream, &descriptor, &requests_tx).expect("serve split request");

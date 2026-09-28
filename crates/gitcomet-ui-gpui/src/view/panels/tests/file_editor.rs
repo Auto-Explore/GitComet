@@ -2003,6 +2003,125 @@ fn hold_editor_save_receipt(
     send
 }
 
+#[gpui::test]
+fn pr530_newer_save_result_supersedes_older_failure(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    for newest_finishes_first in [false, true] {
+        for newest_succeeds in [false, true] {
+            let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+            let (view, cx) = cx.add_window_view(|window, cx| {
+                super::super::GitCometView::new(store, events, None, window, cx)
+            });
+            let directory = tempfile::tempdir().unwrap();
+            let workdir = directory.path().canonicalize().unwrap();
+            let file = PathBuf::from("main.rs");
+            let repo_id = gitcomet_state::model::RepoId(980);
+            std::fs::write(workdir.join(&file), "original\n").unwrap();
+            let (_, older) = request_action_with_dirty_auto_saved_buffer(
+                cx,
+                &view,
+                editor_state(repo_id, &workdir, &file),
+                |id, _| UnsavedFileEditsAction::CloseWindow(id),
+            );
+            let (newer, received) = smol::channel::bounded(1);
+            cx.update(|_, app| {
+                view.update(app, |view, cx| {
+                    // Keep the close waiter out of this receipt-ordering test.
+                    view.pending_unsaved_file_edits_flush = None;
+                    view.pending_file_edits_action = None;
+                    view.main_pane.update(cx, |pane, cx| {
+                        pane.file_editor_pending_saves
+                            .get_mut(&(repo_id, file.clone()))
+                            .unwrap()
+                            .completions
+                            .push(received);
+                        if newest_finishes_first {
+                            newer.try_send(newest_succeeds).unwrap();
+                            pane.settle_file_editor_saves(cx);
+                            assert!(!pane.file_editor_pending_saves.is_empty());
+                            older.try_send(false).unwrap();
+                        } else {
+                            older.try_send(false).unwrap();
+                            pane.settle_file_editor_saves(cx);
+                            newer.try_send(newest_succeeds).unwrap();
+                        }
+                        pane.settle_file_editor_saves(cx);
+                        assert!(pane.file_editor_pending_saves.is_empty());
+                        assert_eq!(pane.file_editor_dirty, !newest_succeeds);
+                        assert_eq!(pane.file_editor_failed_saves.is_empty(), newest_succeeds);
+                        assert_eq!(pane.unsaved_file_edit_keys().is_empty(), newest_succeeds);
+                    });
+                })
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn pr530_close_requested_during_move_drain_is_retried(cx: &mut gpui::TestAppContext) {
+    check_shutdown_requested_during_move_drain(cx, false);
+}
+
+#[gpui::test]
+fn pr530_quit_requested_during_move_drain_is_retried(cx: &mut gpui::TestAppContext) {
+    check_shutdown_requested_during_move_drain(cx, true);
+}
+
+fn check_shutdown_requested_during_move_drain(cx: &mut gpui::TestAppContext, quit: bool) {
+    let _guard = lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_, app| crate::app::install_app_shortcuts_for_test(app, backend));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let file = PathBuf::from("main.rs");
+    let repo_id = gitcomet_state::model::RepoId(981);
+    std::fs::write(workdir.join(&file), "original\n").unwrap();
+    let (_, completion) = request_action_with_dirty_auto_saved_buffer(
+        cx,
+        &view,
+        editor_state(repo_id, &workdir, &file),
+        |window_id, _| UnsavedFileEditsAction::MoveRepo {
+            window_id,
+            repo_id,
+            path: workdir.clone(),
+            target_workspace: None,
+        },
+    );
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            if quit {
+                assert!(view.request_quit_unsaved_file_edits_prompt(cx));
+            } else {
+                assert!(view.request_close_window_or_warn(window.window_handle().window_id(), cx));
+            }
+        })
+    });
+    completion.try_send(true).unwrap();
+    advance_file_edit_drain(cx, std::time::Duration::from_millis(100));
+    cx.cx.update(|app| {
+        if quit {
+            // The test platform stubs quit; the retry must leave this window in
+            // place rather than moving its repository to a newly opened window.
+            assert_eq!(app.windows().len(), 1);
+            view.update(app, |view, cx| {
+                assert!(view.pending_file_edits_action.is_none());
+                assert!(!view.request_quit_unsaved_file_edits_prompt(cx));
+                assert_eq!(view.state.repos[0].id, repo_id);
+            });
+        } else {
+            assert!(
+                app.windows().is_empty(),
+                "the close must supersede the move"
+            );
+        }
+    });
+}
+
 fn check_move_waits_for_existing_saves(
     cx: &mut gpui::TestAppContext,
     auto_save: bool,
@@ -2338,6 +2457,28 @@ fn check_discard_after_save_timeout(
         }
     });
     if matches!(action, UnsavedFileEditsAction::MoveRepo { .. }) {
+        advance_file_edit_drain(cx, std::time::Duration::from_secs(6));
+        cx.update(|_, app| {
+            let view = view.read(app);
+            assert!(
+                view.pending_unsaved_file_edits_prompt.is_some()
+                    || view
+                        .popover_host
+                        .read(app)
+                        .showing_unsaved_file_edits_prompt(),
+                "a discarded write that still blocks a move must show a timeout prompt"
+            );
+        });
+        cx.update(|_, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| {
+                view.update(cx, |view, cx| {
+                    view.resolve_unsaved_file_edits(action.clone(), false, cx)
+                });
+                host.close_popover(cx);
+            });
+        });
+        cx.run_until_parked();
         // Even a failed receipt releases the move once recovery was discarded.
         completion.try_send(false).unwrap();
         advance_file_edit_drain(cx, std::time::Duration::from_millis(50));

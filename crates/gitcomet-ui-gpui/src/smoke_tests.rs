@@ -4317,6 +4317,12 @@ fn repo_tab_strip_never_renders_scroll_arrows(cx: &mut gpui::TestAppContext) {
                 .join(format!("repository-number-{ix}"))
         })
         .collect();
+    // Restore preserves already-open tabs. Close the roomy fixture before
+    // replacing it with the dense one.
+    store_for_test.dispatch(Msg::CloseRepos {
+        repo_ids: roomy_repo_ids,
+        activate_after: None,
+    });
     let dense_repo_ids = restore_session_and_draw(cx, &store_for_test, view.clone(), repos);
     sync_view_for_tests(cx, &view);
 

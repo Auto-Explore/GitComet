@@ -322,12 +322,7 @@ fn workspace_rows(
     mut workspaces: Vec<session::Workspace>,
     sort: RepoPickerSort,
 ) -> Vec<SortableRow> {
-    workspaces.sort_by_key(|workspace| {
-        (
-            !workspace.restore_on_launch,
-            std::cmp::Reverse(workspace.last_activation_order),
-        )
-    });
+    crate::workspaces::sort_workspaces(&mut workspaces);
     let mut rows = workspaces
         .into_iter()
         .enumerate()

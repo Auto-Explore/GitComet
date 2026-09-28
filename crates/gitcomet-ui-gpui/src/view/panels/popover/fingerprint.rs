@@ -751,6 +751,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::UnsavedFileEditsConfirm(prompt) => {
             68u8.hash(hasher);
             prompt.action.hash(hasher);
+            prompt.waiting_for_writes.hash(hasher);
             prompt.files.hash(hasher);
         }
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {

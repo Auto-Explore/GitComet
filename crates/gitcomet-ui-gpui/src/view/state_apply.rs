@@ -85,6 +85,11 @@ impl GitCometView {
                     .unwrap_or_default()
                     <= pending.failure_revision
         });
+        if !self.state.repo_open_failures.is_empty() {
+            self.store.dispatch(Msg::AcknowledgeRepoOpenFailures {
+                through_revision: self.state.repo_open_failure_revision,
+            });
+        }
         if self
             .pending_repo_open_active
             .as_ref()
@@ -182,9 +187,12 @@ impl GitCometView {
         if self.view_mode != GitCometViewMode::Normal {
             return;
         }
-        let title = crate::workspaces::workspace_for_window(cx, self.window_handle.window_id())
-            .map(|workspace| format!("{} — GitComet", workspace.display_name()))
-            .unwrap_or_else(|| "GitComet".to_string());
+        let title = crate::workspaces::with_workspace_for_window(
+            cx,
+            self.window_handle.window_id(),
+            |workspace| format!("{} — GitComet", workspace.display_name()),
+        )
+        .unwrap_or_else(|| "GitComet".to_string());
         if self.native_window_title != title {
             self.native_window_title.clone_from(&title);
             let window_handle = self.window_handle;
@@ -201,6 +209,26 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        let workspace_membership_changed = self.state.active_repo != next.active_repo
+            || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
+            || !self
+                .state
+                .repos
+                .iter()
+                .map(|repo| {
+                    (
+                        repo.id,
+                        &repo.spec.workdir,
+                        repo.is_provisional_external_drop_open(),
+                    )
+                })
+                .eq(next.repos.iter().map(|repo| {
+                    (
+                        repo.id,
+                        &repo.spec.workdir,
+                        repo.is_provisional_external_drop_open(),
+                    )
+                }));
         let git_runtime_changed = self.state.git_runtime != next.git_runtime;
         let prev_git_runtime_available = self.state.git_runtime.is_available();
         let prev_had_repos = !self.state.repos.is_empty();
@@ -559,7 +587,9 @@ impl GitCometView {
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
 
-        self.sync_workspace_and_registry(cx);
+        if workspace_membership_changed {
+            self.sync_workspace_and_registry(cx);
+        }
 
         git_runtime_changed
             || prev_banner_error != next_banner_error

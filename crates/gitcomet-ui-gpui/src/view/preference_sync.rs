@@ -193,11 +193,15 @@ impl GitCometView {
     /// Re-read this window's workspace theme override from the manager.
     /// An unknown key (for example a deleted user theme) counts as no override.
     pub(crate) fn sync_workspace_theme_override(&mut self, cx: &mut gpui::Context<Self>) {
-        let mode = self
-            .workspace_id
-            .and_then(|id| crate::workspaces::workspace(cx, id))
-            .and_then(|workspace| workspace.theme_mode)
-            .and_then(|key| ThemeMode::from_key(&key));
+        let mode = self.workspace_id.and_then(|id| {
+            crate::workspaces::with_workspace(cx, id, |workspace| {
+                workspace
+                    .theme_mode
+                    .as_deref()
+                    .and_then(ThemeMode::from_key)
+            })
+            .flatten()
+        });
         if self.workspace_theme_mode == mode {
             return;
         }

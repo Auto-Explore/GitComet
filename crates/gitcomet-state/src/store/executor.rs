@@ -52,7 +52,6 @@ pub(super) fn metadata_worker_threads() -> usize {
 #[derive(Clone, Copy)]
 pub(super) enum StoreExecutorPool {
     Primary,
-    RepoLoad,
     Metadata,
     Signatures,
     SessionPersist,
@@ -181,16 +180,12 @@ impl TaskExecutor {
         }
 
         static PRIMARY: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
-        static REPO_LOAD: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SIGNATURES: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
         let tx = match pool {
             StoreExecutorPool::Primary => sender_for(&PRIMARY, "gitcomet-store-primary", threads),
-            StoreExecutorPool::RepoLoad => {
-                sender_for(&REPO_LOAD, "gitcomet-store-repo-load", threads)
-            }
             StoreExecutorPool::Signatures => {
                 sender_for(&SIGNATURES, "gitcomet-store-signatures", threads)
             }

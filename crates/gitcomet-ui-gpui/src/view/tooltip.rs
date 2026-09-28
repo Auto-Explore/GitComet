@@ -176,7 +176,9 @@ impl GitCometView {
         let seq = self.workspace_persist_seq;
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(250)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
                 let _ = view.update(cx, |this, cx| {
                     if this.workspace_persist_seq == seq {
                         crate::workspaces::persist_unsaved_placement(cx);
@@ -206,7 +208,9 @@ impl GitCometView {
         let seq = self.ui_settings_persist_seq;
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(250)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
                 let size = view
                     .update(cx, |this, _cx| {
                         if this.ui_settings_persist_seq != seq {
@@ -220,10 +224,10 @@ impl GitCometView {
                     .ok()
                     .flatten();
                 if let Some((width, height)) = size {
-                    let _ = smol::unblock(move || {
-                        session::persist_mergetool_window_size(width, height)
-                    })
-                    .await;
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { session::persist_mergetool_window_size(width, height) })
+                        .await;
                 }
             },
         )
@@ -246,7 +250,7 @@ impl GitCometView {
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(250)).await;
+                cx.background_executor().timer(Duration::from_millis(250)).await;
                 let settings = view
                     .update(cx, |this, cx| {
                         if this.ui_settings_persist_seq != seq {
@@ -402,7 +406,9 @@ impl GitCometView {
                     return;
                 };
 
-                let _ = smol::unblock(move || session::persist_ui_settings(settings)).await;
+                let _ = cx.background_executor().spawn(async move {
+                    session::persist_ui_settings(settings)
+                }).await;
             },
         )
         .detach();

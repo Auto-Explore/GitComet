@@ -964,18 +964,23 @@ impl MainPaneView {
             .file_editor_pending_saves
             .iter_mut()
             .filter_map(|(key, save)| {
-                save.completions
-                    .retain(|completion| match completion.try_recv() {
+                // Consume receipts in dispatch order: a newer successful save
+                // supersedes an older error, even if its receipt becomes
+                // visible first.
+                let mut completed = 0;
+                for completion in &save.completions {
+                    match completion.try_recv() {
                         Ok(succeeded) => {
-                            save.failed |= !succeeded;
-                            false
+                            save.failed = !succeeded;
                         }
-                        Err(smol::channel::TryRecvError::Empty) => true,
+                        Err(smol::channel::TryRecvError::Empty) => break,
                         Err(smol::channel::TryRecvError::Closed) => {
                             save.failed = true;
-                            false
                         }
-                    });
+                    }
+                    completed += 1;
+                }
+                save.completions.drain(..completed);
                 save.completions.is_empty().then(|| key.clone())
             })
             .collect();
@@ -1312,6 +1317,23 @@ impl MainPaneView {
         self.unsaved_file_edit_paths(repo_id)
             .into_iter()
             .map(|path| SharedString::from(path.display().to_string()))
+            .collect()
+    }
+
+    pub(in crate::view) fn pending_file_edit_labels_for_repo(
+        &self,
+        repo_id: RepoId,
+    ) -> Vec<SharedString> {
+        let mut paths: Vec<_> = self
+            .file_editor_pending_saves
+            .keys()
+            .filter(|(id, _)| *id == repo_id)
+            .map(|(_, path)| path)
+            .collect();
+        paths.sort();
+        paths
+            .into_iter()
+            .map(|path| path.display().to_string().into())
             .collect()
     }
 

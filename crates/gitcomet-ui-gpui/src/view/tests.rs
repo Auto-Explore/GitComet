@@ -6656,7 +6656,16 @@ fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
         })
     });
     for _ in 0..4 {
+        let paths_before =
+            cx.update(|_, app| view.read(app).persisted_workspace_repo_paths.as_ptr());
         apply(cx);
+        cx.update(|_, app| {
+            assert_eq!(
+                paths_before,
+                view.read(app).persisted_workspace_repo_paths.as_ptr(),
+                "an unchanged store tick must reuse the workspace membership"
+            )
+        });
     }
 
     assert_eq!(
@@ -6897,6 +6906,42 @@ fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Wor
     workspace.custom_name = Some(name.to_string());
     workspace.restore_on_launch = false;
     workspace
+}
+
+#[gpui::test]
+fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let workspace = named_saved_workspace("Saved", "/tmp/pr530-home");
+    let id = workspace.id;
+    let (view, cx) = home_view_with(cx, vec![workspace], Vec::new());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.sync_home_rows(cx);
+            let rows = view.home_rows.workspaces.as_ptr();
+            view.sync_home_rows(cx);
+            assert_eq!(
+                rows,
+                view.home_rows.workspaces.as_ptr(),
+                "a repaint rebuilt Home rows"
+            );
+        });
+        crate::workspaces::set_workspace_name(app, id, "Renamed");
+        view.update(app, |view, cx| {
+            view.sync_home_rows(cx);
+            assert_eq!(view.home_rows.workspaces[0].display_name(), "Renamed");
+            view.home_search_query = "missing".to_string();
+            view.sync_home_rows(cx);
+            assert!(view.home_rows.workspaces.is_empty());
+            view.home_search_query.clear();
+            view.home_recent_repos
+                .push(PathBuf::from("/tmp/pr530-recent"));
+            view.sync_home_rows(cx);
+            assert_eq!(
+                view.home_rows.repositories,
+                vec![PathBuf::from("/tmp/pr530-recent")]
+            );
+        });
+    });
 }
 
 #[gpui::test]

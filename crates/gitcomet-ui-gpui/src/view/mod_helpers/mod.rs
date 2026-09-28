@@ -1147,6 +1147,7 @@ pub struct GitCometView {
     /// Waits for the dispatched writes to drain before the close/quit it was
     /// asked to retry.
     pub(super) pending_unsaved_file_edits_flush: Option<gpui::Task<()>>,
+    pub(super) pending_file_edits_action: Option<UnsavedFileEditsAction>,
     pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_branch_exists_prompt: Option<BranchExistsPromptState>,

@@ -224,6 +224,11 @@ pub enum Msg {
     /// The candidate is not persisted until the backend has opened it
     /// successfully, and any open failure discards its temporary tab.
     OpenRepoFromExternalDrop(PathBuf),
+    /// Release failure receipts already observed by the window, retaining any
+    /// newer failures that arrived while the acknowledgement was queued.
+    AcknowledgeRepoOpenFailures {
+        through_revision: u64,
+    },
     RestoreSession {
         open_repos: Vec<PathBuf>,
         active_repo: Option<PathBuf>,

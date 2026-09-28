@@ -671,13 +671,16 @@ impl Render for TitleBarView {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.40 } else { 0.30 },
         );
-        let workspace =
-            crate::workspaces::workspace_for_window(cx, window.window_handle().window_id());
+        let workspace = crate::workspaces::with_workspace_for_window(
+            cx,
+            window.window_handle().window_id(),
+            |workspace| (workspace.display_name(), workspace.color),
+        );
         let workspace_chip_visible = workspace.is_some();
         let bar_bg = title_bar_background(
             theme,
             window.is_window_active(),
-            workspace.as_ref().and_then(|group| group.color),
+            workspace.as_ref().and_then(|(_, color)| *color),
         );
         let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
@@ -710,13 +713,12 @@ impl Render for TitleBarView {
         // The group name and color identify this window beside the repository
         // tabs and open the repository picker.
         let repo_picker_open = self.repo_picker_open;
+        let workspace_dot =
+            workspace_color(workspace.as_ref().and_then(|(_, color)| *color), theme);
         let workspace_label: SharedString = workspace
-            .as_ref()
-            .map(|group| group.display_name())
+            .map(|(name, _)| name)
             .unwrap_or_else(|| "Workspace".to_string())
             .into();
-        let workspace_dot =
-            workspace_color(workspace.as_ref().and_then(|group| group.color), theme);
         let workspace_tooltip: SharedString = format!("Workspace: {workspace_label}").into();
         let repo_picker_toggle_bounds_for_prepaint = Rc::clone(&self.repo_picker_toggle_bounds);
         let repo_picker_toggle_bounds_for_click = Rc::clone(&self.repo_picker_toggle_bounds);

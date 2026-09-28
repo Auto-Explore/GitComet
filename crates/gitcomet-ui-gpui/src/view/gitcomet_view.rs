@@ -1152,11 +1152,7 @@ impl GitCometView {
         if initial_repository_launch_mode == InitialRepositoryLaunchMode::OpenExplicitly
             && let Some(path) = initial_path.as_ref()
         {
-            let failure_revision = initial_store_state
-                .repo_open_failures
-                .get(path)
-                .copied()
-                .unwrap_or_default();
+            let failure_revision = initial_store_state.repo_open_failure_revision;
             pending_repo_open_reservations.insert(
                 path.clone(),
                 PendingRepoOpen {
@@ -1768,6 +1764,7 @@ impl GitCometView {
             pending_terminal_shutdown_prompt: None,
             pending_unsaved_file_edits_prompt: None,
             pending_unsaved_file_edits_flush: None,
+            pending_file_edits_action: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
             pending_branch_exists_prompt: initial_state.branch_exists_prompt.clone(),
@@ -1811,7 +1808,7 @@ impl GitCometView {
 
     pub(crate) fn run_process_startup_hooks(&mut self, cx: &mut gpui::Context<Self>) {
         #[cfg(test)]
-        crate::app::record_startup_hook_invocation_for_test(cx);
+        crate::app::record_startup_hook_invocation_for_test(cx, self.window_handle.window_id());
         self.maybe_show_user_survey_on_startup(cx);
         self.maybe_check_for_updates_on_startup(cx);
     }

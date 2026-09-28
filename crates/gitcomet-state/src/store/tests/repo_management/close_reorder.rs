@@ -121,7 +121,7 @@ fn moving_repo_out_removes_it_without_recording_a_recent_close() {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::OpenRepo(PathBuf::from(format!("/tmp/{name}"))),
+            Msg::OpenRepo(std::env::temp_dir().join(name)),
         );
     }
 
@@ -139,7 +139,7 @@ fn moving_repo_out_removes_it_without_recording_a_recent_close() {
             .iter()
             .map(|repo| repo.spec.workdir.clone())
             .collect::<Vec<_>>(),
-        vec![PathBuf::from("/tmp/repo1")]
+        vec![std::env::temp_dir().join("repo1")]
     );
     assert_eq!(state.active_repo, Some(RepoId(1)));
     assert!(
