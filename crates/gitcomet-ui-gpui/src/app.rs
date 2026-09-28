@@ -2037,9 +2037,12 @@ fn bind_text_input_keys(cx: &mut App) {
             Some("TextInput"),
         ),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
-        KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
-        // Registered after the generic binding so the history find bar's
-        // input steps back through matches instead of swallowing the key.
+        KeyBinding::new(
+            "shift-enter",
+            crate::kit::ShiftEnter,
+            Some("TextInput && !HistoryFind"),
+        ),
+        // Disjoint scopes keep this independent of registration order.
         KeyBinding::new(
             "shift-enter",
             HistoryFindPrevious,
@@ -2730,8 +2733,7 @@ mod tests {
     }
 
     /// The history find bar's input steps back through matches on
-    /// Shift-Enter. Its binding is registered after the generic `TextInput`
-    /// one so it wins inside the bar, while every other text input keeps
+    /// Shift-Enter, independently of binding order. Other text inputs keep
     /// `ShiftEnter`.
     #[gpui::test]
     fn history_find_text_input_shift_enter_resolves_to_previous_match(
@@ -2755,6 +2757,16 @@ mod tests {
                 app.clear_key_bindings();
                 bind_app_keys(app);
                 bind_text_input_keys(app);
+                // The scopes must work independently of registration order.
+                let reversed = app
+                    .key_bindings()
+                    .borrow()
+                    .bindings()
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                app.clear_key_bindings();
+                app.bind_keys(reversed);
                 let focus = view.update(app, |view, _cx| view.focus_handle());
                 window.focus(&focus, app);
                 let _ = window.draw(app);

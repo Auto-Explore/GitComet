@@ -2,12 +2,16 @@
 //! author, or SHA prefix, then step the selection between the matches. The
 //! bar itself is the shared [`components::QuickSearchBar`].
 
+use super::indexed_graph::IndexedGraph;
 use super::*;
 use components::QuickSearchStatus;
 use gitcomet_core::history_find::HistoryFindQuery;
+use gitcomet_core::history_index::HistoryIndex;
 use gitcomet_core::text_search::TextSearchOptions;
 use gitcomet_state::history_find::HistoryFindMsg;
+use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Weak;
 
 /// Quiet time after a keystroke before the query is searched and the first
 /// match selected. Row dimming follows every keystroke immediately; this only
@@ -31,28 +35,49 @@ pub(in crate::view) struct HistoryFind {
     jump_to_first: bool,
     /// The search last asked of the store, so a render does not re-send it
     /// while the reply is in flight.
-    requested: Option<(HistoryFindQuery, usize)>,
+    requested: Option<(FindRequest, u64)>,
+    /// Steps that cannot yet be answered by a streaming scan.
+    steps: VecDeque<bool>,
     matches: Option<(FindMatchesKey, Rc<FindMatches>)>,
-    /// The status last shown for an answered query. Held while a new query's
-    /// scan has nothing to report yet, so the count does not blink on every
-    /// keystroke.
-    status: Option<QuickSearchStatus>,
     /// Running while the user is still typing; see [`HISTORY_FIND_SETTLE_MS`].
     settling: Option<gpui::Task<()>>,
     _input_subscription: gpui::Subscription,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A weak identity reserves the allocation's address without retaining its data.
+/// Bare addresses can be reused after a page or graph has been replaced.
+struct FindIdentity<T>(Weak<T>);
+
+impl<T> From<&Arc<T>> for FindIdentity<T> {
+    fn from(value: &Arc<T>) -> Self {
+        Self(Arc::downgrade(value))
+    }
+}
+impl<T> PartialEq for FindIdentity<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+impl<T> Eq for FindIdentity<T> {}
+
+#[derive(Eq, PartialEq)]
+struct FindRequest {
+    repo_id: RepoId,
+    query: HistoryFindQuery,
+    index: FindIdentity<HistoryIndex>,
+}
+
+#[derive(Eq, PartialEq)]
 enum FindMatchesKey {
     Indexed {
-        /// The store's search; its match chunks only grow.
         generation: u64,
-        /// The displayed graph: its projection decides which raw rows show.
-        graph: usize,
+        graph: FindIdentity<IndexedGraph>,
     },
     Paged {
+        repo_id: RepoId,
         query: HistoryFindQuery,
-        page: usize,
+        page: FindIdentity<LogPage>,
+        stashes_rev: u64,
         visible: usize,
     },
 }
@@ -132,7 +157,7 @@ impl HistoryView {
                 jump_to_first: false,
                 requested: None,
                 matches: None,
-                status: None,
+                steps: VecDeque::new(),
                 settling: None,
                 _input_subscription: subscription,
             }
@@ -167,15 +192,8 @@ impl HistoryView {
         find.jump_to_first = false;
         find.matches = None;
         find.settling = None;
-        if find.requested.take().is_some()
-            && let Some(repo_id) = self.active_repo_id()
-        {
-            self.store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
-                repo_id,
-                query: None,
-                index: None,
-            }));
-        }
+        find.steps.clear();
+        self.stop_history_find_request();
         window.focus(&self.history_panel_focus_handle, cx);
         cx.notify();
     }
@@ -225,7 +243,7 @@ impl HistoryView {
         }
     }
 
-    fn set_history_find_query(&mut self, text: &str, jump_to_first: bool) {
+    pub(super) fn set_history_find_query(&mut self, text: &str, jump_to_first: bool) {
         let Some(find) = self.find.as_mut() else {
             return;
         };
@@ -236,6 +254,7 @@ impl HistoryView {
                 .as_ref()
                 .is_some_and(|query| query.regex_error().is_none());
         find.matches = None;
+        find.steps.clear();
     }
 
     /// A toggle was clicked: search again with `options` at once, selecting
@@ -280,62 +299,101 @@ impl HistoryView {
     /// Keep the store's scan in step with the query and the displayed index,
     /// then take the first-match jump a query edit asked for. Runs each render
     /// once typing has settled.
-    pub(super) fn sync_history_find(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn sync_history_find(&mut self, cx: &mut gpui::Context<Self>) -> bool {
         let Some(find) = self
             .find
             .as_ref()
             .filter(|find| find.open && find.settling.is_none())
         else {
-            return;
+            return false;
         };
-        let Some(repo_id) = self.active_repo_id() else {
-            return;
+        let Some(repo) = self.active_repo() else {
+            return false;
         };
+        let repo_id = repo.id;
+        let results = &repo.history_state.find;
+        let generation = results.generation();
         let index = self
             .indexed
             .presentation
             .as_ref()
             .filter(|shown| shown.key.repo_id == repo_id)
             .map(|shown| shown.graph.projection.index.clone());
-        // An invalid regex is never searched; like a blank query it only
-        // stops a search already asked for.
         let query = find
             .query
             .as_ref()
             .filter(|query| query.regex_error().is_none());
-        let wanted = query
-            .cloned()
-            .zip(index.clone())
-            .map(|(query, index)| (query, Arc::as_ptr(&index) as usize));
-        // The store drops an unfinished scan when repository loads are
-        // cancelled (a tab switch, a finished action), so the request is
-        // repeated whenever its answer is missing. The reducer ignores a
-        // repeat of a search it already has.
-        let unanswered = query.zip(index.as_ref()).is_some_and(|(query, index)| {
-            self.active_repo()
-                .is_some_and(|repo| !repo.history_state.find.is_for(query, index))
+        let wanted = query.zip(index.as_ref()).map(|(query, index)| FindRequest {
+            repo_id,
+            query: query.clone(),
+            index: index.into(),
         });
-        if wanted != find.requested || unanswered {
-            self.store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
-                repo_id,
-                query: wanted.as_ref().map(|(query, _)| query.clone()),
-                index,
-            }));
-            if let Some(find) = self.find.as_mut() {
-                find.requested = wanted;
+        let answered = query
+            .zip(index.as_ref())
+            .is_some_and(|(query, index)| results.is_for(query, index));
+        let changed = find.requested.as_ref().map(|(request, _)| request) != wanted.as_ref();
+        // A generation change distinguishes a cancelled search from the same
+        // snapshot waiting for its request to reach the store.
+        let interrupted = !answered
+            && find
+                .requested
+                .as_ref()
+                .is_some_and(|(_, sent_generation)| *sent_generation != generation);
+        if changed || interrupted {
+            if let Some(wanted) = wanted {
+                self.store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
+                    repo_id,
+                    query: Some(wanted.query.clone()),
+                    index,
+                }));
+                self.find.as_mut().unwrap().requested = Some((wanted, generation));
+            } else {
+                self.stop_history_find_request();
             }
+        } else if answered
+            && let Some((_, acknowledged)) =
+                self.find.as_mut().and_then(|find| find.requested.as_mut())
+        {
+            *acknowledged = generation;
         }
 
+        let mut moved = false;
         if self.find.as_ref().is_some_and(|find| find.jump_to_first)
             && let Some(matches) = self.history_find_matches()
-            && (!matches.visible.is_empty() || matches.complete)
+            && (!matches.visible.is_empty() || (matches.complete && !matches.failed))
         {
-            if let Some(find) = self.find.as_mut() {
-                find.jump_to_first = false;
-            }
+            self.find.as_mut().unwrap().jump_to_first = false;
             if let Some(&first) = matches.visible.first() {
                 self.select_history_find_match(first, cx);
+                moved = true;
             }
+        }
+        self.drive_history_find_steps(cx) || moved
+    }
+
+    fn stop_history_find_request(&mut self) {
+        if let Some((request, _)) = self.find.as_mut().and_then(|find| find.requested.take()) {
+            self.store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
+                repo_id: request.repo_id,
+                query: None,
+                index: None,
+            }));
+        }
+    }
+
+    pub(in crate::view) fn cancel_history_find_navigation(&mut self) {
+        if let Some(find) = self.find.as_mut() {
+            find.jump_to_first = false;
+            find.steps.clear();
+        }
+    }
+
+    pub(super) fn history_find_repo_changed(&mut self) {
+        self.stop_history_find_request();
+        self.cancel_history_find_navigation();
+        if let Some(find) = self.find.as_mut() {
+            find.matches = None;
+            find.settling = None;
         }
     }
 
@@ -364,7 +422,7 @@ impl HistoryView {
             }
             let key = FindMatchesKey::Indexed {
                 generation: results.generation(),
-                graph: Arc::as_ptr(&shown.graph) as usize,
+                graph: (&shown.graph).into(),
             };
             let find = self.find.as_mut()?;
             if find
@@ -404,8 +462,10 @@ impl HistoryView {
             .as_ref()
             .filter(|cache| cache.base.request.repo_id == repo_id)?;
         let key = FindMatchesKey::Paged {
+            repo_id,
             query: query.clone(),
-            page: Arc::as_ptr(&cache.page) as usize,
+            page: (&cache.page).into(),
+            stashes_rev: cache.base.request.stashes_rev,
             visible: cache.base.visible_indices.len(),
         };
         if let Some((cached, matches)) = self.find.as_ref().and_then(|find| find.matches.as_ref())
@@ -440,7 +500,11 @@ impl HistoryView {
     /// The selected commit's visible index, if a commit is selected and shown.
     fn history_find_selected_visible_ix(&self) -> Option<usize> {
         let repo = self.active_repo()?;
-        let selected = repo.history_state.selected_commit.as_ref()?;
+        let selected = match self.pending_history_selections.back() {
+            Some(HistoryPrimarySelection::Commit(id)) => id,
+            Some(_) => return None,
+            None => repo.history_state.selected_commit.as_ref()?,
+        };
         if let Some(shown) = self
             .indexed
             .presentation
@@ -453,13 +517,7 @@ impl HistoryView {
             .history_cache
             .as_ref()
             .filter(|cache| cache.base.request.repo_id == repo.id)?;
-        cache.base.visible_indices.iter().position(|commit_ix| {
-            cache
-                .page
-                .commits
-                .get(commit_ix)
-                .is_some_and(|commit| &commit.id == selected)
-        })
+        cache.base.visible_ix_by_commit.get(selected).copied()
     }
 
     /// Move the selection to the next (or previous) match after the selected
@@ -469,36 +527,69 @@ impl HistoryView {
         forward: bool,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(matches) = self.history_find_matches() else {
-            return false;
-        };
-        if matches.visible.is_empty() {
+        if self.history_find_query().is_none() {
             return false;
         }
-        if let Some(find) = self.find.as_mut() {
-            // Stepping takes over from the pending first-match jump.
-            find.jump_to_first = false;
+        if self
+            .history_find_matches()
+            .is_some_and(|matches| matches.failed && matches.visible.is_empty())
+        {
+            // Enter explicitly retries a failed read; renders never retry it
+            // on their own. Partial results remain navigable after a failure.
+            let find = self.find.as_mut().unwrap();
+            find.requested = None;
+            find.jump_to_first = true;
+            find.steps.clear();
+            cx.notify();
+            return true;
         }
-        let selected = self.history_find_selected_visible_ix();
-        let target = match (selected, forward) {
-            (Some(selected), true) => {
-                let next = matches.visible.partition_point(|&row| row <= selected);
-                matches.visible.get(next).or(matches.visible.first())
-            }
-            (Some(selected), false) => {
-                let prev = matches.visible.partition_point(|&row| row < selected);
-                prev.checked_sub(1)
-                    .and_then(|ix| matches.visible.get(ix))
-                    .or(matches.visible.last())
-            }
-            (None, true) => matches.visible.first(),
-            (None, false) => matches.visible.last(),
-        };
-        let Some(&target) = target else {
-            return false;
-        };
-        self.select_history_find_match(target, cx);
+        let find = self.find.as_mut().unwrap();
+        find.jump_to_first = false;
+        find.steps.push_back(forward);
+        self.drive_history_find_steps(cx);
         true
+    }
+
+    fn drive_history_find_steps(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        let mut moved = false;
+        while let Some(&forward) = self.find.as_ref().and_then(|find| find.steps.front()) {
+            let Some(matches) = self.history_find_matches() else {
+                break;
+            };
+            let selected = self.history_find_selected_visible_ix();
+            let wrap = if !matches.complete {
+                None
+            } else if forward {
+                matches.visible.first()
+            } else {
+                matches.visible.last()
+            };
+            let target = match (selected, forward) {
+                (Some(selected), true) => {
+                    let next = matches.visible.partition_point(|&row| row <= selected);
+                    matches.visible.get(next).or(wrap)
+                }
+                (Some(selected), false) => {
+                    let prev = matches.visible.partition_point(|&row| row < selected);
+                    prev.checked_sub(1)
+                        .and_then(|ix| matches.visible.get(ix))
+                        .or(wrap)
+                }
+                (None, true) => matches.visible.first(),
+                (None, false) => wrap,
+            }
+            .copied();
+            let Some(target) = target else {
+                if matches.complete {
+                    self.find.as_mut().unwrap().steps.clear();
+                }
+                break;
+            };
+            self.find.as_mut().unwrap().steps.pop_front();
+            self.select_history_find_match(target, cx);
+            moved = true;
+        }
+        moved
     }
 
     /// Select a match the way clicking its row would and bring it into view.
@@ -538,13 +629,9 @@ impl HistoryView {
             !matches.pending && (!matches.visible.is_empty() || matches.complete)
         });
         let Some(matches) = answered else {
-            return self
-                .find
-                .as_ref()
-                .and_then(|find| find.status)
-                .unwrap_or(QuickSearchStatus::Searching);
+            return QuickSearchStatus::Searching;
         };
-        let status = if matches.failed {
+        if matches.failed {
             QuickSearchStatus::Failed
         } else if matches.visible.is_empty() {
             QuickSearchStatus::NoMatches
@@ -556,11 +643,7 @@ impl HistoryView {
                 total: matches.visible.len(),
                 complete: matches.complete,
             }
-        };
-        if let Some(find) = self.find.as_mut() {
-            find.status = Some(status);
         }
-        status
     }
 
     pub(super) fn render_history_find(

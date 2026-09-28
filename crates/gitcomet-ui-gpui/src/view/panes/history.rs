@@ -1125,6 +1125,9 @@ pub(in super::super) struct HistoryView {
     signature_debounce: Option<gpui::Task<()>>,
     /// The Cmd-F find bar, created the first time it opens.
     find: Option<find::HistoryFind>,
+    // Inputs can arrive before the store publishes their selections. Keep the
+    // outstanding destinations so navigation starts from the latest intent.
+    pending_history_selections: std::collections::VecDeque<HistoryPrimarySelection>,
 }
 
 /// A hoverable sub-area of a history row. Both are painted on the canvas, so
@@ -1305,30 +1308,44 @@ impl HistoryView {
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
             let switched_repo = this.state.active_repo != next.active_repo;
-            // Badges repaint the rows without invalidating open refs menus.
-            let signatures_changed = this
-                .state
+            let previous_repo = this.active_repo();
+            let next_repo = next
                 .repos
                 .iter()
-                .find(|repo| Some(repo.id) == this.state.active_repo)
+                .find(|repo| Some(repo.id) == next.active_repo);
+            // Badges and find results repaint without invalidating refs menus.
+            let signatures_changed = previous_repo
                 .map(|repo| repo.history_state.commit_signatures_rev)
-                != next
-                    .repos
-                    .iter()
-                    .find(|repo| Some(repo.id) == next.active_repo)
-                    .map(|repo| repo.history_state.commit_signatures_rev);
+                != next_repo.map(|repo| repo.history_state.commit_signatures_rev);
             let find_changed = this.history_find_is_open()
-                && this
-                    .state
-                    .repos
+                && previous_repo.map(|repo| repo.history_state.find.rev)
+                    != next_repo.map(|repo| repo.history_state.find.rev);
+            let selection_revisions = |repo: &RepoState| {
+                (
+                    repo.history_state.selected_commit_rev,
+                    repo.history_state.worktree_selection_rev,
+                )
+            };
+            let selection_changed =
+                previous_repo.map(selection_revisions) != next_repo.map(selection_revisions);
+            if switched_repo {
+                this.history_find_repo_changed();
+                this.pending_history_selections.clear();
+            } else if selection_changed {
+                let selected = next_repo.and_then(|repo| history_primary_selection(repo, true));
+                // Snapshots can coalesce several selections. Retire every
+                // destination through the last one this snapshot acknowledges.
+                if let Some(ix) = this
+                    .pending_history_selections
                     .iter()
-                    .find(|repo| Some(repo.id) == this.state.active_repo)
-                    .map(|repo| repo.history_state.find.rev)
-                    != next
-                        .repos
-                        .iter()
-                        .find(|repo| Some(repo.id) == next.active_repo)
-                        .map(|repo| repo.history_state.find.rev);
+                    .rposition(|pending| Some(pending) == selected.as_ref())
+                {
+                    this.pending_history_selections.drain(..=ix);
+                } else {
+                    this.pending_history_selections.clear();
+                    this.cancel_history_find_navigation();
+                }
+            }
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
@@ -1445,6 +1462,7 @@ impl HistoryView {
             signature_viewport: None,
             signature_debounce: None,
             find: None,
+            pending_history_selections: Default::default(),
         }
     }
 
@@ -1700,6 +1718,8 @@ impl HistoryView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.cancel_history_find_navigation();
+        self.note_history_selection(repo_id, HistoryPrimarySelection::WorkingTree);
         self.store.dispatch(Msg::ClearCommitSelection { repo_id });
         let keep_file_view = self.state.file_browser_settings.follow_selected_commit
             && self.state.sidebar_mode == gitcomet_state::model::SidebarMode::Files
@@ -1853,6 +1873,10 @@ impl HistoryView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        if let Some(find) = &self.find {
+            find.input
+                .update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         cx.notify();
     }
 

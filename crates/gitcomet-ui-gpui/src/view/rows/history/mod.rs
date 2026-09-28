@@ -596,6 +596,11 @@ fn history_table_row(
                 } else {
                     CommitSelectMode::Single
                 };
+                this.cancel_history_find_navigation();
+                this.note_history_selection(
+                    repo_id,
+                    crate::view::panes::history::HistoryPrimarySelection::Commit(commit_id.clone()),
+                );
                 if this.select_indexed_commit(repo_id, commit_id.clone(), mode) {
                     cx.notify();
                     return;
@@ -823,6 +828,13 @@ fn worktree_uncommitted_history_row(
                 if !e.standard_click() {
                     return;
                 }
+                this.cancel_history_find_navigation();
+                this.note_history_selection(
+                    repo_id,
+                    crate::view::panes::history::HistoryPrimarySelection::Worktree(
+                        select_path.clone(),
+                    ),
+                );
                 this.store.dispatch(Msg::SelectWorktreeUncommitted {
                     repo_id,
                     path: select_path.clone(),

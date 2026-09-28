@@ -1794,6 +1794,11 @@ pub(super) fn history_commit_row_canvas(
                         // focus must still move to the clicked commit so the
                         // details pane matches the menu target. Outside the
                         // selection this collapses to the clicked commit.
+                        this.cancel_history_find_navigation();
+                        this.note_history_selection(
+                            repo_id,
+                            super::HistoryPrimarySelection::Commit(commit_id.clone()),
+                        );
                         this.store.dispatch(Msg::SelectCommitMulti {
                             repo_id,
                             commit_id: commit_id.clone(),

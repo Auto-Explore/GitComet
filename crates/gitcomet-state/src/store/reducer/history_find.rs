@@ -13,22 +13,29 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryFindMsg) -> Vec<Effect>
         HistoryFindMsg::Find { query, index, .. } => {
             if let (Some(query), Some(index)) = (&query, &index)
                 && find.is_for(query, index)
+                && find.error.is_none()
             {
                 return Vec::new();
             }
             find.cancellation.cancel();
             let seq = find.seq.wrapping_add(1);
             let rev = find.rev.wrapping_add(1);
+            let cache = if query.is_some() && index.is_some() {
+                Arc::clone(&find.cache)
+            } else {
+                Default::default()
+            };
             *find = HistoryFindState {
                 seq,
                 rev,
+                cache,
                 ..Default::default()
             };
             let (Some(query), Some(index)) = (query, index) else {
                 return Vec::new();
             };
             find.query = Some(query.clone());
-            find.index = Some(index.clone());
+            find.index = Some(Arc::downgrade(&index));
             if index.is_empty() {
                 find.done = true;
                 return Vec::new();
@@ -39,6 +46,7 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryFindMsg) -> Vec<Effect>
                 index,
                 query,
                 cancellation: find.cancellation.clone(),
+                cache: Arc::clone(&find.cache),
             })]
         }
         HistoryFindMsg::Found { seq, result, .. } => {
@@ -282,5 +290,47 @@ mod tests {
         let find = &state.repos[0].history_state.find;
         assert_eq!(find.match_rows().collect::<Vec<_>>().as_slice(), &[1]);
         assert!(find.error.is_some());
+    }
+
+    #[test]
+    fn a_failed_history_find_can_retry_the_same_query_and_index() {
+        let mut state = fixture();
+        let index = index(8);
+        let first = work(find(&mut state, "fix", &index));
+        let first_seq = first.seq;
+        reduce(
+            &mut state,
+            first.failed(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("transient read failure".into()),
+            )),
+        );
+        let retry = work(find(&mut state, "fix", &index));
+        assert_ne!(retry.seq, first_seq);
+        assert!(state.repos[0].history_state.find.error.is_none());
+        found(&mut state, retry.seq, vec![2], true);
+        assert_eq!(
+            state.repos[0]
+                .history_state
+                .find
+                .match_rows()
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn finished_history_find_does_not_keep_an_obsolete_index_alive() {
+        let mut state = fixture();
+        let index = index(8);
+        let weak = Arc::downgrade(&index);
+        let scan = work(find(&mut state, "fix", &index));
+        found(&mut state, scan.seq, vec![2], true);
+        drop(scan);
+        state.repos[0].bump_load_epoch();
+        drop(index);
+        assert!(
+            weak.upgrade().is_none(),
+            "inactive find results retain the entire index"
+        );
     }
 }

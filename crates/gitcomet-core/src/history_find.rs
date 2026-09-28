@@ -68,11 +68,32 @@ impl HistoryFindQuery {
     }
 
     pub fn matches(&self, commit: &Commit) -> bool {
+        self.matches_fields(commit.id.as_ref(), &commit.summary, &commit.author)
+    }
+
+    /// Match cached search text without constructing a full commit object.
+    pub fn matches_fields(&self, id: &str, summary: &str, author: &str) -> bool {
         self.sha_prefix
             .as_deref()
-            .is_some_and(|prefix| starts_with_ignore_ascii_case(commit.id.as_ref(), prefix))
-            || self.matcher.is_match(&commit.summary)
-            || self.matcher.is_match(&commit.author)
+            .is_some_and(|prefix| starts_with_ignore_ascii_case(id, prefix))
+            || self.matcher.is_match(summary)
+            || self.matcher.is_match(author)
+    }
+
+    /// Whether this query can only remove matches from a previous query.
+    /// Word boundaries, regex alternatives and newly enabled SHA matching
+    /// can all add matches when text is appended, so they cannot narrow.
+    pub fn is_refinement_of(&self, previous: &Self) -> bool {
+        self.options == previous.options
+            && !self.options.regex
+            && !self.options.whole_word
+            && self.matcher.query().starts_with(previous.matcher.query())
+            && self.sha_prefix.as_ref().is_none_or(|prefix| {
+                previous
+                    .sha_prefix
+                    .as_ref()
+                    .is_some_and(|old| prefix.starts_with(old))
+            })
     }
 }
 
@@ -152,6 +173,19 @@ mod tests {
         let mut hasher = DefaultHasher::new();
         query.hash(&mut hasher);
         hasher.finish()
+    }
+
+    #[test]
+    fn extending_a_query_can_gain_sha_or_whole_word_matches() {
+        let sha_only = commit("abcd1234", "unrelated", "Ann");
+        assert!(!query("abc", PLAIN).matches(&sha_only));
+        assert!(query("abcd", PLAIN).matches(&sha_only));
+        let longer_word = commit("00000000", "fixes", "Ann");
+        assert!(!query("fix", WHOLE_WORD).matches(&longer_word));
+        assert!(query("fixes", WHOLE_WORD).matches(&longer_word));
+        let alternation = commit("00000000", "feature", "Ann");
+        assert!(!query("fix", REGEX).matches(&alternation));
+        assert!(query("fix|feature", REGEX).matches(&alternation));
     }
 
     #[test]

@@ -781,7 +781,7 @@ impl HistoryView {
         let selection = if self.history_highlight_commit_chain
             && !repo.history_state.multi_selection.is_multi()
         {
-            match history_primary_selection(repo, plan.show_working_tree_summary_row()) {
+            match self.history_navigation_selection(repo, plan.show_working_tree_summary_row()) {
                 Some(HistoryPrimarySelection::Commit(id)) => shown
                     .graph
                     .projection
@@ -1227,11 +1227,12 @@ impl HistoryView {
         else {
             return false;
         };
+        let projection = shown.graph.projection.clone();
         self.store.dispatch(Msg::IndexedHistory(Event::Select {
             repo_id,
             commit_id,
             mode,
-            projection: shown.graph.projection.clone(),
+            projection,
         }));
         true
     }
@@ -1273,9 +1274,8 @@ impl HistoryView {
             return false;
         };
         let list_ix = self.indexed.plan.list_ix_for_visible(visible_ix);
-        if !self.is_single_selected_commit(&id) {
-            self.select_indexed_commit(repo_id, id, gitcomet_state::msg::CommitSelectMode::Single);
-        }
+        self.note_history_selection(repo_id, HistoryPrimarySelection::Commit(id.clone()));
+        self.select_indexed_commit(repo_id, id, gitcomet_state::msg::CommitSelectMode::Single);
         self.cancel_history_scroll_reveal();
         let center = center_if_hidden && !self.indexed_row_in_view(list_ix);
         self.scroll_indexed_to(list_ix, center);
@@ -1307,28 +1307,29 @@ impl HistoryView {
             return false;
         };
         let plan = &self.indexed.plan;
-        let current = match history_primary_selection(repo, plan.show_working_tree_summary_row()) {
-            Some(HistoryPrimarySelection::Commit(id)) => shown
-                .graph
-                .projection
-                .position(id.as_ref())
-                .map(|row| plan.list_ix_for_visible(row)),
-            Some(HistoryPrimarySelection::WorkingTree) => Some(0),
-            Some(HistoryPrimarySelection::Worktree(path)) => {
-                let Some(row) = self
-                    .indexed
-                    .worktrees
-                    .iter()
-                    .position(|summary| summary.path == path)
-                    .and_then(|ix| plan.list_ix_for_worktree(ix))
-                else {
-                    return false;
-                };
-                Some(row)
+        let current =
+            match self.history_navigation_selection(repo, plan.show_working_tree_summary_row()) {
+                Some(HistoryPrimarySelection::Commit(id)) => shown
+                    .graph
+                    .projection
+                    .position(id.as_ref())
+                    .map(|row| plan.list_ix_for_visible(row)),
+                Some(HistoryPrimarySelection::WorkingTree) => Some(0),
+                Some(HistoryPrimarySelection::Worktree(path)) => {
+                    let Some(row) = self
+                        .indexed
+                        .worktrees
+                        .iter()
+                        .position(|summary| summary.path == path)
+                        .and_then(|ix| plan.list_ix_for_worktree(ix))
+                    else {
+                        return false;
+                    };
+                    Some(row)
+                }
+                None => None,
             }
-            None => None,
-        }
-        .unwrap_or(0);
+            .unwrap_or(0);
         let total = plan.list_len(shown.graph.projection.len());
         if total == 0 {
             return false;
@@ -1346,10 +1347,13 @@ impl HistoryView {
             }
             Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) => {
                 if let Some(summary) = self.indexed.worktrees.get(worktree_ix) {
-                    self.store.dispatch(Msg::SelectWorktreeUncommitted {
-                        repo_id: repo.id,
-                        path: summary.path.clone(),
-                    });
+                    let (repo_id, path) = (repo.id, summary.path.clone());
+                    self.note_history_selection(
+                        repo_id,
+                        HistoryPrimarySelection::Worktree(path.clone()),
+                    );
+                    self.store
+                        .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
                 }
             }
             _ => return false,

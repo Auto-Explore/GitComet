@@ -5409,6 +5409,7 @@ fn commit_message_text_input_secondary_f_without_visible_diff_opens_history_find
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
     cx.update(|window, app| {
+        window.activate_window();
         crate::app::bind_app_keys_for_test(app);
         let _ = window.draw(app);
     });

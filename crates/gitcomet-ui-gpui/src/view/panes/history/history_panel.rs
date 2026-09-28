@@ -17,7 +17,7 @@ const HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.last_window_size = window.viewport_size();
-        self.history_view_inner(cx)
+        self.history_view_inner(window, cx)
     }
 }
 
@@ -33,7 +33,11 @@ impl HistoryView {
         });
     }
 
-    fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    fn history_view_inner(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
         let manual = std::mem::take(&mut self.scroll_interaction.borrow_mut().manual_pending);
@@ -51,7 +55,11 @@ impl HistoryView {
         self.sync_history_loading(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
-        self.sync_history_find(cx);
+        if self.sync_history_find(cx) {
+            // The jump happens after preparing this frame's text window.
+            // Notify during drawing cannot invalidate the next frame.
+            window.request_animation_frame();
+        }
         let plan = self.ensure_history_list_plan();
         if self.indexed.presentation.is_none() {
             self.sync_history_viewport(&plan, cx);
@@ -271,6 +279,7 @@ impl HistoryView {
         direction: i8,
         _cx: &mut gpui::Context<Self>,
     ) -> bool {
+        self.cancel_history_find_navigation();
         if self.indexed.presentation.is_some() {
             return self.select_adjacent_indexed(direction, _cx);
         }
@@ -294,7 +303,7 @@ impl HistoryView {
                     };
                     let page = Arc::clone(&cache.page);
                     (
-                        super::history_primary_selection(repo, show_working_tree_summary_row),
+                        self.history_navigation_selection(repo, show_working_tree_summary_row),
                         page,
                         cache.base.request.log_source as u64,
                         cache.base.request.stashes_rev,
@@ -395,6 +404,10 @@ impl HistoryView {
             let Some(path) = path else {
                 return false;
             };
+            self.note_history_selection(
+                repo_id,
+                super::HistoryPrimarySelection::Worktree(path.clone()),
+            );
             self.store
                 .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
             self.dismiss_history_refs_hover(_cx);
@@ -455,12 +468,15 @@ impl HistoryView {
             request.history_scope,
         );
         let list_ix = plan.list_ix_for_visible(visible_ix);
-        if !self.is_single_selected_commit(&commit_id) {
-            self.store.dispatch(Msg::SelectCommit {
-                repo_id,
-                commit_id: commit_id.clone(),
-            });
-        }
+        self.note_history_selection(
+            repo_id,
+            super::HistoryPrimarySelection::Commit(commit_id.clone()),
+        );
+        // The reducer owns idempotence and leaving range-comparison mode.
+        self.store.dispatch(Msg::SelectCommit {
+            repo_id,
+            commit_id: commit_id.clone(),
+        });
         super::set_history_selected_list_index_cache(
             &mut self.history_selected_list_index_cache,
             repo_id,
@@ -477,13 +493,27 @@ impl HistoryView {
         true
     }
 
-    /// Whether `id` is the one selected commit. Re-selecting it would change
-    /// nothing, while a multi-selection that includes it still collapses.
-    pub(in crate::view) fn is_single_selected_commit(&self, id: &CommitId) -> bool {
-        self.active_repo().is_some_and(|repo| {
-            repo.history_state.selected_commit.as_ref() == Some(id)
-                && !repo.history_state.multi_selection.is_multi()
-        })
+    pub(in crate::view) fn note_history_selection(
+        &mut self,
+        repo_id: RepoId,
+        selection: super::HistoryPrimarySelection,
+    ) {
+        if self.active_repo_id() == Some(repo_id)
+            && self.pending_history_selections.back() != Some(&selection)
+        {
+            self.pending_history_selections.push_back(selection);
+        }
+    }
+
+    pub(super) fn history_navigation_selection(
+        &self,
+        repo: &RepoState,
+        show_working_tree: bool,
+    ) -> Option<super::HistoryPrimarySelection> {
+        self.pending_history_selections
+            .back()
+            .cloned()
+            .or_else(|| super::history_primary_selection(repo, show_working_tree))
     }
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {

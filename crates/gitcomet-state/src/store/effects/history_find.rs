@@ -1,12 +1,6 @@
 use super::*;
-use crate::history_find::{HistoryFindChunk, HistoryFindEffect, HistoryFindMsg};
-use gitcomet_core::history_index::HISTORY_BLOCK_SIZE;
+use crate::history_find::{HistoryFindEffect, HistoryFindMsg};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-
-/// Minimum spacing between progress reports, so a long scan does not flood
-/// the store with a message per block. Matches the index build's cadence.
-const REPORT_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(super) fn schedule(
     repos: &util::RepoMap,
@@ -35,39 +29,20 @@ pub(super) fn schedule(
                     }),
                 )
             };
-            let len = work.index.len();
-            let mut pending = Vec::new();
-            let mut last_report = Instant::now();
-            let mut start = 0;
-            while start < len {
-                // The range reader's store-reopen budget is counted in blocks of this size.
-                let end = (start + HISTORY_BLOCK_SIZE).min(len);
-                let range = match repo.read_history_range(&work.index, start..end, &cancellation) {
-                    Ok(range) => range,
-                    Err(error) => return send(Err(error)),
-                };
-                pending.extend(
-                    range
-                        .commits
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, commit)| work.query.matches(commit))
-                        .filter_map(|(offset, _)| u32::try_from(start + offset).ok()),
+            let result = work
+                .cache
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .search(
+                    &work.index,
+                    &work.query,
+                    &cancellation,
+                    |range| repo.read_history_range(&work.index, range, &cancellation),
+                    |chunk| send(Ok(chunk)),
                 );
-                start = end;
-                // A block without matches changes nothing the view shows.
-                if start < len && !pending.is_empty() && last_report.elapsed() >= REPORT_INTERVAL {
-                    last_report = Instant::now();
-                    send(Ok(HistoryFindChunk {
-                        matches: std::mem::take(&mut pending),
-                        done: false,
-                    }));
-                }
+            if let Err(error) = result {
+                send(Err(error));
             }
-            send(Ok(HistoryFindChunk {
-                matches: pending,
-                done: true,
-            }));
         },
         move |tx| {
             util::send_or_log(

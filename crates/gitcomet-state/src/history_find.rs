@@ -2,15 +2,18 @@
 //! whose text the viewport has loaded.
 use crate::model::RepoId;
 use gitcomet_core::history_find::HistoryFindQuery;
-use gitcomet_core::history_index::HistoryIndexHandle;
+use gitcomet_core::history_index::{HistoryIndex, HistoryIndexHandle};
 use gitcomet_core::services::{CancellationToken, Result};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
+
+mod cache;
+use cache::HistoryFindCache;
 
 #[derive(Clone, Debug, Default)]
 pub struct HistoryFindState {
     pub query: Option<HistoryFindQuery>,
-    /// The index the matches belong to. Results for any other index are stale.
-    pub index: Option<HistoryIndexHandle>,
+    /// Identity only: finished results must not keep obsolete indexes alive.
+    pub index: Option<Weak<HistoryIndex>>,
     /// Matching raw index rows in ascending (display) order, in the chunks
     /// the scan reported them. A search only ever appends chunks, so a reader
     /// can resume after the ones it has already seen, and publishing a new
@@ -21,6 +24,7 @@ pub struct HistoryFindState {
     pub rev: u64,
     pub(crate) seq: u64,
     pub(crate) cancellation: CancellationToken,
+    pub(crate) cache: Arc<Mutex<HistoryFindCache>>,
 }
 
 impl HistoryFindState {
@@ -34,6 +38,7 @@ impl HistoryFindState {
             *self = Self {
                 seq: self.seq.wrapping_add(1),
                 rev: self.rev.wrapping_add(1),
+                cache: Arc::clone(&self.cache),
                 ..Self::default()
             };
         }
@@ -58,7 +63,7 @@ impl HistoryFindState {
             && self
                 .index
                 .as_ref()
-                .is_some_and(|known| Arc::ptr_eq(known, index))
+                .is_some_and(|known| known.ptr_eq(&Arc::downgrade(index)))
     }
 }
 
@@ -92,6 +97,7 @@ pub struct HistoryFindEffect {
     pub index: HistoryIndexHandle,
     pub query: HistoryFindQuery,
     pub cancellation: CancellationToken,
+    pub(crate) cache: Arc<Mutex<HistoryFindCache>>,
 }
 
 impl HistoryFindEffect {
