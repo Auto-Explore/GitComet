@@ -37,6 +37,10 @@ pub(in crate::view) struct TextEncodingMenuState {
     pub(in crate::view) had_bom: bool,
     /// The editor shows the file, so it can be saved in another encoding.
     pub(in crate::view) editor: bool,
+    /// The editor has edits that reopening would drop.
+    pub(in crate::view) unsaved: bool,
+    /// What the editor's next save writes.
+    pub(in crate::view) save_format: Option<gitcomet_core::text_format::TextFormat>,
 }
 
 fn source_description(source: FormatSource, attributes: &TextAttributes) -> String {
@@ -117,28 +121,81 @@ fn format_details(format: &SideTextFormat, attributes: &TextAttributes) -> Strin
 impl MainPaneView {
     /// Saving can be called from a root-view close handler, so show errors
     /// after that handler releases its borrow of the root.
+    pub(super) fn show_error_report(&self, report: ErrorReport, cx: &mut gpui::Context<Self>) {
+        let root = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root.update(cx, |root, cx| root.report_error(report, cx));
+        });
+    }
+
     pub(super) fn show_text_format_error(
         &self,
         message: impl Into<String>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let root = self.root_view.clone();
-        let message = message.into();
-        cx.defer(move |cx| {
-            let _ = root.update(cx, |root, cx| {
-                root.push_toast(crate::view::components::ToastKind::Error, message, cx);
-            });
-        });
+        let report = ErrorReport::message(self.active_repo_id(), message);
+        self.show_error_report(report, cx);
     }
 
     /// Encoding for the resolver output, independent of a mixed marker file.
     pub(in crate::view) fn conflict_output_text_format(&self) -> Option<SideTextFormat> {
-        let session = self
+        let stored = self
             .active_repo()?
             .conflict_state
             .conflict_session
-            .as_ref()?;
-        session.output_format.or(session.current_format)
+            .as_ref()
+            .and_then(|session| session.output_format.or(session.current_format));
+        let Some((repo_id, path, chosen)) = &self.conflict_output_save_format else {
+            return stored;
+        };
+        if self.conflict_resolver.repo_id != Some(*repo_id)
+            || self.conflict_resolver.path.as_ref() != Some(path)
+        {
+            return stored;
+        }
+        // No stored format means plain UTF-8.
+        let mut format = stored.unwrap_or_else(|| SideTextFormat::utf8(LineEndingStats::default()));
+        format.format = *chosen;
+        format.source = FormatSource::Override;
+        // The old encoding's round-trip worry does not apply to the new one.
+        format.lossy = false;
+        Some(format)
+    }
+
+    /// Save the resolved output as `format` from now on.
+    fn set_conflict_output_save_format(
+        &mut self,
+        format: gitcomet_core::text_format::TextFormat,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver.repo_id,
+            self.conflict_resolver.path.clone(),
+        ) else {
+            return;
+        };
+        let current = self
+            .conflict_output_text_format()
+            .unwrap_or_else(|| SideTextFormat::utf8(LineEndingStats::default()));
+        if current.malformed || current.binary || current.format == format {
+            return;
+        }
+        self.conflict_output_save_format = Some((repo_id, path, format));
+        cx.notify();
+    }
+
+    /// "Save with encoding": for the resolver's output or the editor's buffer,
+    /// whichever is on screen.
+    pub(in crate::view) fn set_save_text_format(
+        &mut self,
+        format: gitcomet_core::text_format::TextFormat,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.main_pane_surface().body == MainPaneBody::Conflict {
+            self.set_conflict_output_save_format(format, cx);
+        } else {
+            self.set_file_editor_save_format(format, cx);
+        }
     }
 
     /// The resolved output as bytes in the conflicted file's encoding, or
@@ -150,8 +207,18 @@ impl MainPaneView {
     ) -> Option<gitcomet_state::msg::ContentBytes> {
         match super::file_editor::encode_for_save(text.into(), self.conflict_output_text_format()) {
             Ok((bytes, _)) => Some(bytes),
-            Err(message) => {
-                self.show_text_format_error(message, cx);
+            Err(error) => {
+                let (repo_id, path) = (
+                    self.conflict_resolver.repo_id,
+                    self.conflict_resolver.path.clone(),
+                );
+                let report = match (repo_id, path) {
+                    (Some(repo_id), Some(path)) => {
+                        super::file_editor::save_error_report(repo_id, &path, &error, false)
+                    }
+                    _ => ErrorReport::message(self.active_repo_id(), error.to_string()),
+                };
+                self.show_error_report(report, cx);
                 None
             }
         }
@@ -346,8 +413,17 @@ impl MainPaneView {
             .to_path_buf();
         let (_, shown, editable) = self.shown_text_formats()?;
         let attributes = self.selected_text_attributes();
+        let resolver = self.main_pane_surface().body == MainPaneBody::Conflict;
+        let editor = (editable || resolver) && !shown.malformed && !shown.binary;
+        let unsaved = if resolver {
+            self.conflict_resolved_output_is_modified()
+        } else {
+            self.file_editor_dirty
+        };
         Some(TextEncodingMenuState {
-            editor: editable && !shown.malformed && !shown.binary,
+            editor,
+            unsaved: editor && unsaved,
+            save_format: editor.then_some(shown.format),
             chosen: repo
                 .diff_state
                 .text_override_for(&path)
@@ -364,7 +440,8 @@ impl MainPaneView {
     }
 
     /// Read the open file in `encoding`, or as its attributes and content say
-    /// when `None`. An editor with unsaved edits keeps them and refuses.
+    /// when `None`. Unsaved edits cannot be reopened, so for them the pick is
+    /// the encoding the next save writes.
     pub(in crate::view) fn set_text_encoding_override(
         &mut self,
         encoding: Option<TextEncoding>,
@@ -385,14 +462,39 @@ impl MainPaneView {
         };
         let unsaved_editor =
             self.main_pane_surface().body == MainPaneBody::FileEditor && self.file_editor_dirty;
+        if unsaved_editor {
+            match encoding {
+                Some(encoding) => self.set_file_editor_save_format(
+                    gitcomet_core::text_format::TextFormat {
+                        encoding,
+                        bom: encoding.is_utf16(),
+                    },
+                    cx,
+                ),
+                None => self.show_text_format_error(
+                    "Save or discard your edits before detecting the encoding again",
+                    cx,
+                ),
+            }
+            return;
+        }
         let unsaved_resolution = self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
             && self.conflict_resolved_output_is_modified();
-        if unsaved_editor || unsaved_resolution {
-            self.show_text_format_error(
-                "Save or discard your edits before reopening the file in another encoding",
-                cx,
-            );
+        if unsaved_resolution {
+            match encoding {
+                Some(encoding) => self.set_conflict_output_save_format(
+                    gitcomet_core::text_format::TextFormat {
+                        encoding,
+                        bom: encoding.is_utf16(),
+                    },
+                    cx,
+                ),
+                None => self.show_text_format_error(
+                    "Save or discard your edits before detecting the encoding again",
+                    cx,
+                ),
+            }
             return;
         }
         let value = TextOverride {
@@ -430,7 +532,58 @@ impl MainPaneView {
         self.set_file_editor_text_format(Some(current), cx);
         self.file_editor_dirty = true;
         self.file_editor_saved_fingerprint = None;
+        self.file_editor_save_error = None;
+        if self.auto_save_file_edits {
+            self.schedule_file_editor_autosave(cx);
+        }
         cx.notify();
+    }
+
+    /// After a save in `saved` format, point the open file's encoding choice
+    /// at what reads the new bytes back: none if they read that way on their
+    /// own, else `saved`. The buffer already holds that text, so it is marked
+    /// as read with the new choice instead of re-reading (and racing the write).
+    pub(super) fn follow_saved_text_format(
+        &mut self,
+        path: &Path,
+        bytes: &[u8],
+        saved: gitcomet_core::text_format::TextFormat,
+    ) {
+        use gitcomet_core::text_format::{ContentSniff, SideKind};
+
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let repo_id = repo.id;
+        let current = repo.diff_state.text_override_for(path).unwrap_or_default();
+        let attributes = self.selected_text_attributes();
+        let sniff = ContentSniff::of(bytes);
+        let reads_as = |encoding| {
+            sniff
+                .resolve(SideKind::Worktree, &attributes, encoding)
+                .format
+                .encoding
+        };
+        if reads_as(current.encoding) == saved.encoding {
+            return;
+        }
+        let encoding = (reads_as(None) != saved.encoding).then_some(saved.encoding);
+        if let Some(format) = self.file_editor_text_format.as_mut() {
+            format.source = sniff
+                .resolve(SideKind::Worktree, &attributes, encoding)
+                .source;
+        }
+        self.file_editor_decode_key = self
+            .selected_text_decode_request(SideKind::Worktree)
+            .map(|(_, key)| key.with_encoding(encoding));
+        self.store.dispatch(Msg::SetTextOverride {
+            repo_id,
+            path: path.to_path_buf(),
+            value: TextOverride {
+                encoding,
+                ..current
+            },
+        });
     }
 
     /// Rewrite every line break in the editor as `ending`, as one undoable
@@ -461,6 +614,66 @@ impl MainPaneView {
         if let (Some(stats), Some(format)) = (converted, self.file_editor_text_format.as_mut()) {
             format.line_endings = stats;
         }
+        cx.notify();
+    }
+
+    /// Whether an error's action still has what it acts on: the editor open
+    /// on its file.
+    pub(in crate::view) fn error_action_available(&self, action: &ErrorAction) -> bool {
+        match action {
+            ErrorAction::SaveEditorAs { repo_id, path, .. }
+            | ErrorAction::RevealInEditor { repo_id, path, .. } => {
+                self.main_pane_surface().body == MainPaneBody::FileEditor
+                    && !self.file_editor_loading
+                    && self
+                        .file_editor_key
+                        .as_ref()
+                        .is_some_and(|(key_repo, key_path)| key_repo == repo_id && key_path == path)
+            }
+            ErrorAction::OpenUrl { .. } => true,
+        }
+    }
+
+    /// Save the editor's buffer as `format`. Returns whether it was written.
+    pub(in crate::view) fn save_file_editor_as(
+        &mut self,
+        format: gitcomet_core::text_format::TextFormat,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.set_file_editor_save_format(format, cx);
+        self.save_file_editor_buffer(cx)
+    }
+
+    /// Select the character at a 1-based line and column (in characters) and
+    /// focus the editor on it.
+    pub(in crate::view) fn reveal_in_file_editor(
+        &mut self,
+        line: u32,
+        column: u32,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let input = self.file_editor_input.clone();
+        input.update(cx, |input, cx| {
+            let text = input.text();
+            let line_start = if line <= 1 {
+                0
+            } else {
+                memchr::memchr_iter(b'\n', text.as_bytes())
+                    .nth(line as usize - 2)
+                    .map_or(text.len(), |newline| newline + 1)
+            };
+            let mut chars = text[line_start..]
+                .char_indices()
+                .skip(column.saturating_sub(1) as usize);
+            let range = match chars.next() {
+                Some((start, ch)) => line_start + start..line_start + start + ch.len_utf8(),
+                None => text.len()..text.len(),
+            };
+            input.set_selected_range(range, true, window, cx);
+        });
+        let focus = input.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
         cx.notify();
     }
 

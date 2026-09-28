@@ -18,7 +18,7 @@ use super::*;
 use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
-use gitcomet_core::text_format::{SideKind, SideTextFormat};
+use gitcomet_core::text_format::{FormatSource, SideKind, SideTextFormat};
 use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::path::{Path, PathBuf};
@@ -58,26 +58,81 @@ pub(in crate::view) struct StashedFileEdit {
     pub(in crate::view) text_format: Option<SideTextFormat>,
 }
 
+/// Why text cannot be written in its file's encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::view) enum SaveEncodeError {
+    /// The file did not read back byte for byte, so writing it changes bytes.
+    Unwritable(gitcomet_core::text_format::TextEncoding),
+    /// A character has no bytes in the encoding.
+    Unmappable(gitcomet_core::text_format::Unmappable),
+}
+
+impl std::fmt::Display for SaveEncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unwritable(encoding) => write!(
+                f,
+                "It can't be written in {encoding} without changing bytes it already has."
+            ),
+            Self::Unmappable(unmappable) => write!(f, "{unmappable}."),
+        }
+    }
+}
+
+/// The error the user sees for a save that wrote nothing. With `editor`, the
+/// dialog offers to save as UTF-8 and to go to the character.
+pub(in crate::view) fn save_error_report(
+    repo_id: RepoId,
+    path: &Path,
+    error: &SaveEncodeError,
+    editor: bool,
+) -> ErrorReport {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let mut report = ErrorReport::message(
+        Some(repo_id),
+        format!(
+            "Couldn't save {name}\n\n{error} Choose another encoding under “Save with encoding” in the encoding menu."
+        ),
+    );
+    if editor {
+        report = report.with_action(ErrorAction::SaveEditorAs {
+            repo_id,
+            path: path.to_path_buf(),
+            format: gitcomet_core::text_format::TextFormat::UTF_8,
+        });
+        if let SaveEncodeError::Unmappable(unmappable) = error {
+            report = report.with_action(ErrorAction::RevealInEditor {
+                repo_id,
+                path: path.to_path_buf(),
+                line: unmappable.line,
+                column: unmappable.column,
+                ch: unmappable.ch,
+            });
+        }
+    }
+    report
+}
+
 /// The bytes to write for `text` in the file's encoding, and the same bytes as
 /// the disk check will see them.
 pub(in crate::view) fn encode_for_save(
     text: SharedString,
     format: Option<SideTextFormat>,
-) -> Result<(gitcomet_state::msg::ContentBytes, PendingWrite), String> {
+) -> Result<(gitcomet_state::msg::ContentBytes, PendingWrite), SaveEncodeError> {
     if let Some(format) = format
         && !format.is_writable()
     {
-        return Err(format!(
-            "This file can't be saved in {} without changing bytes it already has.",
-            format.format.encoding
-        ));
+        return Err(SaveEncodeError::Unwritable(format.format.encoding));
     }
     let Some(format) = format.filter(|format| !format.format.is_plain_utf8()) else {
         return Ok((text.to_string().into(), PendingWrite::Text(text)));
     };
     let bytes: Arc<[u8]> = Arc::from(
         gitcomet_core::text_format::encode(&text, format.format)
-            .map_err(|unmappable| format!("{unmappable}. Save it in another encoding (UTF-8)."))?
+            .map_err(SaveEncodeError::Unmappable)?
             .as_ref(),
     );
     Ok((Arc::clone(&bytes).into(), PendingWrite::Encoded(bytes)))
@@ -475,6 +530,13 @@ impl MainPaneView {
         self.file_editor_dirty
     }
 
+    /// Whether the toolbar shows Save and Discard for the editor: always
+    /// without auto-save, and with it while the buffer cannot be written.
+    pub(in crate::view) fn file_editor_shows_save_controls(&self) -> bool {
+        !self.auto_save_file_edits
+            || (self.file_editor_dirty && self.file_editor_save_error.is_some())
+    }
+
     pub(in crate::view) fn set_auto_save_file_edits(
         &mut self,
         next: bool,
@@ -525,6 +587,7 @@ impl MainPaneView {
         // file that was just opened.
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         self.file_editor_saved_fingerprint = None;
         // Likewise the search: these offsets belong to the outgoing file and mean
         // nothing in the incoming one. The reload re-seats both.
@@ -752,6 +815,7 @@ impl MainPaneView {
         self.file_editor_autosave = None;
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         self.file_editor_saved_fingerprint = None;
         self.reread_file_editor_from_disk(cx);
     }
@@ -894,7 +958,7 @@ impl MainPaneView {
                     && this.file_editor_dirty
                     && !this.file_disk_notice_awaits_editor()
                 {
-                    this.save_file_editor_buffer(cx);
+                    this.write_file_editor_buffer(false, cx);
                 }
             });
         }));
@@ -907,6 +971,16 @@ impl MainPaneView {
     /// the same "Saved → path" toast.
     pub(in crate::view) fn save_file_editor_buffer(
         &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.write_file_editor_buffer(true, cx)
+    }
+
+    /// `save_file_editor_buffer`; background writes pass `repeat_failure:
+    /// false` so a failure already on screen is not reported again.
+    fn write_file_editor_buffer(
+        &mut self,
+        repeat_failure: bool,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let Some((repo_id, path)) = self.file_editor_key.clone() else {
@@ -934,10 +1008,17 @@ impl MainPaneView {
         let (bytes, pending_write) =
             match encode_for_save(contents.clone(), self.file_editor_text_format) {
                 Ok(encoded) => encoded,
-                Err(message) => {
+                Err(error) => {
                     // Kept dirty: nothing was written.
                     self.file_editor_autosave = None;
-                    self.show_text_format_error(message, cx);
+                    let report = save_error_report(repo_id, &path, &error, true);
+                    let message = SharedString::from(report.message.clone());
+                    let repeat = self.file_editor_save_error.as_ref() == Some(&message);
+                    self.file_editor_save_error = Some(message);
+                    if repeat_failure || !repeat {
+                        self.show_error_report(report, cx);
+                    }
+                    cx.notify();
                     return false;
                 }
             };
@@ -950,9 +1031,17 @@ impl MainPaneView {
         self.store.dispatch(Msg::SaveWorktreeFile {
             repo_id,
             path: path.clone(),
-            contents: bytes,
+            contents: bytes.clone(),
             stage: false,
         });
+        // A converted buffer, or one read in a chosen encoding, may need that
+        // choice moved so the new bytes read back as written.
+        if let Some(format) = self
+            .file_editor_text_format
+            .filter(|format| format.source == FormatSource::Override)
+        {
+            self.follow_saved_text_format(&path, bytes.as_bytes(), format.format);
+        }
         // Optimistic, like every other command in the app: the write is what the
         // user asked for, and a failure raises its own error toast. Holding the
         // buffer dirty until the command landed would make the indicator flicker
@@ -966,6 +1055,7 @@ impl MainPaneView {
         self.file_editor_saved_fingerprint = Some(fingerprint);
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         // The disk check must not mistake this write for someone else's,
         // whether it looks before or after the bytes land.
         self.file_editor_disk.note_pending_write(pending_write);
@@ -1065,7 +1155,7 @@ impl MainPaneView {
         // leaving the file is not an answer to the question.
         let dispatched = self.auto_save_file_edits
             && !self.file_disk_notice_awaits_editor()
-            && self.save_file_editor_buffer(cx);
+            && self.write_file_editor_buffer(false, cx);
         if self.file_editor_dirty {
             self.stash_current_file_editor_buffer(cx);
         }
@@ -1106,6 +1196,7 @@ impl MainPaneView {
             self.file_editor_key = None;
             self.file_editor_dirty = false;
             self.file_editor_first_dirty_line = None;
+            self.file_editor_save_error = None;
             self.file_editor_saved_fingerprint = None;
             self.file_editor_loading = false;
             self.file_editor_error = None;
@@ -1301,8 +1392,8 @@ impl MainPaneView {
             );
             let bytes = match encode_for_save(stashed.text.clone(), stashed.text_format) {
                 Ok((bytes, _)) => bytes,
-                Err(message) => {
-                    self.show_text_format_error(message, cx);
+                Err(error) => {
+                    self.show_error_report(save_error_report(repo_id, &path, &error, true), cx);
                     failed.get_or_insert_with(|| (repo_id, path.clone()));
                     self.file_editor_stash.insert((repo_id, path), stashed);
                     continue;
@@ -1358,6 +1449,7 @@ impl MainPaneView {
         self.file_editor_stash.remove(&key);
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         self.file_editor_saved_fingerprint = None;
         // Forget which file is loaded so the next `ensure` re-reads it.
         self.file_editor_key = None;
@@ -2277,7 +2369,7 @@ mod encode_for_save_tests {
             Some(read_as(TextEncoding::WINDOWS_1252, false)),
         )
         .unwrap_err();
-        assert!(error.contains("line 2, column 1"), "{error}");
+        assert!(error.to_string().contains("line 2, column 1"), "{error}");
 
         let mut lossy = read_as(TextEncoding::from_label("shift_jis").unwrap(), false);
         lossy.lossy = true;

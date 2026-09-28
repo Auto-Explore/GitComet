@@ -6,8 +6,8 @@ use super::repo_management::{
 };
 use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
-    append_requested_status_refresh_effects, clear_banner_error_for_repo, diff_reload_effects,
-    push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
+    append_requested_status_refresh_effects, diff_reload_effects, push_diagnostic,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
@@ -845,7 +845,6 @@ fn finish_repo_action(
     completion: RepoActionCompletion,
 ) -> Vec<Effect> {
     let rebuild_selected_head_gitlink = repo_action_clears_head_dependent_state(action);
-    let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
@@ -858,7 +857,6 @@ fn finish_repo_action(
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
-                clear_banner = true;
             }
             RepoActionCompletion::ExpectedNoop => {}
             RepoActionCompletion::Failed(e) => {
@@ -866,9 +864,6 @@ fn finish_repo_action(
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
-    }
-    if clear_banner {
-        clear_banner_error_for_repo(state, repo_id);
     }
 
     // HEAD-changing actions invalidate this cache when they start. Classify the

@@ -42,6 +42,9 @@ fn check(enabled: bool) -> Option<SharedString> {
 }
 
 fn encoding_model(state: &TextEncodingMenuState) -> ContextMenuModel {
+    if state.editor && state.unsaved {
+        return unsaved_encoding_model(state);
+    }
     let mut items = vec![ContextMenuItem::Header("Reopen with encoding".into())];
     if state.stored_as_utf8 {
         items.push(ContextMenuItem::Description(
@@ -86,12 +89,62 @@ fn encoding_model(state: &TextEncodingMenuState) -> ContextMenuModel {
     ContextMenuModel::new(items)
 }
 
-/// Converting the editor's file: the Unicode encodings, with and without a
-/// byte-order mark, plus the one it was read in.
-fn save_with_items(state: &TextEncodingMenuState) -> Vec<ContextMenuItem> {
+/// Unsaved edits cannot be reopened, so every pick sets what Save writes.
+fn unsaved_encoding_model(state: &TextEncodingMenuState) -> ContextMenuModel {
     use gitcomet_core::text_format::TextFormat;
 
-    let mut formats = vec![
+    let mut items = vec![
+        ContextMenuItem::Header("Save with encoding".into()),
+        ContextMenuItem::Description(
+            "Unsaved edits are written in the encoding you pick. Discard them to reopen the file in another encoding."
+                .into(),
+        ),
+        ContextMenuItem::Separator,
+    ];
+    let legacy = TextEncoding::all()
+        .filter(|encoding| !encoding.is_utf8() && !encoding.is_utf16())
+        .map(|encoding| {
+            (
+                encoding.name().to_string(),
+                TextFormat {
+                    encoding,
+                    bom: false,
+                },
+            )
+        });
+    let mut group = "";
+    for (label, format) in unicode_save_formats().into_iter().chain(legacy) {
+        if format.encoding.group() != group {
+            group = format.encoding.group();
+            items.push(ContextMenuItem::Header(group.into()));
+        }
+        items.push(save_with_entry(state, label, format));
+    }
+    if let Some(chosen) = state.chosen {
+        items.extend(remember_items(state, chosen));
+    }
+    ContextMenuModel::new(items)
+}
+
+fn save_with_entry(
+    state: &TextEncodingMenuState,
+    label: String,
+    format: gitcomet_core::text_format::TextFormat,
+) -> ContextMenuItem {
+    ContextMenuItem::Entry {
+        label: label.into(),
+        icon: check(state.save_format == Some(format)),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::SaveWithEncoding { format }),
+    }
+}
+
+/// UTF-16 only with a byte-order mark, which is what lets it be read back.
+fn unicode_save_formats() -> Vec<(String, gitcomet_core::text_format::TextFormat)> {
+    use gitcomet_core::text_format::TextFormat;
+
+    vec![
         ("UTF-8".to_string(), TextFormat::UTF_8),
         (
             "UTF-8 with BOM".to_string(),
@@ -114,7 +167,15 @@ fn save_with_items(state: &TextEncodingMenuState) -> Vec<ContextMenuItem> {
                 bom: true,
             },
         ),
-    ];
+    ]
+}
+
+/// Converting the editor's file: the Unicode encodings, with and without a
+/// byte-order mark, plus the one it was read in.
+fn save_with_items(state: &TextEncodingMenuState) -> Vec<ContextMenuItem> {
+    use gitcomet_core::text_format::TextFormat;
+
+    let mut formats = unicode_save_formats();
     if let Some(current) = state
         .current
         .filter(|current| !current.is_utf8() && !current.is_utf16())
@@ -135,13 +196,7 @@ fn save_with_items(state: &TextEncodingMenuState) -> Vec<ContextMenuItem> {
     items.extend(
         formats
             .into_iter()
-            .map(|(label, format)| ContextMenuItem::Entry {
-                label: label.into(),
-                icon: None,
-                shortcut: None,
-                disabled: false,
-                action: Box::new(ContextMenuAction::SaveWithEncoding { format }),
-            }),
+            .map(|(label, format)| save_with_entry(state, label, format)),
     );
     items
 }
@@ -277,7 +332,55 @@ mod tests {
             stored_as_utf8: false,
             had_bom: false,
             editor: false,
+            unsaved: false,
+            save_format: None,
         }
+    }
+
+    #[test]
+    fn unsaved_edits_turn_the_menu_into_save_with() {
+        use gitcomet_core::text_format::TextFormat;
+
+        let mut state = state(None);
+        state.editor = true;
+        state.unsaved = true;
+        state.save_format = Some(TextFormat {
+            encoding: TextEncoding::WINDOWS_1252,
+            bom: false,
+        });
+        let model = encoding_model(&state);
+        assert!(matches!(
+            model.items.first(),
+            Some(ContextMenuItem::Header(header)) if header.as_ref() == "Save with encoding"
+        ));
+        let mut checked = Vec::new();
+        let mut saves = Vec::new();
+        for item in &model.items {
+            if let ContextMenuItem::Entry {
+                label,
+                icon,
+                action,
+                ..
+            } = item
+            {
+                match action.as_ref() {
+                    ContextMenuAction::SetTextEncoding { .. } => {
+                        panic!("reopening would drop the unsaved edits")
+                    }
+                    ContextMenuAction::SaveWithEncoding { format } => saves.push(*format),
+                    _ => {}
+                }
+                if icon.is_some() {
+                    checked.push(label.to_string());
+                }
+            }
+        }
+        assert_eq!(checked, vec!["Windows-1252".to_string()]);
+        assert_eq!(saves.first(), Some(&TextFormat::UTF_8));
+        assert!(saves.contains(&TextFormat {
+            encoding: TextEncoding::from_label("koi8-r").unwrap(),
+            bom: false,
+        }));
     }
 
     fn rules(model: &ContextMenuModel) -> Vec<String> {

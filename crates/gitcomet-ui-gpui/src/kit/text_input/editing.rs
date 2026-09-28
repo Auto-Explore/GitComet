@@ -579,7 +579,6 @@ impl TextInput {
 
     /// Installs a selection programmatically. Takes the window because a
     /// non-empty range is a real highlight and must own the window's selection.
-    #[allow(dead_code)]
     pub fn set_selected_range(
         &mut self,
         range: Range<usize>,

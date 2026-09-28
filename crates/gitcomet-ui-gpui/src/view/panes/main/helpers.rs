@@ -3515,6 +3515,10 @@ pub(crate) struct MainPaneView {
     /// still moves it, because tracking that precisely costs more than the
     /// attribution below it is worth.
     pub(in crate::view) file_editor_first_dirty_line: Option<u32>,
+    /// Why the last save wrote nothing (the text has no bytes in the file's
+    /// encoding). Shows Save/Discard under auto-save and stops auto-save
+    /// re-reporting the same failure every pause.
+    pub(in crate::view) file_editor_save_error: Option<SharedString>,
     /// Fingerprint of the text last known to be on disk. `None` before the
     /// first read lands, which reads as "everything is unsaved".
     pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,
@@ -3598,6 +3602,13 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in crate::view) conflict_resolver: ConflictResolverUiState,
+    /// The encoding picked for a resolved output, for the file it was picked
+    /// for. Kept outside the resolver state, which is rebuilt on every reload.
+    pub(in crate::view) conflict_output_save_format: Option<(
+        RepoId,
+        std::path::PathBuf,
+        gitcomet_core::text_format::TextFormat,
+    )>,
     pub(in crate::view) conflict_open_summary_toasted_files:
         FxHashSet<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) conflict_resolver_vsplit_ratio: f32,

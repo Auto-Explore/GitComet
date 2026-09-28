@@ -2028,7 +2028,7 @@ pub(super) fn schedule_open_file_at_commit_parent(
                 // instead of silently doing nothing.
                 send_or_log(
                     &msg_tx,
-                    Msg::ShowBannerError {
+                    Msg::ReportError {
                         repo_id: Some(repo_id),
                         message: format!("Could not open file at parent commit: {e}"),
                     },

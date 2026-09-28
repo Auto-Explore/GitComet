@@ -99,6 +99,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         operation_id: Option<GitOperationId>,
     },
+    /// The errors on screen, opened on the one toast `toast_id` shows.
+    ErrorDetails {
+        toast_id: u64,
+    },
     RepoPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,

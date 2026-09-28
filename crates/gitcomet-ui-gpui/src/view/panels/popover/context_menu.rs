@@ -1134,7 +1134,7 @@ impl PopoverHost {
                 let main_pane = self.main_pane.clone();
                 cx.defer(move |cx| {
                     main_pane.update(cx, |pane, cx| {
-                        pane.set_file_editor_save_format(format, cx);
+                        pane.set_save_text_format(format, cx);
                     });
                 });
             }

@@ -468,9 +468,9 @@ fn the_palette_command_opens_the_picker_and_tracks_the_remotes(cx: &mut gpui::Te
 }
 
 #[gpui::test]
-fn a_failed_launch_is_reported_in_the_error_banner(cx: &mut gpui::TestAppContext) {
+fn a_failed_launch_is_reported_as_an_error_toast(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, view, cx) = remote_browser_view(
+    let (_store, view, cx) = remote_browser_view(
         cx,
         ready(vec![remote("origin", Some("git@github.com:org/repo.git"))]),
     );
@@ -483,19 +483,28 @@ fn a_failed_launch_is_reported_in_the_error_banner(cx: &mut gpui::TestAppContext
         });
     });
 
-    pump_until(cx, "the launch failure to reach the banner", |_| {
-        store
-            .snapshot()
-            .banner_error
-            .as_ref()
-            .is_some_and(|banner| {
-                banner.message == "Failed to open link: no browser installed"
-                    && banner.repo_id == Some(RepoId(1))
-            })
+    let view_for_wait = view.clone();
+    pump_until(cx, "the launch failure to show as an error", move |cx| {
+        cx.update(|_window, app| {
+            view_for_wait
+                .read(app)
+                .toast_host
+                .read(app)
+                .error_notices()
+                .iter()
+                .any(|(_, notice)| {
+                    notice.message == "Failed to open link: no browser installed"
+                        && notice.repo_id == Some(RepoId(1))
+                })
+        })
     });
-    assert!(
-        toasts(cx, &view).is_empty(),
-        "an error goes to the banner, not a toast"
+    assert_eq!(
+        toasts(cx, &view),
+        vec![(
+            components::ToastKind::Error,
+            "Failed to open link: no browser installed".to_string()
+        )],
+        "the error is one toast that stays until closed"
     );
 }
 

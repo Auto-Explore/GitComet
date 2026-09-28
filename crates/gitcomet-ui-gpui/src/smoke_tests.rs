@@ -2472,6 +2472,10 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
     ));
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    // The fixture backend reports unsupported loads as errors, which stay
+    // on screen over the sidebar this clicks.
+    cx.update(|_window, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    sync_view_for_tests(cx, &view);
     click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
 
     let label_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge_label", 128);
@@ -2530,6 +2534,10 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
     ));
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    // The fixture backend reports unsupported loads as errors, which stay
+    // on screen over the sidebar this clicks.
+    cx.update(|_window, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    sync_view_for_tests(cx, &view);
     click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
 
     let row_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge", 128);

@@ -335,36 +335,72 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
         assert!(pane.conflict_resolved_output_is_modified());
         pane.conflict_resolver_input.read(app).text().to_string()
     });
-    // Both choosing another encoding and returning to automatic detection
-    // would reload the conflict sources, so both must keep the edits.
-    for encoding in [Some(koi8()), None] {
-        cx.update(|_, app| {
-            view.update(app, |view, cx| {
-                view.main_pane
-                    .update(cx, |pane, cx| pane.set_text_encoding_override(encoding, cx));
+    // Picking an encoding for a modified resolution sets what Save writes;
+    // the sources are not reread and the edits stay.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.main_pane.update(cx, |pane, cx| {
+                pane.set_text_encoding_override(Some(koi8()), cx)
             });
         });
-        crate::view::test_support::drain_store_worker(&view, cx);
-        cx.update(|_, app| {
-            let root = view.read(app);
-            let pane = root.main_pane.read(app);
-            assert_eq!(pane.conflict_resolver_input.read(app).text(), edited);
-            assert!(pane.conflict_resolved_output_is_modified());
-            let state = root.store.snapshot();
-            let repo = state.repos.iter().find(|repo| repo.id == repo_id).unwrap();
-            assert_eq!(
-                repo.diff_state
-                    .text_override_for(Path::new(FILE))
-                    .unwrap()
-                    .encoding,
-                Some(TextEncoding::WINDOWS_1252)
-            );
-            assert!(state.banner_error.as_ref().is_some_and(|banner| {
-                banner.repo_id == Some(repo_id)
-                    && banner.message.contains("Save or discard your edits")
-            }));
+    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert_eq!(pane.conflict_resolver_input.read(app).text(), edited);
+        assert_eq!(
+            pane.conflict_output_text_format()
+                .map(|format| format.format.encoding),
+            Some(koi8())
+        );
+        assert!(
+            pane.text_encoding_menu_state()
+                .is_some_and(|menu| menu.editor && menu.unsaved),
+            "the menu offers Save with encoding for the resolution"
+        );
+        let state = root.store.snapshot();
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id).unwrap();
+        assert_eq!(
+            repo.diff_state
+                .text_override_for(Path::new(FILE))
+                .unwrap()
+                .encoding,
+            Some(TextEncoding::WINDOWS_1252)
+        );
+    });
+    // Returning to automatic detection would reload the conflict sources,
+    // so it must keep the edits.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.main_pane
+                .update(cx, |pane, cx| pane.set_text_encoding_override(None, cx));
         });
-    }
+    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert_eq!(pane.conflict_resolver_input.read(app).text(), edited);
+        assert!(pane.conflict_resolved_output_is_modified());
+        let state = root.store.snapshot();
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id).unwrap();
+        assert_eq!(
+            repo.diff_state
+                .text_override_for(Path::new(FILE))
+                .unwrap()
+                .encoding,
+            Some(TextEncoding::WINDOWS_1252)
+        );
+        assert!(
+            root.toast_host
+                .read(app)
+                .error_notices()
+                .iter()
+                .any(|(_, notice)| notice.repo_id == Some(repo_id)
+                    && notice.message.contains("Save or discard your edits"))
+        );
+    });
     // Once the output has been saved, the same request can reload normally.
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, cx| {
@@ -1141,6 +1177,327 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
                 .map(|format| format.format.encoding),
             Some(koi8())
         );
+    });
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// A Latin-1 file open in the editor with a character windows-1252 has no
+/// byte for, so nothing can be written until the encoding changes.
+fn open_unencodable_edit(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &Path,
+) {
+    show(
+        cx,
+        view,
+        file_state(repo_id, workdir, true, Loadable::NotLoaded, None),
+        true,
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "Ā", cx);
+                });
+                pane.on_file_editor_edited(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+}
+
+fn sync_and_read_editor_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> (bool, bool, bool) {
+    crate::view::test_support::drain_store_worker(view, cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.is_file_editor_active(),
+            pane.file_editor_is_dirty(),
+            pane.file_editor_shows_save_controls(),
+        )
+    })
+}
+
+#[gpui::test]
+async fn save_button_stays_in_editor_when_the_text_cannot_be_encoded(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = unique_workdir("encoding_save_stays");
+    let original = b"caf\xe9\n".to_vec();
+    std::fs::write(workdir.join(FILE), &original).expect("write fixture");
+    let repo_id = gitcomet_state::model::RepoId(9512);
+    open_unencodable_edit(cx, &view, repo_id, &workdir);
+
+    cx.update(|window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.save_file_editor_buffer_and_exit(window, cx);
+        });
+    });
+    let (active, dirty, _) = sync_and_read_editor_state(cx, &view);
+    assert!(
+        active,
+        "a save that wrote nothing must not leave the editor"
+    );
+    assert!(dirty);
+    assert_eq!(std::fs::read(workdir.join(FILE)).unwrap(), original);
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = unique_workdir("encoding_autosave_escape");
+    let original = b"caf\xe9\n".to_vec();
+    std::fs::write(workdir.join(FILE), &original).expect("write fixture");
+    let repo_id = gitcomet_state::model::RepoId(9513);
+    open_unencodable_edit(cx, &view, repo_id, &workdir);
+    cx.update(|_window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, _| {
+            pane.auto_save_file_edits = true;
+            assert!(
+                !pane.file_editor_shows_save_controls(),
+                "auto-save hides Save/Discard while it can write"
+            );
+        });
+    });
+
+    cx.update(|window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.toggle_file_editor(window, cx);
+        });
+    });
+    let (active, dirty, save_controls) = sync_and_read_editor_state(cx, &view);
+    assert!(
+        active,
+        "leaving through a failed auto-save keeps the editor"
+    );
+    assert!(dirty);
+    assert!(
+        save_controls,
+        "Discard must be reachable while auto-save cannot write"
+    );
+    assert_eq!(std::fs::read(workdir.join(FILE)).unwrap(), original);
+
+    // Auto-save off keeps today's way out: the edits are kept and the editor closes.
+    cx.update(|window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.auto_save_file_edits = false;
+            pane.toggle_file_editor(window, cx);
+        });
+    });
+    let (active, _, _) = sync_and_read_editor_state(cx, &view);
+    assert!(!active);
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn picking_an_encoding_with_unsaved_edits_sets_the_save_format(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = unique_workdir("encoding_pick_while_dirty");
+    std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
+    let repo_id = gitcomet_state::model::RepoId(9514);
+    open_unencodable_edit(cx, &view, repo_id, &workdir);
+
+    cx.update(|_window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
+            assert_eq!(
+                pane.file_editor_text_format.map(|format| format.format),
+                Some(gitcomet_core::text_format::TextFormat::UTF_8),
+                "the pick is what Save writes"
+            );
+            assert!(pane.file_editor_is_dirty());
+            assert_eq!(pane.file_editor_input.read(cx).text(), "Ācafé\n");
+            assert!(pane.save_file_editor_buffer(cx), "UTF-8 can write Ā");
+        });
+    });
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn converting_away_from_a_reopen_override_reads_back_in_the_new_encoding(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = unique_workdir("encoding_convert_override");
+    std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
+    let repo_id = gitcomet_state::model::RepoId(9515);
+    show(
+        cx,
+        &view,
+        file_state(
+            repo_id,
+            &workdir,
+            true,
+            Loadable::NotLoaded,
+            Some(TextEncoding::ISO_8859_1),
+        ),
+        true,
+    );
+    cx.update(|_window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert_eq!(pane.file_editor_input.read(cx).text(), "café\n");
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "ŝ", cx);
+            });
+            pane.on_file_editor_edited(cx);
+            assert!(!pane.save_file_editor_buffer(cx), "ŝ has no Latin-1 byte");
+            pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
+            assert!(pane.save_file_editor_buffer(cx));
+        });
+    });
+    // The test backend opens no repo, so land the write the store would make.
+    std::fs::write(workdir.join(FILE), "ŝcafé\n").expect("simulate the write");
+    sync_and_read_editor_state(cx, &view);
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let state = root.store.snapshot();
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id).unwrap();
+        assert_eq!(
+            repo.diff_state
+                .text_override_for(Path::new(FILE))
+                .and_then(|value| value.encoding),
+            None,
+            "UTF-8 bytes read as UTF-8 without the old Latin-1 choice"
+        );
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.file_editor_decode_key,
+            pane.selected_text_decode_request(gitcomet_core::text_format::SideKind::Worktree)
+                .map(|(_, key)| key),
+            "the saved buffer already holds this text; re-reading it races the write"
+        );
+    });
+
+    // Reading the new bytes back must not garble them.
+    cx.update(|_window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.reload_file_editor_from_disk(cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.file_editor_input.read(app).text(), "ŝcafé\n");
+    });
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = open_window(cx);
+    let workdir = unique_workdir("encoding_error_actions");
+    std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
+    let repo_id = gitcomet_state::model::RepoId(9516);
+    open_unencodable_edit(cx, &view, repo_id, &workdir);
+    cx.update(|_window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert!(!pane.save_file_editor_buffer(cx));
+        });
+    });
+    cx.run_until_parked();
+    let (toast_id, actions) = cx.update(|_window, app| {
+        let notices = view.read(app).toast_host.read(app).error_notices();
+        let [(id, notice)] = notices.as_slice() else {
+            panic!("one error: {notices:?}");
+        };
+        assert_eq!(notice.repo_id, Some(repo_id));
+        assert!(notice.message.contains("cannot be written in Windows-1252"));
+        (*id, notice.actions.clone())
+    });
+    assert_eq!(
+        actions,
+        vec![
+            crate::view::ErrorAction::SaveEditorAs {
+                repo_id,
+                path: FILE.into(),
+                format: gitcomet_core::text_format::TextFormat::UTF_8,
+            },
+            crate::view::ErrorAction::RevealInEditor {
+                repo_id,
+                path: FILE.into(),
+                line: 1,
+                column: 1,
+                ch: 'Ā',
+            },
+        ]
+    );
+
+    let open_dialog = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.open_popover_centered(PopoverKind::ErrorDetails { toast_id }, window, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} must be drawn"));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+
+    open_dialog(cx);
+    click(cx, "error_details_action_1");
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        assert_eq!(root.popover_host.read(app).popover_kind_for_tests(), None);
+        let input = root.main_pane.read(app).file_editor_input.read(app);
+        assert_eq!(
+            input.selected_range(),
+            0.."Ā".len(),
+            "Go to selects the character"
+        );
+        assert_eq!(root.toast_host.read(app).error_notices().len(), 1);
+    });
+
+    open_dialog(cx);
+    click(cx, "error_details_action_0");
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert!(
+            !pane.file_editor_is_dirty(),
+            "Save as UTF-8 wrote the buffer"
+        );
+        assert_eq!(
+            pane.file_editor_text_format.map(|format| format.format),
+            Some(gitcomet_core::text_format::TextFormat::UTF_8)
+        );
+        assert!(root.toast_host.read(app).error_notices().is_empty());
+        assert_eq!(root.popover_host.read(app).popover_kind_for_tests(), None);
     });
     let _ = std::fs::remove_dir_all(&workdir);
 }

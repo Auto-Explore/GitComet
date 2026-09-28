@@ -235,11 +235,12 @@ pub enum Msg {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,
     },
-    ShowBannerError {
+    /// An error to show the user: a diagnostic of the repo, or an app
+    /// notification without one.
+    ReportError {
         repo_id: Option<RepoId>,
         message: String,
     },
-    DismissBannerError,
     DismissRepoError {
         repo_id: RepoId,
     },

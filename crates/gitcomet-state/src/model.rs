@@ -707,7 +707,6 @@ pub struct AppState {
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
-    pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub branch_exists_prompt: Option<BranchExistsPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
@@ -766,12 +765,6 @@ pub struct BranchExistsPromptState {
     pub name: String,
     pub target: String,
     pub operation: BranchExistsPromptOperation,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BannerErrorState {
-    pub repo_id: Option<RepoId>,
-    pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

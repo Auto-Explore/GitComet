@@ -1007,6 +1007,7 @@ pub struct GitCometView {
     pub(super) _terminal_keystroke_interceptor: gpui::Subscription,
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
+    pub(super) _toast_errors_subscription: gpui::Subscription,
     pub(super) _open_repo_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
     pub(super) theme_mode: ThemeMode,
@@ -1159,7 +1160,6 @@ pub struct GitCometView {
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,
 
-    pub(super) error_banner_input: Entity<components::TextInput>,
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
     pub(super) auth_prompt_key: Option<String>,

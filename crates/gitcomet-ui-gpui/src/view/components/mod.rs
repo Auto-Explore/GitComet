@@ -64,7 +64,7 @@ pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
 pub use tab_bar::{TabBar, TabBarScroll};
 pub use text_fade::{FadingText, trailing_fade};
-pub use toast::{ToastKind, toast};
+pub use toast::{TOAST_BADGE_PX, TOAST_WIDTH_PX, ToastKind, toast};
 pub use tokens::*;
 pub(crate) use truncated_text::{
     PathTruncationAlignmentGroup, TruncatedText, TruncatedTextFlex, TruncatedTextTooltipMode,

@@ -12,8 +12,8 @@ mod repo_management;
 mod util;
 
 use crate::model::{
-    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptOperation,
-    Loadable, PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    AppState, AuthPromptState, AuthRetryOperation, BranchExistsPromptOperation, Loadable,
+    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
     SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{
@@ -475,24 +475,17 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
     }
 }
 
-fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthRetryOperation) {
-    match operation {
-        AuthRetryOperation::RepoCommand { repo_id, .. }
-        | AuthRetryOperation::SafePushAfterCommit { repo_id, .. }
-        | AuthRetryOperation::Commit { repo_id, .. } => {
-            util::clear_banner_error_for_repo(state, *repo_id);
-        }
-        AuthRetryOperation::Clone { .. } => clear_stale_clone_banner_error(state),
+/// Record an error for the UI to show: on its repo when there is one still
+/// open, else as an app notification.
+fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) {
+    if message.trim().is_empty() {
+        return;
     }
-}
-
-fn clear_stale_clone_banner_error(state: &mut AppState) {
-    if state
-        .banner_error
-        .as_ref()
-        .is_some_and(|banner| banner.message.starts_with("Clone failed"))
-    {
-        state.banner_error = None;
+    match repo_id.and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id)) {
+        Some(repo_state) => {
+            util::push_diagnostic(repo_state, crate::model::DiagnosticKind::Error, message)
+        }
+        None => util::push_notification(state, crate::model::AppNotificationKind::Error, message),
     }
 }
 
@@ -895,8 +888,6 @@ fn submit_auth_prompt(
         }
     };
 
-    clear_banner_error_for_auth_operation(state, &prompt.operation);
-
     match retry_msg_for_auth_operation(prompt.operation) {
         Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),
         None => Vec::new(),
@@ -1026,21 +1017,14 @@ fn reduce_inner(
             repo_ids,
             activate_after,
         } => repo_management::close_repos(repos, state, repo_ids, activate_after),
-        Msg::ShowBannerError { repo_id, message } => {
-            if !message.trim().is_empty() {
-                state.banner_error = Some(BannerErrorState { repo_id, message });
-            }
-            Vec::new()
-        }
-        Msg::DismissBannerError => {
-            state.banner_error = None;
+        Msg::ReportError { repo_id, message } => {
+            report_error(state, repo_id, message);
             Vec::new()
         }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.feedback.last_error = None;
             }
-            util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
         }
         Msg::CancelGitOperation {
@@ -2599,10 +2583,11 @@ fn reduce_inner(
                     Vec::new()
                 }
                 Err(error) => {
-                    state.banner_error = Some(BannerErrorState {
-                        repo_id: Some(repo_id),
-                        message: util::format_failure_summary("Submodule trust check", &error),
-                    });
+                    report_error(
+                        state,
+                        Some(repo_id),
+                        util::format_failure_summary("Submodule trust check", &error),
+                    );
                     Vec::new()
                 }
             }
@@ -2627,10 +2612,11 @@ fn reduce_inner(
                     Vec::new()
                 }
                 Err(error) => {
-                    state.banner_error = Some(BannerErrorState {
-                        repo_id: Some(repo_id),
-                        message: util::format_failure_summary("Submodule trust check", &error),
-                    });
+                    report_error(
+                        state,
+                        Some(repo_id),
+                        util::format_failure_summary("Submodule trust check", &error),
+                    );
                     Vec::new()
                 }
             }
@@ -2660,10 +2646,11 @@ fn reduce_inner(
                     Vec::new()
                 }
                 Err(error) => {
-                    state.banner_error = Some(BannerErrorState {
-                        repo_id: Some(repo_id),
-                        message: util::format_failure_summary("Submodule trust check", &error),
-                    });
+                    report_error(
+                        state,
+                        Some(repo_id),
+                        util::format_failure_summary("Submodule trust check", &error),
+                    );
                     Vec::new()
                 }
             }
@@ -3240,7 +3227,10 @@ mod nav_history_tests {
         }));
         // Background / non-navigation messages do not push a step (they are
         // folded into the current entry in place, so they can't pollute history).
-        assert!(!is_view_navigation(&Msg::DismissBannerError));
+        assert!(!is_view_navigation(&Msg::ReportError {
+            repo_id: None,
+            message: String::new(),
+        }));
     }
 
     #[test]

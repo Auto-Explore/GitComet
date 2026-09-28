@@ -19,6 +19,7 @@ mod create_tag_prompt;
 mod delete_branches_confirm;
 mod delete_remote_branch_confirm;
 mod discard_changes_confirm;
+mod error_details;
 mod file_history;
 mod fingerprint;
 mod force_delete_branch_confirm;
@@ -223,6 +224,11 @@ pub(in super::super) struct PopoverHost {
     hook_activity_history_scroll: ScrollHandle,
     hook_activity_hooks_scroll: ScrollHandle,
     hook_activity_output_scroll: ScrollHandle,
+    /// The error shown in the error details dialog, by its toast id.
+    error_details_selected: Option<u64>,
+    error_details_text: error_details::TextState,
+    error_details_scroll: ScrollHandle,
+    error_details_rail_scroll: ScrollHandle,
     /// Explicit 1-based mainline selected in the open merge-commit
     /// cherry-pick or revert confirmation. Reset every time either opens.
     commit_mainline: Option<usize>,
@@ -542,6 +548,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::StashDropConfirm { .. }
+            | PopoverKind::ErrorDetails { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
             | PopoverKind::RevertCommitConfirm { .. }
@@ -800,6 +807,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
         | PopoverKind::HookActivity { .. }
+        | PopoverKind::ErrorDetails { .. }
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
@@ -885,7 +893,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CloneRepo
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
-        PopoverKind::HookActivity { .. } => Some(DIALOG_900_WIDTH),
+        PopoverKind::HookActivity { .. } | PopoverKind::ErrorDetails { .. } => {
+            Some(DIALOG_900_WIDTH)
+        }
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),

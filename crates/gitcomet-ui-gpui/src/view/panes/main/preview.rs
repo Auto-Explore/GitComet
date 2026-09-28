@@ -85,6 +85,13 @@ pub(in crate::view) struct TextDecodeKey {
     encoding: Option<TextEncoding>,
 }
 
+impl TextDecodeKey {
+    /// The same inputs with another encoding choice.
+    pub(in crate::view) fn with_encoding(self, encoding: Option<TextEncoding>) -> Self {
+        Self { encoding, ..self }
+    }
+}
+
 /// Content that is not UTF-8 is decoded whole, so it is bounded.
 const NON_UTF8_TEXT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const BINARY_PREVIEW_MESSAGE: &str = "File looks binary; text preview is not supported.";
