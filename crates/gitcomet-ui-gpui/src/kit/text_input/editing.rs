@@ -2104,6 +2104,57 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
+    /// Cmd-Backspace (Ctrl-Shift-Backspace on Windows/Linux): delete back to
+    /// where Home would move the caret.
+    /// At the start of a row it deletes the line break instead, joining the
+    /// row to the one above, as native text fields do.
+    pub(super) fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToLineStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            let cursor = self.cursor_offset();
+            let start = self.row_start(cursor);
+            let target = if start < cursor {
+                start
+            } else {
+                self.previous_boundary(cursor)
+            };
+            self.extend_selection_to(target, cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    /// Cmd-Delete (Ctrl-Shift-Delete on Windows/Linux): delete forward to
+    /// where End would move the caret, or the line break when already at the
+    /// end of a row.
+    pub(super) fn delete_to_line_end(
+        &mut self,
+        _: &DeleteToLineEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            let cursor = self.cursor_offset();
+            let end = self.row_end(cursor);
+            let target = if end > cursor {
+                end
+            } else {
+                self.next_boundary(cursor)
+            };
+            self.extend_selection_to(target, cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
     pub(super) fn insert_line_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.queue_cursor_autoscroll();
         self.replace_text_in_range(None, self.line_ending, window, cx);
@@ -3374,6 +3425,10 @@ impl TextInput {
 }
 
 impl EntityInputHandler for TextInput {
+    fn accepts_text_input(&self, window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        crate::window_focus::is_active(&self.focus_handle, window) && !self.read_only
+    }
+
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -3420,10 +3475,10 @@ impl EntityInputHandler for TextInput {
         &mut self,
         range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if !self.accepts_text_input(window, cx) {
             return;
         }
         let Some(new_text) = self.sanitize_insert_text(new_text) else {
@@ -3462,10 +3517,10 @@ impl EntityInputHandler for TextInput {
         range_utf16: Option<Range<usize>>,
         new_text: &str,
         new_selected_range_utf16: Option<Range<usize>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if !self.accepts_text_input(window, cx) {
             return;
         }
         let Some(new_text) = self.sanitize_insert_text(new_text) else {

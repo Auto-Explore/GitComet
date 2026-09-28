@@ -28,6 +28,7 @@ mod ui_runtime;
 mod ui_scale;
 mod view;
 mod window_controls;
+mod window_focus;
 mod window_root_hook;
 mod workspaces;
 

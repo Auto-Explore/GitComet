@@ -5,6 +5,134 @@ use super::wrap::*;
 use super::*;
 
 #[gpui::test]
+fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        for multiline in [false, true] {
+            let (input, cx) = cx.add_window_view(|window, cx| {
+                window.activate_window();
+                cx.observe_window_activation(window, |_input, window, cx| {
+                    crate::window_focus::reset_on_deactivation(window, cx);
+                })
+                .detach();
+                let options = TextInputOptions {
+                    multiline,
+                    ..Default::default()
+                };
+                // Both constructors must acquire blur listeners when rendered.
+                if multiline {
+                    TextInput::new_inert(options, cx)
+                } else {
+                    TextInput::new(options, window, cx)
+                }
+            });
+            cx.update(|window, app| {
+                input.update(app, |input, cx| {
+                    input.set_text("alpha beta", cx);
+                    window.focus(&input.focus_handle, cx);
+                    input.replace_text_in_range(Some(10..10), "!", window, cx);
+                });
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(800));
+            cx.run_until_parked();
+            cx.update(|window, app| {
+                input.update(app, |input, cx| {
+                    assert!(input.interaction.cursor_blink_task.is_some());
+                    assert!(
+                        !input.interaction.cursor_blink_visible,
+                        "the live blink ran"
+                    );
+                    input.set_selected_range(1..4, false, window, cx);
+                    input.interaction.is_selecting = true;
+                    input.interaction.mouse_selection_anchor = Some(1);
+                    input.interaction.pending_mouse_selection_anchor =
+                        Some(point(px(4.0), px(4.0)));
+                });
+            });
+            let undo_len = cx.update(|_, app| input.read(app).selection.undo_stack.len());
+
+            cx.deactivate_window();
+            cx.update(|window, app| {
+                assert!(window.focused(app).is_none());
+                input.update(app, |input, cx| {
+                    assert!(!input.interaction.has_focus);
+                    assert!(input.interaction.cursor_blink_task.is_none());
+                    assert!(!input.interaction.is_selecting);
+                    assert!(input.interaction.mouse_selection_anchor.is_none());
+                    assert!(input.interaction.pending_mouse_selection_anchor.is_none());
+                    assert!(!input.accepts_text_input(window, cx));
+                    assert_eq!(input.text(), "alpha beta!");
+                    assert_eq!(input.selection.range, 1..4);
+                    assert_eq!(input.selection.undo_stack.len(), undo_len);
+                });
+                window.activate_window();
+            });
+            cx.run_until_parked();
+            crate::test_support::refresh_and_draw(cx);
+            cx.simulate_keystrokes("x");
+            cx.executor().advance_clock(Duration::from_secs(2));
+            cx.run_until_parked();
+            cx.update(|window, app| {
+                assert!(window.focused(app).is_none());
+                let input = input.read(app);
+                assert_eq!(input.text(), "alpha beta!");
+                assert_eq!(input.selection.range, 1..4);
+                assert!(input.interaction.cursor_blink_task.is_none());
+            });
+
+            // A delivered click reactivates and places the caret in one gesture.
+            let position = cx.update(|_, app| input.read(app).layout.bounds.unwrap().center());
+            cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+            cx.simulate_click(position, gpui::Modifiers::default());
+            crate::test_support::refresh_and_draw(cx);
+            cx.update(|window, app| {
+                let input = input.read(app);
+                assert!(crate::window_focus::is_active(&input.focus_handle, window));
+                assert!(input.interaction.cursor_blink_visible);
+                assert!(input.interaction.cursor_blink_task.is_some());
+                assert!(input.selection.range.is_empty());
+            });
+            cx.simulate_keystrokes("z");
+            cx.update(|_, app| assert!(input.read(app).text().contains('z')));
+            // Stop the live task before leaving this test window behind.
+            cx.deactivate_window();
+        }
+    });
+}
+
+#[gpui::test]
+fn control_blur_cancels_caret_and_drag_without_losing_selection(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha beta", cx);
+            window.focus(&input.focus_handle, cx);
+            input.set_selected_range(2..5, false, window, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        input.update(app, |input, _| {
+            input.interaction.is_selecting = true;
+            input.interaction.mouse_selection_anchor = Some(2);
+        });
+        window.blur(app);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let input = input.read(app);
+        assert!(!input.interaction.has_focus);
+        assert!(!input.interaction.is_selecting);
+        assert_eq!(input.selection.range, 2..5);
+    });
+}
+
+#[gpui::test]
 fn content_events_exclude_focus_selection_and_identical_replacements(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1869,16 +1997,7 @@ fn make_dual_providers() -> DualProviders {
 
 #[gpui::test]
 fn multiline_shift_enter_inserts_a_line_break(cx: &mut gpui::TestAppContext) {
-    let (input, cx) = cx.add_window_view(|window, cx| {
-        TextInput::new(
-            TextInputOptions {
-                multiline: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        )
-    });
+    let (input, cx) = multiline_input(cx);
 
     cx.update(|window, app| {
         input.update(app, |input, cx| {
@@ -1898,16 +2017,7 @@ fn multiline_shift_enter_inserts_a_line_break(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn multiline_submit_on_enter_keeps_shift_enter_as_line_break(cx: &mut gpui::TestAppContext) {
-    let (input, cx) = cx.add_window_view(|window, cx| {
-        TextInput::new(
-            TextInputOptions {
-                multiline: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        )
-    });
+    let (input, cx) = multiline_input(cx);
 
     cx.update(|window, app| {
         input.update(app, |input, cx| {
@@ -2261,14 +2371,17 @@ fn multiline_input(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
-        TextInput::new(
+        window.activate_window();
+        let input = TextInput::new(
             TextInputOptions {
                 multiline: true,
                 ..Default::default()
             },
             window,
             cx,
-        )
+        );
+        window.focus(&input.focus_handle, cx);
+        input
     })
 }
 
@@ -3144,16 +3257,7 @@ fn replace_text_in_range_keeps_cached_provider_highlights_and_interpolates(
 ) {
     use std::sync::atomic::Ordering;
 
-    let (input, cx) = cx.add_window_view(|window, cx| {
-        TextInput::new(
-            TextInputOptions {
-                multiline: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        )
-    });
+    let (input, cx) = multiline_input(cx);
 
     let dp = make_dual_providers();
 
@@ -3199,16 +3303,7 @@ fn replace_and_mark_text_in_range_keeps_cached_provider_highlights_and_interpola
 ) {
     use std::sync::atomic::Ordering;
 
-    let (input, cx) = cx.add_window_view(|window, cx| {
-        TextInput::new(
-            TextInputOptions {
-                multiline: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        )
-    });
+    let (input, cx) = multiline_input(cx);
 
     let dp = make_dual_providers();
 
@@ -3301,16 +3396,7 @@ fn protected_sample_span() -> Range<usize> {
 fn protected_sample_input(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
-    let (input, cx) = cx.add_window_view(|window, cx| {
-        TextInput::new(
-            TextInputOptions {
-                multiline: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        )
-    });
+    let (input, cx) = multiline_input(cx);
     cx.update(|_window, app| {
         input.update(app, |input, cx| {
             input.set_text(PROTECTED_SAMPLE_TEXT, cx);

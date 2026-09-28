@@ -48,8 +48,10 @@ fn open_worktree_badge_picker(
     repo_id: RepoId,
 ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        GitCometView::new(store, events, None, window, cx)
+    });
 
     cx.update(|window, app| {
         crate::app::bind_text_input_keys_for_test(app);

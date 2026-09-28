@@ -56,6 +56,7 @@ These shortcuts apply when a GitComet text input has focus.
 | Undo | `Cmd-Z` | `Ctrl-Z` | |
 | Redo | `Cmd-Shift-Z` | `Ctrl-Shift-Z` | |
 | Show the character palette | `Ctrl-Cmd-Space` | None | macOS only. |
+| Delete to line start / end | `Cmd-Backspace`, `Cmd-Delete` | `Ctrl-Shift-Backspace`, `Ctrl-Shift-Delete` | With the caret at the end of a single-line input, such as a search box, deleting to the line start clears it. At the start or end of a line, deletes the line break instead. |
 
 ### Cursor movement and selection
 
@@ -130,8 +131,8 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Open file history | `Ctrl-H` | `Ctrl-H` | Working-tree files and files viewed at a commit; not while a text field has focus. |
 | Search the current diff | `Cmd-F` | `Ctrl-F` | If rendered markdown preview is open, GitComet switches back to source mode before opening search. |
 | Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
-| Previous search match | `F2` | `F2` | While diff search is open. |
-| Next search match | `F3` | `F3` | While diff search is open. |
+| Previous search match | `F2` | `F2` | While diff search is open. The ↑ button in the search box does the same. |
+| Next search match | `F3` | `F3` | While diff search is open. The ↓ button in the search box does the same. |
 | Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |
 | Previous file in the status list | `F1` | `F1` | Working tree and conflict-oriented diff flows. |
 | Next file in the status list | `F4` | `F4` | Working tree and conflict-oriented diff flows. |

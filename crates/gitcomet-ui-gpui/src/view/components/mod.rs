@@ -8,6 +8,7 @@ mod interactive_row;
 mod modal;
 mod panel_tab;
 mod picker_prompt;
+mod quick_search_bar;
 mod repository_badge;
 mod resize_grip;
 mod shortcut_keys;
@@ -55,6 +56,7 @@ pub use picker_prompt::{
     PickerPromptOrder, PickerRowKey, PickerRowSpec, picker_prompt_layout_ordered, picker_row,
     remove_row_button, row_height as picker_row_height, selected_hint_pill, workspace_picker_item,
 };
+pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus};
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
 };

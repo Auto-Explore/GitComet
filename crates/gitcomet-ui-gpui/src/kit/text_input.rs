@@ -33,6 +33,8 @@ actions!(
         Delete,
         DeleteWordLeft,
         DeleteWordRight,
+        DeleteToLineStart,
+        DeleteToLineEnd,
         Enter,
         ShiftEnter,
         Left,
