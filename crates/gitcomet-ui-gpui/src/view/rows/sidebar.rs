@@ -39,12 +39,8 @@ pub(in crate::view) fn sidebar_row_background(
 const SIDEBAR_TREE_ROW_HEIGHT_PX: f32 = 24.0;
 const SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX: f32 = 32.0;
 
-/// Unscaled row height, for the callers that place rows themselves — the
-/// collapsed-rail popover's prefix sum works in design units, then scales once.
-/// Whole pixels on purpose: layout snaps every row to the pixel grid, so a
-/// fractional height off the density ramp (Spacious lands on 36.8) would leave
-/// the popover's prefix sum a fifth of a pixel short per row, accumulating over
-/// a long list until the window it places no longer matches what is drawn.
+/// Unscaled height shared by both sidebar modes. Round the density ramp before
+/// scaling so natural rows and sticky overlays use the same slot geometry.
 pub(in crate::view) fn sidebar_list_row_height_px(theme: AppTheme) -> f32 {
     theme
         .metrics
@@ -62,8 +58,7 @@ pub(in crate::view) fn sidebar_list_row_height(
     ui_scale::design_px_from_percent(sidebar_list_row_height_px(theme), ui_scale_percent)
 }
 
-/// Height of the spacer rows the collapsed-rail popover also needs, to size the
-/// scroll spacers it places around its virtualized window.
+/// Height of placeholders for rows painted by a sticky decoration.
 pub(in crate::view) const BRANCH_TREE_SPACER_HEIGHT_PX: f32 = 8.0;
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
@@ -344,21 +339,51 @@ pub(in crate::view) fn worktree_badge_interaction(theme: AppTheme) -> controls::
 /// TruncatedText resolves unset text styles inside a deferred measure closure
 /// that doesn't see ancestor styling, so an unset size would fall back to the
 /// 1rem window default and the label would grow as soon as it matched.
+fn search_label_highlights(
+    search: &crate::view::sidebar_search::SidebarSearch,
+    label: &str,
+    color: gpui::Rgba,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let mut ranges = Vec::new();
+    search.matcher.find_ranges_into(label, &mut ranges, 16);
+    ranges
+        .into_iter()
+        .map(|range| {
+            (
+                range,
+                gpui::HighlightStyle {
+                    color: Some(color.into_color()),
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
+}
+
 fn filtered_label_element<V: 'static>(
     label: SharedString,
-    query: &str,
+    source: Option<&str>,
+    search: &crate::view::sidebar_search::SidebarSearch,
     text_color: gpui::Rgba,
     highlight_color: gpui::Rgba,
     text_size: gpui::AbsoluteLength,
     font_weight: FontWeight,
     cx: &gpui::Context<V>,
 ) -> AnyElement {
-    // `to_ascii_lowercase` preserves byte length, so the match offset is valid
-    // in the original (mixed-case) label.
-    if !query.is_empty()
-        && let Some(start) = label.to_ascii_lowercase().find(query)
-    {
-        let range = start..start + query.len();
+    let mut ranges = Vec::new();
+    let source = source.unwrap_or(&label);
+    search.matcher.find_ranges_into(source, &mut ranges, 16);
+    if source.ends_with(label.as_ref()) {
+        let offset = source.len() - label.len();
+        ranges = ranges
+            .into_iter()
+            .filter_map(|range| {
+                (range.end > offset).then(|| range.start.saturating_sub(offset)..range.end - offset)
+            })
+            .collect();
+    }
+    if !ranges.is_empty() {
         let highlight = gpui::HighlightStyle {
             color: Some(highlight_color.into_color()),
             font_weight: Some(FontWeight::BOLD),
@@ -367,7 +392,7 @@ fn filtered_label_element<V: 'static>(
         components::TruncatedText::new(label, text_size)
             .text_color(text_color)
             .font_weight(font_weight)
-            .highlights([(range, highlight)])
+            .highlights(ranges.into_iter().map(|range| (range, highlight)))
             .render(cx)
             .into_any_element()
     } else {
@@ -505,16 +530,8 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let surface = if this.collapsed_popover_presentation.is_some() {
-            SidebarRowSurface::Rail
-        } else {
-            SidebarRowSurface::Tree
-        };
-        let Some(presentation) = this
-            .collapsed_popover_presentation
-            .clone()
-            .or_else(|| this.branch_sidebar_presentation_cached())
-        else {
+        let surface = SidebarRowSurface::Tree;
+        let Some(presentation) = this.branch_sidebar_presentation_cached() else {
             return Vec::new();
         };
         Self::render_sidebar_rows(
@@ -523,25 +540,6 @@ impl SidebarPaneView {
             surface,
             presentation,
             _window,
-            cx,
-        )
-    }
-
-    pub(in crate::view) fn render_pinned_sidebar_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(presentation) = this.branch_sidebar_presentation_cached() else {
-            return Vec::new();
-        };
-        Self::render_sidebar_rows(
-            this,
-            range.map(|ix| (ix, false)),
-            SidebarRowSurface::Pins,
-            presentation,
-            window,
             cx,
         )
     }
@@ -588,20 +586,9 @@ impl SidebarPaneView {
         } else {
             controls::ControlActivation::Action
         };
-        let filter_query: std::rc::Rc<str> = match surface {
-            SidebarRowSurface::Rail => this
-                .collapsed_popover_filter_query
-                .trim()
-                .to_ascii_lowercase()
-                .into(),
-            SidebarRowSurface::Pins => "".into(),
-            _ => presentation.filter.clone(),
-        };
-        let rows = if surface == SidebarRowSurface::Pins {
-            presentation.pins.clone()
-        } else {
-            presentation.rows.clone()
-        };
+        let filter_query = presentation.search.clone();
+        let rows = presentation.rows.clone();
+        let pin_count = presentation.pins.len();
         let workspace_badges = presentation.workspace_badges;
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
         let theme = this.theme;
@@ -612,7 +599,6 @@ impl SidebarPaneView {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.70 } else { 0.78 },
         );
-        let selected_branch = this.selected_branch_on_surface(surface).cloned();
         let selected_branch_commit_id = this.sidebar_selected_tip();
         let selected_commit = this
             .active_repo()
@@ -698,6 +684,11 @@ impl SidebarPaneView {
                 })
             })
             .map(|(ix, row, stuck)| {
+                let surface = if ix < pin_count {
+                    SidebarRowSurface::Pins
+                } else {
+                    surface
+                };
                 let row_surface = sidebar_row_background(theme, surface, &row, stuck);
                 let row_style = components::InteractiveRowStyle::new(theme, row_surface).flat();
                 (ix, row, row_style, row_surface, stuck)
@@ -759,7 +750,7 @@ impl SidebarPaneView {
                                 if is_collapsed_popover {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 } else {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 }
                             }),
                         )
@@ -843,7 +834,7 @@ impl SidebarPaneView {
                                 if is_collapsed_popover {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 } else {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 }
                             }),
                         )
@@ -861,42 +852,6 @@ impl SidebarPaneView {
                             }),
                         )
                         .map(|row| paint_header(row.into_any_element(), row_surface))
-                        .into_any_element()
-                }
-                BranchSidebarRow::FilterGroupHeader { section } => {
-                    let (icon_path, label): (&'static str, SharedString) = match section {
-                        BranchSection::Local => ("icons/computer.svg", "Local Branches".into()),
-                        BranchSection::Remote => ("icons/cloud.svg", "Remote Branches".into()),
-                    };
-                    let selector_suffix = match section {
-                        BranchSection::Local => "local",
-                        BranchSection::Remote => "remote",
-                    };
-                    // Purely a divider between the two halves of a cross-section
-                    // filter result: no collapse toggle, no menu, no hover.
-                    div()
-                        .id(("branch_filter_group", ix))
-                        .debug_selector(move || format!("branch_filter_group_{selector_suffix}"))
-                        .h(sidebar_list_row_height(theme, ui_scale_percent))
-                        .w_full()
-                        .pl(indent_px(0))
-                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
-                        .flex()
-                        .items_center()
-                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot(icon_path, icon_primary, 14.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .text_size(theme.ui_text(14.0))
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(label),
-                        )
                         .into_any_element()
                 }
                 BranchSidebarRow::SectionSpacer => div()
@@ -972,7 +927,7 @@ impl SidebarPaneView {
                                 if is_collapsed_popover {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 } else {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 }
                             }),
                         )
@@ -1037,7 +992,18 @@ impl SidebarPaneView {
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             components::FadingText::new(
-                                div().text_size(theme.ui_text(14.0)).child(message.clone()),
+                                div()
+                                    .text_size(theme.ui_text(14.0))
+                                    .child(filtered_label_element(
+                                        message.clone(),
+                                        None,
+                                        &filter_query,
+                                        theme.colors.foreground.primary,
+                                        theme.colors.accent.foreground,
+                                        theme.ui_text(14.0).into(),
+                                        FontWeight::NORMAL,
+                                        cx,
+                                    )),
                                 row_style.resolved_background(row_state),
                             )
                             .hover_bg(
@@ -1157,7 +1123,7 @@ impl SidebarPaneView {
                                 if is_collapsed_popover {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 } else {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 }
                             }),
                         )
@@ -1260,6 +1226,11 @@ impl SidebarPaneView {
                                                 theme.ui_text(14.0),
                                             )
                                             .id(("worktree_path_text", ix))
+                                            .highlights(search_label_highlights(
+                                                &filter_query,
+                                                &path_label,
+                                                theme.colors.accent.foreground,
+                                            ))
                                             // Set the color explicitly: TruncatedText
                                             // resolves an unset color from the ambient text
                                             // style inside a deferred measure closure, which
@@ -1315,6 +1286,11 @@ impl SidebarPaneView {
                                                             theme.ui_text(11.0),
                                                         )
                                                         .id(("worktree_branch_badge_text", ix))
+                                                        .highlights(search_label_highlights(
+                                                            &filter_query,
+                                                            &badge_label,
+                                                            theme.colors.accent.foreground,
+                                                        ))
                                                         // Explicit color: TruncatedText resolves an
                                                         // unset color from the ambient text style in
                                                         // a deferred measure closure that misses the
@@ -1440,7 +1416,7 @@ impl SidebarPaneView {
                                 if is_collapsed_popover {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 } else {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 }
                             }),
                         )
@@ -1577,7 +1553,16 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .debug_selector(move || format!("submodule_label_{ix}"))
-                                .child(path_label),
+                                .child(filtered_label_element(
+                                    path_label,
+                                    None,
+                                    &filter_query,
+                                    theme.colors.foreground.primary,
+                                    theme.colors.accent.foreground,
+                                    theme.ui_text(14.0).into(),
+                                    FontWeight::NORMAL,
+                                    cx,
+                                )),
                         )
                         .when_some(badge_label, |row, badge_label| {
                             row.child(
@@ -1691,7 +1676,7 @@ impl SidebarPaneView {
                                     controls::ControlActivation::Nested,
                                     cx.listener(move |this, _, _, cx| {
                                         if stuck {
-                                            this.navigate_sidebar_header(key.clone(), cx);
+                                            this.navigate_sidebar_row(ix, cx);
                                         } else {
                                             this.toggle_active_repo_collapse_key(key.clone(), cx);
                                         }
@@ -1724,7 +1709,7 @@ impl SidebarPaneView {
                                     return;
                                 }
                                 if stuck {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 } else {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 }
@@ -1760,7 +1745,7 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
-                    let from_pins = surface == SidebarRowSurface::Pins;
+                    let from_pins = ix < pin_count;
                     let pinned_root = from_pins && depth == 0;
                     let prefix = if from_pins { "pinned_" } else { "" };
                     let row_group: SharedString =
@@ -1830,7 +1815,7 @@ impl SidebarPaneView {
                                     controls::ControlActivation::Nested,
                                     cx.listener(move |this, _, _, cx| {
                                         if stuck {
-                                            this.navigate_sidebar_header(key.clone(), cx);
+                                            this.navigate_sidebar_row(ix, cx);
                                         } else {
                                             this.toggle_active_repo_collapse_key(key.clone(), cx);
                                         }
@@ -1858,8 +1843,16 @@ impl SidebarPaneView {
                             components::FadingText::new(
                                 filtered_label_element(
                                     label,
+                                    Some(&remote.as_ref().map_or_else(
+                                        || format!("{path}/"),
+                                        |remote| format!("{remote}/{path}/"),
+                                    )),
                                     &filter_query,
-                                    theme.colors.foreground.secondary,
+                                    if from_pins {
+                                        theme.colors.foreground.primary
+                                    } else {
+                                        theme.colors.foreground.secondary
+                                    },
                                     theme.colors.accent.foreground,
                                     gpui::rems(0.75).into(),
                                     FontWeight::NORMAL,
@@ -1882,7 +1875,7 @@ impl SidebarPaneView {
                                     return;
                                 }
                                 if stuck {
-                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                    this.navigate_sidebar_row(ix, cx);
                                 } else {
                                     this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                                 }
@@ -1917,6 +1910,12 @@ impl SidebarPaneView {
                     is_upstream,
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
+                    let surface = if ix < pin_count {
+                        SidebarRowSurface::Pins
+                    } else {
+                        surface
+                    };
+                    let selected_branch = this.selected_branch_on_surface(surface).cloned();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
                     let target_for_reveal = target.clone();
@@ -2084,6 +2083,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(if full_label { 0 } else { usize::from(depth) }))
                         .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
+                        .bg(row_surface)
                         .interactive_row(row_style, row_state)
                         .text_color(branch_text_color)
                         .child(tree_toggle_slot(None).when(
@@ -2108,6 +2108,7 @@ impl SidebarPaneView {
                                     .text_color(branch_selected_label_color)
                                     .child(filtered_label_element(
                                         label,
+                                        Some(&name),
                                         &filter_query,
                                         branch_selected_label_color,
                                         theme.colors.accent.foreground,

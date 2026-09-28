@@ -3156,20 +3156,11 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         .debug_bounds("collapsed_sidebar_popover")
         .expect("expected collapsed Files popover");
     assert!(
-        cx.debug_bounds("collapsed_file_browser_rows").is_some(),
-        "collapsed Files should render its virtualized row band"
+        cx.debug_bounds("file_browser_scroll_container").is_some(),
+        "collapsed Files shares the virtualized file list"
     );
-    assert!(
-        cx.debug_bounds("file_browser_scroll_container").is_none(),
-        "collapsed Files must not use the full-sidebar virtualized viewport"
-    );
-    let scroll = cx.update(|_window, app| {
-        view.read(app)
-            .sidebar_pane
-            .read(app)
-            .collapsed_popover_scroll
-            .clone()
-    });
+    let scroll =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).list_scroll_for_test());
     assert!(
         scroll.max_offset().y > px(0.0),
         "collapsed popover scrollbar must observe overflowing rows"
@@ -3178,47 +3169,24 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         components::Scrollbar::thumb_visible_for_test(&scroll, panel.size.height),
         "collapsed popover must render a scrollbar thumb for overflowing rows"
     );
-    let surface = cx
-        .debug_bounds("collapsed_sidebar_popover_content")
-        .expect("expected collapsed popover scroll surface");
-    let scrollbar_before = cx
-        .debug_bounds("collapsed_sidebar_popover_scrollbar")
-        .expect("expected collapsed popover scrollbar");
-    assert_eq!(
-        (scrollbar_before.top(), scrollbar_before.bottom()),
-        (surface.top(), surface.bottom()),
-        "scrollbar track must be anchored to the visible surface"
-    );
-
-    let before = cx
-        .debug_bounds("file_browser_row_0")
-        .expect("expected first file row")
-        .top();
+    let surface = cx.debug_bounds("file_browser_scroll_container").unwrap();
+    let search_toggle = cx.debug_bounds("collapsed_popover_filter_toggle").unwrap();
+    let before = scroll.offset();
     cx.simulate_event(gpui::ScrollWheelEvent {
-        position: panel.center(),
+        position: surface.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
         ..Default::default()
     });
     test_support::redraw(cx);
-    let after = cx
-        .debug_bounds("file_browser_row_0")
-        .expect("expected first file row after scroll")
-        .top();
-    let scrollbar_after = cx
-        .debug_bounds("collapsed_sidebar_popover_scrollbar")
-        .expect("expected collapsed popover scrollbar after scroll");
-    assert!(
-        after < before - px(1.0),
-        "mouse wheel must move collapsed file rows (before={before:?}, after={after:?})"
-    );
+    assert!(scroll.offset().y < before.y);
     assert_eq!(
-        scrollbar_after, scrollbar_before,
-        "scrollbar track must stay fixed while its content scrolls"
+        cx.debug_bounds("collapsed_popover_filter_toggle").unwrap(),
+        search_toggle
     );
 }
 
 #[gpui::test]
-fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestAppContext) {
+fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -3252,7 +3220,7 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     );
 
     assert!(
-        cx.debug_bounds("collapsed_popover_filter_bar").is_none(),
+        cx.debug_bounds("sidebar_branches_search").is_none(),
         "the popover filter must stay hidden until its header toggle is used"
     );
     let toggle = cx
@@ -3284,7 +3252,7 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     test_support::redraw(cx);
 
     let filter_bar = cx
-        .debug_bounds("collapsed_popover_filter_bar")
+        .debug_bounds("sidebar_branches_search")
         .expect("expected the toggle to reveal the popover filter");
     // The branch sits under a `feature/` group header, so it is not row zero.
     let first_row = ["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"]
@@ -3305,14 +3273,14 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     test_support::redraw(cx);
 
     assert!(
-        cx.debug_bounds("branch_filter_group_remote").is_some(),
-        "a Local popover filter must also surface Remote matches, under a Remote label"
+        cx.debug_bounds("branch_row_1_1").is_none(),
+        "a Local search must not show a branch that only exists on Remote"
     );
     let query = cx.update(|_window, app| {
         view.read(app)
             .sidebar_pane
             .read(app)
-            .collapsed_popover_filter_query
+            .branch_filter_query
             .clone()
     });
     assert_eq!(
@@ -5050,7 +5018,17 @@ fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext
                     ..Default::default()
                 });
                 ui_scale::set_current(app, scale);
-                view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+                view.update(app, |view, cx| {
+                    view.notify_font_preferences_changed(cx);
+                    // Real scale changes resize the panel too. Measure the
+                    // natural tab widths with room for both header actions;
+                    // the minimum-width search test covers constrained tabs.
+                    test_support::set_sidebar_width_for_test(
+                        view,
+                        px(320.0 * scale as f32 / 100.0),
+                        cx,
+                    );
+                });
             });
             test_support::redraw(cx);
             let sizes = ["sidebar_tab_branches", "sidebar_tab_files"]

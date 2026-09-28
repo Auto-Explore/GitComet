@@ -3913,9 +3913,7 @@ fn branch_group_menu_pin_action_persists_the_group_key(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
-fn pinned_branch_group_actions_use_all_members_despite_the_tree_filter(
-    cx: &mut gpui::TestAppContext,
-) {
+fn pinned_branch_group_actions_use_the_shared_branch_filter(cx: &mut gpui::TestAppContext) {
     let local = branch_group_delete_confirm_names_with_head(
         cx,
         BranchSection::Local,
@@ -3926,13 +3924,13 @@ fn pinned_branch_group_actions_use_all_members_despite_the_tree_filter(
         true,
         |_| {},
     );
-    assert_eq!(local, vec!["feat/a".to_string(), "feat/b/c".to_string()]);
+    assert_eq!(local, vec!["feat/b/c".to_string()]);
     let remote = branch_group_delete_confirm_names_with_head(
         cx,
         BranchSection::Remote,
         Some("origin"),
         "feat",
-        "no matching branch",
+        "origin/feat/",
         "main",
         true,
         |_| {},

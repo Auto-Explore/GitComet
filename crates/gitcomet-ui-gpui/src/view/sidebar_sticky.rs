@@ -3,6 +3,155 @@
 use super::branch_sidebar::{self, BranchMenuTarget, BranchSection, BranchSidebarRow};
 use gpui::SharedString;
 use rustc_hash::FxHashMap;
+use std::{ops::Range, rc::Rc};
+
+#[derive(Clone, Debug)]
+pub(super) enum StickySlot {
+    Row(usize),
+    Overflow {
+        row: usize,
+        bottom: bool,
+        roots: Range<usize>,
+    },
+}
+
+impl StickySlot {
+    pub(super) fn row(&self) -> usize {
+        match self {
+            Self::Row(row) | Self::Overflow { row, .. } => *row,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct StickyLayout {
+    pub(super) rows: Rc<[usize]>,
+    pub(super) slots: Vec<StickySlot>,
+}
+
+/// Only inspect the viewport's neighboring pin roots and the small sticky
+/// budget. Hundreds of thousands of offscreen pins cost two binary searches.
+pub(super) fn fit_pins(
+    base: &[usize],
+    pins: &[usize],
+    selected: Option<usize>,
+    scroll: f32,
+    height: f32,
+    row_height: f32,
+) -> StickyLayout {
+    if row_height <= 0.0 {
+        return StickyLayout::default();
+    }
+    let base_top = base
+        .iter()
+        .enumerate()
+        .take_while(|(rank, row)| **row as f32 * row_height - scroll <= *rank as f32 * row_height)
+        .count();
+    let base_bottom = base
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(rank, row)| {
+            **row as f32 * row_height - scroll >= height - (base.len() - *rank) as f32 * row_height
+        })
+        .count();
+    let top = pins
+        .partition_point(|row| *row as f32 * row_height < scroll + base_top as f32 * row_height);
+    let bottom = pins
+        .partition_point(|row| {
+            (*row + 1) as f32 * row_height <= scroll + height - base_bottom as f32 * row_height
+        })
+        .max(top);
+    let budget = ((height / row_height / 3.0).floor() as usize)
+        .saturating_sub(usize::from(selected.is_some_and(|row| base.contains(&row))))
+        .min(((height / row_height).floor() as usize).saturating_sub(base.len() + 1));
+    let count = top + pins.len() - bottom;
+    let controls = usize::from(top > 0) + usize::from(bottom < pins.len());
+    let overflowing = count > budget;
+    let mut chosen = Vec::new();
+    if count > 0 && (!overflowing || budget >= controls) {
+        let available = if overflowing {
+            budget - controls
+        } else {
+            budget
+        };
+        if let Some(selected) = selected
+            && let Ok(ix) = pins.binary_search(&selected)
+            && (ix < top || ix >= bottom)
+            && available > 0
+        {
+            chosen.push(selected);
+        }
+        let mut above = top;
+        let mut below = bottom;
+        while chosen.len() < available && (above > 0 || below < pins.len()) {
+            let choose_top = above > 0
+                && (below == pins.len()
+                    || scroll - pins[above - 1] as f32 * row_height
+                        <= pins[below] as f32 * row_height - scroll - height);
+            let row = if choose_top {
+                above -= 1;
+                pins[above]
+            } else {
+                let row = pins[below];
+                below += 1;
+                row
+            };
+            if !chosen.contains(&row) {
+                chosen.push(row);
+            }
+        }
+    }
+    let mut slots: Vec<_> = base
+        .iter()
+        .chain(&chosen)
+        .copied()
+        .map(StickySlot::Row)
+        .collect();
+    if overflowing && budget >= controls {
+        for (range, bottom_edge) in [(0..top, false), (bottom..pins.len(), true)] {
+            let kept = chosen
+                .iter()
+                .filter(|row| pins[range.clone()].binary_search(row).is_ok())
+                .count();
+            if range.len() > kept {
+                let row = if bottom_edge {
+                    pins[range.end - 1]
+                } else {
+                    pins[range.start]
+                };
+                slots.push(StickySlot::Overflow {
+                    row,
+                    bottom: bottom_edge,
+                    roots: range,
+                });
+            }
+        }
+    }
+    slots.sort_by_key(|slot| {
+        (
+            slot.row(),
+            match slot {
+                StickySlot::Overflow { bottom: false, .. } => 0,
+                StickySlot::Row(_) => 1,
+                _ => 2,
+            },
+        )
+    });
+    slots.dedup_by(|a, b| matches!((&a, &b), (StickySlot::Row(a), StickySlot::Row(b)) if a == b));
+    let rows = slots
+        .iter()
+        .filter_map(|slot| {
+            if let StickySlot::Row(row) = slot {
+                Some(*row)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .into();
+    StickyLayout { rows, slots }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SidebarRowSurface {
@@ -16,6 +165,7 @@ pub(super) enum SidebarRowSurface {
 pub(super) struct SidebarStructure {
     pub(super) sections: Vec<usize>,
     pub(super) headers: FxHashMap<SharedString, usize>,
+    pub(super) pin_roots: Vec<usize>,
 }
 
 pub(super) fn header_key(row: &BranchSidebarRow) -> Option<&SharedString> {
@@ -30,10 +180,45 @@ pub(super) fn header_key(row: &BranchSidebarRow) -> Option<&SharedString> {
     }
 }
 
+pub(super) fn row_key(row: &BranchSidebarRow) -> SharedString {
+    match row {
+        BranchSidebarRow::Branch { target, .. } => format!("branch:{target:?}").into(),
+        BranchSidebarRow::WorktreeItem { path, .. } => {
+            format!("worktree:{}", path.display()).into()
+        }
+        BranchSidebarRow::SubmoduleItem { path, .. } => {
+            format!("submodule:{}", path.display()).into()
+        }
+        BranchSidebarRow::StashItem { id, .. } => format!("stash:{}", id.0).into(),
+        _ => header_key(row)
+            .cloned()
+            .unwrap_or_else(|| format!("{row:?}").into()),
+    }
+}
+
 impl SidebarStructure {
+    #[cfg(test)]
     pub(super) fn new(rows: &[BranchSidebarRow]) -> Self {
+        Self::with_pins(rows, 0)
+    }
+
+    pub(super) fn with_pins(rows: &[BranchSidebarRow], pins: usize) -> Self {
         let mut result = Self::default();
         for (ix, row) in rows.iter().enumerate() {
+            if ix < pins {
+                if matches!(
+                    row,
+                    BranchSidebarRow::Branch { depth: 0, .. }
+                        | BranchSidebarRow::GroupHeader {
+                            depth: 0,
+                            collapsed: false,
+                            ..
+                        }
+                ) {
+                    result.pin_roots.push(ix);
+                }
+                continue;
+            }
             if let Some(key) = header_key(row) {
                 result.headers.insert(key.clone(), ix);
                 if branch_sidebar::is_top_level_collapse_key(key) {
@@ -50,17 +235,17 @@ impl SidebarStructure {
         &self,
         rows: &[BranchSidebarRow],
         target: &BranchMenuTarget,
-        query: &str,
+        search: &super::sidebar_search::SidebarSearch,
     ) -> Vec<usize> {
         let (name, remote) = match target {
             BranchMenuTarget::Local { name } => {
-                if !branch_sidebar::branch_matches_raw_filter(name, query) {
+                if !search.matches_ref(name) {
                     return Vec::new();
                 }
                 (name.as_str(), None)
             }
             BranchMenuTarget::Remote { remote, branch } => {
-                if !branch_sidebar::remote_branch_matches_raw_filter(remote, branch, query) {
+                if !search.matches_remote(remote, branch) {
                     return Vec::new();
                 }
                 (branch.as_str(), Some(remote.as_str()))
@@ -193,6 +378,32 @@ pub(super) fn owning_section(row: &BranchSidebarRow) -> Option<BranchSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_pins_fit_both_edges_without_covering_the_body() {
+        let pins: Vec<_> = (0..100_000).collect();
+        for height in [24.0, 72.0, 180.0, 480.0, 1200.0] {
+            for scroll in [0.0, 240.0, 5000.0, 2_400_000.0] {
+                let sections = [100_000, 100_100];
+                let base = fitted_rows(&sections, &sections, &sections, height, 24.0);
+                let layout = fit_pins(base, &pins, Some(0), scroll, height, 24.0);
+                assert!(layout.slots.len() <= (height / 24.0) as usize - 1);
+                assert!(layout.slots.len() - base.len() <= (height / 72.0) as usize);
+                let mut previous = -24.0;
+                for (rank, slot) in layout.slots.iter().enumerate() {
+                    let y = row_y(slot.row(), rank, layout.slots.len(), scroll, height, 24.0);
+                    assert!(y >= previous + 24.0);
+                    previous = y;
+                }
+                if height == 480.0 && scroll == 5000.0 {
+                    assert!(layout.rows.contains(&0), "selected pin has priority");
+                    for edge in [false, true] {
+                        assert!(layout.slots.iter().any(|slot| matches!(slot, StickySlot::Overflow { bottom, .. } if *bottom == edge)));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn dual_edge_headers_stay_ordered_and_clicks_reveal_content() {

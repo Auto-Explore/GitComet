@@ -855,6 +855,7 @@ impl PopoverHost {
             pinned_branches_by_repo,
             collapsed_items_by_repo,
             branch_filter_query: String::new(),
+            branch_search: crate::view::sidebar_search::SidebarSearch::new("", Default::default()),
             tag_push_preview_key: None,
             tag_push_cancellations: Vec::new(),
             push_upstream_tag_mode: None,
@@ -875,6 +876,8 @@ impl PopoverHost {
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             context_menu_scroll: ScrollHandle::new(),
+            pin_menu_entries: None,
+            pin_menu_scroll: UniformListScrollHandle::default(),
             context_menu_scroll_anchors: Vec::new(),
             expanded_history_ref: None,
             repo_picker_selected_index: None,
@@ -1248,6 +1251,7 @@ impl PopoverHost {
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
         self.context_menu_scroll_anchors.clear();
+        self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
         self.expanded_history_ref = None;
         self.picker_row_menu = None;
@@ -2583,6 +2587,7 @@ impl PopoverHost {
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
         self.context_menu_scroll_anchors.clear();
+        self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
         self.expanded_history_ref = None;
         self.repo_picker_selected_index = None;
@@ -3119,14 +3124,25 @@ impl PopoverHost {
         cx.notify();
     }
 
+    #[cfg(test)]
     pub(in crate::view) fn set_branch_filter_query(
         &mut self,
         query: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.branch_filter_query == query {
+        self.set_branch_search(query, self.branch_search.matcher.options(), cx);
+    }
+
+    pub(in crate::view) fn set_branch_search(
+        &mut self,
+        query: String,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.branch_filter_query == query && self.branch_search.matcher.options() == options {
             return;
         }
+        self.branch_search = crate::view::sidebar_search::SidebarSearch::new(&query, options);
         self.branch_filter_query = query;
         cx.notify();
     }
@@ -3192,19 +3208,10 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return 0;
         };
-        let filter = self.active_branch_filter().unwrap_or_default();
-        self.pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .map_or(0, |items| {
-                items
-                    .iter()
-                    .filter(|key| {
-                        crate::view::branch_sidebar::pinned_branch_renders(
-                            repo, key, section, filter,
-                        )
-                    })
-                    .count()
-            })
+        self.pinned_branches_by_repo.get(&repo.spec.workdir).map_or(0, |items| {
+            crate::view::branch_sidebar::matching_pinned_roots(repo, items, &self.branch_search).iter()
+                .filter(|row| matches!(row, BranchSidebarRow::Branch { section: candidate, .. } | BranchSidebarRow::GroupHeader { section: candidate, .. } if *candidate == section)).count()
+        })
     }
 
     pub(in crate::view) fn fixed_pinned_branch_counts(&self, repo_id: RepoId) -> (usize, usize) {
@@ -3214,7 +3221,7 @@ impl PopoverHost {
         self.pinned_branches_by_repo
             .get(&repo.spec.workdir)
             .map_or((0, 0), |items| {
-                crate::view::branch_sidebar::pinned_root_rows(repo, items, "")
+                crate::view::branch_sidebar::matching_pinned_roots(repo, items, &self.branch_search)
                     .into_iter()
                     .fold((0, 0), |(local, remote), row| match row {
                         BranchSidebarRow::Branch {

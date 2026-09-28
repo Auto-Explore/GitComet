@@ -380,8 +380,13 @@ pub(crate) enum PopoverKind {
         remote: Option<String>,
         /// Full slash path with no trailing separator (`feat`, `feat/sub`).
         path: String,
-        /// Fixed pins show the complete group even while the tree is filtered.
+        /// Whether the context menu was opened from a pinned copy of the group.
         from_pins: bool,
+    },
+    /// Pinned roots that do not fit in the sidebar's sticky pin budget.
+    SidebarPinnedOverflow {
+        repo_id: RepoId,
+        bottom: bool,
     },
     /// Folder toggles for active paths when the sidebar is too short to stack them.
     SidebarAncestorMenu {

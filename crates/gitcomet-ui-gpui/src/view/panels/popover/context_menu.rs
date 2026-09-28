@@ -241,6 +241,122 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
 }
 
 impl PopoverHost {
+    pub(super) fn sidebar_pin_overflow_view(
+        &mut self,
+        repo_id: RepoId,
+        bottom: bool,
+        max_height: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        if !self
+            .pin_menu_entries
+            .as_ref()
+            .is_some_and(|(repo, edge, _)| *repo == repo_id && *edge == bottom)
+        {
+            let entries = self
+                .sidebar_pane
+                .read(cx)
+                .sidebar_pin_overflow_entries(bottom);
+            self.pin_menu_entries = Some((repo_id, bottom, entries.into()));
+            self.pin_menu_scroll
+                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        }
+        let entries = self.pin_menu_entries.as_ref().unwrap().2.clone();
+        let for_keys = entries.clone();
+        let theme = self.theme;
+        let scale = super::popover_ui_scale(cx);
+        let row_height = components::control_height(scale);
+        let height =
+            (row_height * entries.len().min(8)).min((max_height - scale.px(40.0)).max(row_height));
+        let list = uniform_list(
+            "sidebar_pin_overflow_list",
+            entries.len(),
+            cx.processor(move |this, range: Range<usize>, _, cx| {
+                range
+                    .map(|ix| {
+                        let (label, key) = entries[ix].clone();
+                        let selected = this.context_menu_selected_ix == Some(ix);
+                        components::Button::new(format!("pin_overflow_entry_{ix}"), label)
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .selected(selected)
+                            .on_click(theme, cx, move |this, _, window, cx| {
+                                this.sidebar_pane.update(cx, |pane, cx| {
+                                    pane.navigate_sidebar_row_key(key.clone(), cx)
+                                });
+                                this.close_popover_and_restore_focus(window, cx);
+                            })
+                            .w_full()
+                            .h(row_height)
+                            .into_any_element()
+                    })
+                    .collect()
+            }),
+        )
+        .h_full()
+        .track_scroll(&self.pin_menu_scroll);
+        div()
+            .w(scale.px(280.0))
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            .track_focus(&self.context_menu_focus_handle)
+            .key_context("ContextMenu")
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "escape" => this.close_popover_and_restore_focus(window, cx),
+                        "enter" | "space" => {
+                            if let Some((_, key)) = this
+                                .context_menu_selected_ix
+                                .and_then(|ix| for_keys.get(ix))
+                            {
+                                this.sidebar_pane.update(cx, |pane, cx| {
+                                    pane.navigate_sidebar_row_key(key.clone(), cx)
+                                });
+                                this.close_popover_and_restore_focus(window, cx);
+                            }
+                        }
+                        "up" | "down" | "home" | "end" if !for_keys.is_empty() => {
+                            let next = match event.keystroke.key.as_str() {
+                                "home" => 0,
+                                "end" => for_keys.len() - 1,
+                                "up" => this
+                                    .context_menu_selected_ix
+                                    .unwrap_or(for_keys.len())
+                                    .saturating_sub(1),
+                                _ => this
+                                    .context_menu_selected_ix
+                                    .map_or(0, |ix| (ix + 1).min(for_keys.len() - 1)),
+                            };
+                            this.context_menu_selected_ix = Some(next);
+                            this.pin_menu_scroll
+                                .scroll_to_item(next, gpui::ScrollStrategy::Center);
+                            cx.notify();
+                        }
+                        _ => return,
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .child(
+                div()
+                    .px(scale.px(8.0))
+                    .py(scale.px(6.0))
+                    .text_size(theme.ui_text(12.0))
+                    .child("More pinned items"),
+            )
+            .child(
+                div().relative().h(height).min_h(px(0.0)).child(list).child(
+                    components::Scrollbar::new(
+                        "pin_overflow_scrollbar",
+                        self.pin_menu_scroll.clone(),
+                    )
+                    .render(theme),
+                ),
+            )
+    }
+
     pub(super) fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
         self.state
             .repos
@@ -804,9 +920,8 @@ impl PopoverHost {
             // The branch tree's collapse state is view-owned rather than a
             // store message, so these four go through the sidebar pane.
             ContextMenuAction::UnpinAllFixedBranches { repo_id, section } => {
-                self.sidebar_pane.update(cx, |pane, cx| {
-                    pane.unpin_branches_matching(repo_id, section, "", cx)
-                });
+                self.sidebar_pane
+                    .update(cx, |pane, cx| pane.unpin_all_branches(repo_id, section, cx));
             }
             ContextMenuAction::ToggleSidebarCollapseKey { collapse_key } => {
                 self.sidebar_pane.update(cx, |pane, cx| {

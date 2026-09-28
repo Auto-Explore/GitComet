@@ -199,7 +199,9 @@ fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
 }
 
 #[gpui::test]
-fn sticky_sidebar_pins_are_fixed_capped_virtualized_and_unfiltered(cx: &mut gpui::TestAppContext) {
+fn sticky_sidebar_pins_share_scrolling_filtering_and_virtualized_overflow(
+    cx: &mut gpui::TestAppContext,
+) {
     let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -230,42 +232,50 @@ fn sticky_sidebar_pins_are_fixed_capped_virtualized_and_unfiltered(cx: &mut gpui
         })
     });
     test_support::redraw(cx);
-    let pins_bounds = cx.debug_bounds("sidebar_pinned_area").unwrap();
-    let body = cx.debug_bounds("sidebar_branches_body").unwrap();
+    let body = cx.debug_bounds("branch_sidebar_scroll_container").unwrap();
     assert!(
-        pins_bounds.size.height <= body.size.height / 3.0 + px(1.0),
-        "pins {pins_bounds:?}, body {body:?}"
+        cx.debug_bounds("sidebar_pinned_area").is_none(),
+        "no nested pin viewport"
     );
     let pins = cx.update(|_, app| {
         pane.update(app, |pane, _| {
-            assert!(
-                pane.rendered_rows < 200,
-                "only visible rows may be built: {}",
-                pane.rendered_rows
-            );
+            assert!(pane.rendered_rows < 200);
             let p = pane.branch_sidebar_presentation_cached().unwrap();
             assert_eq!(p.pins.len(), 2_000);
+            assert_eq!(&p.rows[..p.pins.len()], p.pins.as_ref());
             p.pins
         })
     });
-    assert!(cx.debug_bounds("sidebar_pinned_heading").is_none());
-    let pin = cx.debug_bounds("sidebar_pin_marker_0").unwrap();
-    let branch_icon = cx.debug_bounds("sidebar_branch_icon_Pins_0").unwrap();
-    let header_icon = cx.debug_bounds("sidebar_header_icon_0").unwrap();
-    let header_toggle = cx.debug_bounds("sidebar_header_toggle_0").unwrap();
-    assert_eq!(pin.left(), header_toggle.left());
-    assert_eq!(pin.size.width, header_toggle.size.width);
-    assert_eq!(branch_icon.left(), header_icon.left());
-    assert_eq!(branch_icon.size.width, header_icon.size.width);
-    scroll(cx, pins_bounds.center(), point(px(0.0), px(-300.0)));
+    assert!(cx.debug_bounds("sidebar_pin_marker_0").is_some());
+    assert!(cx.debug_bounds("sidebar_more_pins_bottom").is_some());
+    scroll(cx, body.center(), point(px(0.0), px(-800.0)));
     test_support::redraw(cx);
     cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            assert!(pane.branches_scroll.0.borrow().base_handle.offset().y < px(0.0));
+            assert!(Rc::ptr_eq(
+                &pane.branch_sidebar_presentation_cached().unwrap().pins,
+                &pins
+            ));
+            assert!(pane.rendered_rows < 200);
+        })
+    });
+    let overflow = cx.debug_bounds("sidebar_more_pins_top").unwrap();
+    cx.simulate_click(overflow.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(cx.update(|_, app| matches!(
+        test_support::popover_kind(view.read(app), app),
+        Some(PopoverKind::SidebarPinnedOverflow { bottom: false, .. })
+    )));
+    let entry = cx.debug_bounds("pin_overflow_entry_0").unwrap();
+    cx.simulate_click(entry.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("sidebar_pin_marker_0").is_some(),
+        "overflow reveals the natural pin"
+    );
+    cx.update(|_, app| {
         pane.update(app, |pane, cx| {
-            assert!(pane.pinned_scroll.0.borrow().base_handle.offset().y < px(0.0));
-            assert_eq!(
-                pane.branches_scroll.0.borrow().base_handle.offset().y,
-                px(0.0)
-            );
             pane.branch_filter_query = "no matching refs".into();
             pane.sticky_context = None;
             cx.notify();
@@ -275,74 +285,19 @@ fn sticky_sidebar_pins_are_fixed_capped_virtualized_and_unfiltered(cx: &mut gpui
     cx.update(|_, app| {
         pane.update(app, |pane, _| {
             let p = pane.branch_sidebar_presentation_cached().unwrap();
-            assert!(
-                Rc::ptr_eq(&p.pins, &pins),
-                "typing a filter must not rebuild or hide pins"
-            );
+            assert!(p.pins.is_empty());
             assert!(
                 !p.rows
                     .iter()
-                    .any(|r| matches!(r, BranchSidebarRow::Branch { .. }))
+                    .any(|row| matches!(row, BranchSidebarRow::Branch { .. }))
+            );
+            assert_eq!(
+                pane.pinned_branches_for_test().len(),
+                2_000,
+                "filtering preserves stored pins"
             );
         })
     });
-    assert!(cx.debug_bounds("sidebar_pinned_heading").is_none());
-    assert_eq!(cx.debug_bounds("sidebar_pinned_area").unwrap(), pins_bounds);
-    for height in [560.0, 900.0, 680.0] {
-        cx.simulate_resize(gpui::size(px(1000.0), px(height)));
-        test_support::redraw(cx);
-        let pins = cx.debug_bounds("sidebar_pinned_area").unwrap();
-        let body = cx.debug_bounds("sidebar_branches_body").unwrap();
-        assert!(pins.size.height <= body.size.height / 3.0 + px(1.0));
-    }
-    // Bulk actions moved to the section menus and include filtered-out pins.
-    cx.update(|_, app| pane.update(app, |pane, cx| pane.sync_popover_branch_filter(cx)));
-    for (section, key, menu_selector, remaining) in [
-        (
-            BranchSection::Local,
-            branch_sidebar::local_section_storage_key(),
-            "context_menu_unpin_all_local_1000",
-            1_000,
-        ),
-        (
-            BranchSection::Remote,
-            branch_sidebar::remote_section_storage_key(),
-            "context_menu_unpin_all_remote_1000",
-            0,
-        ),
-    ] {
-        let ix = cx.update(|_, app| {
-            pane.update(app, |pane, _| {
-                pane.branch_sidebar_presentation_cached()
-                    .unwrap()
-                    .structure
-                    .headers[key]
-            })
-        });
-        let header = cx.debug_bounds(selector(ix)).unwrap();
-        cx.simulate_mouse_down(
-            header.center(),
-            gpui::MouseButton::Right,
-            gpui::Modifiers::default(),
-        );
-        cx.simulate_mouse_up(
-            header.center(),
-            gpui::MouseButton::Right,
-            gpui::Modifiers::default(),
-        );
-        test_support::redraw(cx);
-        let action = cx
-            .debug_bounds(menu_selector)
-            .expect("bulk unpin stays accessible without a Pinned heading");
-        cx.simulate_click(action.center(), gpui::Modifiers::default());
-        test_support::redraw(cx);
-        cx.update(|_, app| pane.update(app, |pane, _| {
-            let p = pane.branch_sidebar_presentation_cached().unwrap();
-            assert_eq!(p.pins.len(), remaining);
-            assert!(!p.pins.iter().any(|row| matches!(row, BranchSidebarRow::Branch { section: candidate, .. } if *candidate == section)));
-        }));
-    }
-    assert!(cx.debug_bounds("sidebar_pinned_area").is_none());
 }
 
 #[gpui::test]
@@ -407,7 +362,7 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
                 };
                 (
                     p.pins.iter().position(matching).unwrap(),
-                    p.rows.iter().position(matching).unwrap(),
+                    p.rows.iter().rposition(matching).unwrap(),
                     p.rows,
                 )
             })
@@ -511,20 +466,45 @@ fn sticky_sidebar_paths_include_both_targets_and_ignore_closed_or_filtered_paths
     let structure = crate::view::sidebar_sticky::SidebarStructure::new(&rows);
     assert_eq!(
         structure
-            .active_path(&rows, &BranchMenuTarget::local("shared/topic-000000"), "")
+            .active_path(
+                &rows,
+                &BranchMenuTarget::local("shared/topic-000000"),
+                &crate::view::sidebar_search::SidebarSearch::new("", Default::default())
+            )
             .len(),
         1
     );
-    assert_eq!(structure.active_path(&rows, &selected, "").len(), 2);
+    assert_eq!(
+        structure
+            .active_path(
+                &rows,
+                &selected,
+                &crate::view::sidebar_search::SidebarSearch::new("", Default::default())
+            )
+            .len(),
+        2
+    );
     assert!(
         structure
-            .active_path(&rows, &selected, "no-match")
+            .active_path(
+                &rows,
+                &selected,
+                &crate::view::sidebar_search::SidebarSearch::new("no-match", Default::default())
+            )
             .is_empty()
     );
     let collapsed = BTreeSet::from([branch_sidebar::remote_group_storage_key("origin", "shared")]);
     let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "");
     let structure = crate::view::sidebar_sticky::SidebarStructure::new(&rows);
-    assert!(structure.active_path(&rows, &selected, "").is_empty());
+    assert!(
+        structure
+            .active_path(
+                &rows,
+                &selected,
+                &crate::view::sidebar_search::SidebarSearch::new("", Default::default())
+            )
+            .is_empty()
+    );
 }
 
 #[gpui::test]
@@ -772,7 +752,7 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
                 assert!(cx.debug_bounds("sidebar_ancestor_menu_0").is_some());
             }
         }
-        // Filtering hides the selected leaf and its path, but retains section headers.
+        // A query with no matches hides the selected leaf and empty sections.
         cx.update(|_, app| {
             pane.update(app, |pane, cx| {
                 pane.branch_filter_query = "no matching refs".into();
@@ -781,7 +761,7 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
         });
         test_support::redraw(cx);
         assert!(cx.debug_bounds("sidebar_sticky_selected_branch").is_none());
-        cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), 5));
+        cx.update(|_, app| assert!(pane.read(app).decorated_sidebar_rows().is_empty()));
     }
 }
 
@@ -1410,7 +1390,7 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
             test_support::redraw(cx);
             let theme = cx.update(|_, app| pane.read(app).theme);
             assert!(
-                paint(cx, "sidebar_pinned_surface")
+                paint(cx, "pinned_branch_row_81_0")
                     .iter()
                     .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
             );
@@ -1495,25 +1475,19 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                     .iter()
                     .any(|(fill, _)| *fill == crate::view::selected_branch_row_bg(theme).into())
             );
-            let pins = cx.debug_bounds("sidebar_pinned_area").unwrap();
-            assert_eq!(pins.size.height, sidebar_list_row_height(theme, scale) * 2);
-            let pinned_surface = cx.debug_bounds("sidebar_pinned_surface").unwrap();
-            let header = cx.debug_bounds("sidebar_sticky_header_0").unwrap();
+            assert!(cx.debug_bounds("sidebar_pinned_area").is_none());
+            let header = cx.debug_bounds("sidebar_sticky_header_2").unwrap();
             let pinned_row = cx.debug_bounds("pinned_branch_row_81_0").unwrap();
             let tree_row = cx.debug_bounds("sidebar_sticky_selected_branch").unwrap();
-            assert_eq!(pinned_surface.left(), pins.left());
-            assert_eq!(pinned_surface.right(), pins.right());
             let panel = cx.debug_bounds("branch_sidebar_scroll_container").unwrap();
-            assert_eq!(header.left(), panel.left());
-            assert_eq!(header.right(), panel.right());
-            for row in [pinned_surface, pinned_row, tree_row] {
-                assert_eq!(row.left(), header.left());
-                assert_eq!(row.right(), header.right());
+            for row in [header, pinned_row, tree_row] {
+                assert_eq!(row.left(), panel.left());
+                assert_eq!(row.right(), panel.right());
             }
             let pin = cx.debug_bounds("sidebar_pin_marker_0").unwrap();
-            let header_toggle = cx.debug_bounds("sidebar_header_toggle_0").unwrap();
+            let header_toggle = cx.debug_bounds("sidebar_header_toggle_2").unwrap();
             let pin_icon = cx.debug_bounds("sidebar_branch_icon_Pins_0").unwrap();
-            let header_icon = cx.debug_bounds("sidebar_header_icon_0").unwrap();
+            let header_icon = cx.debug_bounds("sidebar_header_icon_2").unwrap();
             assert_eq!(pin.left(), header_toggle.left());
             assert_eq!(pin_icon.left(), header_icon.left());
             assert_eq!(pin_icon.size.width, header_icon.size.width);
@@ -1574,7 +1548,7 @@ fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
         cx.debug_bounds("sidebar_pin_marker_2").is_none(),
         "inherited members are not individual pins"
     );
-    let pins = cx.update(|_, app| {
+    let _pins = cx.update(|_, app| {
         pane.update(app, |pane, _| {
             assert!(
                 pane.rendered_rows < 200,
@@ -1596,7 +1570,7 @@ fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
     cx.update(|_, app| {
         pane.update(app, |pane, _| {
             let p = pane.branch_sidebar_presentation_cached().unwrap();
-            assert!(Rc::ptr_eq(&pins, &p.pins));
+            assert!(p.pins.is_empty());
             assert!(
                 !p.rows
                     .iter()
@@ -1604,8 +1578,9 @@ fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
             );
         })
     });
-    // Nested folders and pinned roots toggle, independently of scrolling the
-    // main list. Their canonical collapse keys persist with the tree.
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.clear_branch_filter(cx)));
+    test_support::redraw(cx);
+    // Nested folders and pinned roots retain their canonical collapse keys.
     let nested = cx.debug_bounds("pinned_sidebar_group_toggle_1").unwrap();
     cx.simulate_click(nested.center(), gpui::Modifiers::default());
     test_support::redraw(cx);
@@ -1670,7 +1645,15 @@ fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
     test_support::redraw(cx);
     // Bulk unpin counts roots, including closed and filtered-out groups, and
     // leaves the other section's pin intact.
-    let local_header = cx.debug_bounds(selector(0)).unwrap();
+    let local_ix = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            pane.branch_sidebar_presentation_cached()
+                .unwrap()
+                .structure
+                .sections[0]
+        })
+    });
+    let local_header = cx.debug_bounds(selector(local_ix)).unwrap();
     cx.simulate_mouse_down(
         local_header.center(),
         MouseButton::Right,

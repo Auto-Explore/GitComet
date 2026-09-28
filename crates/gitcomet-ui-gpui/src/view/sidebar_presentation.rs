@@ -4,7 +4,9 @@ use super::caches::{
     branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
     branch_sidebar_cache_store,
 };
+use super::sidebar_search::SidebarSearch;
 use super::*;
+use gitcomet_core::text_search::TextSearchOptions;
 use gitcomet_state::model::SidebarDataRequest;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,22 +58,27 @@ pub(in crate::view) struct SidebarPresentation {
     pub(in crate::view) workspace_badges: WorkspaceBadgeIndex,
     pub(in crate::view) pins: Rc<[BranchSidebarRow]>,
     pub(in crate::view) structure: Rc<super::sidebar_sticky::SidebarStructure>,
-    pub(in crate::view) filter: Rc<str>,
+    pub(in crate::view) search: Rc<SidebarSearch>,
+    pub(in crate::view) match_count: usize,
+    pub(in crate::view) row_keys: Rc<[SharedString]>,
 }
 
 #[derive(Default)]
 pub(in crate::view) struct SidebarPresentationCache {
     branch_rows: Option<BranchSidebarCache>,
-    filtered_rows: Option<FilteredSidebarRows>,
     workspace_badges: Option<WorkspaceBadgeCache>,
     // Pin/collapse mutations explicitly invalidate this view-owned cache.
     // Comparing entire pin sets here would make every scroll frame O(pins).
     pinned_rows: Option<(RepoId, BranchSidebarFingerprint, Rc<[BranchSidebarRow]>)>,
-    structure: Option<(
-        Rc<[BranchSidebarRow]>,
-        Rc<super::sidebar_sticky::SidebarStructure>,
-    )>,
-    normalized_filter: Option<(String, Rc<str>)>,
+    search: Option<Rc<SidebarSearch>>,
+    projection: Option<SidebarProjection>,
+}
+
+struct SidebarProjection {
+    tree: Rc<[BranchSidebarRow]>,
+    pins: Rc<[BranchSidebarRow]>,
+    scope: Option<String>,
+    presentation: SidebarPresentation,
 }
 
 impl SidebarPresentationCache {
@@ -88,13 +95,6 @@ impl SidebarPresentationCache {
         };
         workspace_badges_cached(&mut self.workspace_badges, repo, &state.repos).active_fingerprint
     }
-}
-
-struct FilteredSidebarRows {
-    repo_id: RepoId,
-    fingerprint: BranchSidebarFingerprint,
-    query: String,
-    rows: Rc<[BranchSidebarRow]>,
 }
 
 struct OpenWorkspaceSource {
@@ -214,6 +214,7 @@ pub(in crate::view) fn sidebar_request_fingerprint(
     }
 }
 
+#[cfg(test)]
 pub(in crate::view) fn build_sidebar_presentation(
     cache: &mut SidebarPresentationCache,
     state: &AppState,
@@ -221,6 +222,35 @@ pub(in crate::view) fn build_sidebar_presentation(
     pinned_branches_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
     branch_filter: &str,
 ) -> Option<SidebarPresentation> {
+    build_sidebar_presentation_scoped(
+        cache,
+        state,
+        collapsed_items_by_repo,
+        pinned_branches_by_repo,
+        branch_filter,
+        TextSearchOptions::default(),
+        None,
+    )
+}
+
+pub(in crate::view) fn build_sidebar_presentation_scoped(
+    cache: &mut SidebarPresentationCache,
+    state: &AppState,
+    collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    pinned_branches_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    branch_filter: &str,
+    options: TextSearchOptions,
+    scope: Option<&str>,
+) -> Option<SidebarPresentation> {
+    if !cache.search.as_ref().is_some_and(|search| {
+        search.query == branch_filter.trim() && search.matcher.options() == options
+    }) {
+        cache.search = Some(Rc::new(SidebarSearch::new(branch_filter, options)));
+        cache.branch_rows = None;
+        cache.pinned_rows = None;
+        cache.projection = None;
+    }
+    let search = Rc::clone(cache.search.as_ref().unwrap());
     let repo_id = state.active_repo?;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
     let empty = BTreeSet::new();
@@ -231,13 +261,13 @@ pub(in crate::view) fn build_sidebar_presentation(
         .get(&repo.spec.workdir)
         .unwrap_or(&empty);
 
-    let rows = branch_sidebar_rows_cached(
-        &mut cache.branch_rows,
-        &mut cache.filtered_rows,
-        repo,
-        collapsed_items,
-        branch_filter,
-    );
+    // Search temporarily reveals ancestors without changing saved collapse state.
+    let collapsed_items = if search.matcher.is_empty() {
+        collapsed_items
+    } else {
+        &empty
+    };
+    let tree = branch_sidebar_rows_cached(&mut cache.branch_rows, repo, collapsed_items);
     let fingerprint = BranchSidebarFingerprint::from_repo(repo);
     if !cache
         .pinned_rows
@@ -250,65 +280,113 @@ pub(in crate::view) fn build_sidebar_presentation(
             branch_sidebar::expanded_pinned_rows(repo, pinned_branches, collapsed_items).into(),
         ));
     }
-    if !cache
-        .structure
-        .as_ref()
-        .is_some_and(|(source, _)| Rc::ptr_eq(source, &rows))
+    let raw_pins = Rc::clone(&cache.pinned_rows.as_ref().unwrap().2);
+    let badges = workspace_badges_cached(&mut cache.workspace_badges, repo, state.repos.as_slice());
+    if let Some(cached) = &cache.projection
+        && Rc::ptr_eq(&tree, &cached.tree)
+        && Rc::ptr_eq(&raw_pins, &cached.pins)
+        && cached.scope.as_deref() == scope
     {
-        cache.structure = Some((
-            Rc::clone(&rows),
-            Rc::new(super::sidebar_sticky::SidebarStructure::new(&rows)),
-        ));
+        return Some(SidebarPresentation {
+            workspace_badges: badges,
+            ..cached.presentation.clone()
+        });
     }
-    if !cache
-        .normalized_filter
-        .as_ref()
-        .is_some_and(|(query, _)| query == branch_filter)
-    {
-        cache.normalized_filter = Some((
-            branch_filter.to_owned(),
-            branch_filter.trim().to_ascii_lowercase().into(),
-        ));
+    let mut pins = search.project(&raw_pins);
+    let mut rows = search.project(&tree);
+    if let Some(scope) = scope {
+        pins.retain(|row| match row {
+            BranchSidebarRow::Branch { section, .. }
+            | BranchSidebarRow::GroupHeader { section, .. } => match section {
+                branch_sidebar::BranchSection::Local => {
+                    scope == branch_sidebar::local_section_storage_key()
+                }
+                branch_sidebar::BranchSection::Remote => {
+                    scope == branch_sidebar::remote_section_storage_key()
+                }
+            },
+            _ => false,
+        });
+        rows = rows
+            .iter()
+            .position(|row| super::sidebar_sticky::header_key(row).is_some_and(|key| key == scope))
+            .map(|start| {
+                let end = rows[start + 1..]
+                    .iter()
+                    .position(|row| {
+                        super::sidebar_sticky::header_key(row)
+                            .is_some_and(|key| branch_sidebar::is_top_level_collapse_key(key))
+                    })
+                    .map_or(rows.len(), |end| start + 1 + end);
+                rows[start + 1..end].to_vec()
+            })
+            .unwrap_or_default();
     }
-    Some(SidebarPresentation {
+    let pins: Rc<[BranchSidebarRow]> = pins.into();
+    let mut combined = pins.to_vec();
+    combined.extend(rows);
+    let rows: Rc<[BranchSidebarRow]> = combined.into();
+    let structure = Rc::new(super::sidebar_sticky::SidebarStructure::with_pins(
+        &rows,
+        pins.len(),
+    ));
+    let mut pin_root = String::new();
+    let row_keys = rows
+        .iter()
+        .enumerate()
+        .map(|(ix, row)| {
+            let key = super::sidebar_sticky::row_key(row);
+            if ix < pins.len() {
+                if matches!(
+                    row,
+                    BranchSidebarRow::Branch { depth: 0, .. }
+                        | BranchSidebarRow::GroupHeader { depth: 0, .. }
+                ) {
+                    pin_root = key.to_string();
+                }
+                format!("pin:{}:{pin_root}:{key}", pin_root.len()).into()
+            } else {
+                format!("tree:{key}").into()
+            }
+        })
+        .collect::<Vec<SharedString>>()
+        .into();
+    let match_count = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch { .. }
+                    | BranchSidebarRow::WorktreeItem { .. }
+                    | BranchSidebarRow::SubmoduleItem { .. }
+                    | BranchSidebarRow::StashItem { .. }
+            )
+        })
+        .count();
+    let presentation = SidebarPresentation {
         rows,
-        pins: Rc::clone(&cache.pinned_rows.as_ref().unwrap().2),
-        structure: Rc::clone(&cache.structure.as_ref().unwrap().1),
-        filter: Rc::clone(&cache.normalized_filter.as_ref().unwrap().1),
-        workspace_badges: workspace_badges_cached(
-            &mut cache.workspace_badges,
-            repo,
-            state.repos.as_slice(),
-        ),
-    })
+        pins,
+        structure,
+        row_keys,
+        search,
+        match_count,
+        workspace_badges: badges,
+    };
+    cache.projection = Some(SidebarProjection {
+        tree,
+        pins: raw_pins,
+        scope: scope.map(str::to_owned),
+        presentation: presentation.clone(),
+    });
+    Some(presentation)
 }
 
 fn branch_sidebar_rows_cached(
     cache: &mut Option<BranchSidebarCache>,
-    filtered_cache: &mut Option<FilteredSidebarRows>,
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
-    branch_filter: &str,
 ) -> Rc<[BranchSidebarRow]> {
     let fingerprint = BranchSidebarFingerprint::from_repo(repo);
-    let query = branch_filter.trim();
-    if !query.is_empty() {
-        if let Some(cached) = filtered_cache.as_ref().filter(|cached| {
-            cached.repo_id == repo.id && cached.fingerprint == fingerprint && cached.query == query
-        }) {
-            return Rc::clone(&cached.rows);
-        }
-        let rows: Rc<[BranchSidebarRow]> =
-            branch_sidebar::expanded_sidebar_rows(repo, collapsed_items, query).into();
-        *filtered_cache = Some(FilteredSidebarRows {
-            repo_id: repo.id,
-            fingerprint,
-            query: query.to_owned(),
-            rows: Rc::clone(&rows),
-        });
-        return rows;
-    }
-
     if let Some(rows) = branch_sidebar_cache_lookup(cache, repo.id, fingerprint) {
         return rows;
     }
@@ -352,6 +430,165 @@ fn branch_sidebar_rows_cached(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_flyout_keeps_nested_folder_state_and_shares_section_rows() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.branches = Loadable::Ready(Arc::new(
+            ["main", "feat/A"]
+                .map(|name| gitcomet_core::domain::Branch {
+                    name: name.into(),
+                    target: CommitId("a".into()),
+                    upstream: None,
+                    divergence: None,
+                })
+                .to_vec(),
+        ));
+        let state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        };
+        let scope = branch_sidebar::local_section_storage_key();
+        let collapsed = BTreeMap::from([(
+            PathBuf::from("/tmp/repo"),
+            BTreeSet::from([scope.to_owned(), "group:local:feat".into()]),
+        )]);
+        let empty = BTreeMap::new();
+        let mut cache = SidebarPresentationCache::default();
+        let expanded =
+            build_sidebar_presentation(&mut cache, &state, &collapsed, &empty, "").unwrap();
+        assert!(
+            expanded
+                .rows
+                .iter()
+                .any(|row| matches!(row, BranchSidebarRow::Branch { name, .. } if name == "main"))
+        );
+        let scoped = build_sidebar_presentation_scoped(
+            &mut cache,
+            &state,
+            &collapsed,
+            &empty,
+            "",
+            Default::default(),
+            Some(scope),
+        )
+        .unwrap();
+        assert!(
+            scoped
+                .rows
+                .iter()
+                .any(|row| matches!(row, BranchSidebarRow::Branch { name, .. } if name == "main"))
+        );
+        assert!(scoped.rows.iter().any(|row| matches!(row, BranchSidebarRow::GroupHeader { path, collapsed: true, .. } if path == "feat")));
+        assert!(
+            !scoped.rows.iter().any(
+                |row| matches!(row, BranchSidebarRow::Branch { name, .. } if name == "feat/A")
+            )
+        );
+        let cached = build_sidebar_presentation_scoped(
+            &mut cache,
+            &state,
+            &collapsed,
+            &empty,
+            "",
+            Default::default(),
+            Some(scope),
+        )
+        .unwrap();
+        assert!(Rc::ptr_eq(&scoped.rows, &cached.rows));
+        let expanded =
+            build_sidebar_presentation(&mut cache, &state, &collapsed, &empty, "").unwrap();
+        assert!(
+            expanded
+                .rows
+                .iter()
+                .any(|row| matches!(row, BranchSidebarRow::Branch { name, .. } if name == "main"))
+        );
+        assert!(
+            !expanded.rows.iter().any(
+                |row| matches!(row, BranchSidebarRow::Branch { name, .. } if name == "feat/A")
+            )
+        );
+    }
+
+    #[test]
+    fn combined_pins_keep_distinct_identity_and_share_filtered_group_context() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.branches = Loadable::Ready(Arc::new(
+            ["feat/A", "feat/B"]
+                .map(|name| gitcomet_core::domain::Branch {
+                    name: name.into(),
+                    target: CommitId("a".into()),
+                    upstream: None,
+                    divergence: None,
+                })
+                .to_vec(),
+        ));
+        let state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        };
+        let pins = BTreeMap::from([(
+            PathBuf::from("/tmp/repo"),
+            BTreeSet::from(["local:feat/A".into(), "group:local:feat".into()]),
+        )]);
+        let empty = BTreeMap::new();
+        let mut cache = SidebarPresentationCache::default();
+        let p = build_sidebar_presentation(&mut cache, &state, &empty, &pins, "").unwrap();
+        assert_eq!(p.pins.len(), 4);
+        assert_eq!(p.structure.pin_roots.len(), 2);
+        let copies: Vec<_> = p
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, row)| match row {
+                BranchSidebarRow::Branch { name, .. } if name == "feat/A" => {
+                    Some(p.row_keys[ix].clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copies.len(), 3);
+        assert_eq!(copies.iter().collect::<BTreeSet<_>>().len(), 3);
+        assert!(p.structure.headers["group:local:feat"] >= p.pins.len());
+        let options = TextSearchOptions {
+            regex: true,
+            match_case: true,
+            ..Default::default()
+        };
+        let filtered = build_sidebar_presentation_scoped(
+            &mut cache, &state, &empty, &pins, "A$", options, None,
+        )
+        .unwrap();
+        assert_eq!(filtered.pins.len(), 3);
+        assert_eq!(filtered.match_count, 3);
+        let again = build_sidebar_presentation_scoped(
+            &mut cache, &state, &empty, &pins, "A$", options, None,
+        )
+        .unwrap();
+        assert!(Rc::ptr_eq(&filtered.rows, &again.rows));
+        assert!(Rc::ptr_eq(&filtered.search, &again.search));
+        let closed = BTreeMap::from([(
+            PathBuf::from("/tmp/repo"),
+            BTreeSet::from(["group:local:feat".into()]),
+        )]);
+        let closed = build_sidebar_presentation(
+            &mut SidebarPresentationCache::default(),
+            &state,
+            &closed,
+            &pins,
+            "",
+        )
+        .unwrap();
+        assert_eq!(closed.pins.len(), 2);
+        assert_eq!(
+            closed.structure.pin_roots.len(),
+            1,
+            "closed group is never sticky"
+        );
+    }
 
     fn repo_state(id: RepoId, path: &str) -> RepoState {
         RepoState::new_opening(

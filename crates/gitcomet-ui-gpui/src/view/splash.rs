@@ -952,6 +952,7 @@ impl GitCometView {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let panel = div()
             .id("collapsed_sidebar_popover")
+            .h_full()
             .debug_selector(|| "collapsed_sidebar_popover".to_string())
             .w_full()
             .flex()

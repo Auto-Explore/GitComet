@@ -211,6 +211,7 @@ pub(in super::super) struct PopoverHost {
         std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
     /// Mirror of the sidebar's branch filter, for the same reason.
     branch_filter_query: String,
+    branch_search: crate::view::sidebar_search::SidebarSearch,
 
     tag_push_preview_key: Option<u64>,
     tag_push_cancellations: Vec<gitcomet_core::services::CancellationToken>,
@@ -240,6 +241,8 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     context_menu_scroll: ScrollHandle,
+    pin_menu_entries: Option<(RepoId, bool, PinMenuEntries)>,
+    pin_menu_scroll: UniformListScrollHandle,
     context_menu_scroll_anchors: Vec<gpui::ScrollAnchor>,
     expanded_history_ref: Option<HistoryMenuRef>,
     repo_picker_selected_index: Option<usize>,
@@ -384,6 +387,8 @@ pub(in super::super) struct PopoverHost {
     rebase_reword_description_input: Entity<components::TextInput>,
     rebase_reword_description_scroll: ScrollHandle,
 }
+
+type PinMenuEntries = std::rc::Rc<[(SharedString, SharedString)]>;
 
 pub(in crate::view) struct PopoverHostInit {
     pub(in crate::view) theme: AppTheme,
@@ -532,6 +537,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::FileBrowserFolderMenu { .. }
             | PopoverKind::BranchGroupMenu { .. }
             | PopoverKind::PinnedSectionMenu { .. }
+            | PopoverKind::SidebarPinnedOverflow { .. }
             | PopoverKind::SidebarAncestorMenu { .. }
             | PopoverKind::BrowseHistoryMenu { .. }
     )
@@ -1010,6 +1016,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }
         | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),

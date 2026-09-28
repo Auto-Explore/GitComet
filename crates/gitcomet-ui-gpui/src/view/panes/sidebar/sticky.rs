@@ -2,6 +2,9 @@ use super::*;
 use crate::view::rows::sidebar::branch_commit_id;
 use crate::view::sidebar_sticky::{self, SidebarRowSurface};
 
+type StickyLayoutCache =
+    std::cell::RefCell<Option<((f32, f32, f32), sidebar_sticky::StickyLayout)>>;
+
 pub(super) struct SelectionCache {
     repo_id: RepoId,
     fingerprint: BranchSidebarFingerprint,
@@ -13,11 +16,15 @@ pub(super) struct StickyContext {
     rows: Rc<[BranchSidebarRow]>,
     head: Option<String>,
     selected: Option<BranchMenuTarget>,
+    selected_is_pinned: bool,
+    pin_roots: Rc<[usize]>,
+    row_keys: Rc<[SharedString]>,
+    layout_cache: StickyLayoutCache,
     pub(super) eligible_rows: Rc<[usize]>,
     priority_rows: Rc<[usize]>,
     sections: Rc<[usize]>,
     selected_row: Option<(usize, SharedString)>,
-    anchor: Option<(BranchSidebarRow, f32)>,
+    anchor: Option<(SharedString, f32)>,
     row_height: Option<f32>,
     click_guard: Option<StickyClickGuard>,
 }
@@ -52,12 +59,37 @@ impl StickyContext {
         }
     }
 
+    fn layout(&self, height: f32, row_height: f32, scroll: f32) -> sidebar_sticky::StickyLayout {
+        let key = (height, row_height, scroll);
+        if let Some((cached, layout)) = self.layout_cache.borrow().as_ref()
+            && *cached == key
+        {
+            return layout.clone();
+        }
+        let base = self
+            .fitted_rows(height, row_height)
+            .map_or(&[][..], |rows| rows.as_ref());
+        let layout = sidebar_sticky::fit_pins(
+            base,
+            &self.pin_roots,
+            self.selected_row
+                .as_ref()
+                .filter(|_| self.selected_is_pinned)
+                .map(|(ix, _)| *ix),
+            scroll,
+            height,
+            row_height,
+        );
+        *self.layout_cache.borrow_mut() = Some((key, layout.clone()));
+        layout
+    }
+
     /// Save the first uncovered stable row and its position in slot units so
     /// asynchronous data updates and density/scale changes retain the context.
     fn capture_anchor(
         &self,
         scroll_handle: &UniformListScrollHandle,
-    ) -> Option<(BranchSidebarRow, f32)> {
+    ) -> Option<(SharedString, f32)> {
         let handle = scroll_handle.0.borrow();
         let size = handle.last_item_size?;
         let row_height = self.row_height?;
@@ -70,12 +102,14 @@ impl StickyContext {
         if scroll <= 0.0 {
             return None;
         }
-        let fitted = self.fitted_rows(f32::from(size.item.height), row_height);
-        let fitted = fitted.map(|rows| rows.as_ref()).unwrap_or(&[]);
-        let stacked = fitted
+        let layout = self.layout(f32::from(size.item.height), row_height, scroll);
+        let stacked = layout
+            .slots
             .iter()
             .enumerate()
-            .take_while(|(rank, ix)| **ix as f32 * row_height - scroll <= *rank as f32 * row_height)
+            .take_while(|(rank, slot)| {
+                slot.row() as f32 * row_height - scroll <= *rank as f32 * row_height
+            })
             .count();
         let start = (scroll / row_height).ceil() as usize + stacked;
         self.rows
@@ -83,13 +117,16 @@ impl StickyContext {
             .enumerate()
             .skip(start)
             .find(|(_, row)| sidebar_sticky::same_row(row, row))
-            .map(|(ix, row)| (row.clone(), ix as f32 - scroll / row_height))
+            .map(|(ix, _)| (self.row_keys[ix].clone(), ix as f32 - scroll / row_height))
     }
 }
 
+#[derive(Clone)]
 pub(super) enum NavigationTarget {
+    #[cfg(test)]
     Header(SharedString),
     Branch(BranchMenuTarget),
+    RowKey(SharedString),
 }
 
 impl SidebarPaneView {
@@ -102,7 +139,9 @@ impl SidebarPaneView {
         surface: SidebarRowSurface,
         event: &ClickEvent,
     ) {
-        if surface != SidebarRowSurface::Tree || event.mouse_position().is_none() {
+        if !matches!(surface, SidebarRowSurface::Tree | SidebarRowSurface::Pins)
+            || event.mouse_position().is_none()
+        {
             return;
         }
         let Some(context) = &mut self.sticky_context else {
@@ -181,7 +220,7 @@ impl SidebarPaneView {
             _ => None,
         };
         let selected = self
-            .selected_branch_on_surface(SidebarRowSurface::Tree)
+            .selected_branch()
             .filter(|selected| {
                 selected.repo_id == repo.id
                     && tip.is_some()
@@ -205,6 +244,7 @@ impl SidebarPaneView {
             && Rc::ptr_eq(&context.rows, &presentation.rows)
             && context.head.as_deref() == head
             && context.selected.as_ref() == selected
+            && context.selected_is_pinned == self.selected_branch_is_pinned
         {
             return;
         }
@@ -222,8 +262,8 @@ impl SidebarPaneView {
         // ancestor removes the leaf as well as its sticky path. Resolve once
         // per model/selection change, never while scrolling.
         let selected_row = selected.as_ref().and_then(|selected| {
-            presentation.rows.iter().position(|row| {
-                matches!(row, BranchSidebarRow::Branch { target, .. } if target == selected)
+            presentation.rows.iter().enumerate().position(|(ix, row)| {
+                (ix < presentation.pins.len()) == self.selected_branch_is_pinned && matches!(row, BranchSidebarRow::Branch { target, .. } if target == selected)
             }).map(|ix| {
                 let key = match selected {
                     BranchMenuTarget::Local { name } => format!("sticky:local:{name}"),
@@ -235,16 +275,21 @@ impl SidebarPaneView {
             })
         });
         let mut priority_rows = presentation.structure.sections.clone();
-        if let Some((ix, _)) = &selected_row {
+        if let Some((ix, _)) = &selected_row
+            && presentation.structure.pin_roots.binary_search(ix).is_err()
+        {
             priority_rows.push(*ix);
             priority_rows.sort_unstable();
         }
         let mut eligible_rows = priority_rows.clone();
-        for target in current.iter().chain(selected.iter()) {
+        for target in current
+            .iter()
+            .chain(selected.iter().filter(|_| !self.selected_branch_is_pinned))
+        {
             eligible_rows.extend(presentation.structure.active_path(
                 &presentation.rows,
                 target,
-                &presentation.filter,
+                &presentation.search,
             ));
         }
         eligible_rows.sort_unstable();
@@ -260,6 +305,10 @@ impl SidebarPaneView {
             rows: Rc::clone(&presentation.rows),
             head,
             selected,
+            selected_is_pinned: self.selected_branch_is_pinned,
+            pin_roots: presentation.structure.pin_roots.clone().into(),
+            row_keys: Rc::clone(&presentation.row_keys),
+            layout_cache: Default::default(),
             eligible_rows: eligible_rows.into(),
             priority_rows: priority_rows.into(),
             sections: presentation.structure.sections.clone().into(),
@@ -273,16 +322,19 @@ impl SidebarPaneView {
                 .selected_row
                 .as_ref()
                 .is_some_and(|(ix, _)| *ix == guard.row)
-            && let Some(rows) = next.fitted_rows(
+            && let layout = next.layout(
                 f32::from(guard.viewport.size.height),
                 f32::from(guard.row_height),
+                -f32::from(guard.scroll_offset.y),
             )
-            && let Ok(rank) = rows.binary_search(&guard.row)
+            && let Some(rank) = layout.slots.iter().position(
+                |slot| matches!(slot, sidebar_sticky::StickySlot::Row(ix) if *ix == guard.row),
+            )
         {
             let y = sidebar_sticky::row_y(
                 guard.row,
                 rank,
-                rows.len(),
+                layout.slots.len(),
                 -f32::from(guard.scroll_offset.y),
                 f32::from(guard.viewport.size.height),
                 f32::from(guard.row_height),
@@ -313,11 +365,40 @@ impl SidebarPaneView {
         };
         let row_height = f32::from(size.contents.height) / context.rows.len().max(1) as f32;
         context
-            .fitted_rows(f32::from(size.item.height), row_height)
-            .cloned()
-            .unwrap_or_else(|| Rc::from([]))
+            .layout(
+                f32::from(size.item.height),
+                row_height,
+                -f32::from(handle.base_handle.offset().y),
+            )
+            .rows
     }
 
+    pub(in crate::view) fn navigate_sidebar_row(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(key) = self
+            .sticky_context
+            .as_ref()
+            .and_then(|context| context.row_keys.get(ix))
+            .cloned()
+        {
+            self.navigate_sidebar_row_key(key, cx);
+        }
+    }
+
+    pub(in crate::view) fn navigate_sidebar_row_key(
+        &mut self,
+        key: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.pending_sidebar_navigation = Some(NavigationTarget::RowKey(key));
+        self.clear_sidebar_click_target();
+        cx.notify();
+    }
+
+    #[cfg(test)]
     pub(in crate::view) fn navigate_sidebar_header(
         &mut self,
         key: SharedString,
@@ -354,36 +435,48 @@ impl SidebarPaneView {
         context.row_height = Some(row_height);
         let navigation = self.pending_sidebar_navigation.take();
         let target = navigation.as_ref().and_then(|target| match target {
+            #[cfg(test)]
             NavigationTarget::Header(key) => presentation
                 .structure
                 .headers
                 .get(key)
                 .copied()
                 .map(|ix| (ix, false)),
+            NavigationTarget::RowKey(key) => presentation.row_keys.iter().position(|candidate| candidate == key).map(|ix| (ix, false)),
             NavigationTarget::Branch(target) => presentation
                 .rows
                 .iter()
-                .position(|row| matches!(row, BranchSidebarRow::Branch { target: candidate, .. } if candidate == target))
+                .rposition(|row| matches!(row, BranchSidebarRow::Branch { target: candidate, .. } if candidate == target))
                 .map(|ix| (ix, true)),
         });
         let offset = if let Some((ix, center)) = target {
             context.anchor = None;
-            let fitted = context.fitted_rows(height, row_height);
-            let headers = fitted.map(|rows| rows.as_ref()).unwrap_or(&[]);
-            Some(sidebar_sticky::navigation_offset(
-                ix,
-                headers,
-                height,
-                row_height,
-                presentation.rows.len(),
-                center,
-            ))
+            let mut offset = (ix as f32 * row_height).max(0.0);
+            // Re-fit at the destination: a reveal can change which edge owns
+            // the pin overflow control and which ancestors cover the body.
+            for _ in 0..3 {
+                let layout = context.layout(height, row_height, offset);
+                let headers = layout
+                    .slots
+                    .iter()
+                    .map(sidebar_sticky::StickySlot::row)
+                    .collect::<Vec<_>>();
+                offset = sidebar_sticky::navigation_offset(
+                    ix,
+                    &headers,
+                    height,
+                    row_height,
+                    presentation.rows.len(),
+                    center,
+                );
+            }
+            Some(offset)
         } else {
             context.anchor.take().and_then(|(anchor, y)| {
                 presentation
-                    .rows
+                    .row_keys
                     .iter()
-                    .position(|row| sidebar_sticky::same_row(row, &anchor))
+                    .position(|key| key == &anchor)
                     .map(|ix| {
                         ((ix as f32 - y) * row_height).clamp(
                             0.0,
@@ -427,61 +520,39 @@ impl SidebarPaneView {
             .collect()
     }
 
-    pub(super) fn render_fixed_pins(
-        &mut self,
-        presentation: &SidebarPresentation,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> Option<AnyElement> {
-        if presentation.pins.is_empty() {
-            return None;
-        }
-        let scale = ui_scale::current(cx);
-        let row_height = sidebar_list_row_height(theme, scale.percent);
-        let list = restrict_scroll_to_vertical_axis(
-            uniform_list(
-                "sidebar_pins",
-                presentation.pins.len(),
-                cx.processor(Self::render_pinned_sidebar_rows),
-            )
-            .h_full()
-            .min_h(px(0.0))
-            .track_scroll(&self.pinned_scroll),
-        );
-        Some(
-            div()
-                .id("sidebar_pinned_area")
-                .debug_selector(|| "sidebar_pinned_area".to_string())
-                .flex()
-                .flex_col()
-                .flex_none()
-                .min_h(px(0.0))
-                .h(row_height * presentation.pins.len())
-                .max_h(gpui::relative(1.0 / 3.0))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(
-                            div()
-                                .debug_selector(|| "sidebar_pinned_surface".to_string())
-                                .h_full()
-                                .bg(theme.colors.surface.panel)
-                                .child(list),
-                        )
-                        .child(
-                            components::Scrollbar::new(
-                                "sidebar_pins_scrollbar",
-                                self.pinned_scroll.clone(),
-                            )
-                            .auto_hide()
-                            .render(theme),
-                        ),
-                )
-                .into_any_element(),
-        )
+    pub(in crate::view) fn sidebar_pin_overflow_entries(
+        &self,
+        bottom: bool,
+    ) -> Vec<(SharedString, SharedString)> {
+        let Some(context) = &self.sticky_context else {
+            return Vec::new();
+        };
+        let cache = context.layout_cache.borrow();
+        let Some((_, layout)) = cache.as_ref() else {
+            return Vec::new();
+        };
+        let Some(range) = layout.slots.iter().find_map(|slot| match slot {
+            sidebar_sticky::StickySlot::Overflow {
+                bottom: edge,
+                roots,
+                ..
+            } if *edge == bottom => Some(roots.clone()),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+        context.pin_roots[range]
+            .iter()
+            .filter(|ix| layout.rows.binary_search(ix).is_err())
+            .filter_map(|ix| {
+                let label = match &context.rows[*ix] {
+                    BranchSidebarRow::Branch { name, .. } => name.clone(),
+                    BranchSidebarRow::GroupHeader { label, .. } => label.clone(),
+                    _ => return None,
+                };
+                Some((label, context.row_keys[*ix].clone()))
+            })
+            .collect()
     }
 }
 
@@ -507,16 +578,18 @@ impl gpui::UniformListDecoration for StickyRows {
             let Some(context) = &this.sticky_context else {
                 return div().into_any();
             };
-            let Some(rows) =
-                context.fitted_rows(f32::from(bounds.size.height), f32::from(row_height))
-            else {
-                return div().into_any_element();
-            };
-            let compact = rows.len() < context.eligible_rows.len();
+            let layout = context.layout(
+                f32::from(bounds.size.height),
+                f32::from(row_height),
+                -f32::from(scroll_offset.y),
+            );
+            let compact = context
+                .fitted_rows(f32::from(bounds.size.height), f32::from(row_height))
+                .is_some_and(|rows| rows.len() < context.eligible_rows.len());
             let elements = Self::render_rows(
                 this,
                 &presentation,
-                rows.clone(),
+                layout,
                 compact,
                 bounds,
                 scroll_offset,
@@ -538,7 +611,7 @@ impl StickyRows {
     fn render_rows(
         this: &mut SidebarPaneView,
         presentation: &SidebarPresentation,
-        rows: Rc<[usize]>,
+        layout: sidebar_sticky::StickyLayout,
         compact: bool,
         bounds: Bounds<Pixels>,
         scroll_offset: Point<Pixels>,
@@ -555,7 +628,7 @@ impl StickyRows {
             let y = sidebar_sticky::row_y(
                 ix,
                 rank,
-                rows.len(),
+                layout.slots.len(),
                 -f32::from(scroll_offset.y),
                 f32::from(bounds.size.height),
                 f32::from(row_height),
@@ -564,35 +637,107 @@ impl StickyRows {
         };
         let rendered = SidebarPaneView::render_sidebar_rows(
             this,
-            rows.iter()
+            layout
+                .slots
+                .iter()
                 .enumerate()
-                .map(|(rank, &ix)| (ix, position(rank, ix).1)),
+                .filter_map(|(rank, slot)| match slot {
+                    sidebar_sticky::StickySlot::Row(ix) => Some((*ix, position(rank, *ix).1)),
+                    _ => None,
+                }),
             SidebarRowSurface::Sticky { compact },
             presentation.clone(),
             window,
             cx,
         );
-        rendered
-            .into_iter()
-            .zip(rows.iter())
+        let mut rendered = rendered.into_iter();
+        layout
+            .slots
+            .iter()
             .enumerate()
-            .map(|(rank, (element, &ix))| {
+            .map(|(rank, slot)| {
+                let ix = slot.row();
                 let (y, stuck) = position(rank, ix);
+                if let sidebar_sticky::StickySlot::Overflow { bottom, roots, .. } = slot {
+                    let bottom = *bottom;
+                    let count = roots.len()
+                        - layout
+                            .rows
+                            .iter()
+                            .filter(|ix| {
+                                presentation.structure.pin_roots[roots.clone()]
+                                    .binary_search(ix)
+                                    .is_ok()
+                            })
+                            .count();
+                    return div()
+                        .id(if bottom {
+                            "sidebar_more_pins_bottom"
+                        } else {
+                            "sidebar_more_pins_top"
+                        })
+                        .debug_selector(move || {
+                            if bottom {
+                                "sidebar_more_pins_bottom"
+                            } else {
+                                "sidebar_more_pins_top"
+                            }
+                            .to_owned()
+                        })
+                        .absolute()
+                        .left(-scroll_offset.x)
+                        .top(px(y) - scroll_offset.y)
+                        .w(bounds.size.width)
+                        .h(row_height)
+                        .bg(this.theme.colors.surface.panel)
+                        .block_mouse_except_scroll()
+                        .flex()
+                        .items_center()
+                        .px(content_inset)
+                        .text_size(this.theme.ui_text(12.0))
+                        .text_color(this.theme.colors.foreground.primary)
+                        .child(format!("More pinned items ({count})"))
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                let root = this.root_view.clone();
+                                let position = e.position();
+                                if let Some(repo_id) = this.active_repo_id() {
+                                    window.defer(cx, move |window, cx| {
+                                        let _ = root.update(cx, |root, cx| {
+                                            root.open_popover_at(
+                                                PopoverKind::SidebarPinnedOverflow {
+                                                    repo_id,
+                                                    bottom,
+                                                },
+                                                position,
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    });
+                                }
+                            }),
+                        )
+                        .into_any_element();
+                }
+                let element = rendered.next().unwrap();
                 let header_key = sidebar_sticky::header_key(&presentation.rows[ix]);
-                let key = header_key.cloned().unwrap_or_else(|| {
-                    this.sticky_context
-                        .as_ref()
-                        .unwrap()
-                        .selected_row
-                        .as_ref()
-                        .unwrap()
-                        .1
-                        .clone()
-                });
+                let key = presentation.row_keys[ix].clone();
                 let is_header = header_key.is_some();
+                let is_selected = this
+                    .sticky_context
+                    .as_ref()
+                    .and_then(|context| context.selected_row.as_ref())
+                    .is_some_and(|(row, _)| *row == ix);
                 let background = crate::view::rows::sidebar::sidebar_row_background(
                     this.theme,
-                    SidebarRowSurface::Sticky { compact },
+                    if ix < presentation.pins.len() {
+                        SidebarRowSurface::Pins
+                    } else {
+                        SidebarRowSurface::Sticky { compact }
+                    },
                     &presentation.rows[ix],
                     stuck,
                 );
@@ -602,8 +747,10 @@ impl StickyRows {
                     .debug_selector(move || {
                         if is_header {
                             format!("sidebar_sticky_header_{ix}")
-                        } else {
+                        } else if is_selected {
                             "sidebar_sticky_selected_branch".to_string()
+                        } else {
+                            format!("sidebar_sticky_pin_{ix}")
                         }
                     })
                     .left(-scroll_offset.x)

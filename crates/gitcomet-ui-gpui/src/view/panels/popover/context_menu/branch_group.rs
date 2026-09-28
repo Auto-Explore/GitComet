@@ -17,7 +17,7 @@ pub(super) fn model(
 ) -> ContextMenuModel {
     let (member_count, deletable_count) =
         member_counts(this, repo_id, section, remote, path, from_pins);
-    let filtered = !from_pins && this.active_branch_filter().is_some();
+    let filtered = this.active_branch_filter().is_some();
     let collapse_key = match section {
         BranchSection::Local => branch_sidebar::local_group_storage_key(path),
         BranchSection::Remote => {
@@ -186,11 +186,8 @@ fn for_each_member(
         return;
     };
     let needle = format!("{path}/");
-    let filter = if from_pins {
-        ""
-    } else {
-        this.active_branch_filter().unwrap_or_default()
-    };
+    let _ = from_pins;
+    let search = &this.branch_search;
 
     match section {
         BranchSection::Local => {
@@ -198,8 +195,7 @@ fn for_each_member(
                 return;
             };
             for branch in branches.iter() {
-                if is_group_member(&branch.name, path, &needle)
-                    && branch_sidebar::branch_matches_raw_filter(&branch.name, filter)
+                if is_group_member(&branch.name, path, &needle) && search.matches_ref(&branch.name)
                 {
                     visit(&branch.name);
                 }
@@ -215,11 +211,7 @@ fn for_each_member(
             for branch in branches.iter() {
                 if branch.remote == remote
                     && is_group_member(&branch.name, path, &needle)
-                    && branch_sidebar::remote_branch_matches_raw_filter(
-                        remote,
-                        &branch.name,
-                        filter,
-                    )
+                    && search.matches_remote(remote, &branch.name)
                 {
                     visit(&branch.name);
                 }

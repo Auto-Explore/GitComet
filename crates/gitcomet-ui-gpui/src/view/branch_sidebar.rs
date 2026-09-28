@@ -97,6 +97,7 @@ pub(super) fn branch_pin_storage_key(section: BranchSection, name: &str) -> Stri
 /// The row builder drops a pin whose branch no longer exists and one the branch
 /// filter excludes, so anything reporting "how many are pinned" has to ask the
 /// same question or it disagrees with what is on screen.
+#[cfg(test)]
 pub(super) fn pinned_branch_renders(
     repo: &RepoState,
     key: &str,
@@ -253,11 +254,6 @@ pub(super) enum BranchSidebarRow {
         collapse_key: SharedString,
     },
     SectionSpacer,
-    /// A non-interactive group label. Only the collapsed-rail branch popovers
-    /// emit these, to separate Local from Remote when a filter spans both.
-    FilterGroupHeader {
-        section: BranchSection,
-    },
     Placeholder {
         section: BranchSection,
         message: SharedString,
@@ -919,6 +915,7 @@ pub(super) fn toggle_collapse_state(collapsed_items: &mut BTreeSet<String>, coll
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn branch_sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
@@ -928,8 +925,8 @@ pub(super) fn branch_sidebar_rows(
     sidebar_rows(repo, collapsed_items, pinned_branches, branch_filter, false)
 }
 
-/// The expanded sidebar keeps its sections open and renders pins in a separate
-/// fixed viewport. Rail popovers still use the section-scoped presentation.
+/// Base tree with open top-level sections. The shared presentation adds pins,
+/// search results and an optional section scope for a minimized flyout.
 pub(super) fn expanded_sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
@@ -1892,12 +1889,14 @@ fn matches_branch_filter(name: &str, filter: &str) -> bool {
 ///
 /// The row builder lowercases and trims once up front; menus acting on the same
 /// rows get here instead of repeating that normalisation and drifting from it.
+#[cfg(test)]
 pub(super) fn branch_matches_raw_filter(name: &str, filter: &str) -> bool {
     matches_branch_filter(name, &filter.trim().to_ascii_lowercase())
 }
 
 /// [`matches_remote_branch_filter`] for a raw query, matching against the full
 /// `remote/name` form the tree filters on.
+#[cfg(test)]
 pub(super) fn remote_branch_matches_raw_filter(remote: &str, branch: &str, filter: &str) -> bool {
     matches_remote_branch_filter(remote, branch, &filter.trim().to_ascii_lowercase())
 }
@@ -1922,8 +1921,29 @@ pub(super) fn expanded_pinned_rows(
     pinned_rows(repo, pins, "", Some(collapsed_items))
 }
 
+/// Visible explicit roots under the same matcher used by the sidebar. Expand
+/// groups before filtering, so a matching descendant keeps its root available.
+pub(super) fn matching_pinned_roots(
+    repo: &RepoState,
+    pins: &BTreeSet<String>,
+    search: &super::sidebar_search::SidebarSearch,
+) -> Vec<BranchSidebarRow> {
+    search
+        .project(&expanded_pinned_rows(repo, pins, &BTreeSet::new()))
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch { depth: 0, .. }
+                    | BranchSidebarRow::GroupHeader { depth: 0, .. }
+            )
+        })
+        .collect()
+}
+
 /// Only explicitly pinned roots, for counts and bulk unpin. Descendants do
 /// not count as extra pins, and closed groups still participate.
+#[cfg(test)]
 pub(super) fn pinned_root_rows(
     repo: &RepoState,
     pins: &BTreeSet<String>,
