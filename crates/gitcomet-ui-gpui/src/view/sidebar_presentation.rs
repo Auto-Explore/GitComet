@@ -54,6 +54,9 @@ impl WorkspaceBadgeIndex {
 pub(in crate::view) struct SidebarPresentation {
     pub(in crate::view) rows: Rc<[BranchSidebarRow]>,
     pub(in crate::view) workspace_badges: WorkspaceBadgeIndex,
+    pub(in crate::view) pins: Rc<[BranchSidebarRow]>,
+    pub(in crate::view) structure: Rc<super::sidebar_sticky::SidebarStructure>,
+    pub(in crate::view) filter: Rc<str>,
 }
 
 #[derive(Default)]
@@ -61,6 +64,14 @@ pub(in crate::view) struct SidebarPresentationCache {
     branch_rows: Option<BranchSidebarCache>,
     filtered_rows: Option<FilteredSidebarRows>,
     workspace_badges: Option<WorkspaceBadgeCache>,
+    // Pin/collapse mutations explicitly invalidate this view-owned cache.
+    // Comparing entire pin sets here would make every scroll frame O(pins).
+    pinned_rows: Option<(RepoId, BranchSidebarFingerprint, Rc<[BranchSidebarRow]>)>,
+    structure: Option<(
+        Rc<[BranchSidebarRow]>,
+        Rc<super::sidebar_sticky::SidebarStructure>,
+    )>,
+    normalized_filter: Option<(String, Rc<str>)>,
 }
 
 impl SidebarPresentationCache {
@@ -82,8 +93,6 @@ impl SidebarPresentationCache {
 struct FilteredSidebarRows {
     repo_id: RepoId,
     fingerprint: BranchSidebarFingerprint,
-    collapsed: BTreeSet<String>,
-    pinned: BTreeSet<String>,
     query: String,
     rows: Rc<[BranchSidebarRow]>,
 }
@@ -163,6 +172,7 @@ pub(in crate::view) struct SidebarRequestFingerprint {
 pub(in crate::view) fn active_sidebar_data_request(
     state: &AppState,
     collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    expanded_visible: bool,
 ) -> Option<(RepoId, SidebarDataRequest)> {
     let repo_id = state.active_repo?;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
@@ -174,14 +184,16 @@ pub(in crate::view) fn active_sidebar_data_request(
         repo_id,
         SidebarDataRequest {
             worktrees: true,
-            submodules: !branch_sidebar::is_collapsed(
-                collapsed_items,
-                branch_sidebar::submodules_section_storage_key(),
-            ),
-            stashes: !branch_sidebar::is_collapsed(
-                collapsed_items,
-                branch_sidebar::stash_section_storage_key(),
-            ),
+            submodules: expanded_visible
+                || !branch_sidebar::is_collapsed(
+                    collapsed_items,
+                    branch_sidebar::submodules_section_storage_key(),
+                ),
+            stashes: expanded_visible
+                || !branch_sidebar::is_collapsed(
+                    collapsed_items,
+                    branch_sidebar::stash_section_storage_key(),
+                ),
         },
     ))
 }
@@ -189,11 +201,13 @@ pub(in crate::view) fn active_sidebar_data_request(
 pub(in crate::view) fn sidebar_request_fingerprint(
     state: &AppState,
     collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    expanded_visible: bool,
 ) -> SidebarRequestFingerprint {
-    let (active_repo_id, request) = active_sidebar_data_request(state, collapsed_items_by_repo)
-        .map_or((state.active_repo, None), |(repo_id, request)| {
-            (Some(repo_id), Some(request))
-        });
+    let (active_repo_id, request) =
+        active_sidebar_data_request(state, collapsed_items_by_repo, expanded_visible)
+            .map_or((state.active_repo, None), |(repo_id, request)| {
+                (Some(repo_id), Some(request))
+            });
     SidebarRequestFingerprint {
         active_repo_id,
         request,
@@ -217,15 +231,50 @@ pub(in crate::view) fn build_sidebar_presentation(
         .get(&repo.spec.workdir)
         .unwrap_or(&empty);
 
+    let rows = branch_sidebar_rows_cached(
+        &mut cache.branch_rows,
+        &mut cache.filtered_rows,
+        repo,
+        collapsed_items,
+        branch_filter,
+    );
+    let fingerprint = BranchSidebarFingerprint::from_repo(repo);
+    if !cache
+        .pinned_rows
+        .as_ref()
+        .is_some_and(|(id, rev, _)| *id == repo.id && *rev == fingerprint)
+    {
+        cache.pinned_rows = Some((
+            repo.id,
+            fingerprint,
+            branch_sidebar::expanded_pinned_rows(repo, pinned_branches, collapsed_items).into(),
+        ));
+    }
+    if !cache
+        .structure
+        .as_ref()
+        .is_some_and(|(source, _)| Rc::ptr_eq(source, &rows))
+    {
+        cache.structure = Some((
+            Rc::clone(&rows),
+            Rc::new(super::sidebar_sticky::SidebarStructure::new(&rows)),
+        ));
+    }
+    if !cache
+        .normalized_filter
+        .as_ref()
+        .is_some_and(|(query, _)| query == branch_filter)
+    {
+        cache.normalized_filter = Some((
+            branch_filter.to_owned(),
+            branch_filter.trim().to_ascii_lowercase().into(),
+        ));
+    }
     Some(SidebarPresentation {
-        rows: branch_sidebar_rows_cached(
-            &mut cache.branch_rows,
-            &mut cache.filtered_rows,
-            repo,
-            collapsed_items,
-            pinned_branches,
-            branch_filter,
-        ),
+        rows,
+        pins: Rc::clone(&cache.pinned_rows.as_ref().unwrap().2),
+        structure: Rc::clone(&cache.structure.as_ref().unwrap().1),
+        filter: Rc::clone(&cache.normalized_filter.as_ref().unwrap().1),
         workspace_badges: workspace_badges_cached(
             &mut cache.workspace_badges,
             repo,
@@ -239,29 +288,21 @@ fn branch_sidebar_rows_cached(
     filtered_cache: &mut Option<FilteredSidebarRows>,
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
-    pinned_branches: &BTreeSet<String>,
     branch_filter: &str,
 ) -> Rc<[BranchSidebarRow]> {
     let fingerprint = BranchSidebarFingerprint::from_repo(repo);
     let query = branch_filter.trim();
     if !query.is_empty() {
         if let Some(cached) = filtered_cache.as_ref().filter(|cached| {
-            cached.repo_id == repo.id
-                && cached.fingerprint == fingerprint
-                && cached.query == query
-                && &cached.collapsed == collapsed_items
-                && &cached.pinned == pinned_branches
+            cached.repo_id == repo.id && cached.fingerprint == fingerprint && cached.query == query
         }) {
             return Rc::clone(&cached.rows);
         }
         let rows: Rc<[BranchSidebarRow]> =
-            branch_sidebar::branch_sidebar_rows(repo, collapsed_items, pinned_branches, query)
-                .into();
+            branch_sidebar::expanded_sidebar_rows(repo, collapsed_items, query).into();
         *filtered_cache = Some(FilteredSidebarRows {
             repo_id: repo.id,
             fingerprint,
-            collapsed: collapsed_items.clone(),
-            pinned: pinned_branches.clone(),
             query: query.to_owned(),
             rows: Rc::clone(&rows),
         });
@@ -295,7 +336,7 @@ fn branch_sidebar_rows_cached(
     }
 
     let rows: Rc<[BranchSidebarRow]> =
-        branch_sidebar::branch_sidebar_rows(repo, collapsed_items, pinned_branches, "").into();
+        branch_sidebar::expanded_sidebar_rows(repo, collapsed_items, "").into();
 
     branch_sidebar_cache_store(
         cache,
@@ -418,7 +459,7 @@ mod tests {
         };
 
         let (_, request) =
-            active_sidebar_data_request(&state, &BTreeMap::new()).expect("request exists");
+            active_sidebar_data_request(&state, &BTreeMap::new(), false).expect("request exists");
 
         assert!(request.worktrees);
         assert!(!request.submodules);
@@ -447,7 +488,7 @@ mod tests {
         )]);
 
         let (_, request) =
-            active_sidebar_data_request(&state, &collapsed_items).expect("request exists");
+            active_sidebar_data_request(&state, &collapsed_items, false).expect("request exists");
 
         assert!(request.worktrees);
         assert!(request.submodules);

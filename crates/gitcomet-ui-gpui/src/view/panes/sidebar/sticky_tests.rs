@@ -1,0 +1,1686 @@
+use super::*;
+use crate::view::test_support::{self, TestBackend};
+
+fn scroll(cx: &mut gpui::VisualTestContext, position: Point<Pixels>, delta: Point<Pixels>) {
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(delta),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+}
+
+fn fixture(count: usize) -> Arc<AppState> {
+    let mut state = long_list_tests::branch_fixture(count);
+    let state_mut = Arc::make_mut(&mut state);
+    state_mut.repos[0].head_branch = Loadable::Ready("shared/topic-000000".into());
+    state
+}
+
+fn insert_branch(state: &mut Arc<AppState>, name: &str) {
+    let repo = &mut Arc::make_mut(state).repos[0];
+    if let Loadable::Ready(branches) = &mut repo.branches {
+        let mut branch = branches[0].clone();
+        branch.name = name.into();
+        Arc::make_mut(branches).push(branch);
+    }
+    repo.branches_rev += 1;
+}
+
+fn selector(ix: usize) -> &'static str {
+    format!("sidebar_sticky_header_{ix}").leak()
+}
+
+#[gpui::test]
+fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(1_000);
+    Arc::make_mut(&mut state).repos[0].worktrees =
+        long_list_tests::fixture(40, CollapsedSidebarSection::Worktrees).repos[0]
+            .worktrees
+            .clone();
+    Arc::make_mut(&mut state).repos[0].stashes =
+        long_list_tests::fixture(100, CollapsedSidebarSection::Stashes).repos[0]
+            .stashes
+            .clone();
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+    let (headers, worktrees, stashes, group, rows) = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            assert_eq!(presentation.structure.sections.len(), 5);
+            let group = presentation.structure.headers
+                [branch_sidebar::local_group_storage_key("shared").as_str()];
+            assert!(
+                pane.sticky_context
+                    .as_ref()
+                    .unwrap()
+                    .eligible_rows
+                    .contains(&group)
+            );
+            (
+                pane.sticky_context.as_ref().unwrap().eligible_rows.clone(),
+                presentation.structure.headers[branch_sidebar::worktrees_section_storage_key()],
+                presentation.structure.headers[branch_sidebar::stash_section_storage_key()],
+                group,
+                presentation.rows.clone(),
+            )
+        })
+    });
+    let mut bottom = px(0.0);
+    for ix in headers.iter() {
+        let bounds = cx
+            .debug_bounds(selector(*ix))
+            .expect("every eligible header is painted");
+        assert!(bounds.top() >= bottom);
+        bottom = bounds.bottom();
+    }
+    // Wheel input over a sticky header must reach the one main scroll surface.
+    let local = cx.debug_bounds(selector(0)).unwrap();
+    scroll(cx, local.center(), point(px(0.0), px(-800.0)));
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            assert!(pane.branches_scroll.0.borrow().base_handle.offset().y < px(0.0));
+            assert!(Rc::ptr_eq(
+                &rows,
+                &pane.branch_sidebar_presentation_cached().unwrap().rows
+            ));
+        })
+    });
+    let stash = cx.debug_bounds(selector(stashes)).unwrap();
+    cx.simulate_click(stash.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    let after_stash = cx.update(|_, app| {
+        pane.read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y
+    });
+    assert!(after_stash < px(-20_000.0));
+    let worktree = cx.debug_bounds(selector(worktrees)).unwrap();
+    cx.simulate_click(worktree.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(
+        cx.update(|_, app| pane
+            .read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y)
+            > after_stash
+    );
+    // The clicked heading keeps focus as it moves. Enter uses the same
+    // offset-aware navigation as a pointer click.
+    let worktree_offset = cx.update(|_, app| {
+        pane.read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("enter").unwrap(),
+    });
+    test_support::redraw(cx);
+    assert_eq!(
+        cx.update(|_, app| pane
+            .read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()),
+        worktree_offset
+    );
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.navigate_sidebar_header(
+                branch_sidebar::local_group_storage_key("shared").into(),
+                cx,
+            );
+        })
+    });
+    test_support::redraw(cx);
+    let toggle = cx
+        .debug_bounds(format!("sidebar_group_toggle_{group}").leak())
+        .unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            let group = presentation.structure.headers
+                [branch_sidebar::local_group_storage_key("shared").as_str()];
+            assert!(
+                !pane
+                    .sticky_context
+                    .as_ref()
+                    .unwrap()
+                    .eligible_rows
+                    .contains(&group)
+            );
+            assert!(branch_sidebar::is_collapsed(
+                &pane.collapsed_items_for_test(),
+                &branch_sidebar::local_group_storage_key("shared")
+            ));
+        })
+    });
+}
+
+#[gpui::test]
+fn sticky_sidebar_pins_are_fixed_capped_virtualized_and_unfiltered(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = fixture(10_000);
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+            view.sidebar_pane.update(cx, |pane, cx| {
+                pane.sidebar_pinned_branches_by_repo.insert(
+                    state.repos[0].spec.workdir.clone(),
+                    (0..1_000)
+                        .flat_map(|ix| {
+                            [
+                                format!("local:shared/topic-{ix:06}"),
+                                format!("remote:origin/shared/topic-{ix:06}"),
+                            ]
+                        })
+                        .collect(),
+                );
+                pane.sidebar_presentation_cache = SidebarPresentationCache::default();
+                pane.sync_popover_pinned_branches(cx);
+                cx.notify();
+            });
+        })
+    });
+    test_support::redraw(cx);
+    let pins_bounds = cx.debug_bounds("sidebar_pinned_area").unwrap();
+    let body = cx.debug_bounds("sidebar_branches_body").unwrap();
+    assert!(
+        pins_bounds.size.height <= body.size.height / 3.0 + px(1.0),
+        "pins {pins_bounds:?}, body {body:?}"
+    );
+    let pins = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            assert!(
+                pane.rendered_rows < 200,
+                "only visible rows may be built: {}",
+                pane.rendered_rows
+            );
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert_eq!(p.pins.len(), 2_000);
+            p.pins
+        })
+    });
+    assert!(cx.debug_bounds("sidebar_pinned_heading").is_none());
+    let pin = cx.debug_bounds("sidebar_pin_marker_0").unwrap();
+    let branch_icon = cx.debug_bounds("sidebar_branch_icon_Pins_0").unwrap();
+    let header_icon = cx.debug_bounds("sidebar_header_icon_0").unwrap();
+    let header_toggle = cx.debug_bounds("sidebar_header_toggle_0").unwrap();
+    assert_eq!(pin.left(), header_toggle.left());
+    assert_eq!(pin.size.width, header_toggle.size.width);
+    assert_eq!(branch_icon.left(), header_icon.left());
+    assert_eq!(branch_icon.size.width, header_icon.size.width);
+    scroll(cx, pins_bounds.center(), point(px(0.0), px(-300.0)));
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            assert!(pane.pinned_scroll.0.borrow().base_handle.offset().y < px(0.0));
+            assert_eq!(
+                pane.branches_scroll.0.borrow().base_handle.offset().y,
+                px(0.0)
+            );
+            pane.branch_filter_query = "no matching refs".into();
+            pane.sticky_context = None;
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert!(
+                Rc::ptr_eq(&p.pins, &pins),
+                "typing a filter must not rebuild or hide pins"
+            );
+            assert!(
+                !p.rows
+                    .iter()
+                    .any(|r| matches!(r, BranchSidebarRow::Branch { .. }))
+            );
+        })
+    });
+    assert!(cx.debug_bounds("sidebar_pinned_heading").is_none());
+    assert_eq!(cx.debug_bounds("sidebar_pinned_area").unwrap(), pins_bounds);
+    for height in [560.0, 900.0, 680.0] {
+        cx.simulate_resize(gpui::size(px(1000.0), px(height)));
+        test_support::redraw(cx);
+        let pins = cx.debug_bounds("sidebar_pinned_area").unwrap();
+        let body = cx.debug_bounds("sidebar_branches_body").unwrap();
+        assert!(pins.size.height <= body.size.height / 3.0 + px(1.0));
+    }
+    // Bulk actions moved to the section menus and include filtered-out pins.
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.sync_popover_branch_filter(cx)));
+    for (section, key, menu_selector, remaining) in [
+        (
+            BranchSection::Local,
+            branch_sidebar::local_section_storage_key(),
+            "context_menu_unpin_all_local_1000",
+            1_000,
+        ),
+        (
+            BranchSection::Remote,
+            branch_sidebar::remote_section_storage_key(),
+            "context_menu_unpin_all_remote_1000",
+            0,
+        ),
+    ] {
+        let ix = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                pane.branch_sidebar_presentation_cached()
+                    .unwrap()
+                    .structure
+                    .headers[key]
+            })
+        });
+        let header = cx.debug_bounds(selector(ix)).unwrap();
+        cx.simulate_mouse_down(
+            header.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            header.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        test_support::redraw(cx);
+        let action = cx
+            .debug_bounds(menu_selector)
+            .expect("bulk unpin stays accessible without a Pinned heading");
+        cx.simulate_click(action.center(), gpui::Modifiers::default());
+        test_support::redraw(cx);
+        cx.update(|_, app| pane.update(app, |pane, _| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert_eq!(p.pins.len(), remaining);
+            assert!(!p.pins.iter().any(|row| matches!(row, BranchSidebarRow::Branch { section: candidate, .. } if *candidate == section)));
+        }));
+    }
+    assert!(cx.debug_bounds("sidebar_pinned_area").is_none());
+}
+
+#[gpui::test]
+fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::test_support::painted_control_quads as paint;
+    use gitcomet_core::domain::{Commit, LogPage};
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(4);
+    let repo = &mut Arc::make_mut(&mut state).repos[0];
+    repo.history_state.selected_commit = Some(CommitId("a".into()));
+    repo.log = Loadable::Ready(
+        Arc::new(LogPage {
+            commits: vec![Commit {
+                id: CommitId("a".into()),
+                parent_ids: Default::default(),
+                summary: "Pinned branch tip".into(),
+                author: "Test".into(),
+                time: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: None,
+        })
+        .into(),
+    );
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+            view.sidebar_pane.update(cx, |pane, cx| {
+                pane.sidebar_pinned_branches_by_repo.insert(
+                    state.repos[0].spec.workdir.clone(),
+                    BTreeSet::from([
+                        "local:shared/topic-000001".into(),
+                        "remote:origin/shared/topic-000001".into(),
+                    ]),
+                );
+                pane.sidebar_presentation_cache = SidebarPresentationCache::default();
+                cx.notify();
+            });
+        })
+    });
+    cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
+    test_support::redraw(cx);
+    let theme = cx.update(|_, app| pane.read(app).theme);
+    let selected_bg = crate::view::selected_branch_row_bg(theme).into();
+    for target in [
+        BranchMenuTarget::local("shared/topic-000001"),
+        BranchMenuTarget::remote("origin", "shared/topic-000001"),
+    ] {
+        let (pin_ix, tree_ix, rows) = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                let p = pane.branch_sidebar_presentation_cached().unwrap();
+                let matching = |row: &BranchSidebarRow| {
+                    matches!(row, BranchSidebarRow::Branch { target: candidate, .. } if candidate == &target)
+                };
+                (
+                    p.pins.iter().position(matching).unwrap(),
+                    p.rows.iter().position(matching).unwrap(),
+                    p.rows,
+                )
+            })
+        });
+        let pin_selector: &'static str = format!("pinned_branch_row_81_{pin_ix}").leak();
+        let tree_selector: &'static str = format!("branch_row_81_{tree_ix}").leak();
+        let tree_resting = paint(cx, tree_selector);
+        let pin = cx.debug_bounds(pin_selector).unwrap();
+        cx.simulate_mouse_down(pin.center(), MouseButton::Right, gpui::Modifiers::default());
+        cx.simulate_mouse_up(pin.center(), MouseButton::Right, gpui::Modifiers::default());
+        test_support::redraw(cx);
+        assert!(
+            paint(cx, pin_selector)
+                .iter()
+                .any(|(fill, _)| *fill == theme.active_overlay().into())
+        );
+        assert_eq!(
+            paint(cx, tree_selector),
+            tree_resting,
+            "opening a pin's menu must not highlight its tree copy"
+        );
+        assert!(cx.debug_bounds("sidebar_sticky_selected_branch").is_none());
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.popover_host
+                    .update(cx, |host, cx| host.close_popover(cx));
+            });
+        });
+        test_support::redraw(cx);
+
+        // Repeatedly switch between copies of the SAME branch. The commit and
+        // cached rows stay identical; selection must follow the actual click.
+        for clicked_selector in [pin_selector, tree_selector, pin_selector] {
+            let bounds = cx.debug_bounds(clicked_selector).unwrap();
+            cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+            cx.simulate_mouse_move(
+                point(px(1000.0), px(1000.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            test_support::redraw(cx);
+            let pinned = clicked_selector == pin_selector;
+            assert_eq!(
+                paint(cx, pin_selector)
+                    .iter()
+                    .any(|(fill, _)| *fill == selected_bg),
+                pinned,
+            );
+            assert_eq!(
+                paint(cx, tree_selector)
+                    .iter()
+                    .any(|(fill, _)| *fill == selected_bg),
+                !pinned,
+            );
+            assert_eq!(
+                cx.debug_bounds("sidebar_sticky_selected_branch").is_some(),
+                !pinned
+            );
+            if pinned {
+                assert_eq!(paint(cx, tree_selector), tree_resting);
+            }
+            cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    assert_eq!(pane.selected_branch().unwrap().target, target);
+                    assert!(Rc::ptr_eq(
+                        &rows,
+                        &pane.branch_sidebar_presentation_cached().unwrap().rows
+                    ));
+                    assert_eq!(
+                        pane.sticky_context
+                            .as_ref()
+                            .unwrap()
+                            .eligible_rows
+                            .contains(&tree_ix),
+                        !pinned
+                    );
+                });
+                assert_eq!(
+                    view.read(app)
+                        .main_pane
+                        .read(app)
+                        .history_view
+                        .read(app)
+                        .selected_branch_for_history_row(state.repos[0].id, true)
+                        .unwrap()
+                        .target,
+                    target,
+                    "pin clicks still identify the selected branch in history",
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn sticky_sidebar_paths_include_both_targets_and_ignore_closed_or_filtered_paths() {
+    let state = fixture(4);
+    let repo = &state.repos[0];
+    let selected = BranchMenuTarget::remote("origin", "shared/topic-000001");
+    let rows = branch_sidebar::expanded_sidebar_rows(repo, &BTreeSet::new(), "");
+    let structure = crate::view::sidebar_sticky::SidebarStructure::new(&rows);
+    assert_eq!(
+        structure
+            .active_path(&rows, &BranchMenuTarget::local("shared/topic-000000"), "")
+            .len(),
+        1
+    );
+    assert_eq!(structure.active_path(&rows, &selected, "").len(), 2);
+    assert!(
+        structure
+            .active_path(&rows, &selected, "no-match")
+            .is_empty()
+    );
+    let collapsed = BTreeSet::from([branch_sidebar::remote_group_storage_key("origin", "shared")]);
+    let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "");
+    let structure = crate::view::sidebar_sticky::SidebarStructure::new(&rows);
+    assert!(structure.active_path(&rows, &selected, "").is_empty());
+}
+
+#[gpui::test]
+fn sticky_sidebar_double_click_keeps_the_scrolled_branch_under_the_pointer(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::domain::{Commit, LogPage};
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(1_000);
+    let repo = &mut Arc::make_mut(&mut state).repos[0];
+    repo.history_state.selected_commit = Some(CommitId("a".into()));
+    repo.log = Loadable::Ready(
+        Arc::new(LogPage {
+            commits: vec![Commit {
+                id: CommitId("a".into()),
+                parent_ids: Default::default(),
+                summary: "Branch tip".into(),
+                author: "Test".into(),
+                time: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: None,
+        })
+        .into(),
+    );
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        });
+    });
+    test_support::redraw(cx);
+    let target = BranchMenuTarget::remote("origin", "shared/topic-000500");
+    let ix = cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            let ix = p.rows.iter().position(|row| {
+                matches!(row, BranchSidebarRow::Branch { target: candidate, .. } if candidate == &target)
+            }).unwrap();
+            let before = pane.sticky_context.as_ref().unwrap().eligible_rows.partition_point(|row| *row < ix);
+            let handle = pane.branches_scroll.0.borrow();
+            let height = handle.last_item_size.unwrap().contents.height / p.rows.len() as f32;
+            handle.base_handle.set_offset(point(px(0.0), -height * (ix - before)));
+            cx.notify();
+            ix
+        })
+    });
+    test_support::redraw(cx);
+    let branch_selector: &'static str = format!("branch_row_81_{ix}").leak();
+    let before = cx.debug_bounds(branch_selector).unwrap();
+    let position = before.center();
+    cx.simulate_click(position, gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert_eq!(
+        cx.debug_bounds(branch_selector).unwrap(),
+        before,
+        "the first click must not move the branch out from under the second click"
+    );
+    cx.simulate_event(MouseDownEvent {
+        position,
+        button: MouseButton::Left,
+        click_count: 2,
+        ..Default::default()
+    });
+    // A frame between the press and release must preserve click ownership too.
+    test_support::redraw(cx);
+    cx.simulate_event(gpui::MouseUpEvent {
+        position,
+        button: MouseButton::Left,
+        click_count: 2,
+        ..Default::default()
+    });
+    test_support::redraw(cx);
+    assert!(
+        cx.update(|_, app| matches!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::CheckoutRemoteBranchPrompt { remote, branch, .. })
+                if remote == "origin" && branch == "shared/topic-000500"
+        )),
+        "the same-position double click must open the clicked branch's checkout prompt"
+    );
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        })
+    });
+    cx.simulate_mouse_move(
+        point(px(900.0), px(500.0)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+    let sticky = cx.debug_bounds("sidebar_sticky_selected_branch").unwrap();
+    assert!(
+        sticky.top() > before.top(),
+        "leaving the clicked row must apply the deferred sticky ancestors"
+    );
+    let viewport = cx.update(|_, app| {
+        pane.read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .bounds()
+    });
+    scroll(cx, viewport.center(), point(px(0.0), px(-400.0)));
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("sidebar_sticky_selected_branch").is_some(),
+        "normal selected-branch stickiness must resume after the gesture"
+    );
+}
+
+#[gpui::test]
+fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(1_000);
+    Arc::make_mut(&mut state).repos[0]
+        .history_state
+        .selected_commit = Some(CommitId("a".into()));
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    for target in [
+        BranchMenuTarget::local("shared/topic-000500"),
+        BranchMenuTarget::remote("origin", "shared/topic-000500"),
+    ] {
+        cx.simulate_resize(gpui::size(px(1000.0), px(800.0)));
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.branch_filter_query.clear();
+                pane.set_selected_branch(
+                    state.repos[0].id,
+                    target.clone(),
+                    SidebarRowSurface::Tree,
+                    cx,
+                );
+            })
+        });
+        test_support::redraw(cx);
+        let (rows, eligible, selected_ix, row_height, viewport, max_offset) =
+            cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    let p = pane.branch_sidebar_presentation_cached().unwrap();
+                    let selected_ix = p.rows.iter().position(|row| matches!(row,
+                    BranchSidebarRow::Branch { target: candidate, .. } if candidate == &target
+                )).unwrap();
+                    let handle = pane.branches_scroll.0.borrow();
+                    let row_height =
+                        handle.last_item_size.unwrap().contents.height / p.rows.len() as f32;
+                    (
+                        p.rows,
+                        pane.sticky_context.as_ref().unwrap().eligible_rows.clone(),
+                        selected_ix,
+                        row_height,
+                        handle.base_handle.bounds(),
+                        handle.base_handle.max_offset().y,
+                    )
+                })
+            });
+        let rank = eligible.iter().position(|ix| *ix == selected_ix).unwrap();
+        for offset in [
+            px(0.0),
+            row_height * selected_ix - viewport.size.height / 2.0,
+            max_offset,
+        ] {
+            cx.update(|_, app| {
+                pane.update(app, |pane, cx| {
+                    pane.branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(point(px(0.0), -offset));
+                    cx.notify();
+                })
+            });
+            test_support::redraw(cx);
+            let branch = cx.debug_bounds("sidebar_sticky_selected_branch").unwrap();
+            assert!(branch.top() >= viewport.top());
+            assert!(branch.bottom() <= viewport.bottom());
+            if offset == px(0.0) {
+                assert_eq!(
+                    branch.top(),
+                    viewport.bottom() - row_height * (eligible.len() - rank)
+                );
+            } else if offset == max_offset {
+                assert_eq!(branch.top(), viewport.top() + row_height * rank);
+            } else {
+                assert!((branch.top() - viewport.center().y).abs() < px(1.0));
+            }
+            let mut previous = viewport.top();
+            for ix in eligible.iter() {
+                let bounds = if *ix == selected_ix {
+                    branch
+                } else {
+                    cx.debug_bounds(selector(*ix)).unwrap()
+                };
+                assert!(bounds.top() >= previous);
+                previous = bounds.bottom();
+            }
+            cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    assert!(Rc::ptr_eq(
+                        &rows,
+                        &pane.branch_sidebar_presentation_cached().unwrap().rows
+                    ));
+                    assert!(Rc::ptr_eq(
+                        &eligible,
+                        &pane.sticky_context.as_ref().unwrap().eligible_rows
+                    ));
+                })
+            });
+        }
+        let chrome = cx.update(|window, _| window.viewport_size().height - viewport.size.height);
+        for (slots, count, selected_visible) in [
+            (7.25, 6, true),
+            (6.25, 5, false),
+            (5.5, 0, false),
+            (12.0, eligible.len(), true),
+        ] {
+            cx.simulate_resize(gpui::size(px(1000.0), chrome + row_height * slots));
+            test_support::redraw(cx);
+            cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), count));
+            assert_eq!(
+                cx.debug_bounds("sidebar_sticky_selected_branch").is_some(),
+                selected_visible
+            );
+            if count == 6 {
+                assert!(cx.debug_bounds("sidebar_ancestor_menu_0").is_some());
+            }
+        }
+        // Filtering hides the selected leaf and its path, but retains section headers.
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.branch_filter_query = "no matching refs".into();
+                cx.notify();
+            })
+        });
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("sidebar_sticky_selected_branch").is_none());
+        cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), 5));
+    }
+}
+
+#[gpui::test]
+fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(500);
+    Arc::make_mut(&mut state).repos[0]
+        .history_state
+        .selected_commit = Some(CommitId("a".into()));
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    for (target, key) in [
+        (
+            BranchMenuTarget::local("shared/topic-000100"),
+            branch_sidebar::local_group_storage_key("shared"),
+        ),
+        (
+            BranchMenuTarget::remote("origin", "shared/topic-000100"),
+            branch_sidebar::remote_header_storage_key("origin"),
+        ),
+        (
+            BranchMenuTarget::remote("origin", "shared/topic-000100"),
+            branch_sidebar::remote_group_storage_key("origin", "shared"),
+        ),
+    ] {
+        for hit in ["label", "icon", "chevron"] {
+            cx.update(|_, app| {
+                pane.update(app, |pane, cx| {
+                    pane.set_active_repo_collapse_key(
+                        branch_sidebar::remote_header_storage_key("origin").into(),
+                        false,
+                        cx,
+                    );
+                    pane.set_active_repo_collapse_key(key.clone().into(), false, cx);
+                    pane.set_selected_branch(
+                        state.repos[0].id,
+                        target.clone(),
+                        SidebarRowSurface::Tree,
+                        cx,
+                    );
+                    pane.branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(point(px(0.0), px(-1_000.0)));
+                })
+            });
+            test_support::redraw(cx);
+            let ix = cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    pane.branch_sidebar_presentation_cached()
+                        .unwrap()
+                        .structure
+                        .headers[key.as_str()]
+                })
+            });
+            let row = cx.debug_bounds(selector(ix)).unwrap();
+            let toggle = cx
+                .debug_bounds(format!("sidebar_group_toggle_{ix}").leak())
+                .unwrap();
+            let position = match hit {
+                "chevron" => toggle.center(),
+                "icon" => point(toggle.right() + px(14.0), row.center().y),
+                _ => point(row.right() - px(50.0), row.center().y),
+            };
+            cx.simulate_click(position, gpui::Modifiers::default());
+            test_support::redraw(cx);
+            // Edge-held group rows navigate, including their chevron. Once
+            // back at their natural position the same targets toggle.
+            let navigated_offset = cx.update(|_, app| {
+                let scale = ui_scale::current(app).percent;
+                let pane = pane.read(app);
+                assert!(!branch_sidebar::is_collapsed(
+                    &pane.collapsed_items_for_test(),
+                    &key
+                ));
+                let handle = pane.branches_scroll.0.borrow();
+                let offset = handle.base_handle.offset().y;
+                assert_ne!(offset, px(-1_000.0));
+                let row_height = sidebar_list_row_height(pane.theme, scale);
+                let natural_top = handle.base_handle.bounds().top() + offset + row_height * ix;
+                (offset, natural_top)
+            });
+            let row = cx.debug_bounds(selector(ix)).unwrap();
+            assert!((row.top() - navigated_offset.1).abs() < px(0.5), "{key}");
+            let toggle = cx
+                .debug_bounds(format!("sidebar_group_toggle_{ix}").leak())
+                .unwrap();
+            let position = match hit {
+                "chevron" => toggle.center(),
+                "icon" => point(toggle.right() + px(14.0), row.center().y),
+                _ => point(row.right() - px(50.0), row.center().y),
+            };
+            cx.simulate_click(position, gpui::Modifiers::default());
+            test_support::redraw(cx);
+            assert!(cx.debug_bounds("sidebar_sticky_selected_branch").is_none());
+            cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    let p = pane.branch_sidebar_presentation_cached().unwrap();
+                    let closed_ix = p.structure.headers[key.as_str()];
+                    assert!(branch_sidebar::is_collapsed(
+                        &pane.collapsed_items_for_test(),
+                        &key
+                    ));
+                    assert!(
+                        !pane
+                            .sticky_context
+                            .as_ref()
+                            .unwrap()
+                            .eligible_rows
+                            .contains(&closed_ix)
+                    );
+                    let handle = pane.branches_scroll.0.borrow();
+                    assert_eq!(
+                        handle.base_handle.offset().y,
+                        navigated_offset.0.max(-handle.base_handle.max_offset().y),
+                        "toggling preserves the offset except for clamping a shortened list"
+                    );
+                    assert!(pane.pending_sidebar_navigation.is_none());
+                })
+            });
+        }
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.set_active_repo_collapse_key(key.clone().into(), false, cx);
+            })
+        });
+    }
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.set_selected_branch(
+                state.repos[0].id,
+                BranchMenuTarget::local("shared/topic-000100"),
+                SidebarRowSurface::Tree,
+                cx,
+            );
+            pane.branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(-1_000.0)));
+        })
+    });
+    test_support::redraw(cx);
+    let compact_height = cx.update(|window, app| {
+        let pane = pane.read(app);
+        let viewport_height = pane
+            .branches_scroll
+            .0
+            .borrow()
+            .last_item_size
+            .unwrap()
+            .item
+            .height;
+        window.viewport_size().height - viewport_height
+            + sidebar_list_row_height(pane.theme, ui_scale::current(app).percent) * 7.25
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), compact_height));
+    test_support::redraw(cx);
+    let menu = cx.debug_bounds("sidebar_ancestor_menu_0").unwrap();
+    cx.simulate_click(menu.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    let entry = cx.debug_bounds("context_menu_collapse_shared").unwrap();
+    cx.simulate_click(entry.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("sidebar_sticky_selected_branch").is_none());
+    cx.update(|_, app| {
+        let pane = pane.read(app);
+        assert!(branch_sidebar::is_collapsed(
+            &pane.collapsed_items_for_test(),
+            &branch_sidebar::local_group_storage_key("shared")
+        ));
+        assert_eq!(
+            pane.branches_scroll.0.borrow().base_handle.offset().y,
+            px(-1_000.0)
+        );
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(800.0)));
+    // A non-active group remains in the same tree position as it toggles,
+    // allowing its row's keyboard activation to be checked after a pointer click.
+    insert_branch(&mut state, "aaa/topic");
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.sidebar_pane.update(cx, |pane, cx| {
+                pane.sticky_context = None;
+                pane.branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+                cx.notify();
+            });
+        })
+    });
+    test_support::redraw(cx);
+    let key = branch_sidebar::local_group_storage_key("aaa");
+    let ix = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            pane.branch_sidebar_presentation_cached()
+                .unwrap()
+                .structure
+                .headers[key.as_str()]
+        })
+    });
+    let bounds = cx
+        .debug_bounds(format!("branch_group_{ix}").leak())
+        .unwrap();
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert!(branch_sidebar::is_collapsed(
+            &pane.read(app).collapsed_items_for_test(),
+            &key
+        ))
+    });
+    for keypress in ["enter", "space"] {
+        cx.simulate_keystrokes(keypress);
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse(keypress).unwrap(),
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            assert_eq!(
+                branch_sidebar::is_collapsed(&pane.read(app).collapsed_items_for_test(), &key),
+                keypress == "space"
+            );
+            assert_eq!(
+                pane.read(app)
+                    .branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+                px(0.0)
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(100);
+    Arc::make_mut(&mut state).repos[0]
+        .history_state
+        .selected_commit = Some(CommitId("a".into()));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    let rows = cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 6);
+            pane.set_selected_branch(
+                state.repos[0].id,
+                BranchMenuTarget::remote("origin", "shared/topic-000001"),
+                SidebarRowSurface::Tree,
+                cx,
+            );
+            p.rows
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 9);
+            pane.set_selected_branch(
+                state.repos[0].id,
+                BranchMenuTarget::local("shared/topic-000001"),
+                SidebarRowSurface::Tree,
+                cx,
+            );
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            assert_eq!(
+                pane.sticky_context.as_ref().unwrap().eligible_rows.len(),
+                7,
+                "shared paths are deduplicated"
+            );
+            pane.set_selected_branch(
+                state.repos[0].id,
+                BranchMenuTarget::remote("origin", "shared/topic-000001"),
+                SidebarRowSurface::Tree,
+                cx,
+            );
+        })
+    });
+    test_support::redraw(cx);
+    Arc::make_mut(&mut state).repos[0]
+        .history_state
+        .selected_commit = Some(CommitId("b".into()));
+    // Only a history selection changed: the store observer must repaint the
+    // active paths without changing the branch presentation.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert!(Rc::ptr_eq(&p.rows, &rows));
+            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 6);
+        })
+    });
+    for head in ["HEAD", "shared/deleted-branch"] {
+        let repo = &mut Arc::make_mut(&mut state).repos[0];
+        repo.head_branch = Loadable::Ready(head.into());
+        repo.head_branch_rev += 1;
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.store.replace_snapshot_for_test(state.clone());
+                test_support::push_test_state(view, state.clone(), cx);
+            })
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            assert_eq!(
+                pane.read(app)
+                    .sticky_context
+                    .as_ref()
+                    .unwrap()
+                    .eligible_rows
+                    .len(),
+                5
+            )
+        });
+    }
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.navigate_sidebar_header(branch_sidebar::stash_section_storage_key().into(), cx);
+        })
+    });
+    let next = Arc::make_mut(&mut state);
+    next.repos[0].id = RepoId(82);
+    next.repos[0].spec.workdir = "/tmp/gitcomet-next-sidebar".into();
+    next.active_repo = Some(RepoId(82));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        let pane = pane.read(app);
+        assert!(pane.pending_sidebar_navigation.is_none());
+        assert_eq!(
+            pane.branches_scroll.0.borrow().base_handle.offset().y,
+            px(0.0)
+        );
+    });
+}
+
+#[gpui::test]
+fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(1_000);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    insert_branch(&mut state, "aaa/first-branch");
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            pane.read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y,
+            px(0.0),
+            "new content at the start must remain visible"
+        )
+    });
+    let chrome = cx.update(|window, app| {
+        let pane = pane.read(app);
+        let size = pane.branches_scroll.0.borrow().last_item_size.unwrap();
+        window.viewport_size().height - size.item.height
+    });
+    let h = cx.update(|_, app| {
+        sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+    });
+    for (slots, expected) in [(6.25, 5), (5.5, 0), (12.0, 6)] {
+        cx.simulate_resize(gpui::size(px(1000.0), chrome + h * slots));
+        test_support::redraw(cx);
+        cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), expected));
+        if expected == 5 {
+            assert!(cx.debug_bounds("sidebar_ancestor_menu_0").is_some());
+        }
+        assert_eq!(cx.debug_bounds(selector(0)).is_some(), expected != 0);
+    }
+    cx.simulate_resize(gpui::size(px(1000.0), px(800.0)));
+    test_support::redraw(cx);
+    let local = cx.debug_bounds(selector(0)).unwrap();
+    scroll(cx, local.center(), point(px(0.0), px(-1_200.0)));
+    test_support::redraw(cx);
+    let (anchor, before) = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            let h = f32::from(
+                pane.branches_scroll
+                    .0
+                    .borrow()
+                    .last_item_size
+                    .unwrap()
+                    .contents
+                    .height,
+            ) / p.rows.len() as f32;
+            let scroll = -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y);
+            let ix = (scroll / h).ceil() as usize + 2;
+            (p.rows[ix].clone(), ix as f32 - scroll / h)
+        })
+    });
+    // A new group ahead of the viewport must not shift the content being read.
+    insert_branch(&mut state, "aaaa/new-branch");
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+        })
+    });
+    test_support::redraw(cx);
+    for (density, scale) in [
+        (crate::appearance::UiDensity::Compact, 100),
+        (crate::appearance::UiDensity::Spacious, 150),
+    ] {
+        cx.update(|_, app| {
+            app.set_global(crate::appearance::Appearance {
+                density,
+                ..Default::default()
+            });
+            ui_scale::set_current(app, scale);
+            view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                let p = pane.branch_sidebar_presentation_cached().unwrap();
+                let ix = p
+                    .rows
+                    .iter()
+                    .position(|row| crate::view::sidebar_sticky::same_row(row, &anchor))
+                    .unwrap();
+                let h = f32::from(
+                    pane.branches_scroll
+                        .0
+                        .borrow()
+                        .last_item_size
+                        .unwrap()
+                        .contents
+                        .height,
+                ) / p.rows.len() as f32;
+                let scroll = -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y);
+                assert!((ix as f32 - scroll / h - before).abs() < 0.01);
+            })
+        });
+    }
+}
+
+#[test]
+fn sticky_sidebar_ignores_legacy_top_level_collapse_and_requests_visible_data() {
+    let state = fixture(4);
+    let repo = &state.repos[0];
+    let collapsed = BTreeSet::from([
+        branch_sidebar::local_section_storage_key().to_string(),
+        branch_sidebar::remote_section_storage_key().to_string(),
+    ]);
+    let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "");
+    assert_eq!(
+        rows.iter()
+            .filter(|row| matches!(row, BranchSidebarRow::Branch { .. }))
+            .count(),
+        8
+    );
+    let (_, request) =
+        sidebar_presentation::active_sidebar_data_request(&state, &BTreeMap::new(), true).unwrap();
+    assert!(request.worktrees && request.submodules && request.stashes);
+}
+
+#[test]
+fn sticky_sidebar_stash_identity_survives_reindexing_and_invalidates_cached_rows() {
+    let mut state = long_list_tests::fixture(2, CollapsedSidebarSection::Stashes);
+    let mut cache = SidebarPresentationCache::default();
+    let empty = BTreeMap::new();
+    let before =
+        sidebar_presentation::build_sidebar_presentation(&mut cache, &state, &empty, &empty, "")
+            .unwrap();
+    let old = before
+        .rows
+        .iter()
+        .find(|row| matches!(row, BranchSidebarRow::StashItem { .. }))
+        .unwrap();
+    let mut reindexed = old.clone();
+    if let BranchSidebarRow::StashItem { index, .. } = &mut reindexed {
+        *index += 1;
+    }
+    assert!(crate::view::sidebar_sticky::same_row(old, &reindexed));
+    let repo = &mut Arc::make_mut(&mut state).repos[0];
+    if let Loadable::Ready(stashes) = &mut repo.stashes {
+        let mut updated = stashes.as_ref().clone();
+        updated[0].id = CommitId("replacement".into());
+        *stashes = Arc::new(updated);
+    }
+    repo.stashes_rev += 1;
+    repo.branch_sidebar_rev += 1;
+    let after =
+        sidebar_presentation::build_sidebar_presentation(&mut cache, &state, &empty, &empty, "")
+            .unwrap();
+    assert!(!Rc::ptr_eq(&before.rows, &after.rows));
+    let new = after
+        .rows
+        .iter()
+        .find(|row| matches!(row, BranchSidebarRow::StashItem { .. }))
+        .unwrap();
+    assert!(!crate::view::sidebar_sticky::same_row(old, new));
+}
+
+#[gpui::test]
+fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::test_support::painted_control_quads as paint;
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(100);
+    Arc::make_mut(&mut state).repos[0]
+        .history_state
+        .selected_commit = Some(CommitId("a".into()));
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+            view.sidebar_pane.update(cx, |pane, cx| {
+                pane.sidebar_pinned_branches_by_repo.insert(
+                    state.repos[0].spec.workdir.clone(),
+                    BTreeSet::from([
+                        "local:shared/topic-000001".into(),
+                        "remote:origin/shared/topic-000050".into(),
+                    ]),
+                );
+                pane.sidebar_presentation_cache = SidebarPresentationCache::default();
+                pane.set_selected_branch(
+                    state.repos[0].id,
+                    BranchMenuTarget::remote("origin", "shared/topic-000050"),
+                    SidebarRowSurface::Tree,
+                    cx,
+                );
+            });
+        })
+    });
+    cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
+    for key in [
+        "gitcomet_light",
+        "gitcomet_dark",
+        "sunset_veil",
+        "tokyo_night",
+        "amber_dark",
+    ] {
+        for (density, scale) in [
+            (crate::appearance::UiDensity::Compact, 100),
+            (crate::appearance::UiDensity::Spacious, 150),
+        ] {
+            cx.update(|_, app| {
+                app.set_global(crate::appearance::Appearance {
+                    density,
+                    ..Default::default()
+                });
+                ui_scale::set_current(app, scale);
+                view.update(app, |view, cx| {
+                    view.notify_font_preferences_changed(cx);
+                    view.set_theme(AppTheme::from_key(key).unwrap(), cx);
+                });
+            });
+            test_support::redraw(cx);
+            let theme = cx.update(|_, app| pane.read(app).theme);
+            assert!(
+                paint(cx, "sidebar_pinned_surface")
+                    .iter()
+                    .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
+            );
+            let headers = cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    let p = pane.branch_sidebar_presentation_cached().unwrap();
+                    pane.sticky_context
+                        .as_ref()
+                        .unwrap()
+                        .eligible_rows
+                        .iter()
+                        .copied()
+                        .filter_map(|ix| {
+                            crate::view::sidebar_sticky::header_key(&p.rows[ix])?;
+                            let group = matches!(
+                                &p.rows[ix],
+                                BranchSidebarRow::GroupHeader { .. }
+                                    | BranchSidebarRow::RemoteHeader { .. }
+                            );
+                            let handle = pane.branches_scroll.0.borrow();
+                            let row_height = handle.last_item_size.unwrap().contents.height
+                                / p.rows.len() as f32;
+                            let natural_top = handle.base_handle.bounds().top()
+                                + handle.base_handle.offset().y
+                                + row_height * ix;
+                            Some((ix, group, natural_top))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            });
+            for (ix, group, natural_top) in headers {
+                let stuck =
+                    (cx.debug_bounds(selector(ix)).unwrap().top() - natural_top).abs() > px(0.5);
+                let background = if group && !stuck {
+                    theme.colors.surface.chrome
+                } else {
+                    theme.colors.surface.panel
+                };
+                assert!(
+                    paint(cx, selector(ix))
+                        .iter()
+                        .any(|(fill, _)| *fill == background.into()),
+                    "groups should use the header background only when held at a sticky edge",
+                );
+            }
+            assert!(
+                paint(cx, "sidebar_sticky_selected_branch")
+                    .iter()
+                    .any(|(fill, _)| *fill == crate::view::selected_branch_row_bg(theme).into())
+            );
+            let pins = cx.debug_bounds("sidebar_pinned_area").unwrap();
+            assert_eq!(pins.size.height, sidebar_list_row_height(theme, scale) * 2);
+            let pinned_surface = cx.debug_bounds("sidebar_pinned_surface").unwrap();
+            let header = cx.debug_bounds("sidebar_sticky_header_0").unwrap();
+            let pinned_row = cx.debug_bounds("pinned_branch_row_81_0").unwrap();
+            let tree_row = cx.debug_bounds("sidebar_sticky_selected_branch").unwrap();
+            assert_eq!(pinned_surface.left(), pins.left());
+            assert_eq!(pinned_surface.right(), pins.right());
+            let panel = cx.debug_bounds("branch_sidebar_scroll_container").unwrap();
+            assert_eq!(header.left(), panel.left());
+            assert_eq!(header.right(), panel.right());
+            for row in [pinned_surface, pinned_row, tree_row] {
+                assert_eq!(row.left(), header.left());
+                assert_eq!(row.right(), header.right());
+            }
+            let pin = cx.debug_bounds("sidebar_pin_marker_0").unwrap();
+            let header_toggle = cx.debug_bounds("sidebar_header_toggle_0").unwrap();
+            let pin_icon = cx.debug_bounds("sidebar_branch_icon_Pins_0").unwrap();
+            let header_icon = cx.debug_bounds("sidebar_header_icon_0").unwrap();
+            assert_eq!(pin.left(), header_toggle.left());
+            assert_eq!(pin_icon.left(), header_icon.left());
+            assert_eq!(pin_icon.size.width, header_icon.size.width);
+            assert!(cx.debug_bounds("sidebar_pinned_heading").is_none());
+        }
+    }
+}
+
+#[gpui::test]
+fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(2_000);
+    insert_branch(&mut state, "shared/nested/leaf");
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+    let group_ix = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            pane.branch_sidebar_presentation_cached()
+                .unwrap()
+                .structure
+                .headers["group:local:shared"]
+        })
+    });
+    let group = cx.debug_bounds(selector(group_ix)).unwrap();
+    cx.simulate_mouse_down(
+        group.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        group.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+    let pin = cx.debug_bounds("context_menu_pin_group").unwrap();
+    cx.simulate_click(pin.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("sidebar_group_pin_marker_0").is_some());
+    assert!(
+        cx.debug_bounds("pinned_branch_group_1").is_some(),
+        "nested folder is rendered"
+    );
+    assert!(cx.debug_bounds("pinned_branch_row_81_2").is_some());
+    assert!(
+        cx.debug_bounds("sidebar_pin_marker_2").is_none(),
+        "inherited members are not individual pins"
+    );
+    let pins = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            assert!(
+                pane.rendered_rows < 200,
+                "large pinned group must stay virtualized"
+            );
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert_eq!(p.pins.len(), 2_003);
+            p.pins
+        })
+    });
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.branch_filter_query = "nothing matches this".into();
+            pane.sync_popover_branch_filter(cx);
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            assert!(Rc::ptr_eq(&pins, &p.pins));
+            assert!(
+                !p.rows
+                    .iter()
+                    .any(|row| matches!(row, BranchSidebarRow::Branch { .. }))
+            );
+        })
+    });
+    // Nested folders and pinned roots toggle, independently of scrolling the
+    // main list. Their canonical collapse keys persist with the tree.
+    let nested = cx.debug_bounds("pinned_sidebar_group_toggle_1").unwrap();
+    cx.simulate_click(nested.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    cx.update(|_, app| pane.update(app, |pane, _| {
+        let p = pane.branch_sidebar_presentation_cached().unwrap();
+        assert_eq!(p.pins.len(), 2_002);
+        assert!(!p.pins.iter().any(|row| matches!(row, BranchSidebarRow::Branch { name, .. } if name == "shared/nested/leaf")));
+    }));
+    let root = cx.debug_bounds("pinned_branch_group_0").unwrap();
+    cx.simulate_click(root.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            assert_eq!(
+                pane.branch_sidebar_presentation_cached()
+                    .unwrap()
+                    .pins
+                    .len(),
+                1
+            );
+            assert_eq!(
+                pane.branches_scroll.0.borrow().base_handle.offset().y,
+                px(0.0)
+            );
+            assert_eq!(
+                pane.saved_sidebar_pinned_branches()[&state.repos[0].spec.workdir],
+                BTreeSet::from(["group:local:shared".into()])
+            );
+        })
+    });
+    let root = cx.debug_bounds("pinned_branch_group_0").unwrap();
+    cx.simulate_mouse_down(
+        root.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        root.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("context_menu_unpin_group").is_some());
+    assert!(cx.update(|_, app| matches!(
+        test_support::popover_kind(view.read(app), app),
+        Some(PopoverKind::BranchGroupMenu {
+            from_pins: true,
+            ..
+        })
+    )));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        })
+    });
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.toggle_sidebar_pin(state.repos[0].id, "group:remote:origin:shared".into(), cx);
+        })
+    });
+    test_support::redraw(cx);
+    // Bulk unpin counts roots, including closed and filtered-out groups, and
+    // leaves the other section's pin intact.
+    let local_header = cx.debug_bounds(selector(0)).unwrap();
+    cx.simulate_mouse_down(
+        local_header.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        local_header.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+    let unpin = cx.debug_bounds("context_menu_unpin_all_local_1").unwrap();
+    cx.simulate_click(unpin.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            assert_eq!(
+                pane.pinned_branches_for_test(),
+                BTreeSet::from(["group:remote:origin:shared".into()])
+            );
+            assert_eq!(
+                pane.branch_sidebar_presentation_cached()
+                    .unwrap()
+                    .pins
+                    .len(),
+                2_001
+            );
+        })
+    });
+    let root = cx.debug_bounds("pinned_branch_group_0").unwrap();
+    cx.simulate_mouse_down(
+        root.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        root.center(),
+        MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+    let unpin = cx.debug_bounds("context_menu_unpin_group").unwrap();
+    cx.simulate_click(unpin.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("sidebar_pinned_area").is_none());
+    cx.update(|_, app| assert!(pane.read(app).saved_sidebar_pinned_branches().is_empty()));
+}

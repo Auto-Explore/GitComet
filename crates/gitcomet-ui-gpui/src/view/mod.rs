@@ -255,6 +255,7 @@ pub(crate) mod rows;
 mod settings_window;
 pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
+mod sidebar_sticky;
 mod splash;
 mod state_apply;
 mod status_actions;

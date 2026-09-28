@@ -479,15 +479,20 @@ impl PopoverHost {
                 section,
                 remote,
                 path,
+                from_pins,
             } => self.context_menu_view(
                 PopoverKind::BranchGroupMenu {
                     repo_id,
                     section,
                     remote,
                     path,
+                    from_pins,
                 },
                 cx,
             ),
+            PopoverKind::SidebarAncestorMenu { repo_id, section } => {
+                self.context_menu_view(PopoverKind::SidebarAncestorMenu { repo_id, section }, cx)
+            }
             PopoverKind::PinnedSectionMenu { repo_id, section } => {
                 self.context_menu_view(PopoverKind::PinnedSectionMenu { repo_id, section }, cx)
             }

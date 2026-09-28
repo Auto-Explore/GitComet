@@ -3207,19 +3207,54 @@ impl PopoverHost {
             })
     }
 
+    pub(in crate::view) fn fixed_pinned_branch_counts(&self, repo_id: RepoId) -> (usize, usize) {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return (0, 0);
+        };
+        self.pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .map_or((0, 0), |items| {
+                crate::view::branch_sidebar::pinned_root_rows(repo, items, "")
+                    .into_iter()
+                    .fold((0, 0), |(local, remote), row| match row {
+                        BranchSidebarRow::Branch {
+                            section: BranchSection::Local,
+                            ..
+                        }
+                        | BranchSidebarRow::GroupHeader {
+                            section: BranchSection::Local,
+                            ..
+                        } => (local + 1, remote),
+                        BranchSidebarRow::Branch {
+                            section: BranchSection::Remote,
+                            ..
+                        }
+                        | BranchSidebarRow::GroupHeader {
+                            section: BranchSection::Remote,
+                            ..
+                        } => (local, remote + 1),
+                        _ => (local, remote),
+                    })
+            })
+    }
+
     pub(in crate::view) fn is_branch_pinned(
         &self,
         repo_id: RepoId,
         section: BranchSection,
         name: &str,
     ) -> bool {
+        let key = crate::view::branch_sidebar::branch_pin_storage_key(section, name);
+        self.is_sidebar_item_pinned(repo_id, &key)
+    }
+
+    pub(in crate::view) fn is_sidebar_item_pinned(&self, repo_id: RepoId, key: &str) -> bool {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return false;
         };
-        let key = crate::view::branch_sidebar::branch_pin_storage_key(section, name);
         self.pinned_branches_by_repo
             .get(&repo.spec.workdir)
-            .is_some_and(|items| items.contains(&key))
+            .is_some_and(|items| items.contains(key))
     }
 
     pub(in crate::view) fn set_date_time_format(

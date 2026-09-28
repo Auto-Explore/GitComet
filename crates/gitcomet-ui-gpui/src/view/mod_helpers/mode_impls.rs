@@ -380,8 +380,15 @@ pub(crate) enum PopoverKind {
         remote: Option<String>,
         /// Full slash path with no trailing separator (`feat`, `feat/sub`).
         path: String,
+        /// Fixed pins show the complete group even while the tree is filtered.
+        from_pins: bool,
     },
-    /// Menu for the "Pinned Local/Remote Branches" header row.
+    /// Folder toggles for active paths when the sidebar is too short to stack them.
+    SidebarAncestorMenu {
+        repo_id: RepoId,
+        section: BranchSection,
+    },
+    /// Menu for the rail's "Pinned Local/Remote Branches" header row.
     PinnedSectionMenu {
         repo_id: RepoId,
         section: BranchSection,

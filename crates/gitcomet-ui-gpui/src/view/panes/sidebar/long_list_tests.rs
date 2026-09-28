@@ -5,7 +5,7 @@ use gitcomet_core::domain::{
 };
 use std::path::PathBuf;
 
-fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<AppState> {
+pub(super) fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<AppState> {
     let mut repo = RepoState::new_opening(
         RepoId(81),
         RepoSpec {
@@ -167,7 +167,7 @@ fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::Test
     }
 }
 
-fn branch_fixture(count: usize) -> Arc<AppState> {
+pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
     let mut repo = RepoState::new_opening(
         RepoId(81),
         RepoSpec {

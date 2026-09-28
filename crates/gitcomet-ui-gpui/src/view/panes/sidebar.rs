@@ -4,6 +4,7 @@ use super::super::file_icons;
 use super::super::sidebar_presentation::{
     SidebarPresentation, SidebarPresentationCache, SidebarRequestFingerprint,
 };
+use super::super::sidebar_sticky::SidebarRowSurface;
 use super::super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
@@ -285,6 +286,11 @@ pub(in super::super) struct SidebarPaneView {
     pub(in super::super) theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     branches_scroll: UniformListScrollHandle,
+    pinned_scroll: UniformListScrollHandle,
+    sticky_context: Option<sticky::StickyContext>,
+    sidebar_selection_cache: Option<sticky::SelectionCache>,
+    pending_sidebar_navigation: Option<sticky::NavigationTarget>,
+    expanded_branches_visible: bool,
     file_browser_scroll: UniformListScrollHandle,
     pub(in super::super) collapsed_popover_scroll: gpui::ScrollHandle,
     file_browser_search_input: Entity<TextInput>,
@@ -312,6 +318,8 @@ pub(in super::super) struct SidebarPaneView {
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     selected_branch: Option<SelectedBranch>,
+    // A pinned branch also has a tree row; only the clicked copy is selected.
+    selected_branch_is_pinned: bool,
     file_search_options: DiffSearchOptions,
     file_browser_rows_cache: FileBrowserRowsCache,
     /// Set transiently while rendering a collapsed-sidebar section popover so the
@@ -329,9 +337,9 @@ pub(in super::super) struct SidebarPaneView {
     /// When the request was made. Bounded so an unresolvable reveal expires
     /// instead of firing at some unrelated later moment.
     pending_file_browser_reveal_at: Option<std::time::Instant>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) render_count: usize,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) rendered_rows: usize,
 }
 
@@ -423,7 +431,7 @@ fn branch_sidebar_row_height_px(row: &BranchSidebarRow, theme: AppTheme) -> f32 
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct SidebarNotifyFingerprint {
     sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
@@ -437,6 +445,7 @@ struct SidebarNotifyFingerprint {
     /// has to repaint when it changes — nothing else in this fingerprint moves
     /// when the user opens a different file.
     diff_target_rev: u64,
+    selected_commit: Option<CommitId>,
 }
 
 impl SidebarNotifyFingerprint {
@@ -472,6 +481,9 @@ impl SidebarNotifyFingerprint {
             active_workspace_badges_hash,
             file_browser_rev,
             diff_target_rev,
+            selected_commit: active_repo_id
+                .and_then(|id| state.repos.iter().find(|r| r.id == id))
+                .and_then(|repo| repo.history_state.selected_commit.clone()),
         }
     }
 }
@@ -513,6 +525,12 @@ impl SidebarPaneView {
             // Reflect the newly-active repo's stored search query in the input.
             // Guarded by repo change so it never fights per-keystroke edits.
             if repo_changed {
+                this.sticky_context = None;
+                this.pending_sidebar_navigation = None;
+                this.branches_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                this.pinned_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 this.sync_search_input_with_state(cx);
                 this.collapsed_popover_scroll
                     .set_offset(point(px(0.0), px(0.0)));
@@ -575,6 +593,8 @@ impl SidebarPaneView {
                 // local query used by the row builder, never writing back.
                 let text = input.read(cx).text().to_string();
                 if this.branch_filter_query != text {
+                    this.sticky_context = None;
+                    this.pending_sidebar_navigation = None;
                     this.branch_filter_query = text;
                     this.branches_scroll
                         .scroll_to_item(0, gpui::ScrollStrategy::Top);
@@ -616,6 +636,11 @@ impl SidebarPaneView {
             theme,
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
+            pinned_scroll: UniformListScrollHandle::default(),
+            sticky_context: None,
+            sidebar_selection_cache: None,
+            pending_sidebar_navigation: None,
+            expanded_branches_visible: false,
             file_browser_scroll: UniformListScrollHandle::default(),
             collapsed_popover_scroll: gpui::ScrollHandle::new(),
             file_browser_search_input,
@@ -637,6 +662,7 @@ impl SidebarPaneView {
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,
             selected_branch: None,
+            selected_branch_is_pinned: false,
             file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
             collapsed_popover_presentation: None,
@@ -644,9 +670,9 @@ impl SidebarPaneView {
             collapsed_popover_section: None,
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "benchmarks"))]
             render_count: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "benchmarks"))]
             rendered_rows: 0,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
@@ -724,13 +750,20 @@ impl SidebarPaneView {
         &mut self,
         repo_id: RepoId,
         target: BranchMenuTarget,
+        surface: SidebarRowSurface,
         cx: &mut gpui::Context<Self>,
     ) {
         let next = Some(SelectedBranch { repo_id, target });
-        if self.selected_branch.as_ref() == next.as_ref() {
+        let is_pinned = surface == SidebarRowSurface::Pins;
+        let released_click = self.clear_sidebar_click_target();
+        if self.selected_branch.as_ref() == next.as_ref()
+            && self.selected_branch_is_pinned == is_pinned
+            && !released_click
+        {
             return;
         }
         self.selected_branch = next;
+        self.selected_branch_is_pinned = is_pinned;
         cx.notify();
     }
 
@@ -742,15 +775,26 @@ impl SidebarPaneView {
         target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
+        surface: SidebarRowSurface,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_selected_branch(repo_id, target.clone(), cx);
+        self.set_selected_branch(repo_id, target.clone(), surface, cx);
         self.reveal_branch_commit_in_history(repo_id, target, commit_id, fallback_scope, cx);
         cx.notify();
     }
 
     pub(in super::super) fn selected_branch(&self) -> Option<&SelectedBranch> {
         self.selected_branch.as_ref()
+    }
+
+    pub(in super::super) fn selected_branch_on_surface(
+        &self,
+        surface: SidebarRowSurface,
+    ) -> Option<&SelectedBranch> {
+        self.selected_branch().filter(|_| {
+            surface == SidebarRowSurface::Rail
+                || self.selected_branch_is_pinned == (surface == SidebarRowSurface::Pins)
+        })
     }
 
     pub(in super::super) fn active_repo_id(&self) -> Option<RepoId> {
@@ -820,7 +864,17 @@ impl SidebarPaneView {
         self.sidebar_collapsed_items_by_repo
             .iter()
             .filter(|&(_repo, items)| !items.is_empty())
-            .map(|(repo, items)| (repo.clone(), items.clone()))
+            .map(|(repo, items)| {
+                (
+                    repo.clone(),
+                    items
+                        .iter()
+                        .filter(|key| !branch_sidebar::is_top_level_collapse_key(key))
+                        .cloned()
+                        .collect::<BTreeSet<_>>(),
+                )
+            })
+            .filter(|(_, items)| !items.is_empty())
             .collect()
     }
 
@@ -841,11 +895,23 @@ impl SidebarPaneView {
         name: &str,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.toggle_sidebar_pin(
+            repo_id,
+            branch_sidebar::branch_pin_storage_key(section, name),
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn toggle_sidebar_pin(
+        &mut self,
+        repo_id: RepoId,
+        key: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return;
         };
         let repo_path = repo.spec.workdir.clone();
-        let key = branch_sidebar::branch_pin_storage_key(section, name);
 
         let items = self
             .sidebar_pinned_branches_by_repo
@@ -878,17 +944,33 @@ impl SidebarPaneView {
         section: BranchSection,
         cx: &mut gpui::Context<Self>,
     ) {
+        let filter = self.branch_filter_query.clone();
+        self.unpin_branches_matching(repo_id, section, &filter, cx);
+    }
+
+    pub(in crate::view) fn unpin_branches_matching(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        filter: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return;
         };
         let repo_path = repo.spec.workdir.clone();
-        let filter = self.branch_filter_query.as_str();
         let Some(items) = self.sidebar_pinned_branches_by_repo.get_mut(&repo_path) else {
             return;
         };
 
         let before = items.len();
-        items.retain(|key| !branch_sidebar::pinned_branch_renders(repo, key, section, filter));
+        for row in branch_sidebar::pinned_root_rows(repo, items, filter) {
+            if let Some((candidate, key)) = branch_sidebar::pinned_row_storage_key(&row)
+                && candidate == section
+            {
+                items.remove(&key);
+            }
+        }
         if items.len() == before {
             return;
         }
@@ -1018,6 +1100,11 @@ impl SidebarPaneView {
         );
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        // Explicit expansion changes retain the offset; only data refreshes
+        // restore a content anchor. GPUI still clamps a shortened list.
+        self.sticky_context = None;
+        self.pending_sidebar_navigation = None;
+        self.branches_scroll.0.borrow_mut().deferred_scroll_to_item = None;
         self.schedule_ui_settings_persist(cx);
         self.sync_popover_collapsed_items(cx);
         if should_load_submodules_on_expand && expanded_now {
@@ -1044,7 +1131,7 @@ impl SidebarPaneView {
             return;
         };
         let path = path.trim();
-        if path.is_empty() {
+        if path.is_empty() && (section != BranchSection::Remote || remote.is_none()) {
             return;
         }
 
@@ -1082,6 +1169,10 @@ impl SidebarPaneView {
             .sidebar_collapsed_items_by_repo
             .entry(repo_path.clone())
             .or_default();
+        if path.is_empty() {
+            let key = branch_sidebar::remote_header_storage_key(remote.as_deref().unwrap());
+            branch_sidebar::set_collapse_state(items, &key, collapsed);
+        }
         for group_path in &group_paths {
             let key = match section {
                 BranchSection::Local => branch_sidebar::local_group_storage_key(group_path),
@@ -1097,16 +1188,29 @@ impl SidebarPaneView {
         }
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        self.sticky_context = None;
+        self.pending_sidebar_navigation = None;
+        self.branches_scroll.0.borrow_mut().deferred_scroll_to_item = None;
         self.schedule_ui_settings_persist(cx);
         self.sync_popover_collapsed_items(cx);
         self.dispatch_sidebar_data_request_if_needed(cx);
         cx.notify();
     }
 
+    pub(in crate::view) fn set_expanded_branches_visible(
+        &mut self,
+        visible: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.expanded_branches_visible = visible;
+        self.dispatch_sidebar_data_request_if_needed(cx);
+    }
+
     fn dispatch_sidebar_data_request_if_needed(&mut self, cx: &mut gpui::Context<Self>) {
         let next = sidebar_presentation::sidebar_request_fingerprint(
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
+            self.expanded_branches_visible && self.state.sidebar_mode == SidebarMode::Branches,
         );
         if next == self.sidebar_request_fingerprint {
             return;
@@ -1116,6 +1220,7 @@ impl SidebarPaneView {
         let Some((repo_id, request)) = sidebar_presentation::active_sidebar_data_request(
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
+            self.expanded_branches_visible && self.state.sidebar_mode == SidebarMode::Branches,
         ) else {
             return;
         };
@@ -1127,13 +1232,15 @@ impl SidebarPaneView {
     pub(in super::super) fn branch_sidebar_presentation_cached(
         &mut self,
     ) -> Option<SidebarPresentation> {
-        sidebar_presentation::build_sidebar_presentation(
+        let presentation = sidebar_presentation::build_sidebar_presentation(
             &mut self.sidebar_presentation_cache,
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
             &self.sidebar_pinned_branches_by_repo,
             &self.branch_filter_query,
-        )
+        )?;
+        self.update_sticky_context(&presentation);
+        Some(presentation)
     }
 
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -1611,7 +1718,7 @@ impl SidebarPaneView {
         }) {
             return Some(SidebarPresentation {
                 rows: Rc::clone(&cached.rows),
-                workspace_badges: base.workspace_badges,
+                ..base
             });
         }
         // While filtering, ignore every persisted collapse state: a match hidden
@@ -1666,10 +1773,7 @@ impl SidebarPaneView {
             rows: Rc::clone(&rows),
             tops,
         });
-        Some(SidebarPresentation {
-            rows,
-            workspace_badges: base.workspace_badges,
-        })
+        Some(SidebarPresentation { rows, ..base })
     }
 
     /// Kick off any lazy data load a section needs before it can render in the
@@ -1926,11 +2030,14 @@ impl SidebarPaneView {
             BranchMenuTarget::local(branch_name),
             commit_id,
             Some(LogScope::FullReachable),
+            SidebarRowSurface::Tree,
             cx,
         );
-        if let Some(row_ix) = row_ix {
-            self.branches_scroll
-                .scroll_to_item(row_ix, gpui::ScrollStrategy::Center);
+        if row_ix.is_some() {
+            self.pending_sidebar_navigation = self
+                .selected_branch
+                .as_ref()
+                .map(|selected| sticky::NavigationTarget::Branch(selected.target.clone()));
         }
         cx.notify();
     }
@@ -2050,9 +2157,8 @@ impl SidebarPaneView {
         cx.notify();
     }
 
-    /// A slim always-visible filter field pinned above the branch tree. It
-    /// narrows the Local/Remote (and pinned) sections live; a query force-expands
-    /// those sections so matches are always visible.
+    /// The filter narrows the Local/Remote trees. Fixed pins remain visible,
+    /// and explicit group collapse choices remain in effect.
     fn render_branch_filter_bar(
         &mut self,
         theme: AppTheme,
@@ -2117,6 +2223,8 @@ impl SidebarPaneView {
         self.branch_filter_input.update(cx, |input, cx| {
             input.set_text("", cx);
         });
+        self.sticky_context = None;
+        self.pending_sidebar_navigation = None;
         self.branch_filter_query.clear();
         self.sync_popover_branch_filter(cx);
         cx.notify();
@@ -2155,24 +2263,60 @@ impl SidebarPaneView {
         )
         .h_full()
         .min_h(px(0.0))
-        .track_scroll(&self.branches_scroll);
+        .track_scroll(&self.branches_scroll)
+        .with_decoration(sticky::StickyRows { view: cx.entity() });
         let list = restrict_scroll_to_vertical_axis(list);
+        let view = cx.entity();
+        let row_height = sidebar_list_row_height(theme, ui_scale_percent);
+        let list = div()
+            .relative()
+            .h_full()
+            .min_h(px(0.0))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        view.update(cx, |this, cx| {
+                            this.prepare_sidebar_scroll(bounds, row_height, cx)
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(list);
         // Rows use the full pane width; the scrollbar overlays them (its track
         // is transparent, only the thumb paints while scrolling/hovering).
         let list = div()
             .flex_1()
             .min_h(px(0.0))
             .pt(scaled_px(SIDEBAR_TOP_INSET_PX))
-            .pl(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
-            .pr(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
             .child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
+            .debug_selector(|| "branch_sidebar_scroll_container".to_string())
+            .min_h(px(0.0))
             .relative()
             .flex()
             .flex_col()
             .flex_1()
             .h_full()
+            .when_some(self.sidebar_click_target_bounds(), |panel, bounds| {
+                panel.on_mouse_move_all({
+                    let view = cx.entity();
+                    move |event, phase, _, _, cx| {
+                        if phase == gpui::DispatchPhase::Capture
+                            && !bounds.contains(&event.position)
+                        {
+                            view.update(cx, |this, cx| {
+                                if this.clear_sidebar_click_target() {
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    }
+                })
+            })
             .child(list.into_any_element())
             .child(
                 components::Scrollbar::new(
@@ -2190,7 +2334,17 @@ impl SidebarPaneView {
             .h_full()
             .min_h(px(0.0))
             .child(filter_bar)
-            .child(panel_body)
+            .child(
+                div()
+                    .id("sidebar_branches_body")
+                    .debug_selector(|| "sidebar_branches_body".to_string())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .children(self.render_fixed_pins(&presentation, theme, cx))
+                    .child(panel_body),
+            )
             .into_any()
     }
 
@@ -3050,7 +3204,7 @@ impl SidebarPaneView {
 
 impl Render for SidebarPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "benchmarks"))]
         {
             self.render_count += 1;
             self.rendered_rows = 0;
@@ -3954,3 +4108,13 @@ mod tests {
 
 #[cfg(test)]
 mod long_list_tests;
+
+mod sticky;
+
+#[cfg(test)]
+mod sticky_tests;
+
+#[cfg(feature = "benchmarks")]
+mod sticky_benchmark;
+#[cfg(feature = "benchmarks")]
+pub use sticky_benchmark::SidebarStickyFrameFixture;

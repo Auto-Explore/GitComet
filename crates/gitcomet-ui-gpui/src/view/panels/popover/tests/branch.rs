@@ -2700,6 +2700,7 @@ fn branch_group_menu_model_filtered(
                         section,
                         remote: remote.map(ToOwned::to_owned),
                         path: path.to_string(),
+                        from_pins: false,
                     },
                     cx,
                 )
@@ -2721,9 +2722,19 @@ fn branch_group_delete_confirm_names(
     path: &str,
     filter: &str,
 ) -> Vec<String> {
-    branch_group_delete_confirm_names_with_head(cx, section, remote, path, filter, "main", |_| {})
+    branch_group_delete_confirm_names_with_head(
+        cx,
+        section,
+        remote,
+        path,
+        filter,
+        "main",
+        false,
+        |_| {},
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn branch_group_delete_confirm_names_with_head(
     cx: &mut gpui::TestAppContext,
     section: BranchSection,
@@ -2731,6 +2742,7 @@ fn branch_group_delete_confirm_names_with_head(
     path: &str,
     filter: &str,
     head: &str,
+    from_pins: bool,
     configure: impl FnOnce(&mut RepoState),
 ) -> Vec<String> {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -2795,6 +2807,7 @@ fn branch_group_delete_confirm_names_with_head(
                         section,
                         remote: remote.map(ToOwned::to_owned),
                         path: path.to_string(),
+                        from_pins,
                     },
                     cx,
                 )
@@ -2954,6 +2967,7 @@ fn branch_group_menu_counts_a_branch_named_exactly_the_group(cx: &mut gpui::Test
         "feat",
         "",
         "main",
+        false,
         add_bare,
     );
     assert_eq!(
@@ -3180,6 +3194,20 @@ fn activate_sidebar_action_with(
                 branch("feat/b/c"),
                 branch("features/x"),
             ]));
+            repo.remote_branches = Loadable::Ready(Arc::new(
+                ["origin", "upstream", "team/origin"]
+                    .into_iter()
+                    .flat_map(|remote| {
+                        ["feat/a", "feat/b/c", "features/x", "main"]
+                            .into_iter()
+                            .map(move |name| gitcomet_core::domain::RemoteBranch {
+                                remote: remote.into(),
+                                name: name.into(),
+                                target: CommitId("aaaaaaaaaaaa".into()),
+                            })
+                    })
+                    .collect(),
+            ));
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
@@ -3596,6 +3624,7 @@ fn branch_group_delete_excludes_the_current_branch_at_resolution_time(
         "feat",
         "",
         "feat/a",
+        false,
         |_| {},
     );
 
@@ -3619,6 +3648,7 @@ fn branch_group_delete_keeps_a_remote_member_matching_the_current_branch(
         "feat",
         "",
         "feat/a",
+        false,
         |_| {},
     );
 
@@ -3790,4 +3820,122 @@ fn branch_exists_dialog_notes_worktree_holding_the_branch(cx: &mut gpui::TestApp
         cx.debug_bounds("branch_exists_worktree_note").is_some(),
         "expected the dialog to say the branch lives in another worktree"
     );
+}
+
+#[gpui::test]
+fn remote_root_menu_expands_and_collapses_only_its_remote(cx: &mut gpui::TestAppContext) {
+    for remote in ["origin", "team/origin"] {
+        for collapsed in [true, false] {
+            let own = [
+                branch_sidebar::remote_header_storage_key(remote),
+                branch_sidebar::remote_group_storage_key(remote, "feat"),
+                branch_sidebar::remote_group_storage_key(remote, "feat/b"),
+                branch_sidebar::remote_group_storage_key(remote, "features"),
+            ];
+            let others = [
+                "group:local:feat",
+                "group:remote:upstream:feat",
+                "group:remote-header:upstream",
+            ];
+            let seed: Vec<&str> = others
+                .iter()
+                .copied()
+                .chain(own.iter().filter(|_| !collapsed).map(String::as_str))
+                .collect();
+            let (keys, _) = activate_sidebar_action_with(
+                cx,
+                &[],
+                "only one matching branch",
+                &seed,
+                |host, cx| {
+                    let menu = host
+                        .context_menu_model(
+                            &PopoverKind::remote(
+                                RepoId(83),
+                                RemotePopoverKind::Menu {
+                                    name: remote.into(),
+                                },
+                            ),
+                            cx,
+                        )
+                        .unwrap();
+                    branch_group_entry_action(
+                        &menu,
+                        if collapsed {
+                            "Collapse all"
+                        } else {
+                            "Expand all"
+                        },
+                    )
+                },
+            );
+            for key in &own {
+                assert_eq!(keys.contains(key), collapsed, "{key}: {keys:?}");
+            }
+            for key in others {
+                assert!(keys.contains(key), "unrelated group changed: {key}");
+            }
+            assert_eq!(
+                keys.len(),
+                others.len() + if collapsed { own.len() } else { 0 }
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn branch_group_menu_pin_action_persists_the_group_key(cx: &mut gpui::TestAppContext) {
+    for (section, remote, expected) in [
+        (BranchSection::Local, None, "group:local:feat"),
+        (
+            BranchSection::Remote,
+            Some("team/origin"),
+            "group:remote:team/origin:feat",
+        ),
+    ] {
+        let (_, pins) = activate_sidebar_action_with(cx, &[], "", &[], |host, cx| {
+            let menu = host
+                .context_menu_model(
+                    &PopoverKind::BranchGroupMenu {
+                        repo_id: RepoId(83),
+                        section,
+                        remote: remote.map(str::to_owned),
+                        path: "feat".into(),
+                        from_pins: false,
+                    },
+                    cx,
+                )
+                .unwrap();
+            branch_group_entry_action(&menu, "Pin group")
+        });
+        assert_eq!(pins, BTreeSet::from([expected.to_owned()]));
+    }
+}
+
+#[gpui::test]
+fn pinned_branch_group_actions_use_all_members_despite_the_tree_filter(
+    cx: &mut gpui::TestAppContext,
+) {
+    let local = branch_group_delete_confirm_names_with_head(
+        cx,
+        BranchSection::Local,
+        None,
+        "feat",
+        "b/c",
+        "main",
+        true,
+        |_| {},
+    );
+    assert_eq!(local, vec!["feat/a".to_string(), "feat/b/c".to_string()]);
+    let remote = branch_group_delete_confirm_names_with_head(
+        cx,
+        BranchSection::Remote,
+        Some("origin"),
+        "feat",
+        "no matching branch",
+        "main",
+        true,
+        |_| {},
+    );
+    assert_eq!(remote, vec!["feat/a".to_string()]);
 }

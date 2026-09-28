@@ -13,9 +13,11 @@ pub(super) fn model(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
+    from_pins: bool,
 ) -> ContextMenuModel {
-    let (member_count, deletable_count) = member_counts(this, repo_id, section, remote, path);
-    let filtered = this.active_branch_filter().is_some();
+    let (member_count, deletable_count) =
+        member_counts(this, repo_id, section, remote, path, from_pins);
+    let filtered = !from_pins && this.active_branch_filter().is_some();
     let collapse_key = match section {
         BranchSection::Local => branch_sidebar::local_group_storage_key(path),
         BranchSection::Remote => {
@@ -40,6 +42,18 @@ pub(super) fn model(
         }),
     ));
     items.push(ContextMenuItem::Separator);
+
+    let pinned = this.is_sidebar_item_pinned(repo_id, &collapse_key);
+    items.push(ContextMenuItem::Entry {
+        label: if pinned { "Unpin group" } else { "Pin group" }.into(),
+        icon: Some("icons/pin.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ToggleBranchGroupPin {
+            repo_id,
+            group_key: collapse_key.clone(),
+        }),
+    });
 
     items.push(ContextMenuItem::Entry {
         label: if collapsed { "Expand" } else { "Collapse" }.into(),
@@ -127,6 +141,7 @@ pub(super) fn model(
             remote: remote.map(ToOwned::to_owned),
             path: path.to_owned(),
             group_label,
+            from_pins,
         }),
     });
 
@@ -164,13 +179,18 @@ fn for_each_member(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
+    from_pins: bool,
     mut visit: impl FnMut(&str),
 ) {
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
         return;
     };
     let needle = format!("{path}/");
-    let filter = this.active_branch_filter().unwrap_or_default();
+    let filter = if from_pins {
+        ""
+    } else {
+        this.active_branch_filter().unwrap_or_default()
+    };
 
     match section {
         BranchSection::Local => {
@@ -236,10 +256,11 @@ fn member_counts(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
+    from_pins: bool,
 ) -> (usize, usize) {
     let current_branch = current_branch_name(this, repo_id);
     let (mut members, mut deletable) = (0, 0);
-    for_each_member(this, repo_id, section, remote, path, |name| {
+    for_each_member(this, repo_id, section, remote, path, from_pins, |name| {
         members += 1;
         if is_deletable(section, name, current_branch) {
             deletable += 1;
@@ -256,10 +277,11 @@ pub(super) fn deletable_branches(
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
+    from_pins: bool,
 ) -> Vec<String> {
     let current_branch = current_branch_name(this, repo_id);
     let mut names = Vec::new();
-    for_each_member(this, repo_id, section, remote, path, |name| {
+    for_each_member(this, repo_id, section, remote, path, from_pins, |name| {
         if is_deletable(section, name, current_branch) {
             names.push(name.to_owned());
         }

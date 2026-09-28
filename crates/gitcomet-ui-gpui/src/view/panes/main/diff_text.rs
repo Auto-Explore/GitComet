@@ -582,9 +582,20 @@ impl MainPaneView {
         let offset = handle.offset();
         // Hitbox bounds are window space with the scroll already applied.
         let to_content = |x: Pixels| row_left + x - viewport.origin.x - offset.x;
+        let match_left = to_content(local_left);
+        let match_right = to_content(local_right);
+        // A newly visible long line records its width during paint. The list
+        // uses that width in the following layout, so a hitbox can be ready
+        // while the scroll range still describes the previous, shorter rows.
+        // Retry instead of claiming a reveal clamped to that stale range.
+        if viewport.size.width <= px(0.0)
+            || match_right > viewport.size.width + handle.max_offset().x + px(1.0)
+        {
+            return false;
+        }
         let Some(target_x) = super::helpers::reveal_scroll_x(
-            to_content(local_left),
-            to_content(local_right),
+            match_left,
+            match_right,
             viewport.size.width,
             handle.max_offset().x,
             offset.x,

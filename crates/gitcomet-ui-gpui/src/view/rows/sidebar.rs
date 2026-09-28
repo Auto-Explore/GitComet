@@ -3,12 +3,36 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale;
 use crate::view::components::InteractiveRowExt as _;
+use crate::view::sidebar_presentation::SidebarPresentation;
+use crate::view::sidebar_sticky::SidebarRowSurface;
 use gitcomet_core::domain::LogScope;
 use gitcomet_core::domain::SubmoduleStatus;
 use palette::IntoColor;
 use std::num::NonZeroU32;
 
 pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+
+pub(in crate::view) fn sidebar_row_background(
+    theme: AppTheme,
+    surface: SidebarRowSurface,
+    row: &BranchSidebarRow,
+    stuck: bool,
+) -> gpui::Rgba {
+    match surface {
+        SidebarRowSurface::Rail => theme.colors.surface.raised,
+        SidebarRowSurface::Pins => theme.colors.surface.panel,
+        _ if !stuck
+            && matches!(
+                row,
+                BranchSidebarRow::GroupHeader { .. } | BranchSidebarRow::RemoteHeader { .. }
+            ) =>
+        {
+            theme.colors.surface.chrome
+        }
+        _ if crate::view::sidebar_sticky::header_key(row).is_some() => theme.colors.surface.panel,
+        _ => theme.colors.surface.chrome,
+    }
+}
 
 /// Row height of every continuous list in the sidebar. The tabs swap lists in
 /// place, so a differing rhythm would make the rows jump.
@@ -420,7 +444,10 @@ struct BranchHistoryRevealTarget {
     fallback_scope: Option<LogScope>,
 }
 
-fn branch_commit_id(repo: &RepoState, target: &BranchMenuTarget) -> Option<CommitId> {
+pub(in crate::view) fn branch_commit_id(
+    repo: &RepoState,
+    target: &BranchMenuTarget,
+) -> Option<CommitId> {
     match target {
         BranchMenuTarget::Local { name } => match &repo.branches {
             Loadable::Ready(branches) => branches
@@ -478,9 +505,60 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        #[cfg(test)]
+        let surface = if this.collapsed_popover_presentation.is_some() {
+            SidebarRowSurface::Rail
+        } else {
+            SidebarRowSurface::Tree
+        };
+        let Some(presentation) = this
+            .collapsed_popover_presentation
+            .clone()
+            .or_else(|| this.branch_sidebar_presentation_cached())
+        else {
+            return Vec::new();
+        };
+        Self::render_sidebar_rows(
+            this,
+            range.map(|ix| (ix, false)),
+            surface,
+            presentation,
+            _window,
+            cx,
+        )
+    }
+
+    pub(in crate::view) fn render_pinned_sidebar_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(presentation) = this.branch_sidebar_presentation_cached() else {
+            return Vec::new();
+        };
+        Self::render_sidebar_rows(
+            this,
+            range.map(|ix| (ix, false)),
+            SidebarRowSurface::Pins,
+            presentation,
+            window,
+            cx,
+        )
+    }
+
+    pub(in crate::view) fn render_sidebar_rows(
+        this: &mut Self,
+        // Decorated rows may still be at their natural position. The flag
+        // identifies rows actually held at an edge, not just eligible ones.
+        range: impl Iterator<Item = (usize, bool)>,
+        surface: SidebarRowSurface,
+        presentation: SidebarPresentation,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        #[cfg(any(test, feature = "benchmarks"))]
         {
-            this.rendered_rows += range.len();
+            this.rendered_rows += range.size_hint().0;
         }
         const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
         const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
@@ -495,11 +573,8 @@ impl SidebarPaneView {
         const BRANCH_WORKTREE_BADGE_MAX_W_PX: f32 = 140.0;
         /// Gap between a row's trailing badge and the row's right edge, shared
         /// by every row (headers included) so the badges land on one edge.
-        /// This is as tight as the badges can sit: the list insets its rows by
-        /// `ROW_HIGHLIGHT_INSET_PX` while the overlay scrollbar's thumb paints
-        /// 4..10px in from the *pane* edge, which puts the thumb's leading edge
-        /// exactly 4px inside the row. Any less and a visible thumb would paint
-        /// over the badge.
+        /// The expanded sidebar adds its content inset here so full-width
+        /// backgrounds still leave room for the overlay scrollbar.
         const BRANCH_ROW_TRAILING_PAD_PX: f32 = 4.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = ui_scale::scaler(ui_scale_percent);
@@ -507,26 +582,26 @@ impl SidebarPaneView {
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
-        // Prefer the transient section-scoped presentation set while rendering a
-        // collapsed-sidebar popover; fall back to the full cached presentation.
-        // Each surface highlights matches from its own filter: the popover's
-        // toggled filter box, or the expanded sidebar's filter bar.
-        let is_collapsed_popover = this.collapsed_popover_presentation.is_some();
-        let filter_query = if is_collapsed_popover {
-            this.collapsed_popover_filter_query
+        let is_collapsed_popover = surface == SidebarRowSurface::Rail;
+        let header_activation = if is_collapsed_popover {
+            controls::ControlActivation::Composite
+        } else {
+            controls::ControlActivation::Action
+        };
+        let filter_query: std::rc::Rc<str> = match surface {
+            SidebarRowSurface::Rail => this
+                .collapsed_popover_filter_query
                 .trim()
                 .to_ascii_lowercase()
+                .into(),
+            SidebarRowSurface::Pins => "".into(),
+            _ => presentation.filter.clone(),
+        };
+        let rows = if surface == SidebarRowSurface::Pins {
+            presentation.pins.clone()
         } else {
-            this.branch_filter_query.trim().to_ascii_lowercase()
+            presentation.rows.clone()
         };
-        let Some(presentation) = this
-            .collapsed_popover_presentation
-            .clone()
-            .or_else(|| this.branch_sidebar_presentation_cached())
-        else {
-            return Vec::new();
-        };
-        let rows = presentation.rows;
         let workspace_badges = presentation.workspace_badges;
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
         let theme = this.theme;
@@ -537,16 +612,11 @@ impl SidebarPaneView {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.70 } else { 0.78 },
         );
-        let selected_branch = this.selected_branch().cloned();
-        let (selected_commit, selected_branch_commit_id) =
-            this.active_repo().map_or((None, None), |repo| {
-                let selected_commit = repo.history_state.selected_commit.clone();
-                let selected_branch_commit_id = selected_branch
-                    .as_ref()
-                    .filter(|selected| selected.repo_id == repo_id)
-                    .and_then(|selected| branch_commit_id(repo, &selected.target));
-                (selected_commit, selected_branch_commit_id)
-            });
+        let selected_branch = this.selected_branch_on_surface(surface).cloned();
+        let selected_branch_commit_id = this.sidebar_selected_tip();
+        let selected_commit = this
+            .active_repo()
+            .and_then(|repo| repo.history_state.selected_commit.clone());
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_icon(path, color, scaled_px(size_px))
@@ -590,23 +660,49 @@ impl SidebarPaneView {
             BranchSection::Remote => theme.colors.foreground.secondary,
         };
 
-        let indent_px = |depth: usize| {
-            scaled_px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
-        };
-
-        // The same translucent interaction overlays are used on both surfaces.
-        // The style also resolves those overlays for label fades, so the fade
-        // and the row can never disagree about a semantic state.
-        let row_surface = if is_collapsed_popover {
-            theme.colors.surface.raised
+        let content_inset = if is_collapsed_popover {
+            0.0
         } else {
-            theme.colors.surface.chrome
+            components::ROW_HIGHLIGHT_INSET_PX
         };
-        let row_style = components::InteractiveRowStyle::new(theme, row_surface).flat();
+        let indent_px = |depth: usize| {
+            scaled_px(
+                content_inset + BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX,
+            )
+        };
 
+        let paint_header = |row: AnyElement, background: gpui::Rgba| {
+            if is_collapsed_popover {
+                row
+            } else {
+                div().w_full().bg(background).child(row).into_any_element()
+            }
+        };
+        let decorated: std::rc::Rc<[usize]> = if surface == SidebarRowSurface::Tree {
+            this.decorated_sidebar_rows()
+        } else {
+            std::rc::Rc::from([])
+        };
         range
-            .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
-            .map(|(ix, row)| match row {
+            .filter_map(|(ix, stuck)| {
+                rows.get(ix).cloned().map(|row| {
+                    (
+                        ix,
+                        if decorated.binary_search(&ix).is_ok() {
+                            BranchSidebarRow::SectionSpacer
+                        } else {
+                            row
+                        },
+                        stuck,
+                    )
+                })
+            })
+            .map(|(ix, row, stuck)| {
+                let row_surface = sidebar_row_background(theme, surface, &row, stuck);
+                let row_style = components::InteractiveRowStyle::new(theme, row_surface).flat();
+                (ix, row, row_style, row_surface, stuck)
+            })
+            .map(|(ix, row, row_style, row_surface, stuck)| match row {
                 BranchSidebarRow::PinnedHeader {
                     section,
                     top_border: _,
@@ -631,7 +727,7 @@ impl SidebarPaneView {
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -639,7 +735,7 @@ impl SidebarPaneView {
                             row_style,
                             components::InteractiveRowState::default().open(context_menu_active),
                         )
-                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
                         .child(tree_icon_slot("icons/pin.svg", icon_primary, 14.0))
                         .child(
                             div()
@@ -655,12 +751,16 @@ impl SidebarPaneView {
                         .gitcomet_tooltip(theme, label)
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if is_collapsed_popover {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                } else {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -703,18 +803,24 @@ impl SidebarPaneView {
                         components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
-                        .id(("branch_section", ix))
+                        .id(collapse_key.clone())
                         .relative()
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot(icon_path, icon_primary, 14.0))
+                        .child(
+                            tree_toggle_slot(is_collapsed_popover.then_some(collapsed))
+                                .debug_selector(move || format!("sidebar_header_toggle_{ix}")),
+                        )
+                        .child(
+                            tree_icon_slot(icon_path, icon_primary, 14.0)
+                                .debug_selector(move || format!("sidebar_header_icon_{ix}")),
+                        )
                         .child(
                             div()
                                 .flex_1()
@@ -729,12 +835,16 @@ impl SidebarPaneView {
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if is_collapsed_popover {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                } else {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -750,6 +860,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
                 BranchSidebarRow::FilterGroupHeader { section } => {
@@ -769,7 +880,7 @@ impl SidebarPaneView {
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -790,7 +901,11 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", ix))
-                    .h(scaled_px(BRANCH_TREE_SPACER_HEIGHT_PX))
+                    .h(if is_collapsed_popover {
+                        scaled_px(BRANCH_TREE_SPACER_HEIGHT_PX)
+                    } else {
+                        sidebar_list_row_height(theme, ui_scale_percent)
+                    })
                     .w_full()
                     .into_any_element(),
                 BranchSidebarRow::StashHeader {
@@ -811,18 +926,18 @@ impl SidebarPaneView {
                         components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
-                        .id(("stash_section", ix))
+                        .id(collapse_key.clone())
                         .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
@@ -833,7 +948,7 @@ impl SidebarPaneView {
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.foreground.primary)
-                                .child("Stash"),
+                                .child("Stashes"),
                         )
                         .when(show_stash_spinner, |d| {
                             d.child(
@@ -849,12 +964,16 @@ impl SidebarPaneView {
                         .gitcomet_tooltip(theme, "Stashes (Right-click for actions)".into())
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if is_collapsed_popover {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                } else {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -870,6 +989,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
@@ -885,7 +1005,7 @@ impl SidebarPaneView {
                     index,
                     message,
                     tooltip,
-                    created_at: _,
+                    ..
                 } => {
                     let tooltip = tooltip.clone();
                     let stash_message_for_menu = message.as_ref().to_owned();
@@ -909,7 +1029,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .interactive_row(row_style, row_state)
@@ -989,18 +1109,18 @@ impl SidebarPaneView {
                         components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
-                        .id(("worktrees_section", ix))
+                        .id(collapse_key.clone())
                         .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
@@ -1029,12 +1149,16 @@ impl SidebarPaneView {
                         .gitcomet_tooltip(theme, "Worktrees (Add / Refresh / Open / Remove)".into())
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if is_collapsed_popover {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                } else {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -1053,6 +1177,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
@@ -1110,7 +1235,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
@@ -1267,18 +1392,18 @@ impl SidebarPaneView {
                         components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
-                        .id(("submodules_section", ix))
+                        .id(collapse_key.clone())
                         .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
                         .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
                         .child(
                             div()
@@ -1307,12 +1432,16 @@ impl SidebarPaneView {
                         .gitcomet_tooltip(theme, "Submodules (Add / Update / Open / Remove)".into())
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if is_collapsed_popover {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                } else {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -1331,6 +1460,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
@@ -1435,7 +1565,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot("icons/box.svg", icon_color, 14.0))
@@ -1534,12 +1664,12 @@ impl SidebarPaneView {
                         components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
-                        .id(("branch_remote", ix))
+                        .id(collapse_key.clone())
                         .relative()
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .group(row_group.clone())
                         .flex()
                         .items_center()
@@ -1548,7 +1678,27 @@ impl SidebarPaneView {
                         .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(remote_color)
-                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(if is_collapsed_popover {
+                            tree_toggle_slot(Some(collapsed)).into_any_element()
+                        } else {
+                            let key = collapse_key.clone();
+                            tree_toggle_slot(Some(collapsed))
+                                .id(("sidebar_group_toggle", ix))
+                                .debug_selector(move || format!("sidebar_group_toggle_{ix}"))
+                                .h_full()
+                                .on_activate(
+                                    false,
+                                    controls::ControlActivation::Nested,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if stuck {
+                                            this.navigate_sidebar_header(key.clone(), cx);
+                                        } else {
+                                            this.toggle_active_repo_collapse_key(key.clone(), cx);
+                                        }
+                                    }),
+                                )
+                                .into_any_element()
+                        })
                         .child(tree_icon_slot(
                             super::super::file_icons::folder_icon(!collapsed),
                             remote_color,
@@ -1568,12 +1718,16 @@ impl SidebarPaneView {
                         )
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if stuck {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                } else {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -1594,6 +1748,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
                 BranchSidebarRow::GroupHeader {
@@ -1605,20 +1760,28 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
+                    let from_pins = surface == SidebarRowSurface::Pins;
+                    let pinned_root = from_pins && depth == 0;
+                    let prefix = if from_pins { "pinned_" } else { "" };
                     let row_group: SharedString =
-                        format!("branch_group_row_{}_{}", repo_id.0, ix).into();
+                        format!("{prefix}branch_group_row_{}_{}", repo_id.0, ix).into();
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
                     };
                     let context_menu_invoker: SharedString = format!(
-                        "branch_group_menu_{}_{}_{}_{}",
+                        "{prefix}branch_group_menu_{}_{}_{}_{}",
                         repo_id.0,
                         section_key,
                         remote.as_deref().unwrap_or_default(),
                         path
                     )
                     .into();
+                    let context_menu_invoker: SharedString = if from_pins {
+                        format!("{context_menu_invoker}_{ix}").into()
+                    } else {
+                        context_menu_invoker
+                    };
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
@@ -1627,6 +1790,7 @@ impl SidebarPaneView {
                         section,
                         remote: remote.as_ref().map(|remote| remote.to_string()),
                         path: path.to_string(),
+                        from_pins,
                     };
                     let menu_kind_for_right_click = menu_kind.clone();
                     let row_state =
@@ -1634,11 +1798,11 @@ impl SidebarPaneView {
 
                     div()
                         .id(("branch_group", ix))
-                        .debug_selector(move || format!("branch_group_{ix}"))
+                        .debug_selector(move || format!("{prefix}branch_group_{ix}"))
                         .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .group(row_group.clone())
                         .flex()
                         .items_center()
@@ -1647,12 +1811,45 @@ impl SidebarPaneView {
                         .text_size(theme.ui_text(12.0))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(theme.colors.foreground.secondary)
-                        .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot(
-                            super::super::file_icons::folder_icon(!collapsed),
-                            icon_primary,
-                            14.0,
-                        ))
+                        .child(if is_collapsed_popover {
+                            tree_toggle_slot(Some(collapsed)).into_any_element()
+                        } else {
+                            let key = collapse_key.clone();
+                            tree_toggle_slot(Some(collapsed))
+                                .id(("sidebar_group_toggle", ix))
+                                .debug_selector(move || {
+                                    format!("{prefix}sidebar_group_toggle_{ix}")
+                                })
+                                .h_full()
+                                .on_activate(
+                                    false,
+                                    controls::ControlActivation::Nested,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if stuck {
+                                            this.navigate_sidebar_header(key.clone(), cx);
+                                        } else {
+                                            this.toggle_active_repo_collapse_key(key.clone(), cx);
+                                        }
+                                    }),
+                                )
+                                .into_any_element()
+                        })
+                        .child(
+                            tree_icon_slot(
+                                if pinned_root {
+                                    "icons/pin.svg"
+                                } else {
+                                    super::super::file_icons::folder_icon(!collapsed)
+                                },
+                                icon_primary,
+                                14.0,
+                            )
+                            .when(pinned_root, |icon| {
+                                icon.debug_selector(move || {
+                                    format!("sidebar_group_pin_marker_{ix}")
+                                })
+                            }),
+                        )
                         .child(
                             components::FadingText::new(
                                 filtered_label_element(
@@ -1675,12 +1872,16 @@ impl SidebarPaneView {
                         )
                         .on_activate(
                             false,
-                            controls::ControlActivation::Composite,
+                            header_activation,
                             cx.listener(move |this, e: &ClickEvent, _w, cx| {
                                 if !e.standard_click() || e.click_count() != 1 {
                                     return;
                                 }
-                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                if stuck {
+                                    this.navigate_sidebar_header(collapse_key.clone(), cx);
+                                } else {
+                                    this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                                }
                             }),
                         )
                         .on_pointer_click(
@@ -1697,6 +1898,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
                 BranchSidebarRow::Branch {
@@ -1720,8 +1922,13 @@ impl SidebarPaneView {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
                     };
+                    let menu_prefix = if surface == SidebarRowSurface::Pins {
+                        "pinned_"
+                    } else {
+                        ""
+                    };
                     let context_menu_invoker: SharedString = format!(
-                        "branch_menu_{}_{}_{}",
+                        "{menu_prefix}branch_menu_{}_{}_{}",
                         repo_id.0,
                         section_key,
                         full_name_for_menu.as_ref()
@@ -1730,10 +1937,15 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let label: SharedString =
+                    let full_label = (surface == SidebarRowSurface::Pins && depth == 0)
+                        || matches!(surface, SidebarRowSurface::Sticky { compact: true });
+                    let label: SharedString = if full_label {
+                        name.clone()
+                    } else {
                         super::super::branch_sidebar::branch_sidebar_branch_label(name.as_ref())
                             .to_owned()
-                            .into();
+                            .into()
+                    };
                     let workspace_path = (section == BranchSection::Local)
                         .then(|| workspace_badges.listed_path(name.as_ref()).cloned())
                         .flatten();
@@ -1756,13 +1968,22 @@ impl SidebarPaneView {
                     let show_workspace_badge = has_worktree;
                     let workspace_row_menu_invoker: Option<SharedString> =
                         workspace_badge_path.as_ref().map(|path| {
-                            format!("worktree_menu_{}_{}", repo_id.0, path.display()).into()
+                            format!(
+                                "{menu_prefix}worktree_menu_{}_{}",
+                                repo_id.0,
+                                path.display()
+                            )
+                            .into()
                         });
                     let workspace_menu_active =
                         workspace_row_menu_invoker.as_ref().is_some_and(|invoker| {
                             this.active_context_menu_invoker.as_ref() == Some(invoker)
                         });
-                    let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
+                    let row_group: SharedString = if surface == SidebarRowSurface::Pins {
+                        format!("pinned_branch_row_{}_{}", repo_id.0, ix).into()
+                    } else {
+                        format!("branch_row_{}_{}", repo_id.0, ix).into()
+                    };
                     let row_debug_selector = row_group.as_ref().to_owned();
                     let branch_text_color = if muted {
                         theme.colors.foreground.secondary
@@ -1855,16 +2076,23 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .pl(indent_px(usize::from(depth)))
-                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
+                        .pl(indent_px(if full_label { 0 } else { usize::from(depth) }))
+                        .pr(scaled_px(content_inset + BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .text_color(branch_text_color)
-                        .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot(
-                            "icons/git_branch.svg",
-                            branch_icon_color,
-                            14.0,
+                        .child(tree_toggle_slot(None).when(
+                            surface == SidebarRowSurface::Pins && depth == 0,
+                            |slot| {
+                                slot.debug_selector(move || format!("sidebar_pin_marker_{ix}"))
+                                    .child(svg_icon("icons/pin.svg", icon_primary, 12.0))
+                            },
                         ))
+                        .child(
+                            tree_icon_slot("icons/git_branch.svg", branch_icon_color, 14.0)
+                                .debug_selector(move || {
+                                    format!("sidebar_branch_icon_{surface:?}_{ix}")
+                                }),
+                        )
                         .child(
                             // Long branch names run into the trailing badges;
                             // fade them into the row instead of slicing a glyph.
@@ -2094,8 +2322,10 @@ impl SidebarPaneView {
                                         target_for_reveal.clone(),
                                         target.commit_id,
                                         target.fallback_scope,
+                                        surface,
                                         cx,
                                     );
+                                    this.retain_sidebar_click_target(ix, surface, e);
                                     return;
                                 }
                                 if e.click_count() < 2 {
@@ -2995,10 +3225,10 @@ mod tests {
                 .all(|w| worktree_badge_height(w[1]) > worktree_badge_height(w[0])),
             "the badge must grow at every density step"
         );
-        let compact = scale(UiDensity::Compact);
+        let default = scale(UiDensity::default());
         assert_eq!(
             worktree_badge_height(ui_scale::UiScale::from_percent(200)),
-            worktree_badge_height(compact) * 2.0,
+            worktree_badge_height(default) * 2.0,
             "and follow the UI zoom"
         );
     }
@@ -4110,10 +4340,14 @@ mod tests {
             cx.debug_bounds(feature_dots_selector).is_none(),
             "expected the trailing `⋮` slot to be gone from branch rows"
         );
-        // The row keeps only the trailing padding to the right of its badges,
-        // so the worktree badge lands on the row's right edge.
+        // Backgrounds reach the panel edge; content retains its inset plus
+        // trailing padding so the overlay scrollbar cannot cover the badge.
         assert!(
-            (feature_row_bounds.right() - feature_badge_before.right() - px(4.0)).abs() <= px(1.0),
+            (feature_row_bounds.right()
+                - feature_badge_before.right()
+                - px(components::ROW_HIGHLIGHT_INSET_PX + 4.0))
+            .abs()
+                <= px(1.0),
             "expected the worktree badge to sit one trailing pad off the row's right edge, \
              row right {:?} badge right {:?}",
             feature_row_bounds.right(),

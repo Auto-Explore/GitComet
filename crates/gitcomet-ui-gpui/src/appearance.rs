@@ -4,8 +4,8 @@ use gpui::{App, Pixels, Window};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum UiDensity {
-    #[default]
     Compact,
+    #[default]
     Comfortable,
     Spacious,
 }
@@ -103,7 +103,7 @@ pub(crate) struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            density: UiDensity::Compact,
+            density: UiDensity::default(),
             ui_font_size_px: FontRole::Ui.default_size(),
             editor_font_size_px: FontRole::Editor.default_size(),
             markdown_preview_font_size_px: FontRole::Markdown.default_size(),
@@ -207,7 +207,7 @@ mod tests {
             ..UiSession::default()
         };
         let appearance = Appearance::from_session(&session);
-        assert_eq!(appearance.density, UiDensity::Compact);
+        assert_eq!(appearance.density, UiDensity::Comfortable);
         assert_eq!(
             (appearance.ui_font_size_px, appearance.editor_font_size_px),
             (10, 32)
@@ -278,7 +278,7 @@ mod tests {
         }
 
         assert_eq!(UiDensity::from_key("nonsense"), None);
-        assert_eq!(UiDensity::default(), UiDensity::Compact);
+        assert_eq!(UiDensity::default(), UiDensity::Comfortable);
     }
 
     #[test]

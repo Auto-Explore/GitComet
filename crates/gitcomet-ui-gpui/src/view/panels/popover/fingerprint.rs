@@ -204,6 +204,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
         | PopoverKind::PinnedSectionMenu { repo_id, .. }
+        | PopoverKind::SidebarAncestorMenu { repo_id, .. }
         | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
@@ -238,6 +239,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // is up has to repaint it rather than leave a stale count.
         | PopoverKind::BranchGroupMenu { .. }
         | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -878,12 +880,19 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             section,
             remote,
             path,
+            from_pins,
         } => {
             100u8.hash(hasher);
             repo_id.hash(hasher);
             (*section as u8).hash(hasher);
             remote.hash(hasher);
             path.hash(hasher);
+            from_pins.hash(hasher);
+        }
+        PopoverKind::SidebarAncestorMenu { repo_id, section } => {
+            "sidebar_ancestors".hash(hasher);
+            repo_id.hash(hasher);
+            hash_branch_section(*section, hasher);
         }
         PopoverKind::PinnedSectionMenu { repo_id, section } => {
             101u8.hash(hasher);

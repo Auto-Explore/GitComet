@@ -337,52 +337,67 @@ fn context_menu_entry<V: 'static>(
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
-    let mut row = crate::kit::menu::menu_item(id, theme, ui_scale, selected, disabled)
-        .text_color(text_color)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(scaled_px(8.0))
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .when(!matches!(icon, ContextMenuIconSlot::None), |row| {
-                    row.child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon_path, |this, path| {
-                                this.child(crate::view::icons::svg_icon(
-                                    path,
-                                    icon_color,
-                                    scaled_px(13.0),
-                                ))
-                            }),
-                    )
-                })
-                .child(
+    // Expand/collapse rows are group headers. Resolve their surface here so
+    // every menu host (including ref groups and picker menus) gets the same
+    // treatment as sidebar headers, in both open and closed states.
+    let group_background = matches!(
+        icon_path,
+        Some("icons/chevron_down.svg" | "icons/chevron_right.svg")
+    )
+    .then_some(theme.colors.surface.panel);
+    let mut row = crate::kit::menu::menu_item_with_background(
+        id,
+        theme,
+        ui_scale,
+        selected,
+        disabled,
+        group_background,
+    )
+    .text_color(text_color)
+    .child(
+        div()
+            .flex()
+            .items_center()
+            .gap(scaled_px(8.0))
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .when(!matches!(icon, ContextMenuIconSlot::None), |row| {
+                row.child(
                     div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .text_size(theme.ui_text(MENU_PRIMARY_REMS * 16.0))
-                        .line_height(ui_scale.ui_text(18.0))
-                        .text_color(text_color)
-                        .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
-                        .when(max_lines > 1, |s| s.line_clamp(max_lines))
-                        .child(context_menu_text_content(
-                            label,
-                            tooltip_host,
-                            cx,
-                            max_lines,
-                            text_color,
-                            theme.ui_text(MENU_PRIMARY_REMS * 16.0),
-                            None,
-                        )),
-                ),
-        );
+                        .w(scaled_px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when_some(icon_path, |this, path| {
+                            this.child(crate::view::icons::svg_icon(
+                                path,
+                                icon_color,
+                                scaled_px(13.0),
+                            ))
+                        }),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(theme.ui_text(MENU_PRIMARY_REMS * 16.0))
+                    .line_height(ui_scale.ui_text(18.0))
+                    .text_color(text_color)
+                    .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
+                    .when(max_lines > 1, |s| s.line_clamp(max_lines))
+                    .child(context_menu_text_content(
+                        label,
+                        tooltip_host,
+                        cx,
+                        max_lines,
+                        text_color,
+                        theme.ui_text(MENU_PRIMARY_REMS * 16.0),
+                        None,
+                    )),
+            ),
+    );
 
     let mut end = div()
         .flex()
@@ -705,6 +720,25 @@ mod tests {
                         .debug_selector(|| "row_keycap".to_string()),
                 )
                 .child(
+                    ContextMenuEntry::new("closed_group", "Remote branch origin/main")
+                        .icon(ContextMenuIconSlot::Icon("icons/chevron_right.svg".into()))
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_closed_group".to_string()),
+                )
+                .child(
+                    ContextMenuEntry::new("open_group", "Remote branch upstream/main")
+                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_open_group".to_string()),
+                )
+                .child(
+                    ContextMenuEntry::new("selected_group", "Selected group")
+                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
+                        .selected(true)
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_selected_group".to_string()),
+                )
+                .child(
                     context_menu_header(theme, scale, SharedString::from("Header"), None, cx)
                         .id("row_header_id")
                         .debug_selector(|| "row_header".to_string()),
@@ -736,7 +770,14 @@ mod tests {
                 .expect("expected a plain entry to render")
                 .size
                 .height;
-            for selector in ["row_text_shortcut", "row_keycap", "row_header"] {
+            for selector in [
+                "row_text_shortcut",
+                "row_keycap",
+                "row_header",
+                "row_closed_group",
+                "row_open_group",
+                "row_selected_group",
+            ] {
                 let height = cx
                     .debug_bounds(selector)
                     .unwrap_or_else(|| panic!("expected {selector} to render"))
@@ -747,6 +788,19 @@ mod tests {
                     "{selector} must match a plain entry at {density:?} density"
                 );
             }
+            for selector in ["row_closed_group", "row_open_group"] {
+                assert!(
+                    crate::test_support::painted_control_quads(cx, selector)
+                        .iter()
+                        .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
+                );
+            }
+            assert!(
+                crate::test_support::painted_control_quads(cx, "row_selected_group")
+                    .iter()
+                    .any(|(fill, _)| *fill == theme.hover_overlay().into()),
+                "group backgrounds must preserve keyboard selection feedback"
+            );
         }
     }
 

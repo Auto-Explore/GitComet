@@ -5253,7 +5253,7 @@ fn assert_diff_search_scrolls_sideways(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    cx.simulate_resize(gpui::size(px(900.0), px(560.0)));
     push_raw_patch_diff_state_with_rev(cx, &view, repo_id, fixture_name, unified, 1, true);
     wait_for_main_pane_condition(
         cx,

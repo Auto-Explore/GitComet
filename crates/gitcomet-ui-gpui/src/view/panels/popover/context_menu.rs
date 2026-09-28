@@ -538,13 +538,34 @@ impl PopoverHost {
                 section,
                 remote,
                 path,
+                from_pins,
             } => Some(branch_group::model(
                 self,
                 *repo_id,
                 *section,
                 remote.as_deref(),
                 path,
+                *from_pins,
             )),
+            PopoverKind::SidebarAncestorMenu { section, .. } => {
+                let mut items = vec![ContextMenuItem::Header("Active branch groups".into())];
+                for (label, key) in self
+                    .sidebar_pane
+                    .read(cx)
+                    .sidebar_ancestor_menu_entries(*section)
+                {
+                    items.push(ContextMenuItem::Entry {
+                        label: format!("Collapse {label}").into(),
+                        icon: Some("icons/chevron_down.svg".into()),
+                        shortcut: None,
+                        disabled: false,
+                        action: Box::new(ContextMenuAction::ToggleSidebarCollapseKey {
+                            collapse_key: key,
+                        }),
+                    });
+                }
+                Some(ContextMenuModel::new(items))
+            }
             PopoverKind::PinnedSectionMenu { repo_id, section } => {
                 Some(pinned_section::model(self, *repo_id, *section))
             }
@@ -782,6 +803,11 @@ impl PopoverHost {
             }
             // The branch tree's collapse state is view-owned rather than a
             // store message, so these four go through the sidebar pane.
+            ContextMenuAction::UnpinAllFixedBranches { repo_id, section } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.unpin_branches_matching(repo_id, section, "", cx)
+                });
+            }
             ContextMenuAction::ToggleSidebarCollapseKey { collapse_key } => {
                 self.sidebar_pane.update(cx, |pane, cx| {
                     pane.toggle_active_repo_collapse_key(collapse_key, cx);
@@ -816,6 +842,7 @@ impl PopoverHost {
                 remote,
                 path,
                 group_label,
+                from_pins,
             } => {
                 let names = branch_group::deletable_branches(
                     self,
@@ -823,6 +850,7 @@ impl PopoverHost {
                     section,
                     remote.as_deref(),
                     &path,
+                    from_pins,
                 );
                 // The entry is disabled at zero, so this only fires if the group
                 // emptied between the last repaint and the click.
@@ -1100,6 +1128,11 @@ impl PopoverHost {
                     root.pending_force_delete_branch_centered = false;
                 });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
+            }
+            ContextMenuAction::ToggleBranchGroupPin { repo_id, group_key } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.toggle_sidebar_pin(repo_id, group_key, cx);
+                });
             }
             ContextMenuAction::ToggleBranchPin {
                 repo_id,

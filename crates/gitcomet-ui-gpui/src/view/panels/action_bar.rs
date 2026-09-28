@@ -59,10 +59,9 @@ where
     crate::ui_scale::UiScale::current(cx).row_height(ACTION_BAR_HEIGHT_PX, 44.0)
 }
 
-/// Longest badge label rendered before eliding. `components::Button` takes a
-/// plain string with no truncation of its own, so an unbounded branch name or
-/// folder name would squeeze other actions off the right edge. The full value
-/// stays available in each badge's tooltip.
+/// Longest badge label offered to layout. Badges can shrink further when the
+/// viewport cannot fit the preferred labels alongside its fixed actions. The
+/// full value stays available in each badge's tooltip.
 const BADGE_LABEL_MAX_CHARS: usize = 28;
 const CONDENSED_BADGE_LABEL_MAX_CHARS: usize = 16;
 const COMPACT_BADGE_LABEL_MAX_CHARS: usize = 10;
@@ -383,6 +382,9 @@ impl Render for ActionBarView {
         };
         let action_group_gap = gap(4.0, 8.0, 6.0);
         let tracking_action_gap = gap(2.0, 4.0, 6.0);
+        // Text in the three picker badges gives way before actions do. Keep
+        // enough room for the icon and an ellipsis even at the narrowest size.
+        let badge_min_width = scaled_px(theme.metrics.row_height(22.0, 32.0) + 28.0);
         let action_bar_padding_x = if dense_spacing {
             scaled_px(4.0)
         } else {
@@ -577,6 +579,7 @@ impl Render for ActionBarView {
                 .as_ref()
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
             components::Button::new("workspace_badge", label.clone())
+                .truncate_label()
                 .start_slot(icon("icons/git_worktree.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
                 .open(is_active)
@@ -590,6 +593,7 @@ impl Render for ActionBarView {
                         cx,
                     );
                 })
+                .min_w(badge_min_width)
                 .debug_selector(|| "workspace_badge".to_string())
                 .gitcomet_tooltip(theme, format!("Switch worktree\n{workdir}").into())
         });
@@ -617,6 +621,7 @@ impl Render for ActionBarView {
             };
             Some(
                 components::Button::new("branch_badge", label)
+                    .truncate_label()
                     .start_slot(icon("icons/git_branch.svg", icon_primary))
                     .style(components::ButtonStyle::Subtle)
                     .open(is_active)
@@ -632,6 +637,7 @@ impl Render for ActionBarView {
                             cx,
                         );
                     })
+                    .min_w(badge_min_width)
                     .debug_selector(|| "branch_badge".to_string())
                     .gitcomet_tooltip(theme, tooltip),
             )
@@ -663,6 +669,7 @@ impl Render for ActionBarView {
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
             Some(
                 components::Button::new("upstream_badge", label)
+                    .truncate_label()
                     .start_slot(icon("icons/cloud.svg", badge_color))
                     .style(components::ButtonStyle::Subtle)
                     .text_color(if has_upstream {
@@ -684,6 +691,7 @@ impl Render for ActionBarView {
                             cx,
                         );
                     })
+                    .min_w(badge_min_width)
                     .debug_selector(|| "upstream_badge".to_string())
                     .gitcomet_tooltip(theme, tooltip),
             )
@@ -692,6 +700,7 @@ impl Render for ActionBarView {
             div()
                 .debug_selector(|| "upstream_arrow".to_string())
                 .flex()
+                .flex_none()
                 .items_center()
                 .child(svg_icon(
                     "icons/arrow_right.svg",
@@ -738,6 +747,7 @@ impl Render for ActionBarView {
 
         let pull = div()
             .id("pull")
+            .flex_none()
             .debug_selector(|| "pull".to_string())
             .child(
                 components::SplitButton::action_menu(
@@ -845,6 +855,7 @@ impl Render for ActionBarView {
 
         let push = div()
             .id("push")
+            .flex_none()
             .debug_selector(|| "push".to_string())
             .child(
                 components::SplitButton::action_menu(
@@ -974,7 +985,7 @@ impl Render for ActionBarView {
             .id("tracking_actions")
             .debug_selector(|| "tracking_actions".to_string())
             .flex()
-            .flex_none()
+            .min_w(px(0.0))
             .items_center()
             .gap(tracking_action_gap)
             .children(branch_badge)
@@ -1011,6 +1022,7 @@ impl Render for ActionBarView {
                             div()
                                 .debug_selector(|| "merge_controls".to_string())
                                 .flex()
+                                .flex_none()
                                 .items_center()
                                 .gap_1()
                                 .child(
@@ -1040,6 +1052,7 @@ impl Render for ActionBarView {
                         d.child(
                             div()
                                 .flex()
+                                .flex_none()
                                 .items_center()
                                 .gap_1()
                                 .child(

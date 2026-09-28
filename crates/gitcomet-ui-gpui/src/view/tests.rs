@@ -5599,8 +5599,11 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         .expect("the feat/ group renders a row");
     assert_eq!(
         group_row.size.height,
-        px(24.0),
-        "branch hierarchy rows must remain 24 px tall"
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            rows::sidebar::sidebar_list_row_height(root.theme, root.ui_scale_percent)
+        }),
+        "branch hierarchy rows must follow the selected density"
     );
     let center = group_row.center();
     cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
