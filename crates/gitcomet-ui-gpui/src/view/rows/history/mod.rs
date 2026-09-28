@@ -109,6 +109,11 @@ impl HistoryView {
                     {
                         let cache = cache?;
                         let summary = worktree_dirty.as_ref()?.get(worktree_ix)?;
+                        let selected = matches!(
+                            &primary_selection,
+                            Some(super::HistoryPrimarySelection::Worktree(path))
+                                if path == &summary.path
+                        );
                         // The row shows the lanes of the commit it sits on top of,
                         // so it needs that row's paint data.
                         let graph_ix = visible_ix.checked_sub(graph_start)?;
@@ -145,11 +150,8 @@ impl HistoryView {
                             show_graph_color_marker,
                             repo.id,
                             list_ix,
-                            matches!(
-                                &primary_selection,
-                                Some(super::HistoryPrimarySelection::Worktree(path))
-                                    if path == &summary.path
-                            ),
+                            selected,
+                            find_query.is_some() && !selected,
                             (summary.added, summary.modified, summary.deleted),
                             summary,
                             cx,
@@ -179,6 +181,7 @@ impl HistoryView {
                             show_graph_color_marker,
                             repo.id,
                             selected,
+                            find_query.is_some() && !selected,
                             worktree_counts,
                             cx,
                         ));
@@ -659,6 +662,7 @@ fn worktree_uncommitted_history_row(
     repo_id: RepoId,
     list_ix: usize,
     selected: bool,
+    find_dimmed: bool,
     counts: (usize, usize, usize),
     summary: &gitcomet_core::domain::WorktreeDirtySummary,
     cx: &mut gpui::Context<HistoryView>,
@@ -804,6 +808,7 @@ fn worktree_uncommitted_history_row(
     // never move this row's graph lane away from the commit rows below it.
     let row = div()
         .id(("history_worktree_uncommitted", list_ix))
+        .when(find_dimmed, |row| row.opacity(HISTORY_FIND_DIMMED_OPACITY))
         .h(history_row_height(ui_scale))
         .flex()
         .w_full()
@@ -911,6 +916,7 @@ fn working_tree_summary_history_row(
     show_graph_color_marker: bool,
     repo_id: RepoId,
     selected: bool,
+    find_dimmed: bool,
     counts: (usize, usize, usize),
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
@@ -1022,6 +1028,7 @@ fn working_tree_summary_history_row(
     // the flexible summary is the only cell allowed to absorb width pressure.
     let row = div()
         .id(("history_worktree_summary", repo_id.0))
+        .when(find_dimmed, |row| row.opacity(HISTORY_FIND_DIMMED_OPACITY))
         .h(history_row_height(ui_scale))
         .flex()
         .w_full()
