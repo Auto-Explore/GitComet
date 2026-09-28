@@ -16,7 +16,7 @@ pub(super) struct StickyContext {
     rows: Rc<[BranchSidebarRow]>,
     head: Option<String>,
     selected: Option<BranchMenuTarget>,
-    selected_is_pinned: bool,
+    selected_pin_key: Option<SharedString>,
     pin_roots: Rc<[usize]>,
     row_keys: Rc<[SharedString]>,
     layout_cache: StickyLayoutCache,
@@ -74,7 +74,7 @@ impl StickyContext {
             &self.pin_roots,
             self.selected_row
                 .as_ref()
-                .filter(|_| self.selected_is_pinned)
+                .filter(|_| self.selected_pin_key.is_some())
                 .map(|(ix, _)| *ix),
             scroll,
             height,
@@ -244,7 +244,7 @@ impl SidebarPaneView {
             && Rc::ptr_eq(&context.rows, &presentation.rows)
             && context.head.as_deref() == head
             && context.selected.as_ref() == selected
-            && context.selected_is_pinned == self.selected_branch_is_pinned
+            && context.selected_pin_key == self.selected_branch_pin_key
         {
             return;
         }
@@ -258,21 +258,22 @@ impl SidebarPaneView {
             .map(BranchMenuTarget::local);
         let head = head.map(str::to_owned);
         let selected = selected.cloned();
-        // Only the tree's visible branch rows qualify: filtering or a closed
-        // ancestor removes the leaf as well as its sticky path. Resolve once
-        // per model/selection change, never while scrolling.
+        // Only visible branch rows qualify: filtering or a closed ancestor
+        // removes the leaf as well as its sticky path. Pinned copies of the
+        // same branch are distinguished by their root-specific row keys.
+        // Resolve once per model/selection change, never while scrolling.
         let selected_row = selected.as_ref().and_then(|selected| {
-            presentation.rows.iter().enumerate().position(|(ix, row)| {
-                (ix < presentation.pins.len()) == self.selected_branch_is_pinned && matches!(row, BranchSidebarRow::Branch { target, .. } if target == selected)
-            }).map(|ix| {
-                let key = match selected {
-                    BranchMenuTarget::Local { name } => format!("sticky:local:{name}"),
-                    BranchMenuTarget::Remote { remote, branch } => {
-                        format!("sticky:remote:{}:{remote}:{branch}", remote.len())
-                    }
-                };
-                (ix, SharedString::from(key))
-            })
+            presentation
+                .rows
+                .iter()
+                .enumerate()
+                .position(|(ix, row)| {
+                    let pin_key =
+                        (ix < presentation.pins.len()).then(|| &presentation.row_keys[ix]);
+                    pin_key == self.selected_branch_pin_key.as_ref()
+                        && matches!(row, BranchSidebarRow::Branch { target, .. } if target == selected)
+                })
+                .map(|ix| (ix, presentation.row_keys[ix].clone()))
         });
         let mut priority_rows = presentation.structure.sections.clone();
         if let Some((ix, _)) = &selected_row
@@ -282,10 +283,11 @@ impl SidebarPaneView {
             priority_rows.sort_unstable();
         }
         let mut eligible_rows = priority_rows.clone();
-        for target in current
-            .iter()
-            .chain(selected.iter().filter(|_| !self.selected_branch_is_pinned))
-        {
+        for target in current.iter().chain(
+            selected
+                .iter()
+                .filter(|_| self.selected_branch_pin_key.is_none()),
+        ) {
             eligible_rows.extend(presentation.structure.active_path(
                 &presentation.rows,
                 target,
@@ -305,7 +307,7 @@ impl SidebarPaneView {
             rows: Rc::clone(&presentation.rows),
             head,
             selected,
-            selected_is_pinned: self.selected_branch_is_pinned,
+            selected_pin_key: self.selected_branch_pin_key.clone(),
             pin_roots: presentation.structure.pin_roots.clone().into(),
             row_keys: Rc::clone(&presentation.row_keys),
             layout_cache: Default::default(),

@@ -4,7 +4,6 @@ use super::super::file_icons;
 use super::super::sidebar_presentation::{
     SidebarPresentation, SidebarPresentationCache, SidebarRequestFingerprint,
 };
-use super::super::sidebar_sticky::SidebarRowSurface;
 use super::super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
@@ -291,8 +290,9 @@ pub(in super::super) struct SidebarPaneView {
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     selected_branch: Option<SelectedBranch>,
-    // A pinned branch also has a tree row; only the clicked copy is selected.
-    selected_branch_is_pinned: bool,
+    // A branch can appear in several pinned groups and as an individual pin.
+    // Keep the clicked copy's stable row key; None selects the tree copy.
+    selected_branch_pin_key: Option<SharedString>,
     file_search_options: TextSearchOptions,
     file_browser_rows_cache: FileBrowserRowsCache,
     /// When set (and the sidebar is collapsed), this pane renders only the given
@@ -399,6 +399,7 @@ impl SidebarPaneView {
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
+                this.selected_branch_pin_key = None;
             }
             this.dispatch_sidebar_data_request_if_needed(cx);
 
@@ -513,7 +514,7 @@ impl SidebarPaneView {
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,
             selected_branch: None,
-            selected_branch_is_pinned: false,
+            selected_branch_pin_key: None,
             file_search_options: TextSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
             collapsed_popover_section: None,
@@ -592,20 +593,19 @@ impl SidebarPaneView {
         &mut self,
         repo_id: RepoId,
         target: BranchMenuTarget,
-        surface: SidebarRowSurface,
+        pin_key: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
         let next = Some(SelectedBranch { repo_id, target });
-        let is_pinned = surface == SidebarRowSurface::Pins;
         let released_click = self.clear_sidebar_click_target();
         if self.selected_branch.as_ref() == next.as_ref()
-            && self.selected_branch_is_pinned == is_pinned
+            && self.selected_branch_pin_key == pin_key
             && !released_click
         {
             return;
         }
         self.selected_branch = next;
-        self.selected_branch_is_pinned = is_pinned;
+        self.selected_branch_pin_key = pin_key;
         cx.notify();
     }
 
@@ -617,10 +617,10 @@ impl SidebarPaneView {
         target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
-        surface: SidebarRowSurface,
+        pin_key: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_selected_branch(repo_id, target.clone(), surface, cx);
+        self.set_selected_branch(repo_id, target.clone(), pin_key, cx);
         self.reveal_branch_commit_in_history(repo_id, target, commit_id, fallback_scope, cx);
         cx.notify();
     }
@@ -629,12 +629,12 @@ impl SidebarPaneView {
         self.selected_branch.as_ref()
     }
 
-    pub(in super::super) fn selected_branch_on_surface(
+    pub(in super::super) fn selected_branch_for_row(
         &self,
-        surface: SidebarRowSurface,
+        pin_key: Option<&SharedString>,
     ) -> Option<&SelectedBranch> {
         self.selected_branch()
-            .filter(|_| self.selected_branch_is_pinned == (surface == SidebarRowSurface::Pins))
+            .filter(|_| self.selected_branch_pin_key.as_ref() == pin_key)
     }
 
     pub(in super::super) fn active_repo_id(&self) -> Option<RepoId> {
@@ -1507,7 +1507,7 @@ impl SidebarPaneView {
             BranchMenuTarget::local(branch_name),
             commit_id,
             Some(LogScope::FullReachable),
-            SidebarRowSurface::Tree,
+            None,
             cx,
         );
         if row_ix.is_some() {

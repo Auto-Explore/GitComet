@@ -88,7 +88,7 @@ impl SidebarStickyFrameFixture {
             let presentation = pane.update(cx, |pane, cx| {
                 pane.state = state;
                 if let Some((selected, _)) = selected {
-                    pane.set_selected_branch(id, selected, SidebarRowSurface::Tree, cx);
+                    pane.set_selected_branch(id, selected, None, cx);
                 }
                 pane.sidebar_pinned_branches_by_repo.insert(path, pinned);
                 pane.sidebar_presentation_cache = SidebarPresentationCache::default();

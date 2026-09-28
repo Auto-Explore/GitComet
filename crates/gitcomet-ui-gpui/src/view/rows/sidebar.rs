@@ -1915,7 +1915,8 @@ impl SidebarPaneView {
                     } else {
                         surface
                     };
-                    let selected_branch = this.selected_branch_on_surface(surface).cloned();
+                    let pin_key = (ix < pin_count).then(|| presentation.row_keys[ix].clone());
+                    let selected_branch = this.selected_branch_for_row(pin_key.as_ref()).cloned();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
                     let target_for_reveal = target.clone();
@@ -2329,7 +2330,7 @@ impl SidebarPaneView {
                                         target_for_reveal.clone(),
                                         target.commit_id,
                                         target.fallback_scope,
-                                        surface,
+                                        pin_key.clone(),
                                         cx,
                                     );
                                     this.retain_sidebar_click_target(ix, surface, e);

@@ -337,6 +337,8 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
                 pane.sidebar_pinned_branches_by_repo.insert(
                     state.repos[0].spec.workdir.clone(),
                     BTreeSet::from([
+                        "group:local:shared".into(),
+                        "group:remote:origin:shared".into(),
                         "local:shared/topic-000001".into(),
                         "remote:origin/shared/topic-000001".into(),
                     ]),
@@ -354,7 +356,7 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
         BranchMenuTarget::local("shared/topic-000001"),
         BranchMenuTarget::remote("origin", "shared/topic-000001"),
     ] {
-        let (pin_ix, tree_ix, rows) = cx.update(|_, app| {
+        let (group_member_ix, pin_ix, tree_ix, rows) = cx.update(|_, app| {
             pane.update(app, |pane, _| {
                 let p = pane.branch_sidebar_presentation_cached().unwrap();
                 let matching = |row: &BranchSidebarRow| {
@@ -362,11 +364,15 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
                 };
                 (
                     p.pins.iter().position(matching).unwrap(),
+                    p.pins.iter().rposition(matching).unwrap(),
                     p.rows.iter().rposition(matching).unwrap(),
                     p.rows,
                 )
             })
         });
+        assert_ne!(group_member_ix, pin_ix);
+        let group_member_selector: &'static str =
+            format!("pinned_branch_row_81_{group_member_ix}").leak();
         let pin_selector: &'static str = format!("pinned_branch_row_81_{pin_ix}").leak();
         let tree_selector: &'static str = format!("branch_row_81_{tree_ix}").leak();
         let tree_resting = paint(cx, tree_selector);
@@ -395,7 +401,14 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
 
         // Repeatedly switch between copies of the SAME branch. The commit and
         // cached rows stay identical; selection must follow the actual click.
-        for clicked_selector in [pin_selector, tree_selector, pin_selector] {
+        for clicked_selector in [
+            pin_selector,
+            group_member_selector,
+            pin_selector,
+            tree_selector,
+            group_member_selector,
+            pin_selector,
+        ] {
             let bounds = cx.debug_bounds(clicked_selector).unwrap();
             cx.simulate_click(bounds.center(), gpui::Modifiers::default());
             cx.simulate_mouse_move(
@@ -404,23 +417,27 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
                 gpui::Modifiers::default(),
             );
             test_support::redraw(cx);
-            let pinned = clicked_selector == pin_selector;
-            assert_eq!(
-                paint(cx, pin_selector)
-                    .iter()
-                    .any(|(fill, _)| *fill == selected_bg),
-                pinned,
-            );
-            assert_eq!(
-                paint(cx, tree_selector)
-                    .iter()
-                    .any(|(fill, _)| *fill == selected_bg),
-                !pinned,
-            );
+            let pinned = clicked_selector != tree_selector;
+            for copy_selector in [pin_selector, group_member_selector, tree_selector] {
+                assert_eq!(
+                    paint(cx, copy_selector)
+                        .iter()
+                        .any(|(fill, _)| *fill == selected_bg),
+                    copy_selector == clicked_selector,
+                    "only {clicked_selector} should be selected; checking {copy_selector}",
+                );
+            }
             assert_eq!(
                 cx.debug_bounds("sidebar_sticky_selected_branch").is_some(),
-                !pinned
+                clicked_selector != pin_selector
             );
+            if clicked_selector != pin_selector {
+                assert_eq!(
+                    cx.debug_bounds("sidebar_sticky_selected_branch"),
+                    cx.debug_bounds(clicked_selector),
+                    "the sticky selection must follow the clicked copy",
+                );
+            }
             if pinned {
                 assert_eq!(paint(cx, tree_selector), tree_resting);
             }
@@ -438,6 +455,14 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
                             .eligible_rows
                             .contains(&tree_ix),
                         !pinned
+                    );
+                    assert_eq!(
+                        pane.sticky_context
+                            .as_ref()
+                            .unwrap()
+                            .eligible_rows
+                            .contains(&group_member_ix),
+                        clicked_selector == group_member_selector,
                     );
                 });
                 assert_eq!(
@@ -652,12 +677,7 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
         cx.update(|_, app| {
             pane.update(app, |pane, cx| {
                 pane.branch_filter_query.clear();
-                pane.set_selected_branch(
-                    state.repos[0].id,
-                    target.clone(),
-                    SidebarRowSurface::Tree,
-                    cx,
-                );
+                pane.set_selected_branch(state.repos[0].id, target.clone(), None, cx);
             })
         });
         test_support::redraw(cx);
@@ -808,12 +828,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
                         cx,
                     );
                     pane.set_active_repo_collapse_key(key.clone().into(), false, cx);
-                    pane.set_selected_branch(
-                        state.repos[0].id,
-                        target.clone(),
-                        SidebarRowSurface::Tree,
-                        cx,
-                    );
+                    pane.set_selected_branch(state.repos[0].id, target.clone(), None, cx);
                     pane.branches_scroll
                         .0
                         .borrow()
@@ -907,7 +922,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
             pane.set_selected_branch(
                 state.repos[0].id,
                 BranchMenuTarget::local("shared/topic-000100"),
-                SidebarRowSurface::Tree,
+                None,
                 cx,
             );
             pane.branches_scroll
@@ -1042,7 +1057,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
             pane.set_selected_branch(
                 state.repos[0].id,
                 BranchMenuTarget::remote("origin", "shared/topic-000001"),
-                SidebarRowSurface::Tree,
+                None,
                 cx,
             );
             p.rows
@@ -1055,7 +1070,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
             pane.set_selected_branch(
                 state.repos[0].id,
                 BranchMenuTarget::local("shared/topic-000001"),
-                SidebarRowSurface::Tree,
+                None,
                 cx,
             );
         })
@@ -1071,7 +1086,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
             pane.set_selected_branch(
                 state.repos[0].id,
                 BranchMenuTarget::remote("origin", "shared/topic-000001"),
-                SidebarRowSurface::Tree,
+                None,
                 cx,
             );
         })
@@ -1358,7 +1373,7 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                 pane.set_selected_branch(
                     state.repos[0].id,
                     BranchMenuTarget::remote("origin", "shared/topic-000050"),
-                    SidebarRowSurface::Tree,
+                    None,
                     cx,
                 );
             });

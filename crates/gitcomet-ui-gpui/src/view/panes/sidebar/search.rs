@@ -536,8 +536,10 @@ mod tests {
     fn sidebar_files_search_shares_options_and_clears_on_close(cx: &mut gpui::TestAppContext) {
         let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-        let (view, cx) =
-            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            window.activate_window();
+            GitCometView::new(store, events, None, window, cx)
+        });
         let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
         let mut state = super::super::long_list_tests::file_fixture(100);
         Arc::make_mut(&mut state).sidebar_mode = SidebarMode::Files;
@@ -643,8 +645,10 @@ mod tests {
     ) {
         let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-        let (view, cx) =
-            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            window.activate_window();
+            GitCometView::new(store, events, None, window, cx)
+        });
         let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
         let state = super::super::long_list_tests::branch_fixture(100);
         cx.update(|_, app| {
