@@ -1615,11 +1615,16 @@ pub(super) struct TerminalImeState {
 // ---------------------------------------------------------------------------
 
 pub(super) struct TerminalTextInputHandler {
+    pub(super) focus_handle: gpui::FocusHandle,
     pub(super) pty_sender: Option<PtySender>,
     pub(super) ime_state: Option<TerminalImeState>,
 }
 
 impl gpui::InputHandler for TerminalTextInputHandler {
+    fn accepts_text_input(&mut self, window: &mut Window, _cx: &mut App) -> bool {
+        crate::window_focus::is_active(&self.focus_handle, window) && self.pty_sender.is_some()
+    }
+
     fn selected_text_range(
         &mut self,
         _ignore_disabled_input: bool,
@@ -1660,9 +1665,12 @@ impl gpui::InputHandler for TerminalTextInputHandler {
         &mut self,
         _replacement_range: Option<std::ops::Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
+        if !crate::window_focus::is_active(&self.focus_handle, window) {
+            return;
+        }
         if let Some(ref pty) = self.pty_sender {
             self.ime_state = None;
             pty.write(text.as_bytes().to_vec());
@@ -1674,9 +1682,12 @@ impl gpui::InputHandler for TerminalTextInputHandler {
         _range_utf16: Option<std::ops::Range<usize>>,
         new_text: &str,
         _new_selected_range: Option<std::ops::Range<usize>>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
+        if !crate::window_focus::is_active(&self.focus_handle, window) {
+            return;
+        }
         self.ime_state = Some(TerminalImeState {
             marked_text: new_text.to_string(),
         });
@@ -2726,18 +2737,20 @@ mod tests {
     // IME InputHandler tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn ime_handler_marked_text_range_none_when_empty() {
+    #[gpui::test]
+    fn ime_handler_marked_text_range_none_when_empty(cx: &mut gpui::TestAppContext) {
         let handler = TerminalTextInputHandler {
+            focus_handle: cx.update(|app| app.focus_handle()),
             pty_sender: None,
             ime_state: None,
         };
         assert!(handler.ime_state.is_none());
     }
 
-    #[test]
-    fn ime_handler_replace_and_mark_stores_text() {
+    #[gpui::test]
+    fn ime_handler_replace_and_mark_stores_text(cx: &mut gpui::TestAppContext) {
         let mut handler = TerminalTextInputHandler {
+            focus_handle: cx.update(|app| app.focus_handle()),
             pty_sender: None,
             ime_state: None,
         };
@@ -2748,9 +2761,10 @@ mod tests {
         assert_eq!(handler.ime_state.as_ref().unwrap().marked_text, "test");
     }
 
-    #[test]
-    fn ime_handler_unmark_clears_state() {
+    #[gpui::test]
+    fn ime_handler_unmark_clears_state(cx: &mut gpui::TestAppContext) {
         let mut handler = TerminalTextInputHandler {
+            focus_handle: cx.update(|app| app.focus_handle()),
             pty_sender: None,
             ime_state: Some(TerminalImeState {
                 marked_text: "x".to_string(),
@@ -2760,9 +2774,10 @@ mod tests {
         assert!(handler.ime_state.is_none());
     }
 
-    #[test]
-    fn ime_handler_apple_press_and_hold_disabled() {
+    #[gpui::test]
+    fn ime_handler_apple_press_and_hold_disabled(cx: &mut gpui::TestAppContext) {
         let mut handler = TerminalTextInputHandler {
+            focus_handle: cx.update(|app| app.focus_handle()),
             pty_sender: None,
             ime_state: None,
         };

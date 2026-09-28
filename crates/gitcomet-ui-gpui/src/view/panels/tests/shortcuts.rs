@@ -1087,6 +1087,7 @@ fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1212,6 +1213,7 @@ fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppConte
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1262,6 +1264,7 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1303,6 +1306,7 @@ fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -3286,6 +3290,7 @@ fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext)
 fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -3334,6 +3339,7 @@ fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppC
 fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -3953,6 +3959,7 @@ fn diff_search_arrow_buttons_are_disabled_without_matches(cx: &mut gpui::TestApp
 fn diff_search_shift_enter_inserts_a_newline(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
     open_diff_search_on_two_hunk_diff(cx, &view, RepoId(70943), "diff_search_shift_enter");

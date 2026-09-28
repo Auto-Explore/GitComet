@@ -27,6 +27,7 @@ mod ui_probe;
 mod ui_runtime;
 mod ui_scale;
 mod view;
+mod window_focus;
 mod window_root_hook;
 
 pub use app::{
