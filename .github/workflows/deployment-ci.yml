@@ -5,19 +5,22 @@ on:
     branches: ["main", "dev"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
-      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - ".github/actions/setup-dump-syms/action.yml"
-      - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/package-linux.sh"
+      - "scripts/check-linux-runtime-deps.sh"
+      - "scripts/test-linux-runtime-deps.sh"
+      - "packaging/linux/**"
+      - "assets/linux/**"
       - "scripts/emit-breakpad-symbols.sh"
       - "scripts/install-dump-syms.sh"
       - "scripts/dump-syms-pins.sh"
@@ -38,19 +41,22 @@ on:
     branches: ["main", "dev"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
-      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - ".github/actions/setup-dump-syms/action.yml"
-      - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/package-linux.sh"
+      - "scripts/check-linux-runtime-deps.sh"
+      - "scripts/test-linux-runtime-deps.sh"
+      - "packaging/linux/**"
+      - "assets/linux/**"
       - "scripts/emit-breakpad-symbols.sh"
       - "scripts/install-dump-syms.sh"
       - "scripts/dump-syms-pins.sh"
@@ -102,12 +108,14 @@ jobs:
       - name: Validate shell scripts syntax
         run: |
           bash -n scripts/cargo-flatten-dupes.sh
-          bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
           bash -n scripts/notarize-macos.sh
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/package-linux.sh
+          bash -n scripts/check-linux-runtime-deps.sh
+          bash -n scripts/test-linux-runtime-deps.sh
           bash -n scripts/emit-breakpad-symbols.sh
           bash -n scripts/install-dump-syms.sh
           bash -n scripts/dump-syms-pins.sh
@@ -139,7 +147,6 @@ jobs:
         run: |
           ruby -e 'require "yaml"; %w[
             .github/workflows/build-release-artifacts.yml
-            .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
             .github/workflows/deploy-windows-installer.yml
@@ -151,8 +158,6 @@ jobs:
       - name: Validate deployment workflow config keys
         run: |
           set -euo pipefail
-          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
-          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -215,8 +220,6 @@ jobs:
           grep -Fq 'store_listing_languages: $''{{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}' .github/workflows/release-manual-main.yml
           grep -Fq 'store_preflight: true' .github/workflows/release-manual-main.yml
           grep -Fq 'store_preflight: false' .github/workflows/release-manual-main.yml
-          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
-          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ACCOUNT_NAME' .github/workflows/build-release-artifacts.yml
           grep -Fq 'AZURE_CREDENTIALS' .github/workflows/build-release-artifacts.yml
@@ -234,9 +237,6 @@ jobs:
           grep -Fq 'emit-breakpad-symbols.sh' .github/workflows/build-release-artifacts.yml
           grep -Fq 'SYMBOLS_CONTAINER: $''{{ vars.APT_STORAGE_CONTAINER }}' .github/workflows/build-release-artifacts.yml
           grep -Fq "grep -v '^symbols/'" .github/workflows/deploy-apt-repo.yml
-          grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
-          grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
-          grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
           # dump_syms pins live in one resolver script; every workflow resolves
@@ -456,80 +456,85 @@ jobs:
       - name: Verify dump_syms is runnable
         run: dump_syms --version
 
-  aur-metadata-smoke:
-    name: Validate AUR metadata update script
+  linux-packaging-smoke:
+    name: Validate Linux packaging script
     runs-on: ubuntu-22.04
     timeout-minutes: 20
-    container:
-      image: archlinux:base-devel
     steps:
-      - name: Install Arch packaging tooling
-        run: |
-          set -euo pipefail
-          pacman -Sy --noconfirm --needed perl shadow
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Create non-root packaging user
+      - name: Install packaging tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils dpkg-dev gcc rpm
+
+      - name: Test Linux runtime dependency guard
+        run: scripts/test-linux-runtime-deps.sh
+
+      # /usr/bin/true is a real ELF, so dpkg-shlibdeps and rpm AutoReq still
+      # produce library dependencies. The rc version exercises `~` handling.
+      - name: Build packages from a stub binary
         run: |
           set -euo pipefail
-          id -u builder >/dev/null 2>&1 || useradd -m builder
-          chown -R builder:builder "$GITHUB_WORKSPACE"
+          payload="$RUNNER_TEMP/payload"
+          out=dist/linux-ci
+          scripts/package-linux.sh stage --binary /usr/bin/true --source . --out "$payload"
+          scripts/package-linux.sh tarball --payload "$payload" --version 0.0.0-rc.1 --arch x86_64 --out "$out"
+          scripts/package-linux.sh deb --payload "$payload" --version 0.0.0-rc.1 --revision 1 --arch amd64 --out "$out"
+          scripts/package-linux.sh rpm --payload "$payload" --version 0.0.0-rc.1 --release 1 --arch x86_64 --out "$out"
+          ls -l "$out"
+          # GitHub renames `~` in asset names, so the files must already avoid it.
+          test -f "$out/gitcomet-v0.0.0-rc.1-linux-x86_64.tar.gz"
+          test -f "$out/gitcomet_0.0.0.rc.1-1_amd64.deb"
+          test -f "$out/gitcomet-0.0.0.rc.1-1.x86_64.rpm"
+          tar -tzf "$out/gitcomet-v0.0.0-rc.1-linux-x86_64.tar.gz" | LC_ALL=C sort > "$RUNNER_TEMP/tarball.txt"
+          printf '%s\n' gitcomet-v0.0.0-rc.1-linux-x86_64/ \
+            gitcomet-v0.0.0-rc.1-linux-x86_64/LICENSE-AGPL-3.0 \
+            gitcomet-v0.0.0-rc.1-linux-x86_64/NOTICE \
+            gitcomet-v0.0.0-rc.1-linux-x86_64/README.md \
+            gitcomet-v0.0.0-rc.1-linux-x86_64/gitcomet | LC_ALL=C sort | diff - "$RUNNER_TEMP/tarball.txt"
 
-      - name: Prepare synthetic AUR repo and assets
+      # Resolves the hard dependencies (git, the renderer either/or, hicolor)
+      # and checks that every weak dependency names a real Fedora package.
+      - name: Install the .rpm on Fedora 42
         run: |
-          set -euo pipefail
-          mkdir -p dist/aur-ci/repo
-          cat > dist/aur-ci/repo/PKGBUILD <<'EOF'
-          pkgname=gitcomet
-          pkgver=0.0.0
-          pkgrel=1
-          pkgdesc="Fast, resource-efficient Git GUI written in Rust"
-          arch=('x86_64')
-          url="https://gitcomet.dev/"
-          license=('AGPL-3.0-only')
-          depends=(
-            'fontconfig'
-            'freetype2'
-            'git'
-            'libx11'
-            'libxcb'
-            'libxkbcommon'
-            'wayland'
-          )
-          source=(
-            "gitcomet-v$pkgver-linux-x86_64.tar.gz::https://example.invalid/gitcomet-v$pkgver-linux-x86_64.tar.gz"
-            "gitcomet-source-v$pkgver.tar.gz::https://example.invalid/gitcomet-source-v$pkgver.tar.gz"
-          )
-          sha256sums=('oldbinary'
-                      'oldsource')
-
-          package() {
-            install -D -m755 "gitcomet-v$pkgver-linux-x86_64/gitcomet" "$pkgdir/usr/bin/gitcomet"
-          }
+          docker run --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" fedora:42 bash -euo pipefail -s <<'EOF'
+          dnf install -y -q --setopt=install_weak_deps=False /pkgs/gitcomet-0.0.0.rc.1-1.x86_64.rpm
+          test "$(rpm -q --queryformat '%{VERSION}' gitcomet)" = "0.0.0~rc.1"
+          rpm -qL gitcomet | grep -qx /usr/share/licenses/gitcomet/LICENSE-AGPL-3.0
+          rpm -qL gitcomet | grep -qx /usr/share/licenses/gitcomet/NOTICE
+          test "$(rpm -ql gitcomet | grep -c '^/usr/share/icons/hicolor/.*/apps/gitcomet.png$')" = 5
+          rpm -V gitcomet
+          missing=0
+          for name in $(rpm -q --recommends --suggests gitcomet); do
+            if [ -z "$(dnf repoquery -q --whatprovides "$name")" ]; then
+              echo "::error title=Unknown RPM weak dependency::No Fedora 42 package provides ${name}."
+              missing=1
+            fi
+          done
+          exit "$missing"
           EOF
 
-          printf 'synthetic-binary' > dist/aur-ci/gitcomet-v0.0.0-linux-x86_64.tar.gz
-          printf 'synthetic-source' > dist/aur-ci/gitcomet-source-v0.0.0.tar.gz
-          chown -R builder:builder dist
-
-      - name: Run update-aur.sh
+      - name: Install the .deb on Ubuntu 22.04
         run: |
-          set -euo pipefail
-          su builder -c "cd '$GITHUB_WORKSPACE' && scripts/update-aur.sh \
-            --aur-dir '$GITHUB_WORKSPACE/dist/aur-ci/repo' \
-            --version 0.0.0 \
-            --binary-tar '$GITHUB_WORKSPACE/dist/aur-ci/gitcomet-v0.0.0-linux-x86_64.tar.gz' \
-            --source-tar '$GITHUB_WORKSPACE/dist/aur-ci/gitcomet-source-v0.0.0.tar.gz' \
-            --verify-source"
-
-      - name: Validate generated PKGBUILD and .SRCINFO
-        run: |
-          set -euo pipefail
-          test -f dist/aur-ci/repo/.SRCINFO
-          grep -q '^pkgver=0.0.0$' dist/aur-ci/repo/PKGBUILD
-          grep -q 'source = gitcomet-v0.0.0-linux-x86_64.tar.gz::https://example.invalid/gitcomet-v0.0.0-linux-x86_64.tar.gz$' dist/aur-ci/repo/.SRCINFO
-          grep -q 'source = gitcomet-source-v0.0.0.tar.gz::https://example.invalid/gitcomet-source-v0.0.0.tar.gz$' dist/aur-ci/repo/.SRCINFO
+          docker run --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" ubuntu:22.04 bash -euo pipefail -s <<'EOF'
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends /pkgs/gitcomet_0.0.0.rc.1-1_amd64.deb
+          test "$(dpkg-query -W -f='${Version}' gitcomet)" = "0.0.0~rc.1-1"
+          grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' /usr/share/doc/gitcomet/copyright
+          test "$(dpkg -L gitcomet | grep -c '^/usr/share/icons/hicolor/.*/apps/gitcomet.png$')" = 5
+          missing=0
+          for field in Recommends Suggests; do
+            for name in $(dpkg-query -W -f="\${${field}}" gitcomet | tr ',' ' '); do
+              if ! apt-cache show "$name" >/dev/null 2>&1; then
+                echo "::error title=Unknown .deb weak dependency::No Ubuntu 22.04 package named ${name}."
+                missing=1
+              fi
+            done
+          done
+          exit "$missing"
+          EOF
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script

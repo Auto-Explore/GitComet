@@ -28,10 +28,27 @@ fn desktop_entry_exec_path_arg(exe: &std::path::Path) -> Result<String, String> 
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn should_auto_install_linux_desktop_integration(
     no_desktop_install_flag_present: bool,
+    system_desktop_entry_present: bool,
     _xdg_current_desktop: Option<&str>,
 ) -> bool {
     // `.desktop` entries follow the FreeDesktop spec, so installation is not GNOME-specific.
-    !no_desktop_install_flag_present
+    // A user copy would shadow a packaged entry and outlive the package.
+    !no_desktop_install_flag_present && !system_desktop_entry_present
+}
+
+/// Whether a package (deb, rpm, distro) installed `gitcomet.desktop` in `$XDG_DATA_DIRS`.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn system_desktop_entry_present(
+    xdg_data_dirs: Option<&std::ffi::OsStr>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> bool {
+    // The spec's default applies when the variable is unset or empty; relative entries are invalid.
+    let dirs = xdg_data_dirs
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| std::ffi::OsStr::new("/usr/local/share:/usr/share"));
+    std::env::split_paths(dirs)
+        .filter(|dir| dir.is_absolute())
+        .any(|dir| exists(&dir.join("applications/gitcomet.desktop")))
 }
 
 impl GitCometView {
@@ -46,6 +63,9 @@ impl GitCometView {
         let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
         if !should_auto_install_linux_desktop_integration(
             std::env::var_os("GITCOMET_NO_DESKTOP_INSTALL").is_some(),
+            system_desktop_entry_present(std::env::var_os("XDG_DATA_DIRS").as_deref(), |path| {
+                path.exists()
+            }),
             desktop.as_deref(),
         ) {
             return;
@@ -207,7 +227,11 @@ impl GitCometView {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    use super::system_desktop_entry_present;
     use super::{desktop_entry_exec_path_arg, should_auto_install_linux_desktop_integration};
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    use std::ffi::OsStr;
     use std::path::Path;
 
     #[test]
@@ -233,22 +257,71 @@ mod tests {
     fn auto_install_is_not_limited_to_gnome() {
         for desktop in ["GNOME", "KDE", "XFCE", "sway", ""] {
             assert!(
-                should_auto_install_linux_desktop_integration(false, Some(desktop)),
+                should_auto_install_linux_desktop_integration(false, false, Some(desktop)),
                 "expected desktop '{desktop}' to allow auto install"
             );
         }
-        assert!(should_auto_install_linux_desktop_integration(false, None));
+        assert!(should_auto_install_linux_desktop_integration(
+            false, false, None
+        ));
     }
 
     #[test]
     fn auto_install_respects_opt_out_flag() {
         assert!(!should_auto_install_linux_desktop_integration(
             true,
+            false,
             Some("GNOME")
         ));
         assert!(!should_auto_install_linux_desktop_integration(
             true,
+            false,
             Some("KDE")
+        ));
+    }
+
+    #[test]
+    fn auto_install_skips_when_a_package_installed_the_entry() {
+        assert!(!should_auto_install_linux_desktop_integration(
+            false,
+            true,
+            Some("GNOME")
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn system_entry_is_found_in_xdg_data_dirs() {
+        let exists = |path: &Path| path == Path::new("/opt/share/applications/gitcomet.desktop");
+        assert!(system_desktop_entry_present(
+            Some(OsStr::new("/usr/share:/opt/share")),
+            exists
+        ));
+        assert!(!system_desktop_entry_present(
+            Some(OsStr::new("/usr/share")),
+            exists
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn system_entry_lookup_defaults_when_xdg_data_dirs_is_unset_or_empty() {
+        let exists = |path: &Path| path == Path::new("/usr/share/applications/gitcomet.desktop");
+        assert!(system_desktop_entry_present(None, exists));
+        assert!(system_desktop_entry_present(Some(OsStr::new("")), exists));
+        assert!(!system_desktop_entry_present(
+            Some(OsStr::new("/opt/share")),
+            exists
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn system_entry_lookup_ignores_relative_and_empty_entries() {
+        let exists = |path: &Path| path.ends_with("applications/gitcomet.desktop");
+        assert!(!system_desktop_entry_present(
+            Some(OsStr::new("share::relative/dir")),
+            exists
         ));
     }
 
