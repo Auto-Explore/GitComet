@@ -135,8 +135,37 @@ impl Element for TerminalSelectionTracker {
         _request_layout: &mut Self::RequestLayoutState,
         _prepaint: &mut Self::PrepaintState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) {
+        if self.view.read(cx).focus_handle.is_focused(window) {
+            let view = self.view.clone();
+            let window_handle = window.window_handle();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Capture
+                    || event.first_mouse
+                    || !matches!(
+                        event.button,
+                        MouseButton::Left | MouseButton::Middle | MouseButton::Right
+                    )
+                {
+                    return;
+                }
+                view.update(cx, |this, _cx| this.took_press = false);
+                let view = view.clone();
+                cx.defer(move |cx| {
+                    if view.read(cx).took_press {
+                        return;
+                    }
+                    let _ = window_handle.update(cx, |_root, window, cx| {
+                        if !crate::text_selection_owner::press_keeps_focus(window, cx)
+                            && view.read(cx).focus_handle.is_focused(window)
+                        {
+                            window.blur(cx);
+                        }
+                    });
+                });
+            });
+        }
         // Registered unconditionally and gated inside the closures: `selecting`
         // only becomes true while handling mouse-down, i.e. after this frame was
         // painted, so gating here would drop every move and up event of the drag
@@ -221,6 +250,8 @@ impl TerminalViewportView {
         Self {
             theme,
             focus_handle,
+            focus_subscriptions: None,
+            took_press: false,
             term_lock,
             pty_sender,
             layout_cache: None,
@@ -287,6 +318,21 @@ impl TerminalViewportView {
         self.cursor_blink_hold_until = Instant::now();
     }
 
+    fn reset_focus(&mut self, cx: &mut gpui::Context<Self>) {
+        self.deactivate_cursor_blink();
+        if self.was_focused {
+            self.was_focused = false;
+            self.handle_focus_lost(cx);
+        } else {
+            self.end_selection_drag(cx);
+        }
+        self.pressed_mouse_button = None;
+        self.last_motion_cell = None;
+        self.ime_state = None;
+        self.took_press = false;
+        cx.notify();
+    }
+
     fn schedule_cursor_blink_tick(&mut self, cx: &mut gpui::Context<Self>) {
         if !crate::ui_runtime::current().uses_cursor_blink()
             || !self.cursor_blink_active
@@ -298,15 +344,19 @@ impl TerminalViewportView {
         let blink_seq = self.cursor_blink_seq;
         cx.spawn(
             async move |view: WeakEntity<TerminalViewportView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
-                let _ = view.update(cx, |this, cx| this.advance_cursor_blink(blink_seq, cx));
+                cx.background_executor()
+                    .timer(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS))
+                    .await;
+                let _ = view.update_in(cx, |this, window, cx| {
+                    this.advance_cursor_blink(blink_seq, window, cx)
+                });
             },
         )
         .detach();
     }
 
     fn cursor_blink_should_run(&self, window: &Window) -> bool {
-        self.connected() && self.focus_handle.is_focused(window)
+        self.connected() && crate::window_focus::is_active(&self.focus_handle, window)
     }
 
     pub(super) fn connected(&self) -> bool {
@@ -314,11 +364,12 @@ impl TerminalViewportView {
     }
 
     fn sync_cursor_blink_activity(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
-        let is_focused = self.focus_handle.is_focused(window);
+        let is_focused = crate::window_focus::is_active(&self.focus_handle, window);
         if is_focused && !self.was_focused {
+            self.reset_cursor_blink(cx);
             self.handle_focus_gained(cx);
         } else if !is_focused && self.was_focused {
-            self.handle_focus_lost(cx);
+            self.reset_focus(cx);
         }
         self.was_focused = is_focused;
 
@@ -369,8 +420,17 @@ impl TerminalViewportView {
         }
     }
 
-    pub(super) fn advance_cursor_blink(&mut self, blink_seq: u64, cx: &mut gpui::Context<Self>) {
+    pub(super) fn advance_cursor_blink(
+        &mut self,
+        blink_seq: u64,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.cursor_blink_seq != blink_seq {
+            return;
+        }
+        if !self.cursor_blink_should_run(window) {
+            self.reset_focus(cx);
             return;
         }
         self.cursor_blink_task_scheduled = false;
@@ -868,6 +928,7 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
         button: gpui::MouseButton,
     ) {
+        self.took_press = true;
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
         crate::press_gesture::claim_press(cx);
@@ -1100,8 +1161,12 @@ impl TerminalViewportView {
                         .timer(Duration::from_millis(16))
                         .await;
                     let mut keep_going = false;
-                    let updated = view.update(cx, |this, cx| {
+                    let updated = view.update_in(cx, |this, window, cx| {
                         if !this.selecting || this.selection_autoscroll_seq != seq {
+                            return;
+                        }
+                        if !crate::window_focus::is_active(&this.focus_handle, window) {
+                            this.end_selection_drag(cx);
                             return;
                         }
                         keep_going = true;
@@ -1450,7 +1515,8 @@ impl TerminalViewportView {
             }
 
             // Cursor
-            if self.cursor_blink_visible
+            if crate::window_focus::is_active(&self.focus_handle, window)
+                && self.cursor_blink_visible
                 && self
                     .ime_state
                     .as_ref()
@@ -1498,6 +1564,7 @@ impl TerminalViewportView {
             // IME marked text
             if let Some(ref ime) = self.ime_state
                 && !ime.marked_text.is_empty()
+                && crate::window_focus::is_active(&self.focus_handle, window)
             {
                 paint_state.ime_marked_text = Some(ime.marked_text.clone());
                 paint_state.ime_base_style = Some(layout.base_style.clone());
@@ -1527,7 +1594,15 @@ impl TerminalViewportView {
 }
 
 impl Render for TerminalViewportView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self.focus_subscriptions.is_none() {
+            self.focus_subscriptions = Some(crate::window_focus::observe_blur(
+                &self.focus_handle,
+                window,
+                cx,
+                Self::reset_focus,
+            ));
+        }
         let view = cx.entity().clone();
         let theme = self.theme;
         let term_lock = self.term_lock.clone();
@@ -1611,6 +1686,7 @@ impl Render for TerminalViewportView {
                                     },
                                     move |_bounds, paint_state, window, cx| {
                                         let ime_handler = TerminalTextInputHandler {
+                                            focus_handle: focus_handle.clone(),
                                             pty_sender: pty_sender.clone(),
                                             ime_state: paint_state.ime_marked_text.as_ref().map(
                                                 |t| TerminalImeState {
@@ -1618,7 +1694,9 @@ impl Render for TerminalViewportView {
                                                 },
                                             ),
                                         };
-                                        window.handle_input(&focus_handle, ime_handler, cx);
+                                        if crate::window_focus::is_active(&focus_handle, window) {
+                                            window.handle_input(&focus_handle, ime_handler, cx);
+                                        }
                                         paint_terminal_canvas_state(paint_state, theme, window, cx);
                                     },
                                 )
@@ -1628,7 +1706,7 @@ impl Render for TerminalViewportView {
                     )
                     .child({
                         let line_height = self
-                            .terminal_layout_snapshot(_window, cx)
+                            .terminal_layout_snapshot(window, cx)
                             .metrics
                             .line_height;
                         Scrollbar::new(

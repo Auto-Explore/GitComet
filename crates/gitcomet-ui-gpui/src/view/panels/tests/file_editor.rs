@@ -2998,6 +2998,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 

@@ -3190,8 +3190,10 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
-    let (view, cx) = cx
-        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        GitCometView::new(store_for_view, events, None, window, cx)
+    });
 
     let mut state = view_state_with_active_ready_repo(RepoId(1));
     state.repos[0].branches = Loadable::Ready(Arc::new(vec![Branch {
