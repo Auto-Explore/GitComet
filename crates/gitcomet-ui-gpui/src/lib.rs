@@ -23,6 +23,7 @@ mod text_runs;
 mod text_selection;
 mod text_selection_owner;
 mod theme;
+mod thread_cpu;
 mod ui_probe;
 mod ui_runtime;
 mod ui_scale;

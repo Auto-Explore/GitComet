@@ -1201,7 +1201,17 @@ impl HistoryView {
         }
     }
 
-    fn history_scroll_position(&self) -> f64 {
+    /// Window-space bounds of whichever history list rendered last, for
+    /// scripted input that must land on it.
+    pub(in crate::view) fn history_viewport_bounds(&self) -> Option<Bounds<Pixels>> {
+        if self.indexed.presentation.is_some() {
+            return self.scroll_interaction.borrow().viewport_bounds;
+        }
+        let bounds = self.history_scroll.0.borrow().base_handle.bounds();
+        (bounds.size.height > px(0.0)).then_some(bounds)
+    }
+
+    pub(in crate::view) fn history_scroll_position(&self) -> f64 {
         self.scroll_interaction
             .borrow()
             .logical

@@ -1141,6 +1141,7 @@ impl HistoryView {
         let measure = gpui::canvas(
             move |bounds, window, _cx| {
                 let mut state = interaction.borrow_mut();
+                state.viewport_bounds = Some(bounds);
                 if let Some(logical) = &mut state.logical {
                     let height = f64::from(f32::from(bounds.size.height));
                     let row = f64::from(f32::from(row_height));

@@ -17,11 +17,17 @@
 //!   and could not service its queue.
 //! - `main_cpu`: CPU time the main thread consumed as a share of wall time,
 //!   averaged over at least five seconds to smooth Windows scheduler-tick
-//!   quantization (Windows only; `n/a` elsewhere).
+//!   quantization (Windows and Linux; `n/a` elsewhere).
 //! - `submit`: CPU time in platform drawing/presentation, excluding GPU/display
 //!   completion. `GITCOMET_UI_PROBE_JSONL` additionally records individual frame
 //!   events and interval input-to-submission histograms. Timestamps are relative
 //!   to the `start` record's Unix clock anchor, for external scenario alignment.
+//!
+//! With JSONL on, the probe also enables [`gitcomet_core::op_trace`] on the
+//! same clock and writes its `stage` records (input, store queue, reducer,
+//! worker tasks, publication, UI application) with `thread` records naming
+//! each traced thread. On Linux every interval adds a `threads` record with
+//! each thread's cumulative CPU time, sampled off the main thread.
 //!
 //! One-off sections such as window creation are timed with [`time_section`]
 //! and logged as their own lines.
@@ -42,6 +48,9 @@ const ENABLED_ENV: &str = "GITCOMET_UI_PROBE";
 const LOG_PATH_ENV: &str = "GITCOMET_UI_PROBE_LOG";
 const JSONL_PATH_ENV: &str = "GITCOMET_UI_PROBE_JSONL";
 const INTERVAL_ENV: &str = "GITCOMET_UI_PROBE_INTERVAL_MS";
+/// Wake-latency ping spacing. Each ping wakes the main thread, so idle
+/// wakeup counts need a long spacing (or the probe off).
+const PING_ENV: &str = "GITCOMET_UI_PROBE_PING_MS";
 const DEFAULT_INTERVAL: Duration = Duration::from_millis(1000);
 /// `GetThreadTimes` is scheduler-tick quantized on Windows. Average several UI
 /// reporting intervals so `main_cpu` is useful rather than tick noise.
@@ -53,6 +62,7 @@ const SLOW_FRAME: Duration = Duration::from_millis(16);
 
 struct ProbeLog {
     started: Instant,
+    interval: Duration,
     writer: mpsc::SyncSender<ProbeRecord>,
     jsonl: bool,
     dropped: AtomicU64,
@@ -69,10 +79,13 @@ impl ProbeLog {
 enum ProbeRecord {
     Text(String),
     Json(Value),
+    /// Sample every thread's CPU time on the writer thread, off the UI thread.
+    SampleThreads {
+        at_ms: f64,
+    },
     /// Acknowledged once every earlier record is written and flushed.
     Flush(mpsc::SyncSender<()>),
 }
-static NEXT_ACTION: AtomicU64 = AtomicU64::new(1);
 
 /// `None` until [`start_if_enabled`] runs with the probe switched on.
 static LOG: OnceLock<ProbeLog> = OnceLock::new();
@@ -116,6 +129,21 @@ fn probe_writer(rx: mpsc::Receiver<ProbeRecord>, file: Option<File>, jsonl: Opti
                         if let Some(file) = jsonl.as_mut() {
                             serde_json::to_writer(&mut *file, &value)?;
                             file.write_all(b"\n")?;
+                        }
+                    }
+                    ProbeRecord::SampleThreads { at_ms } => {
+                        if let Some(file) = jsonl.as_mut() {
+                            let threads = crate::thread_cpu::sample_process_threads();
+                            if !threads.is_empty() {
+                                let threads: Vec<_> = threads
+                                    .into_iter()
+                                    .map(|thread| json!([thread.tid, thread.name, thread.cpu_ns]))
+                                    .collect();
+                                let record =
+                                    json!({"event": "threads", "at_ms": at_ms, "threads": threads});
+                                serde_json::to_writer(&mut *file, &record)?;
+                                file.write_all(b"\n")?;
+                            }
                         }
                     }
                     ProbeRecord::Flush(ack) => {
@@ -171,12 +199,39 @@ fn flush_writer(writer: &mpsc::SyncSender<ProbeRecord>, timeout: Duration) {
     let _ = ack_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
 }
 
+/// How often the probe drains and writes its records.
+pub(crate) fn interval() -> Duration {
+    LOG.get().map_or(DEFAULT_INTERVAL, |log| log.interval)
+}
+
+pub(crate) fn jsonl_enabled() -> bool {
+    LOG.get().is_some_and(|log| log.jsonl)
+}
+
+/// A scripted-scenario record, stamped on the probe clock and the Unix clock
+/// so harness-side events (file writes, process samples) can be aligned.
+pub(crate) fn scenario_record(event: &'static str, detail: Value) {
+    let Some(log) = LOG.get().filter(|log| log.jsonl) else {
+        return;
+    };
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(milliseconds);
+    write_json(&[
+        json!({"event": event, "at_ms": milliseconds(log.started.elapsed()),
+        "unix_ms": unix_ms, "detail": detail}),
+    ]);
+}
+
 /// A diagnostic action starts at application handling, not at hardware input.
 pub(crate) fn begin_action(kind: &'static str) -> u64 {
     let Some(log) = LOG.get().filter(|log| log.jsonl) else {
         return 0;
     };
-    let id = NEXT_ACTION.fetch_add(1, Ordering::Relaxed);
+    // Shares the operation-trace id space, so an action and the store work
+    // it causes carry the same id.
+    let id = gitcomet_core::op_trace::next_op();
     write_json(&[
         json!({"event":"action", "kind":kind, "phase":"begin", "id":id,
         "at_ms":milliseconds(log.started.elapsed())}),
@@ -217,6 +272,12 @@ fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
     }
 }
 
+fn stage_record(record: &gitcomet_core::op_trace::Record) -> Value {
+    json!({"event": "stage", "at_ms": record.at_ns as f64 / 1e6, "thread": record.thread,
+        "op": record.op, "stage": record.stage.as_str(), "label": record.label,
+        "a": record.a, "b": record.b})
+}
+
 fn log_line(text: &str) {
     let Some(log) = LOG.get() else {
         return;
@@ -252,6 +313,12 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_INTERVAL);
     let main_cpu = MainThreadCpu::capture();
+    let ping_interval = std::env::var(PING_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(PING_INTERVAL);
 
     // The pinger only stamps timestamps; the measurement happens on the main
     // thread when the foreground task below resumes. Unbounded so a long stall
@@ -263,7 +330,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
             // `try_send` on an unbounded channel only fails once the receiver
             // (and with it the foreground task, and the app) is gone.
             while ping_tx.try_send(Instant::now()).is_ok() {
-                std::thread::sleep(PING_INTERVAL);
+                std::thread::sleep(ping_interval);
             }
         });
     if let Err(err) = spawned {
@@ -292,6 +359,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     if LOG
         .set(ProbeLog {
             started,
+            interval,
             writer,
             jsonl: jsonl_enabled,
             dropped: AtomicU64::new(0),
@@ -313,16 +381,26 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     // Do not turn on process-wide frame collection until a collector and the
     // pinger that drives it are both guaranteed to exist.
     gpui::profiler::set_trace_enabled(true);
-    write_json(&[json!({"event": "start", "version": 2, "unix_ms": unix_ms,
+    if jsonl_enabled {
+        gitcomet_core::op_trace::enable(started);
+    }
+    let env = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
+    write_json(&[json!({"event": "start", "version": 3, "unix_ms": unix_ms,
         "pid": std::process::id(), "os": std::env::consts::OS,
-        "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis()})]);
+        "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis(),
+        "ping_ms": ping_interval.as_millis(),
+        "run_id": env("GITCOMET_PERF_RUN_ID"), "cargo_profile": env("GITCOMET_PERF_CARGO_PROFILE"),
+        "scenario": env(crate::view::scenario_driver::SCENARIO_ENV),
+        "main_tid": crate::thread_cpu::current_tid(),
+        "mimalloc_env": std::env::vars().filter(|(key, _)| key.starts_with("MIMALLOC_"))
+            .collect::<std::collections::BTreeMap<_, _>>()})]);
 
     log_line(&format!(
         "ui-probe start os={} debug_assertions={} interval={}ms ping={}ms main_cpu={}",
         std::env::consts::OS,
         cfg!(debug_assertions),
         interval.as_millis(),
-        PING_INTERVAL.as_millis(),
+        ping_interval.as_millis(),
         if main_cpu.available() {
             "available"
         } else {
@@ -362,8 +440,13 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
             let frames = frame_collector.collect_unseen();
             if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
+                let traced = gitcomet_core::op_trace::drain();
+                records.extend(traced.threads.iter().map(|thread| json!({"event": "thread",
+                    "thread": thread.thread, "name": thread.name, "tid": thread.os_tid})));
+                records.extend(traced.records.iter().map(stage_record));
                 records.push(json!({"event": "interval", "at_ms": milliseconds(now.duration_since(started)),
                     "records_dropped": LOG.get().map(|log| log.dropped.load(Ordering::Relaxed)).unwrap_or(0),
+                    "stage_records_dropped": traced.dropped,
                     "wall_ms": milliseconds(now.duration_since(interval_started)), "main_cpu_percent": main_cpu_pct,
                     "wake_ms": wake_latencies.iter().copied().map(milliseconds).collect::<Vec<_>>() }));
                 cx.update(|app| {
@@ -382,8 +465,11 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
                                 dropped = dropped.saturating_sub(previous.mid_draw_events_dropped);
                             }
                             previous_input.insert(handle.window_id(), snapshot);
+                            let bounds = window.bounds();
                             records.push(json!({"event": "input_interval", "window": format!("{:?}", handle.window_id()),
                                 "at_ms": milliseconds(now.duration_since(started)), "count": latency.len(),
+                                "size": [f32::from(bounds.size.width), f32::from(bounds.size.height)],
+                                "scale": window.scale_factor(), "active": window.is_window_active(),
                                 "wall_ms": milliseconds(now.duration_since(interval_started)),
                                 "p95_ms": if latency.is_empty() { None } else { Some(latency.value_at_quantile(0.95) as f64 / 1e6) },
                                 "max_ms": if latency.is_empty() { None } else { Some(latency.max() as f64 / 1e6) },
@@ -393,6 +479,9 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
                     }
                 });
                 write_json(&records);
+                if let Some(log) = LOG.get() {
+                    log.enqueue(ProbeRecord::SampleThreads { at_ms: milliseconds(now.duration_since(started)) });
+                }
             }
             let summary = IntervalSummary::new(
                 now.duration_since(interval_started),
@@ -572,6 +661,8 @@ impl IntervalSummary {
 struct MainThreadCpu {
     #[cfg(target_os = "windows")]
     clock: Option<gitcomet_win32_window_utils::ThreadCpuClock>,
+    #[cfg(target_os = "linux")]
+    tid: Option<u64>,
 }
 
 impl MainThreadCpu {
@@ -580,18 +671,13 @@ impl MainThreadCpu {
         Self {
             #[cfg(target_os = "windows")]
             clock: gitcomet_win32_window_utils::ThreadCpuClock::for_current_thread(),
+            #[cfg(target_os = "linux")]
+            tid: crate::thread_cpu::current_tid(),
         }
     }
 
     fn available(&self) -> bool {
-        #[cfg(target_os = "windows")]
-        {
-            self.clock.is_some()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            false
-        }
+        self.cpu_time().is_some()
     }
 
     fn cpu_time(&self) -> Option<Duration> {
@@ -599,7 +685,13 @@ impl MainThreadCpu {
         {
             self.clock.as_ref().and_then(|clock| clock.cpu_time())
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            self.tid
+                .and_then(crate::thread_cpu::thread_cpu_ns)
+                .map(Duration::from_nanos)
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
             None
         }
@@ -637,6 +729,7 @@ mod tests {
         let (writer, rx) = mpsc::sync_channel(1);
         let log = ProbeLog {
             started: Instant::now(),
+            interval: DEFAULT_INTERVAL,
             writer,
             jsonl: true,
             dropped: AtomicU64::new(0),
