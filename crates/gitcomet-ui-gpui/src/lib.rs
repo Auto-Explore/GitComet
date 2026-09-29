@@ -3,6 +3,7 @@ mod appearance;
 mod assets;
 mod bundled_fonts;
 mod clipboard;
+mod environment;
 mod external_editor;
 pub mod focused_diff;
 mod font_preferences;

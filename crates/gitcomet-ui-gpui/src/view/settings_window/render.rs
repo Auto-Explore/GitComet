@@ -2153,20 +2153,25 @@ impl Render for SettingsWindowView {
                         }),
                     );
 
-                    let environment_card = self
+                    let mut environment_card = self
                         .card("settings_window_environment", "Environment", theme)
-                        .child(self.info_row(
-                            "settings_window_build",
-                            "Build",
-                            self.runtime_info.app_version_display.clone(),
-                            theme,
-                        ))
-                        .child(self.info_row(
-                            "settings_window_os",
-                            "Operating system",
-                            self.runtime_info.operating_system.clone(),
-                            theme,
-                        ).border_color(no_separator));
+                        .child(components::Button::new("settings_window_copy_environment", "Copy environment details")
+                            .on_click(theme, cx, |this, _, window, cx| {
+                                this.copy_environment_details(window, cx);
+                            }));
+                    for (index, section) in self.runtime_info.environment.sections().into_iter().enumerate() {
+                        environment_card = environment_card.child(
+                            div().px_2().pt_3().pb_2().font_weight(FontWeight::MEDIUM).child(section.title),
+                        );
+                        for row in section.rows {
+                            let id = if index == 0 {
+                                format!("settings_window_{}", row.key)
+                            } else {
+                                format!("settings_window_{}_{}", row.key, index)
+                            };
+                            environment_card = environment_card.child(self.info_row(id, row.label, row.value.into(), theme));
+                        }
+                    }
 
                     let links_card = self
                         .card("settings_window_links", "Links", theme)

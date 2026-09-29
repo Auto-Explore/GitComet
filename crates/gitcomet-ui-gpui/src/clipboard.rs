@@ -12,6 +12,7 @@ pub(crate) enum CopySource {
     TerminalContextMenu,
     HookActivity,
     ContextMenu,
+    EnvironmentDetails,
 }
 
 impl CopySource {
@@ -30,6 +31,7 @@ impl CopySource {
             Self::TerminalContextMenu => "terminal-context-menu",
             Self::HookActivity => "hook-activity",
             Self::ContextMenu => "context-menu",
+            Self::EnvironmentDetails => "environment-details",
         }
     }
 }

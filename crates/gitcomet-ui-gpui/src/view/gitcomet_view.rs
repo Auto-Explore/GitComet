@@ -1005,6 +1005,7 @@ impl GitCometView {
             focused_mergetool_exit_code,
             startup_crash_report,
         } = config;
+        crate::environment::track_window(window, cx);
         if initial_path.is_none() {
             initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
         }

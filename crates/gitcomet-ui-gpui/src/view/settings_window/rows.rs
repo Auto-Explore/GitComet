@@ -445,15 +445,16 @@ impl SettingsWindowView {
 
     pub(super) fn info_row(
         &self,
-        id: &'static str,
+        id: impl Into<SharedString>,
         label: &'static str,
         value: SharedString,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let id = id.into();
         let label_debug_id = format!("{id}_label");
         let value_debug_id = format!("{id}_value");
         div()
-            .id(id)
+            .id(id.clone())
             .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
@@ -813,7 +814,7 @@ impl SettingsWindowView {
                     .child(self.info_row(
                         "settings_window_overflow_info",
                         "Deliberately long info label for overflow coverage",
-                        self.runtime_info.operating_system.clone(),
+                        self.runtime_info.environment.system.operating_system.clone().unwrap_or_default().into(),
                         theme,
                     ))
                     .child(self.link_row(

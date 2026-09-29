@@ -54,6 +54,36 @@ and `-Rounds` explicitly when comparing policies.
 
 ## GUI and process captures
 
+For a responsiveness report, first use **Settings → Environment → Copy
+environment details** on the affected machine. This records the GPU and backend
+selected for the application's windows, including `Hardware`, `Software (CPU)`,
+or `Unavailable`. Different window configurations are listed separately. Native
+macOS GPUI currently does not expose GPU or driver specs; those fields remain
+`Unavailable`.
+
+To capture the same environment with UI timings on Linux:
+
+```sh
+GITCOMET_UI_PROBE=1 \
+GITCOMET_UI_PROBE_LOG=/tmp/gitcomet-ui.log \
+GITCOMET_UI_PROBE_JSONL=/tmp/gitcomet-ui.jsonl \
+GITCOMET_REPO_LOAD_TRACE=/tmp/gitcomet-repository.jsonl \
+target/release/gitcomet /path/to/repository
+```
+
+The probe writes environment updates directly to stderr and its optional logs;
+it does not require `RUST_LOG=info`. Reproduce the slow action and compare `draw`,
+`submit`, and `wake` timings with the repository/process captures below. A slow
+splash alone does not isolate repository loading: startup also validates Git.
+An environment export identifies the renderer but does not establish the cause
+of a slowdown. Collect matched traces on the affected machine before changing
+renderer selection or input behavior.
+
+Environment snapshots are cached and saved as `environment-<pid>.json` alongside
+the process's crash artifacts. Recovered reports use that process's recorded
+environment, even if the next launch selects another renderer. Clean shutdown
+and successful recovery remove these per-process files.
+
 ```sh
 python scripts/profiling/ui-responsiveness.py fixture target/profiling/ui-fixture
 python scripts/profiling/ui-responsiveness.py measure --baseline /path/to/baseline.exe --candidate /path/to/candidate.exe --repository target/profiling/ui-fixture --output target/profiling/ui-session --session first --scenarios idle scroll click
