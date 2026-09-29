@@ -105,6 +105,19 @@ enum Step {
         repeat: usize,
         interval_ms: u64,
     },
+    /// Writes every path at once (a checkout or build touching many files),
+    /// then restores them (or deletes the new ones) the next round. With
+    /// `expect_status` each round's witness is the status list showing all
+    /// of them changed, then none; paths in ignored directories take none,
+    /// and their cost shows in the refresh work the stage records capture.
+    WriteFiles {
+        paths: Vec<PathBuf>,
+        contents: String,
+        rounds: usize,
+        interval_ms: u64,
+        #[serde(default = "default_true")]
+        expect_status: bool,
+    },
     /// Runs a command-palette command (setup, e.g. `toggle-terminal`).
     Command { id: String },
     /// Minimizes the window (idle measurements).
@@ -263,6 +276,24 @@ async fn finish(quit: bool, cx: &mut AsyncApp) {
     }
 }
 
+/// The keystroke typing `ch` produces. Built directly because
+/// `Keystroke::parse` treats `-` as a modifier separator.
+fn text_keystroke(ch: char) -> Keystroke {
+    let (key, key_char) = match ch {
+        ' ' => ("space".to_owned(), " ".to_owned()),
+        '\n' => ("enter".to_owned(), "\n".to_owned()),
+        ch => (ch.to_lowercase().to_string(), ch.to_string()),
+    };
+    Keystroke {
+        modifiers: Modifiers {
+            shift: ch.is_uppercase(),
+            ..Modifiers::default()
+        },
+        key,
+        key_char: Some(key_char),
+    }
+}
+
 fn record(event: &'static str, detail: Value) {
     crate::ui_probe::scenario_record(event, detail);
 }
@@ -373,15 +404,8 @@ impl Driver {
                 witness,
             } => {
                 let chars: Vec<char> = text.chars().collect();
-                let mut keystrokes = Vec::with_capacity(chars.len());
-                for ch in &chars {
-                    let key = if *ch == ' ' {
-                        "space".to_owned()
-                    } else {
-                        ch.to_string()
-                    };
-                    keystrokes.push(Keystroke::parse(&key).map_err(|e| e.to_string())?);
-                }
+                let keystrokes: Vec<Keystroke> =
+                    chars.iter().map(|&ch| text_keystroke(ch)).collect();
                 self.scheduled(
                     chars.len(),
                     *interval_ms,
@@ -458,7 +482,24 @@ impl Driver {
                 repeat,
                 interval_ms,
             } => {
-                self.write_file(path, contents, *repeat, *interval_ms, cx)
+                self.write_files(
+                    std::slice::from_ref(path),
+                    contents,
+                    *repeat,
+                    *interval_ms,
+                    true,
+                    cx,
+                )
+                .await
+            }
+            Step::WriteFiles {
+                paths,
+                contents,
+                rounds,
+                interval_ms,
+                expect_status,
+            } => {
+                self.write_files(paths, contents, *rounds, *interval_ms, *expect_status, cx)
                     .await
             }
             Step::Command { id } => {
@@ -838,23 +879,33 @@ impl Driver {
         .await;
     }
 
-    async fn write_file(
+    async fn write_files(
         &mut self,
-        path: &std::path::Path,
+        paths: &[PathBuf],
         contents: &str,
-        repeat: usize,
+        rounds: usize,
         interval_ms: u64,
+        expect_status: bool,
         cx: &mut AsyncApp,
     ) -> Result<(), String> {
         let workdir = cx
             .update(|cx| self.view.read(cx).active_repo_workdir())
             .ok_or("no active repository")?;
-        let full = workdir.join(path);
-        let original = std::fs::read(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+        // `None` marks a path that did not exist: restoring deletes it.
+        let mut originals = Vec::with_capacity(paths.len());
+        for path in paths {
+            let full = workdir.join(path);
+            let original = match std::fs::read(&full) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(format!("{}: {error}", full.display())),
+            };
+            originals.push((full, original));
+        }
         let started = Instant::now();
         let interval = Duration::from_millis(interval_ms);
         let mut result = Ok(());
-        for ix in 0..repeat {
+        for ix in 0..rounds {
             let scheduled = started + interval * u32::try_from(ix).unwrap_or(u32::MAX);
             let now = Instant::now();
             if scheduled > now {
@@ -867,32 +918,51 @@ impl Driver {
                 op,
                 "file_write",
                 op_trace::instant_ns(scheduled),
-                0,
+                u64::from(expect_status),
             );
-            let bytes: &[u8] = if dirty {
-                contents.as_bytes()
-            } else {
-                &original
-            };
-            if let Err(error) = std::fs::write(&full, bytes) {
-                result = Err(format!("{}: {error}", full.display()));
+            let handling = Instant::now();
+            for (full, original) in &originals {
+                let written = match (dirty, original) {
+                    (true, _) => full
+                        .parent()
+                        .map_or(Ok(()), std::fs::create_dir_all)
+                        .and_then(|()| std::fs::write(full, contents)),
+                    (false, Some(original)) => std::fs::write(full, original),
+                    (false, None) => std::fs::remove_file(full),
+                };
+                if let Err(error) = written {
+                    result = Err(format!("{}: {error}", full.display()));
+                }
+            }
+            op_trace::record(
+                Stage::InputHandled,
+                op,
+                "file_write",
+                u64::try_from(handling.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                1,
+            );
+            if result.is_err() {
                 break;
             }
-            op_trace::record(Stage::InputHandled, op, "file_write", 0, 0);
+            if !expect_status {
+                continue;
+            }
             // The watcher, not this op, drives the refresh: wait for the
-            // status list to reflect the save before the next one.
+            // status list to reflect the round before the next one.
             let deadline = Instant::now() + DEFAULT_WITNESS_TIMEOUT;
             loop {
                 let reflected = cx.update(|cx| {
+                    // The lane the status list renders, not the combined status.
                     self.view.read(cx).active_repo().is_some_and(|repo| {
-                        let listed = match &repo.status {
-                            Loadable::Ready(status) => status
-                                .unstaged
-                                .iter()
-                                .any(|entry| entry.path.as_path() == path),
-                            _ => return false,
+                        let Some(entries) = repo.worktree_status_entries() else {
+                            return false;
                         };
-                        listed == dirty
+                        paths.iter().all(|path| {
+                            let listed = entries
+                                .iter()
+                                .any(|entry| entry.path.as_path() == path.as_path());
+                            listed == dirty
+                        })
                     })
                 });
                 if reflected {
@@ -902,7 +972,7 @@ impl Driver {
                 }
                 let now = Instant::now();
                 if now > deadline {
-                    result = Err(format!("save {ix} never reached the status list"));
+                    result = Err(format!("round {ix} never reached the status list"));
                     break;
                 }
                 self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
@@ -913,7 +983,12 @@ impl Driver {
             }
         }
         // Leave the tree as it was, whatever happened.
-        let _ = std::fs::write(&full, &original);
+        for (full, original) in &originals {
+            let _ = match original {
+                Some(original) => std::fs::write(full, original),
+                None => std::fs::remove_file(full),
+            };
+        }
         result
     }
 }
@@ -946,13 +1021,17 @@ mod tests {
                 {"do": "click", "target": {"list": "history_row", "index": 3}},
                 {"do": "write_file", "path": "save-target.txt", "contents": "x\n",
                  "repeat": 40, "interval_ms": 1500},
+                {"do": "write_files", "paths": ["src/a.txt", "src/b.txt"], "contents": "x\n",
+                 "rounds": 10, "interval_ms": 2000},
+                {"do": "write_files", "paths": ["target/churn-1.txt"], "contents": "x\n",
+                 "rounds": 60, "interval_ms": 500, "expect_status": false},
                 {"do": "command", "id": "toggle-terminal"},
                 {"do": "minimize"},
                 {"do": "expect", "witness": {"kind": "search_settled", "matches": 100}}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 14);
+        assert_eq!(scenario.steps.len(), 16);
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {
@@ -962,11 +1041,24 @@ mod tests {
             }
         ));
         assert!(matches!(
-            scenario.steps[13],
+            scenario.steps[15],
             Step::Expect {
                 witness: WitnessKind::SearchSettled { matches: Some(100) }
             }
         ));
+    }
+
+    #[test]
+    fn typed_text_keeps_dashes_and_case() {
+        let dash = text_keystroke('-');
+        assert_eq!(
+            (dash.key.as_str(), dash.key_char.as_deref()),
+            ("-", Some("-"))
+        );
+        let upper = text_keystroke('G');
+        assert!(upper.modifiers.shift);
+        assert_eq!(upper.key_char.as_deref(), Some("G"));
+        assert_eq!(text_keystroke('\n').key, "enter");
     }
 
     #[test]

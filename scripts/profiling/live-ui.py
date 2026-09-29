@@ -34,6 +34,7 @@ brought to front by hand. Input is always dispatched inside the app.
 """
 
 import argparse
+import collections
 import hashlib
 import json
 import math
@@ -57,6 +58,7 @@ import perf_metadata  # noqa: E402
 SURVEY_SOURCE = ROOT / "crates/gitcomet-ui-gpui/src/view/user_survey.rs"
 SAVE_FILE = "save-target.txt"
 SEARCH_FILE = "search-target.txt"
+IGNORED_DIR = "build"
 WINDOW_SIZE = (1400, 900)
 REFRESH_HZ = 60
 
@@ -121,7 +123,8 @@ def create_fixture(path, commits, files):
              for row in range(100_000)]
     (path / SEARCH_FILE).write_text("".join(lines), encoding="utf-8", newline="\n")
     (path / SAVE_FILE).write_text("saved content\n", encoding="utf-8", newline="\n")
-    git(path, "add", SEARCH_FILE, SAVE_FILE, env=env)
+    (path / ".gitignore").write_text(f"/{IGNORED_DIR}/\n", encoding="utf-8", newline="\n")
+    git(path, "add", SEARCH_FILE, SAVE_FILE, ".gitignore", env=env)
     git(path, "commit", "-qm", "live fixture files",
         env={**env, "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z"})
     for row in range(500, 100_000, 1000):
@@ -143,10 +146,48 @@ def clone_fixture(source, path, revision):
 
 # ---------------------------------------------------------------- scenarios
 
+def tracked_files(repository, count):
+    """`count` tracked files for a burst, spread across the tree."""
+    listed = git(repository, "ls-files", "-z").stdout.decode().split("\0")
+    listed = [path for path in listed if path and not path.startswith(".")]
+    step = max(1, len(listed) // count)
+    return listed[::step][:count]
+
+
 def scenario(name, repository, save_file=SAVE_FILE):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
     ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
+    if name == "status-burst":
+        # A 50-file save burst (formatter, branch switch), restored each round.
+        return {"name": name, "quit": True, "steps": ready + [
+            {"do": "phase", "name": "burst"},
+            {"do": "write_files", "paths": tracked_files(repository, 50),
+             "contents": "burst\n", "rounds": 20, "interval_ms": 2500}]}
     steps = {
+        # Process start to usable status and history, then quit.
+        "startup": [{"do": "wait_ready", "timeout_ms": 180_000}],
+        # Build output churning in an ignored directory should cost nothing.
+        "ignored-churn": ready + [
+            {"do": "phase", "name": "ignored_churn"},
+            {"do": "write_files", "paths": [f"{IGNORED_DIR}/out-{ix:03}.o" for ix in range(100)],
+             "contents": "object\n", "rounds": 60, "interval_ms": 500, "expect_status": False},
+            {"do": "settle", "ms": 3000}],
+        # Sustained terminal output while the history list scrolls.
+        "terminal-output": ready + [
+            {"do": "command", "id": "toggle-terminal"},
+            {"do": "settle", "ms": 3000},
+            {"do": "type", "text": "yes GitComet-terminal-output | head -n 3000000\n", "interval_ms": 20},
+            {"do": "phase", "name": "scroll_with_output"},
+            {"do": "scroll", "target": "history", "delta_px": -96, "repeat": 400, "interval_ms": 16,
+             "flip_every": 100, "witness": {"kind": "history_scrolled"}},
+            {"do": "phase", "name": "output_settling"},
+            {"do": "settle", "ms": 10_000}],
+        # A second (Home) window beside the repository window.
+        "two-windows-idle": ready + [
+            {"do": "command", "id": "new-window"},
+            {"do": "settle", "ms": 5000},
+            {"do": "phase", "name": "idle_two_windows"},
+            {"do": "settle", "ms": 60_000}],
         "idle": ready + [{"do": "phase", "name": "idle"}, {"do": "settle", "ms": 60_000}],
         "idle-minimized": ready + [{"do": "minimize"}, {"do": "settle", "ms": 2000},
                                    {"do": "phase", "name": "idle_minimized"}, {"do": "settle", "ms": 60_000}],
@@ -186,7 +227,8 @@ def scenario(name, repository, save_file=SAVE_FILE):
     return {"name": name, "steps": steps[name], "quit": True}
 
 
-SCENARIOS = ("idle", "idle-minimized", "history-select", "history-scroll", "status-save", "diff-search")
+SCENARIOS = ("startup", "idle", "idle-minimized", "two-windows-idle", "history-select", "history-scroll",
+             "status-save", "status-burst", "ignored-churn", "diff-search", "terminal-output")
 
 
 # ---------------------------------------------------------------- one run
@@ -386,6 +428,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     if compositor:
         env = compositor.environment(env)
     started = time.time()
+    capture["spawn_unix_ms"] = started * 1000
     with open(output / "stderr.log", "wb") as stderr:
         # A wrapper (perf, heaptrack) makes the run a diagnostic capture: its
         # timings are not latency evidence. The sampled pid is then the
@@ -506,14 +549,22 @@ def summarize(directory):
         elif name in begins:
             phases[name] = analyse_phase(begins.pop(name), record, draws, submits, by_op, applied,
                                          records, threads, process, start)
-    if not phases:
+    if not phases and capture["scenario"] != "startup":
         problems.append("no complete phase")
     for name, phase in phases.items():
         inputs = phase["inputs"]
         if inputs["witnessed"] + inputs["superseded"] != inputs["expected_witnesses"]:
             problems.append(f"{name}: {inputs['expected_witnesses']} inputs expected a witness but "
                             f"{inputs['witnessed']} were witnessed and {inputs['superseded']} superseded")
-    summary = {"run_id": capture["run_id"], "scenario": capture["scenario"],
+    startup = None
+    if starts and capture.get("spawn_unix_ms"):
+        anchor = start["unix_ms"]
+        first_draw = next((r for r in records if r["event"] == "draw"), None)
+        ready = next((r for r in records if r["event"] == "scenario_ready"), None)
+        startup = {"spawn_to_probe_ms": anchor - capture["spawn_unix_ms"],
+                   "spawn_to_first_draw_ms": anchor + first_draw["at_ms"] - capture["spawn_unix_ms"] if first_draw else None,
+                   "spawn_to_ready_ms": ready["unix_ms"] - capture["spawn_unix_ms"] if ready else None}
+    summary = {"run_id": capture["run_id"], "scenario": capture["scenario"], "startup": startup,
                "binary_sha256": capture["binary_sha256"], "repository_head": capture["repository_head"],
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
@@ -563,6 +614,10 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
                         r["at_ms"] for r in stage["reduced"])
                     row["apply_ms"] = shown[1]["b"] / 1e6
         inputs.append(row)
+    # Work no scripted input caused (watcher refreshes, timers), by stage.
+    background = collections.Counter(
+        f"{item['stage']}:{item['label']}" for item in by_op.get(0, [])
+        if in_phase(item["at_ms"]) and item["stage"] in ("received", "task_started", "applied"))
     intervals = [r for r in records if r["event"] == "interval" and lo <= r["at_ms"] - r["wall_ms"] and r["at_ms"] <= hi]
     main_cpu = [r["main_cpu_percent"] for r in intervals if r.get("main_cpu_percent") is not None]
     phase_process = [s for s in process
@@ -608,6 +663,7 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "pss_kib": distribution(s["pss_kib"] for s in phase_process),
         "threads": max((s["threads"] for s in phase_process), default=None),
         "fds": max((s["fds"] for s in phase_process), default=None),
+        "background_work": dict(background.most_common()),
         "thread_cpu_ms": dict(sorted(thread_cpu.items(), key=lambda item: -item[1])),
         "thread_runqueue_wait_ms": dict(sorted(thread_wait.items(), key=lambda item: -item[1])),
         "thread_timeslices_per_second": {key: value / seconds for key, value in
