@@ -874,9 +874,9 @@ impl GixRepo {
     /// Resolve a reference (abbreviated sha, branch, tag, `HEAD~3`, …) to its
     /// commit, without the parent diff `commit_details_impl` computes.
     ///
-    /// `find_commit_by_id` sends anything that is not a full oid through
-    /// `rev_parse_single`, so an ambiguous prefix errors here rather than
-    /// silently picking one candidate.
+    /// `find_commit_by_id` resolves hex names against the repository's own
+    /// hash kind, so an ambiguous prefix errors here rather than silently
+    /// picking one candidate.
     pub(in super::super) fn resolve_commit_impl(&self, reference: &CommitId) -> Result<Commit> {
         let repo = self.repo();
         let spec = reference.as_ref();
@@ -1073,27 +1073,156 @@ impl GixRepo {
     }
 }
 
-/// Resolves a `CommitId` to its commit. Ids are full hex, so the object is
-/// looked up directly; the revspec parser (and its prefix disambiguation
-/// against every pack) only runs for anything that is not a plain id.
+/// Resolve a `CommitId` to its commit.
+///
+/// Hex names are decoded against the repository's own hash kind. gix infers
+/// the kind from the digit count alone (up to 40 digits is SHA-1), so a name
+/// of the other width would be compared against hashes of a different length
+/// and panic once objects are packed. Such names are resolved here instead,
+/// and a spec with a hex run wider than the repository digest is never handed
+/// to gix.
 fn find_commit_by_id<'repo>(
     repo: &'repo gix::Repository,
     id: &CommitId,
 ) -> Result<gix::Commit<'repo>> {
     let spec = id.as_ref();
-    let object = match object_id_from_commit_id(id) {
-        Some(oid) => repo.find_object(oid).map_err(|e| {
-            Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
-        })?,
-        None => repo
-            .rev_parse_single(spec)
+    let object = if is_hex_object_name(spec) {
+        find_hex_object(repo, spec)?
+    } else if contains_hex_run_longer_than(spec, repo.object_hash().len_in_hex()) {
+        // gix would decode this run as a prefix of the wrong kind; no object
+        // can carry it, so only a reference can resolve the spec.
+        find_reference_object(repo, spec)?
+    } else {
+        repo.rev_parse_single(spec)
+            .and_then(|id| id.object())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
-            .object()
-            .map_err(|e| {
-                Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
-            })?,
     };
     object
         .peel_to_commit()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))
+}
+
+/// The object named by a full or abbreviated hexadecimal id, with git's
+/// reference precedence.
+fn find_hex_object<'repo>(repo: &'repo gix::Repository, spec: &str) -> Result<gix::Object<'repo>> {
+    let kind = repo.object_hash();
+
+    // Wider than the digest: never an object here, but a reference may carry
+    // the name.
+    if spec.len() > kind.len_in_hex() {
+        return find_reference_object(repo, spec);
+    }
+
+    // A full id names an object directly.
+    if spec.len() == kind.len_in_hex() {
+        let oid = decode_hex_object_id(spec, kind).ok_or_else(|| unknown_revision(spec))?;
+        return load_object(repo, spec, oid);
+    }
+
+    // An abbreviation: a reference of the same name wins, then the unique
+    // object matching the prefix.
+    if let Some(oid) = peel_reference_id(repo, spec)? {
+        return load_object(repo, spec, oid);
+    }
+    match lookup_hex_prefix(repo, spec)? {
+        Some(oid) => load_object(repo, spec, oid),
+        None => Err(unknown_revision(spec)),
+    }
+}
+
+/// The object named by a reference, or an error when no reference has the name.
+fn find_reference_object<'repo>(
+    repo: &'repo gix::Repository,
+    spec: &str,
+) -> Result<gix::Object<'repo>> {
+    let oid = peel_reference_id(repo, spec)?.ok_or_else(|| unknown_revision(spec))?;
+    load_object(repo, spec, oid)
+}
+
+/// Whether `spec` is a hexadecimal object name: at least four digits (git's
+/// minimum abbreviation) and no other characters.
+fn is_hex_object_name(spec: &str) -> bool {
+    spec.len() >= gix::hash::Prefix::MIN_HEX_LEN && spec.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Whether any run of hexadecimal digits in `spec` is longer than `max_hex`.
+fn contains_hex_run_longer_than(spec: &str, max_hex: usize) -> bool {
+    let mut run = 0usize;
+    for byte in spec.bytes() {
+        run = if byte.is_ascii_hexdigit() { run + 1 } else { 0 };
+        if run > max_hex {
+            return true;
+        }
+    }
+    false
+}
+
+/// The id a reference name ultimately points to, following symbolic refs and
+/// peeling annotated tags. `Ok(None)` when no reference has that name.
+fn peel_reference_id(repo: &gix::Repository, spec: &str) -> Result<Option<gix::ObjectId>> {
+    let Some(mut reference) = repo.try_find_reference(spec).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix find reference {spec}: {e}"
+        )))
+    })?
+    else {
+        return Ok(None);
+    };
+    let id = reference.peel_to_id().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix peel reference {spec}: {e}"
+        )))
+    })?;
+    Ok(Some(id.detach()))
+}
+
+/// The unique object whose id starts with the hexadecimal prefix `spec`.
+fn lookup_hex_prefix(repo: &gix::Repository, spec: &str) -> Result<Option<gix::ObjectId>> {
+    let Some(oid) = decode_hex_object_id(spec, repo.object_hash()) else {
+        return Ok(None);
+    };
+    let prefix = gix::hash::Prefix::new(&oid, spec.len()).expect("prefix shorter than the digest");
+    let found = repo.objects.lookup_prefix(prefix, None).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix prefix lookup {spec}: {}",
+            e.into_error()
+        )))
+    })?;
+    // `Err(())` means several objects share the prefix, so it is not a match.
+    Ok(match found {
+        Some(Ok(oid)) => Some(oid),
+        _ => None,
+    })
+}
+
+/// Decode an all-hex object name into a zero-padded id of `kind`; a trailing
+/// odd digit keeps only its high nibble. `hex` must not be longer than an id
+/// of `kind`.
+fn decode_hex_object_id(hex: &str, kind: gix::hash::Kind) -> Option<gix::ObjectId> {
+    let mut id = gix::ObjectId::null(kind);
+    for (slot, pair) in id.as_mut_slice().iter_mut().zip(hex.as_bytes().chunks(2)) {
+        let high = (pair[0] as char).to_digit(16)? as u8;
+        let low = match pair.get(1) {
+            Some(byte) => (*byte as char).to_digit(16)? as u8,
+            None => 0,
+        };
+        *slot = high << 4 | low;
+    }
+    Some(id)
+}
+
+/// Load an object by id, naming `spec` in the error.
+fn load_object<'repo>(
+    repo: &'repo gix::Repository,
+    spec: &str,
+    oid: gix::ObjectId,
+) -> Result<gix::Object<'repo>> {
+    repo.find_object(oid)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix object {spec}: {e}"))))
+}
+
+fn unknown_revision(spec: &str) -> Error {
+    Error::new(ErrorKind::Backend(format!(
+        "gix rev-parse {spec}: unknown revision or path not in the working tree"
+    )))
 }
