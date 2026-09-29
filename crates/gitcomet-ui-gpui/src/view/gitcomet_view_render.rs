@@ -9,8 +9,9 @@ impl Render for GitCometView {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
-        let external_repo_drop_enabled =
-            renders_full_chrome(self.view_mode) && !self.state.repos.is_empty();
+        // The repository bar takes drops once repositories are open; Home
+        // takes them before that.
+        let external_repo_drop_enabled = renders_full_chrome(self.view_mode);
         if self.external_drag_paths.is_some()
             && (!external_repo_drop_enabled
                 || (!cx.has_active_drag() && !self.external_drag_drop_pending))
@@ -28,9 +29,10 @@ impl Render for GitCometView {
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
         self.last_window_size = next_window_size;
+        let metrics = crate::appearance::current(cx);
         if window_width_changed
-            && action_bar_density(previous_window_width, self.ui_scale_percent)
-                != action_bar_density(next_window_size.width, self.ui_scale_percent)
+            && action_bar_density(previous_window_width, self.ui_scale_percent, metrics)
+                != action_bar_density(next_window_size.width, self.ui_scale_percent, metrics)
         {
             // The action bar chooses compact labels at narrow widths. It is
             // normally mounted through a cached view, so explicitly invalidate
@@ -40,7 +42,6 @@ impl Render for GitCometView {
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
-            self.schedule_ui_settings_persist(cx);
         }
         let ui_scale_percent = self.ui_scale_percent;
         let scaled_px = ui_scale::scaler(ui_scale_percent);
@@ -491,6 +492,14 @@ impl Render for GitCometView {
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::OpenWorkspace, window, cx| {
+                    // Claimed either way so the app-level handler cannot toggle
+                    // the chooser a second time.
+                    this.toggle_workspace_picker(window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleRevealCommit, window, cx| {
                 // The availability gate lives in `toggle_reveal_commit`, which
                 // the app-level handler reaches too. Claiming the action either

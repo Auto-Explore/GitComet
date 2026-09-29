@@ -157,6 +157,8 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
+    /// Change the global theme preference. A window whose workspace
+    /// overrides the theme records it but keeps its own look.
     pub(super) fn set_theme_mode(
         &mut self,
         mode: ThemeMode,
@@ -168,12 +170,46 @@ impl GitCometView {
         }
 
         self.theme_mode = mode.clone();
+        self.window_appearance = appearance;
         let shared_mode = mode.clone();
         self.update_ui_preferences(cx, move |preferences| {
             preferences.appearance.theme_mode = shared_mode;
         });
-        self.set_theme(mode.resolve_theme(appearance), cx);
+        let host_mode = mode.clone();
+        self.popover_host
+            .update(cx, |host, _cx| host.sync_global_theme_mode(host_mode));
+        if self.workspace_theme_mode.is_none() {
+            self.set_theme(mode.resolve_theme(appearance), cx);
+        }
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn effective_theme_mode(&self) -> &ThemeMode {
+        self.workspace_theme_mode
+            .as_ref()
+            .unwrap_or(&self.theme_mode)
+    }
+
+    /// Re-read this window's workspace theme override from the manager.
+    /// An unknown key (for example a deleted user theme) counts as no override.
+    pub(crate) fn sync_workspace_theme_override(&mut self, cx: &mut gpui::Context<Self>) {
+        let mode = self.workspace_id.and_then(|id| {
+            crate::workspaces::with_workspace(cx, id, |workspace| {
+                workspace
+                    .theme_mode
+                    .as_deref()
+                    .and_then(ThemeMode::from_key)
+            })
+            .flatten()
+        });
+        if self.workspace_theme_mode == mode {
+            return;
+        }
+        self.workspace_theme_mode = mode;
+        let theme = self
+            .effective_theme_mode()
+            .resolve_theme(self.window_appearance);
+        self.set_theme(theme, cx);
     }
 
     fn sync_date_preferences_to_children(&mut self, cx: &mut gpui::Context<Self>) {

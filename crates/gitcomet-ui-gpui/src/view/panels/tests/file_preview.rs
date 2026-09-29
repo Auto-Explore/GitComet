@@ -2796,6 +2796,8 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
 /// hitbox it measures against — but on its own scroll handle.
 #[gpui::test]
 fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

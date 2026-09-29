@@ -51,9 +51,10 @@ pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_t
 pub use picker_prompt::PickerPromptHeader;
 pub use picker_prompt::picker_prompt_layout;
 pub use picker_prompt::{
-    PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent, PickerPromptGeometry,
-    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, PickerPromptOrder,
-    picker_prompt_layout_ordered, row_height as picker_row_height,
+    OnRemoveFn, PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent,
+    PickerPromptGeometry, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout,
+    PickerPromptOrder, PickerRowKey, PickerRowSpec, picker_prompt_layout_ordered, picker_row,
+    remove_row_button, row_height as picker_row_height, selected_hint_pill, workspace_picker_item,
 };
 pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus};
 pub use repository_badge::{

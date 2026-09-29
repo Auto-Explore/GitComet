@@ -813,6 +813,10 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
             assert!(pane.file_editor_decode_key.is_some());
             pane.save_file_editor_buffer(cx);
             assert!(!pane.file_editor_is_dirty());
+            // No backend repository writes here; report the write as landed.
+            hold_editor_save_receipt(pane, repo_id, Path::new(FILE))
+                .try_send(true)
+                .unwrap();
         });
     });
     show(
@@ -1770,7 +1774,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             ),
             true,
         );
-        cx.update(|_, app| {
+        let write = cx.update(|_, app| {
             view.read(app).main_pane.clone().update(app, |pane, cx| {
                 let expected = pane
                     .file_editor_decode_key
@@ -1782,6 +1786,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
                     Some(expected),
                     "the optimistic save must keep the read identity until the write lands"
                 );
+                hold_editor_save_receipt(pane, repo_id, Path::new(FILE))
             })
         });
         // The store has accepted the write, but disk still contains the old
@@ -1806,5 +1811,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
                 TextFormat::UTF_8
             );
         });
+        // The write lands, so the next pass starts from a saved buffer.
+        write.try_send(true).unwrap();
     }
 }

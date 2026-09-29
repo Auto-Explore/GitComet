@@ -370,11 +370,13 @@ fn context_menu_entry<V: 'static>(
                             .items_center()
                             .justify_center()
                             .when_some(icon_path, |this, path| {
-                                this.child(crate::view::icons::svg_icon(
-                                    path,
-                                    icon_color,
-                                    scaled_px(13.0),
-                                ))
+                                let icon_label = label.text.clone();
+                                this.child(
+                                    crate::view::icons::svg_icon(path, icon_color, scaled_px(13.0))
+                                        .debug_selector(move || {
+                                            format!("context_menu_entry_icon_{icon_label}")
+                                        }),
+                                )
                             }),
                     )
                 })
@@ -530,6 +532,10 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/computer.svg" => Some("icons/computer.svg"),
         "icons/history.svg" => Some("icons/history.svg"),
         "icons/pin.svg" => Some("icons/pin.svg"),
+        "icons/cog.svg" => Some("icons/cog.svg"),
+        "icons/disk.svg" => Some("icons/disk.svg"),
+        "icons/generic_close.svg" => Some("icons/generic_close.svg"),
+        "icons/git_commit.svg" => Some("icons/git_commit.svg"),
         _ => None,
     };
     if by_icon.is_some() {
@@ -892,6 +898,10 @@ mod tests {
             "icons/cloud.svg",
             "icons/computer.svg",
             "icons/pin.svg",
+            "icons/cog.svg",
+            "icons/disk.svg",
+            "icons/generic_close.svg",
+            "icons/git_commit.svg",
         ];
 
         for path in paths {
@@ -1007,6 +1017,10 @@ mod tests {
             "icons/cloud.svg",
             "icons/computer.svg",
             "icons/pin.svg",
+            "icons/cog.svg",
+            "icons/disk.svg",
+            "icons/generic_close.svg",
+            "icons/git_commit.svg",
         ];
         for path in paths {
             assert_eq!(
@@ -1015,5 +1029,61 @@ mod tests {
                 "missing direct SVG support for context-menu icon path: {path}"
             );
         }
+    }
+
+    /// An icon path the resolver does not list renders an empty, still-indented
+    /// slot, so every menu icon literal in the crate must resolve to itself.
+    #[test]
+    fn every_menu_icon_literal_in_the_crate_resolves() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        crate::test_support::rust_sources_under(&src_dir, &mut sources);
+
+        let mut unresolved = Vec::new();
+        let mut seen = 0usize;
+        for path in sources {
+            let relative = path.strip_prefix(&src_dir).expect("source below src");
+            if relative
+                .components()
+                .any(|component| component.as_os_str() == "tests")
+                || relative.to_string_lossy().ends_with("tests.rs")
+            {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("read Rust source");
+            let production = source.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
+            for marker in ["icon: Some(", "ContextMenuIconSlot::Icon("] {
+                for (start, _) in production.match_indices(marker) {
+                    // `leading_icon: Some(..)` and friends are not menu icons.
+                    if production[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        continue;
+                    }
+                    let rest = production[start + marker.len()..].trim_start();
+                    let Some(literal) = rest
+                        .strip_prefix("\"icons/")
+                        .and_then(|rest| rest.split('"').next())
+                        .map(|name| format!("icons/{name}"))
+                    else {
+                        continue;
+                    };
+                    seen += 1;
+                    if context_menu_icon_path(&literal, "").map(str::to_owned)
+                        != Some(literal.clone())
+                    {
+                        unresolved.push(format!("{}: {literal}", relative.display()));
+                    }
+                }
+            }
+        }
+        assert!(seen > 100, "the scan found only {seen} menu icons");
+        assert!(
+            unresolved.is_empty(),
+            "add these to context_menu_icon_path:\n{}",
+            unresolved.join("\n")
+        );
     }
 }

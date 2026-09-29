@@ -8,6 +8,46 @@
 use super::*;
 
 pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) -> ContextMenuModel {
+    if let repo_picker::RepoPickerEntry::Workspace(workspace_id) = entry {
+        let Some(workspace) = host
+            .cached_workspaces
+            .iter()
+            .find(|workspace| workspace.id == *workspace_id)
+        else {
+            return ContextMenuModel::new(Vec::new());
+        };
+        let workspace_id = *workspace_id;
+        return ContextMenuModel::new(vec![
+            ContextMenuItem::Header(workspace.display_name().into()),
+            ContextMenuItem::Entry {
+                label: "Activate".into(),
+                // Same icon as a repository row's Activate.
+                icon: Some("icons/check.svg".into()),
+                shortcut: None,
+                // This window already is that workspace.
+                disabled: host.cached_workspace_id == Some(workspace_id),
+                action: Box::new(ContextMenuAction::ActivateWorkspace { workspace_id }),
+            },
+            ContextMenuItem::Separator,
+            ContextMenuItem::Entry {
+                label: "Workspace Settings".into(),
+                icon: Some("icons/cog.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenWorkspaceSettings { workspace_id }),
+            },
+            // Destructive last, as on repository rows; the trash icon makes it red.
+            ContextMenuItem::Separator,
+            ContextMenuItem::Entry {
+                label: "Delete workspace".into(),
+                icon: Some("icons/trash.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::DeleteWorkspace { workspace_id }),
+            },
+        ]);
+    }
+
     let workdir = entry.workdir(host);
     let pinned = workdir
         .as_ref()
@@ -36,6 +76,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
     }
 
     match entry {
+        repo_picker::RepoPickerEntry::Workspace(_) => {}
         repo_picker::RepoPickerEntry::Open(repo_id) => items.push(ContextMenuItem::Entry {
             label: "Activate".into(),
             icon: Some("icons/check.svg".into()),
@@ -98,6 +139,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
     // is pinned would leave the row exactly where it was — the pinned closed row
     // is the one case with nothing to put here at all.
     let destructive = match entry {
+        repo_picker::RepoPickerEntry::Workspace(_) => None,
         repo_picker::RepoPickerEntry::Open(repo_id) => Some(ContextMenuItem::Entry {
             label: "Close repository".into(),
             icon: Some("icons/repo_tab_close.svg".into()),

@@ -7,9 +7,11 @@ const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 12.0;
 
 // The main window supports widths down to 820 design pixels. At that size the
 // branch/upstream run and the fixed actions on the right cannot all retain full
-// text. Pull/Push always retain their labels because they describe the remote
-// operation beside the upstream badge. Only compact mode hides the remaining
-// action labels; condensed mode keeps them while using tighter spacing.
+// text. Pull/Push retain their labels because they describe the remote
+// operation beside the upstream badge, except in compact mode at Comfortable or
+// Spacious density, where every control is wider and only icons still fit.
+// Only compact mode hides the remaining action labels; condensed mode keeps
+// them while using tighter spacing.
 // Tooltips keep omitted labels available in compact mode.
 const COMPACT_ACTION_BAR_MAX_WIDTH_PX: f32 = 1120.0;
 const CONDENSED_ACTION_BAR_MAX_WIDTH_PX: f32 = 1400.0;
@@ -21,10 +23,35 @@ pub(in super::super) enum ActionBarDensity {
     Wide,
 }
 
+/// How much wider the bar's content is per density step (Comfortable = 1,
+/// Spacious = 1.6); the breakpoints move out by the same factor.
+const ACTION_BAR_DENSITY_WIDTH_GROWTH: f32 = 0.1;
+
+/// The window width the breakpoints compare against: larger UI text and a
+/// roomier density both make the content wider, so they shrink the budget.
+fn action_bar_width_budget(window_width: Pixels, metrics: crate::appearance::Appearance) -> Pixels {
+    let font_factor = (metrics.ui_font_size_px as f32 / 14.0).max(1.0);
+    let density_factor = 1.0 + ACTION_BAR_DENSITY_WIDTH_GROWTH * metrics.density_step();
+    window_width / (font_factor * density_factor)
+}
+
+/// The widest window (100% zoom, default text size) still in the compact and
+/// condensed tiers at `metrics`' density.
+#[cfg(test)]
+pub(in crate::view) fn action_bar_breakpoints(metrics: crate::appearance::Appearance) -> [f32; 2] {
+    let density_factor = 1.0 + ACTION_BAR_DENSITY_WIDTH_GROWTH * metrics.density_step();
+    [
+        COMPACT_ACTION_BAR_MAX_WIDTH_PX * density_factor,
+        CONDENSED_ACTION_BAR_MAX_WIDTH_PX * density_factor,
+    ]
+}
+
 pub(in super::super) fn action_bar_density(
     window_width: Pixels,
     ui_scale_percent: u32,
+    metrics: crate::appearance::Appearance,
 ) -> ActionBarDensity {
+    let window_width = action_bar_width_budget(window_width, metrics);
     if window_width
         <= crate::ui_scale::design_px_from_percent(
             COMPACT_ACTION_BAR_MAX_WIDTH_PX,
@@ -41,6 +68,20 @@ pub(in super::super) fn action_bar_density(
         ActionBarDensity::Condensed
     } else {
         ActionBarDensity::Wide
+    }
+}
+
+/// The narrowest tier at a density above Compact: Pull and Push drop their
+/// labels (their tooltips name them) and badges truncate sooner.
+fn tight_action_bar(density: ActionBarDensity, ui_density: crate::appearance::UiDensity) -> bool {
+    density == ActionBarDensity::Compact && ui_density != crate::appearance::UiDensity::Compact
+}
+
+fn tight_badge_label_max_chars(ui_density: crate::appearance::UiDensity) -> usize {
+    match ui_density {
+        crate::appearance::UiDensity::Compact => COMPACT_BADGE_LABEL_MAX_CHARS,
+        crate::appearance::UiDensity::Comfortable => 7,
+        crate::appearance::UiDensity::Spacious => 5,
     }
 }
 
@@ -360,11 +401,18 @@ impl Render for ActionBarView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let density = action_bar_density(
-            window.viewport_size().width / (theme.metrics.ui_font_size_px as f32 / 14.0).max(1.0),
+            window.viewport_size().width,
             ui_scale_percent,
+            theme.metrics,
         );
         let dense_spacing = density != ActionBarDensity::Wide;
+        // Comfortable and Spacious widen every control, so the narrowest
+        // tier, which just fits at Compact, has to shed more.
+        let tight = tight_action_bar(density, theme.metrics.density);
         let badge_label_max_chars = match density {
+            ActionBarDensity::Compact if tight => {
+                tight_badge_label_max_chars(theme.metrics.density)
+            }
             ActionBarDensity::Compact => COMPACT_BADGE_LABEL_MAX_CHARS,
             ActionBarDensity::Condensed => CONDENSED_BADGE_LABEL_MAX_CHARS,
             ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
@@ -374,6 +422,10 @@ impl Render for ActionBarView {
         // picks the base gap from the viewport, then the user's density setting
         // ramps it.
         let gap = |dense: f32, wide: f32, comfortable: f32| {
+            if tight {
+                // Gaps stop growing where the controls barely fit.
+                return scaled_px(dense);
+            }
             scaled_px(
                 theme
                     .metrics
@@ -567,18 +619,18 @@ impl Render for ActionBarView {
 
         // Workspace (worktree) and branch badges show the current state at a
         // glance, with each opening a filterable picker.
-        let workspace_badge = self.active_repo().map(|repo| {
+        let worktree_badge = self.active_repo().map(|repo| {
             let repo_id = repo.id;
             let label = truncate_badge_label_to(
                 &crate::view::path_display::repo_path_name(&repo.spec.workdir),
                 badge_label_max_chars,
             );
             let workdir = repo.spec.workdir.display().to_string();
-            let invoker: SharedString = "workspace_badge".into();
+            let invoker: SharedString = "worktree_badge".into();
             let is_active = active_invoker
                 .as_ref()
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
-            components::Button::new("workspace_badge", label.clone())
+            components::Button::new("worktree_badge", label.clone())
                 .truncate_label()
                 .start_slot(icon("icons/git_worktree.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
@@ -594,7 +646,7 @@ impl Render for ActionBarView {
                     );
                 })
                 .min_w(badge_min_width)
-                .debug_selector(|| "workspace_badge".to_string())
+                .debug_selector(|| "worktree_badge".to_string())
                 .gitcomet_tooltip(theme, format!("Switch worktree\n{workdir}").into())
         });
 
@@ -714,7 +766,7 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
-        let mut pull_main = components::Button::new("pull_main", "Pull")
+        let mut pull_main = components::Button::new("pull_main", if tight { "" } else { "Pull" })
             .busy(pull_loading)
             .start_slot(if pull_loading {
                 spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
@@ -822,7 +874,7 @@ impl Render for ActionBarView {
                 })
                 .gitcomet_tooltip(theme, terminal_tooltip),
         );
-        let mut push_main = components::Button::new("push_main", "Push")
+        let mut push_main = components::Button::new("push_main", if tight { "" } else { "Push" })
             .busy(push_loading)
             .start_slot(if push_loading {
                 spinner(("push_spinner", active_repo_key), push_color).into_any_element()
@@ -1014,7 +1066,7 @@ impl Render for ActionBarView {
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .child(global_nav)
-                    .children(workspace_badge)
+                    .children(worktree_badge)
                     .child(tracking_actions)
                     .children(historical_badge)
                     .when(is_merging, |d| {
@@ -1217,30 +1269,51 @@ mod tests {
     }
 
     #[test]
+    fn roomier_densities_move_the_breakpoints_out() {
+        let at = |density| crate::appearance::Appearance {
+            density,
+            ..crate::appearance::Appearance::default()
+        };
+        let comfortable = at(crate::appearance::UiDensity::Comfortable);
+        assert_eq!(
+            action_bar_density(px(1121.0), 100, comfortable),
+            ActionBarDensity::Compact,
+            "Comfortable needs more room before labels return"
+        );
+        assert_eq!(
+            action_bar_density(px(1233.0), 100, comfortable),
+            ActionBarDensity::Condensed
+        );
+    }
+
+    #[test]
     fn action_bar_density_changes_at_scaled_breakpoints() {
         assert_eq!(
-            action_bar_density(px(960.0), 100),
+            action_bar_density(px(960.0), 100, crate::appearance::Appearance::default()),
             ActionBarDensity::Compact
         );
         assert_eq!(
-            action_bar_density(px(961.0), 100),
+            action_bar_density(px(961.0), 100, crate::appearance::Appearance::default()),
             ActionBarDensity::Compact
         );
         assert_eq!(
-            action_bar_density(px(1120.0), 100),
+            action_bar_density(px(1120.0), 100, crate::appearance::Appearance::default()),
             ActionBarDensity::Compact
         );
         assert_eq!(
-            action_bar_density(px(1121.0), 100),
+            action_bar_density(px(1121.0), 100, crate::appearance::Appearance::default()),
             ActionBarDensity::Condensed
         );
         assert_eq!(
-            action_bar_density(px(1400.0), 100),
+            action_bar_density(px(1400.0), 100, crate::appearance::Appearance::default()),
             ActionBarDensity::Condensed
         );
-        assert_eq!(action_bar_density(px(1401.0), 100), ActionBarDensity::Wide);
         assert_eq!(
-            action_bar_density(px(1200.0), 125),
+            action_bar_density(px(1401.0), 100, crate::appearance::Appearance::default()),
+            ActionBarDensity::Wide
+        );
+        assert_eq!(
+            action_bar_density(px(1200.0), 125, crate::appearance::Appearance::default()),
             ActionBarDensity::Compact
         );
     }

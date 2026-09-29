@@ -2,7 +2,6 @@ use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_
 use gitcomet_core::mergetool_trace;
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
-#[cfg(any(test, feature = "test-support"))]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -51,11 +50,9 @@ pub(super) fn metadata_worker_threads() -> usize {
     2
 }
 
-#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 pub(super) enum StoreExecutorPool {
     Primary,
-    RepoLoad,
     Metadata,
     Signatures,
     SessionPersist,
@@ -163,7 +160,6 @@ impl TaskExecutor {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn shared_for_store(pool: StoreExecutorPool, threads: usize) -> Self {
         fn sender_for(
             cell: &'static OnceLock<mpsc::Sender<Task>>,
@@ -185,29 +181,21 @@ impl TaskExecutor {
         }
 
         static PRIMARY: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
-        static REPO_LOAD: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SIGNATURES: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
         let tx = match pool {
-            StoreExecutorPool::Primary => {
-                sender_for(&PRIMARY, "gitcomet-test-store-primary", threads)
-            }
-            StoreExecutorPool::RepoLoad => {
-                sender_for(&REPO_LOAD, "gitcomet-test-store-repo-load", threads)
-            }
+            StoreExecutorPool::Primary => sender_for(&PRIMARY, "gitcomet-store-primary", threads),
             StoreExecutorPool::Signatures => {
-                sender_for(&SIGNATURES, "gitcomet-test-store-signatures", threads)
+                sender_for(&SIGNATURES, "gitcomet-store-signatures", threads)
             }
             StoreExecutorPool::Metadata => {
-                sender_for(&METADATA, "gitcomet-test-store-metadata", threads)
+                sender_for(&METADATA, "gitcomet-store-metadata", threads)
             }
-            StoreExecutorPool::SessionPersist => sender_for(
-                &SESSION_PERSIST,
-                "gitcomet-test-store-session-persist",
-                threads,
-            ),
+            StoreExecutorPool::SessionPersist => {
+                sender_for(&SESSION_PERSIST, "gitcomet-store-session-persist", threads)
+            }
         };
 
         Self {

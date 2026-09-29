@@ -15,6 +15,11 @@ pub(in crate::view) enum AppMenuAction {
     /// Open the active repository's remote in the browser, or its picker.
     OpenRemoteInBrowser,
     Settings,
+    OpenWorkspace,
+    /// Zoom is app-wide, so it lives in the menu rather than a window's footer.
+    ZoomIn,
+    ZoomOut,
+    ActualSize,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
     },
@@ -206,6 +211,24 @@ pub(in crate::view) enum ContextMenuAction {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,
     },
+    MoveRepoToWorkspace {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
+    },
+    /// Open a workspace from its picker row: adopted into an empty window,
+    /// otherwise focused or opened in its own.
+    ActivateWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
+    /// Forget the workspace; its window closes, or returns to Home if last.
+    DeleteWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
+    /// Settings › Workspaces with this workspace selected.
+    OpenWorkspaceSettings {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     /// Keep a repository in the picker's Pinned section. Pins outlive both the
     /// recents cap and the repository being closed, so this is what keeps one
     /// reachable for good.
@@ -315,9 +338,6 @@ pub(in crate::view) enum ContextMenuAction {
     },
     UseCommitMessage {
         message: String,
-    },
-    SetUiScale {
-        percent: u32,
     },
     StageSelectionOrPath {
         repo_id: RepoId,
@@ -662,9 +682,11 @@ mod bars;
 mod bottom_status_bar;
 mod layout;
 mod main;
-mod popover;
+pub(in crate::view) mod popover;
 mod repo_tabs_bar;
 
+#[cfg(test)]
+pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
 pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::{PopoverHost, PopoverHostInit};

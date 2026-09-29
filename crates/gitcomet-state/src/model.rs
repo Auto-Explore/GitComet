@@ -705,6 +705,11 @@ impl<T: Clone + PartialEq> NavStack<T> {
 pub struct AppState {
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
+    /// Unacknowledged open failures, shared by snapshots until they change.
+    /// Window routing releases its reservations before acknowledging these.
+    pub repo_open_failures: Arc<FxHashMap<PathBuf, u64>>,
+    /// Store-wide sequence; acknowledgements must not reset retry baselines.
+    pub repo_open_failure_revision: u64,
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
     pub auth_prompt: Option<AuthPromptState>,
@@ -1947,12 +1952,18 @@ impl RepoState {
         repo
     }
 
-    pub(crate) fn is_provisional_external_drop_open(&self) -> bool {
+    pub fn is_provisional_external_drop_open(&self) -> bool {
         self.provisional_external_drop_open
     }
 
     pub(crate) fn external_drop_previous_active_repo(&self) -> Option<RepoId> {
         self.external_drop_previous_active_repo
+    }
+
+    pub(crate) fn set_external_drop_previous_active_repo(&mut self, repo_id: Option<RepoId>) {
+        if self.provisional_external_drop_open {
+            self.external_drop_previous_active_repo = repo_id;
+        }
     }
 
     /// Commits a successfully opened external-drop candidate. Returns whether

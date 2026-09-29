@@ -607,3 +607,190 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
         LogScope::AllBranches
     );
 }
+
+fn drop_folder(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: &str,
+) -> (RepoId, Vec<Effect>) {
+    let effects = reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::OpenRepoFromExternalDrop(PathBuf::from(path)),
+    );
+    let repo_id = state.active_repo.expect("dropped tab becomes active");
+    (repo_id, effects)
+}
+
+fn fail_drop_as_not_a_repository(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    repo_id: RepoId,
+) {
+    let spec = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("dropped tab")
+        .spec
+        .clone();
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id,
+            spec,
+            error: Error::new(ErrorKind::NotARepository),
+        }),
+    );
+}
+
+fn cancels_loads_of(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(
+        |effect| matches!(effect, Effect::CancelRepoLoads { repo_id: id, .. } if *id == repo_id),
+    )
+}
+
+fn open_is_loading(state: &AppState, repo_id: RepoId) -> bool {
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.open.is_loading())
+}
+
+// Dropping several folders opens them one after another. Each later tab must
+// leave the earlier ones validating, or they stay unchecked until clicked.
+#[test]
+fn second_drop_keeps_the_first_drops_validation_running() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+
+    let (first, _) = drop_folder(&mut repos, &id_alloc, &mut state, "/tmp/drop-a");
+    let (second, effects) = drop_folder(&mut repos, &id_alloc, &mut state, "/tmp/drop-b");
+
+    assert_ne!(first, second);
+    assert!(!cancels_loads_of(&effects, first));
+    assert!(open_is_loading(&state, first));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == second))
+    );
+}
+
+#[test]
+fn switching_tabs_keeps_a_pending_drop_validation_running() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+
+    let existing = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    let (dropped, _) = drop_folder(&mut repos, &id_alloc, &mut state, "/tmp/drop-a");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: existing },
+    );
+    assert_eq!(state.active_repo, Some(existing));
+    assert!(!cancels_loads_of(&effects, dropped));
+    assert!(open_is_loading(&state, dropped));
+
+    // An ordinary tab is still cancelled when switched away from.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: dropped },
+    );
+    assert!(cancels_loads_of(&effects, existing));
+}
+
+#[test]
+fn failed_drops_fall_back_past_each_other_to_the_pre_drop_tab() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let _session_file_override = crate::session::push_test_session_file_path_override(Some(
+        session_dir.path().join("session.json"),
+    ));
+
+    let original_active = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    let adjacent_repo = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: original_active,
+        },
+    );
+    let dropped = ["/tmp/drop-a", "/tmp/drop-b", "/tmp/drop-c"]
+        .map(|path| drop_folder(&mut repos, &id_alloc, &mut state, path).0);
+
+    for repo_id in dropped {
+        fail_drop_as_not_a_repository(&mut repos, &id_alloc, &mut state, repo_id);
+    }
+
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(original_active));
+    assert_ne!(state.active_repo, Some(adjacent_repo));
+    assert_eq!(
+        state
+            .notifications
+            .iter()
+            .filter(|notification| notification.kind == AppNotificationKind::Warning)
+            .count(),
+        3,
+        "each failed folder reports on its own"
+    );
+}
+
+#[test]
+fn last_drop_failing_selects_the_previous_valid_drop() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let _session_file_override = crate::session::push_test_session_file_path_override(Some(
+        session_dir.path().join("session.json"),
+    ));
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    let (valid, _) = drop_folder(&mut repos, &id_alloc, &mut state, "/tmp/drop-valid");
+    let (invalid, _) = drop_folder(&mut repos, &id_alloc, &mut state, "/tmp/drop-invalid");
+    let spec = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == valid)
+        .expect("valid drop tab")
+        .spec
+        .clone();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: valid,
+            spec,
+            repo: Arc::new(DummyRepo::new("/tmp/drop-valid")),
+        }),
+    );
+    fail_drop_as_not_a_repository(&mut repos, &id_alloc, &mut state, invalid);
+
+    assert_eq!(state.active_repo, Some(valid));
+    assert!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == valid)
+            .is_some_and(|repo| !repo.is_provisional_external_drop_open())
+    );
+}

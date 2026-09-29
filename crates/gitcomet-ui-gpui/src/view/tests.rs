@@ -14,7 +14,7 @@ use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoI
 use gitcomet_state::store::AppStore;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 struct RecordingFailingBackend {
@@ -81,6 +81,23 @@ impl GitBackend for RecordingFailingBackend {
             .push(workdir.to_path_buf());
         Err(Error::new(ErrorKind::Unsupported(
             "Recording backend does not open repositories",
+        )))
+    }
+}
+
+struct BlockingFailingBackend {
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GitBackend for BlockingFailingBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        let (released, wake) = self.release.as_ref();
+        let mut released = released.lock().expect("blocking backend gate lock");
+        while !*released {
+            released = wake.wait(released).expect("blocking backend gate wait");
+        }
+        Err(Error::new(ErrorKind::Unsupported(
+            "Blocking backend does not open repositories",
         )))
     }
 }
@@ -161,6 +178,20 @@ fn dispatch_file_drop(cx: &mut gpui::VisualTestContext, event: gpui::FileDropEve
         let _ = window.draw(app);
     });
     cx.run_until_parked();
+}
+
+fn assert_external_drag_cleared(view: &GitCometView, app: &gpui::App) {
+    assert!(
+        view.external_drag_paths.is_none(),
+        "clear the dragged paths"
+    );
+    assert!(
+        view.external_drag_payload.is_none(),
+        "clear the classified payload"
+    );
+    assert!(!view.external_drag_drop_pending, "clear the pending drop");
+    assert!(!test_support::repo_external_folder_drag_active(view, app));
+    assert!(!test_support::repo_external_folder_drag_hovered(view, app));
 }
 
 fn install_repo_tab_test_state(
@@ -649,15 +680,190 @@ fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     dispatch_file_drop(cx, gpui::FileDropEvent::Exited);
     test_support::redraw(cx);
     cx.update(|_window, app| {
-        assert!(!test_support::repo_external_folder_drag_active(
+        assert_external_drag_cleared(view.read(app), app);
+    });
+}
+
+fn check_folder_drop_clears_highlight(
+    cx: &mut gpui::TestAppContext,
+    on_home: bool,
+    classify_before_drop: bool,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let initial = tempfile::tempdir().expect("create the initial repository");
+    if !on_home {
+        let repo_id = RepoId(100);
+        let path = initial.path().canonicalize().unwrap();
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: path.clone(),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        store.insert_repo_for_test(
+            repo_id,
+            Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                path,
+            )),
+        );
+        store.replace_snapshot_for_test(Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        }));
+    }
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    test_support::redraw(cx);
+    let folder = tempfile::tempdir().expect("create dropped folder");
+    let path = folder.path().canonicalize().unwrap();
+    let target = if on_home {
+        "repository_entry_screen"
+    } else {
+        "repo_external_folder_drop_target"
+    };
+    let position = cx
+        .debug_bounds(target)
+        .expect("render drop target")
+        .center();
+    let entered = gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths(vec![path.clone()].into()),
+    };
+    if classify_before_drop {
+        dispatch_file_drop(cx, entered.clone());
+        pump_until(cx, "classify the folder before dropping", |cx| {
+            cx.update(|_, app| view.read(app).external_drag_payload.is_some())
+        });
+    }
+    cx.update(|window, app| {
+        if !classify_before_drop {
+            let _ = window.dispatch_event(gpui::PlatformInput::FileDrop(entered), app);
+            assert!(view.read(app).external_drag_payload.is_none());
+        }
+        assert!(test_support::repo_external_folder_drag_active(
             view.read(app),
             app
         ));
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Submit { position }),
+            app,
+        );
+        assert!(
+            !test_support::repo_external_folder_drag_active(view.read(app), app),
+            "clear the highlight immediately, before repository loading or classification completes"
+        );
         assert!(!test_support::repo_external_folder_drag_hovered(
             view.read(app),
             app
         ));
+        let _ = window.draw(app);
     });
+    cx.run_until_parked();
+    pump_until(cx, "finish the dropped folder's classification", |cx| {
+        cx.update(|_, app| view.read(app).external_drag_paths.is_none())
+    });
+    // Apply the loaded snapshot deterministically: this visual transition does
+    // not need to wait for the process-wide repository-load worker pool.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            assert_external_drag_cleared(view, cx);
+            let repo_id = RepoId(1);
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: path.clone(),
+                },
+            );
+            repo.open = Loadable::Ready(());
+            let mut snapshot = view.state.as_ref().clone();
+            snapshot.repos.retain(|repo| repo.id != repo_id);
+            snapshot.repos.push(repo);
+            snapshot.active_repo = Some(repo_id);
+            test_support::apply_state_snapshot_for_test(view, Arc::new(snapshot), cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).state.repos.len(),
+            if on_home { 1 } else { 2 }
+        )
+    });
+    assert!(
+        cx.debug_bounds("repo_external_folder_drop_target")
+            .is_some()
+    );
+    cx.update(|_, app| assert_external_drag_cleared(view.read(app), app));
+
+    // A fresh drag of the same folder must highlight again and clear on exit.
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position,
+            paths: gpui::ExternalPaths(vec![path].into()),
+        },
+    );
+    cx.update(|_, app| {
+        assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ))
+    });
+    dispatch_file_drop(cx, gpui::FileDropEvent::Exited);
+    test_support::redraw(cx);
+    cx.update(|_, app| assert_external_drag_cleared(view.read(app), app));
+}
+
+#[gpui::test]
+fn home_folder_drop_clears_highlight_before_and_after_classification(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    for classified in [true, false] {
+        check_folder_drop_clears_highlight(cx, true, classified);
+    }
+}
+
+#[gpui::test]
+fn repository_bar_folder_drop_clears_highlight_before_and_after_classification(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    for classified in [true, false] {
+        check_folder_drop_clears_highlight(cx, false, classified);
+    }
+}
+
+#[gpui::test]
+fn home_folder_drag_exit_ignores_late_classification(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let folder = tempfile::tempdir().unwrap();
+    let position = cx.debug_bounds("repository_entry_screen").unwrap().center();
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Entered {
+                position,
+                paths: gpui::ExternalPaths(vec![folder.path().to_path_buf()].into()),
+            }),
+            app,
+        );
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Exited),
+            app,
+        );
+        let _ = window.draw(app);
+        assert_external_drag_cleared(view.read(app), app);
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    cx.update(|_, app| assert_external_drag_cleared(view.read(app), app));
 }
 
 #[gpui::test]
@@ -727,9 +933,121 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
 }
 
 #[gpui::test]
-fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
+fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_workspace(
     cx: &mut gpui::TestAppContext,
 ) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(BlockingFailingBackend {
+        release: Arc::clone(&release),
+    });
+    let (store, events) = AppStore::new_test(backend);
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    cx.cx
+        .update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+
+    let dropped = std::env::temp_dir().join("gitcomet-provisional-invalid-drop");
+    store.dispatch(Msg::OpenRepoFromExternalDrop(dropped.clone()));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snapshot = store.snapshot();
+        if snapshot
+            .repos
+            .iter()
+            .any(|repo| repo.spec.workdir == dropped)
+            && gitcomet_state::session::snapshot_repos_from_state(snapshot.as_ref())
+                .open_repos
+                .is_empty()
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let (released, wake) = release.as_ref();
+            *released.lock().expect("release blocking backend") = true;
+            wake.notify_all();
+            panic!("timed out waiting for the provisional external-drop tab");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let provisional_snapshot = store.snapshot();
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            test_support::apply_state_snapshot_for_test(view, provisional_snapshot, cx);
+        });
+    });
+    let persisted_paths = cx.cx.update(|app| {
+        crate::workspaces::workspaces(app)
+            .into_iter()
+            .flat_map(|group| group.repositories)
+            .collect::<Vec<_>>()
+    });
+    let (released, wake) = release.as_ref();
+    *released.lock().expect("release blocking backend") = true;
+    wake.notify_all();
+
+    assert!(
+        !persisted_paths.contains(&dropped),
+        "an unvalidated external drop must not become durable group membership"
+    );
+}
+
+#[gpui::test]
+fn review_regression_followup_window_bounds_do_not_schedule_global_settings_persistence(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let before = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+
+    cx.simulate_resize(gpui::size(gpui::px(913.0), gpui::px(677.0)));
+
+    let after = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+    assert_eq!(
+        after, before,
+        "a window-local bounds update must not enqueue a stale full UiSettings snapshot"
+    );
+}
+
+#[gpui::test]
+fn review_regression_confirmed_focused_mergetool_bounds_persist_legacy_size(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let config = GitCometViewConfig {
+        view_mode: GitCometViewMode::FocusedMergetool,
+        focused_mergetool: Some(FocusedMergetoolViewConfig {
+            repo_path: PathBuf::from("/tmp/gitcomet-focused-bounds-repo"),
+            conflicted_file_path: PathBuf::from("conflicted.txt"),
+            labels: FocusedMergetoolLabels {
+                local: "LOCAL".to_string(),
+                remote: "REMOTE".to_string(),
+                base: "BASE".to_string(),
+            },
+        }),
+        ..GitCometViewConfig::default()
+    };
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+    let before = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+
+    cx.simulate_resize(gpui::size(gpui::px(911.0), gpui::px(673.0)));
+
+    let after = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+    assert!(
+        after > before,
+        "focused mergetool bounds must persist through the legacy UiSettings dimensions"
+    );
+}
+
+#[gpui::test]
+fn repository_bar_ignores_files_and_drops_outside_the_bar(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let opened = Arc::new(Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
@@ -741,8 +1059,7 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     install_repo_tab_test_state_with_count(&store_for_state, &view, cx, RepoId(1), 1);
 
-    let folder_a = tempfile::tempdir().expect("create first dropped folder");
-    let folder_b = tempfile::tempdir().expect("create second dropped folder");
+    let folder = tempfile::tempdir().expect("create dropped folder");
     let file = tempfile::NamedTempFile::new().expect("create dropped file");
     let bar_point = cx
         .debug_bounds("repo_external_folder_drop_target")
@@ -753,36 +1070,31 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
         gpui::point(viewport.width / 2.0, viewport.height / 2.0)
     });
 
-    for paths in [
-        vec![file.path().to_path_buf()],
-        vec![folder_a.path().to_path_buf(), folder_b.path().to_path_buf()],
-    ] {
-        dispatch_file_drop(
-            cx,
-            gpui::FileDropEvent::Entered {
-                position: bar_point,
-                paths: gpui::ExternalPaths(paths.into_iter().collect()),
-            },
-        );
-        cx.update(|_window, app| {
-            assert!(!test_support::repo_external_folder_drag_active(
-                view.read(app),
-                app
-            ));
-        });
-        dispatch_file_drop(
-            cx,
-            gpui::FileDropEvent::Submit {
-                position: bar_point,
-            },
-        );
-    }
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position: bar_point,
+            paths: gpui::ExternalPaths([file.path().to_path_buf()].into_iter().collect()),
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+    });
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Submit {
+            position: bar_point,
+        },
+    );
 
     dispatch_file_drop(
         cx,
         gpui::FileDropEvent::Entered {
             position: outside_bar,
-            paths: gpui::ExternalPaths([folder_a.path().to_path_buf()].into_iter().collect()),
+            paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
         },
     );
     cx.update(|_window, app| {
@@ -801,13 +1113,117 @@ fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
 
     assert!(
         opened.lock().expect("recording backend lock").is_empty(),
-        "unsupported payloads and drops outside the repository bar must remain unhandled"
+        "file-only payloads and drops outside the repository bar must remain unhandled"
     );
     cx.update(|_window, app| {
         assert!(!test_support::repo_external_folder_drag_active(
             view.read(app),
             app
         ));
+    });
+}
+
+/// Each folder in a drop opens on its own; files riding along are skipped.
+#[gpui::test]
+fn dropping_multiple_folders_on_repository_bar_opens_each(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
+        opened: Arc::clone(&opened),
+    });
+    let (store, events) = AppStore::new_test(backend);
+    // Seeded clear of the store's id allocator, which starts at 1: a shared id
+    // would make the drops' tabs alias the seeded one.
+    let seeded_id = RepoId(100);
+    let seeded_path = PathBuf::from("/tmp/multi-folder-drop-seeded");
+    let mut seeded = RepoState::new_opening(
+        seeded_id,
+        RepoSpec {
+            workdir: seeded_path.clone(),
+        },
+    );
+    seeded.open = Loadable::Ready(());
+    store.insert_repo_for_test(
+        seeded_id,
+        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+            seeded_path,
+        )),
+    );
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        repos: vec![seeded],
+        active_repo: Some(seeded_id),
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    }));
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+
+    let folder_a = tempfile::tempdir().expect("create first dropped folder");
+    let folder_b = tempfile::tempdir().expect("create second dropped folder");
+    let file = tempfile::NamedTempFile::new().expect("create dropped file");
+    let bar_point = cx
+        .debug_bounds("repo_external_folder_drop_target")
+        .expect("repository bar drop target should be rendered")
+        .center();
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position: bar_point,
+            paths: gpui::ExternalPaths(
+                [
+                    folder_a.path().to_path_buf(),
+                    file.path().to_path_buf(),
+                    folder_b.path().to_path_buf(),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        },
+    );
+    pump_until(cx, "classify the mixed payload", |cx| {
+        cx.update(|_, app| view.read(app).external_drag_payload.is_some())
+    });
+    cx.update(|_window, app| {
+        assert!(
+            test_support::repo_external_folder_drag_active(view.read(app), app),
+            "a payload with a folder in it highlights the bar"
+        );
+    });
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Submit {
+            position: bar_point,
+        },
+    );
+
+    // The shared repository-load pool can be saturated by other tests, so a
+    // folder counts as handled once the store has it in any form: a pending
+    // tab, a backend open, or the warning its failed open left behind.
+    let reached_store = |path: &Path| {
+        let snapshot = store_for_state.snapshot();
+        let shown = path.display().to_string();
+        snapshot.repos.iter().any(|repo| repo.spec.workdir == path)
+            || opened
+                .lock()
+                .expect("recording backend lock")
+                .iter()
+                .any(|opened| opened == path)
+            || snapshot
+                .notifications
+                .iter()
+                .any(|notification| notification.message.contains(&shown))
+    };
+    let folders =
+        [folder_a.path(), folder_b.path()].map(|path| canonicalize_or_original(path.to_path_buf()));
+    pump_until(cx, "both dropped folders to reach the store", |_| {
+        folders.iter().all(|folder| reached_store(folder))
+    });
+    let file_path = canonicalize_or_original(file.path().to_path_buf());
+    assert!(!reached_store(&file_path), "a dropped file is ignored");
+    cx.update(|_window, app| {
+        assert_external_drag_cleared(view.read(app), app);
     });
 }
 
@@ -2965,12 +3381,12 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
         false,
         true
     ));
-    assert!(!should_show_splash_screen(
+    assert!(!should_show_home_screen(
         GitCometViewMode::Normal,
         false,
         true
     ));
-    assert!(should_show_splash_screen(
+    assert!(should_show_home_screen(
         GitCometViewMode::Normal,
         false,
         false
@@ -2979,11 +3395,11 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
         GitCometViewMode::Normal,
         true
     ));
-    assert!(titlebar_workspace_actions_enabled(
+    assert!(titlebar_repo_tab_actions_enabled(
         GitCometViewMode::FocusedMergetool,
         false
     ));
-    assert!(!titlebar_workspace_actions_enabled(
+    assert!(!titlebar_repo_tab_actions_enabled(
         GitCometViewMode::Normal,
         false
     ));
@@ -2991,7 +3407,7 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
 
 #[test]
 fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette() {
-    assert!(titlebar_workspace_actions_enabled(
+    assert!(titlebar_repo_tab_actions_enabled(
         GitCometViewMode::FocusedMergetool,
         true
     ));
@@ -3476,7 +3892,7 @@ fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext)
 }
 
 #[gpui::test]
-fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
+fn home_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -3486,23 +3902,43 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
         let _ = window.draw(app);
     });
 
-    cx.debug_bounds("repository_entry_screen")
-        .expect("expected repository entry splash screen");
-    cx.debug_bounds("splash_headline")
-        .expect("expected splash headline");
-    cx.debug_bounds("splash_open_repo_action")
-        .expect("expected splash open repository button");
-    cx.debug_bounds("splash_clone_repo_action")
-        .expect("expected splash clone repository button");
+    for selector in [
+        "repository_entry_screen",
+        "home_title",
+        "home_tagline",
+        "home_open_repo_action",
+        "home_clone_repo_action",
+        "home_init_repo_action",
+        "home_search",
+        "home_workspaces_list",
+        "home_recent_list",
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "expected {selector} on the Home page"
+        );
+    }
+    assert!(
+        cx.debug_bounds("splash_headline").is_none(),
+        "the marketing headline is gone"
+    );
+    let workspaces = cx
+        .debug_bounds("home_workspaces_list")
+        .expect("workspaces list");
+    let recent = cx.debug_bounds("home_recent_list").expect("recent list");
+    assert!(
+        workspaces.right() <= recent.left() && (workspaces.top() - recent.top()).abs() < px(1.0),
+        "the two lists sit side by side: {workspaces:?} {recent:?}"
+    );
 
     #[cfg(not(target_os = "macos"))]
     assert!(
-        cx.debug_bounds("app_menu").is_none(),
-        "expected app menu button to be hidden on the splash screen"
+        cx.debug_bounds("app_menu").is_some(),
+        "settings and quit stay reachable from Home through the app menu"
     );
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
-    assert!(splash_active, "expected splash screen to be active");
+    let home_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
+    assert!(home_active, "expected the Home page to be active");
 }
 
 #[gpui::test]
@@ -3536,9 +3972,41 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
     );
 
     cx.update(|_window, app| {
-        assert!(view.read(app).is_splash_screen_active());
+        assert!(view.read(app).is_home_screen_active());
         assert!(view.read(app).blocks_non_repository_actions());
     });
+}
+
+/// Repositories deferred until Git recovers keep bootstrap pending (so the
+/// workspace membership survives), but must not hide the unavailable screen.
+#[gpui::test]
+fn review_regression_deferred_restore_shows_git_unavailable_screen(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let next = Arc::new(AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        ..AppState::test_default()
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+            this.adopt_workspace(
+                session::Workspace::new(vec![PathBuf::from("/repos/deferred")]),
+                cx,
+            );
+        });
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("repository_loading_screen").is_none(),
+        "a deferred restore must not spin while Git is unavailable"
+    );
+    cx.debug_bounds("git_unavailable_screen")
+        .expect("expected the git unavailable screen");
 }
 
 #[gpui::test]
@@ -3613,7 +4081,7 @@ fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContex
         .expect("expected blocking git unavailable overlay");
 
     cx.update(|_window, app| {
-        assert!(!view.read(app).is_splash_screen_active());
+        assert!(!view.read(app).is_home_screen_active());
         assert!(view.read(app).blocks_non_repository_actions());
     });
 }
@@ -3711,8 +4179,8 @@ fn splash_backdrop_renders_native_layers_and_tracks_theme(cx: &mut gpui::TestApp
         });
         cx.debug_bounds("splash_backdrop_image")
             .expect("expected backdrop after switching themes");
-        cx.debug_bounds("splash_open_repo_action")
-            .expect("expected splash controls after switching themes");
+        cx.debug_bounds("home_open_repo_action")
+            .expect("expected Home controls after switching themes");
     }
     assert!(
         cx.debug_bounds("splash_backdrop_glow_layer").is_none(),
@@ -3727,12 +4195,12 @@ fn splash_backdrop_renders_native_layers_and_tracks_theme(cx: &mut gpui::TestApp
         "expected legacy centered backdrop container to be removed"
     );
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    let splash_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
     assert!(splash_active, "expected splash screen to remain active");
 }
 
 #[gpui::test]
-fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
+fn home_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -3743,25 +4211,25 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
     });
 
     let open_center = cx
-        .debug_bounds("splash_open_repo_action")
-        .expect("expected splash open repository button")
+        .debug_bounds("home_open_repo_action")
+        .expect("expected Home open repository button")
         .center();
     cx.simulate_mouse_move(open_center, None, gpui::Modifiers::default());
     test_support::wait_for_native_tooltip(cx);
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
-        Some("Open repository".to_string())
+        Some("Open an existing repository".to_string())
     );
 
     let clone_center = cx
-        .debug_bounds("splash_clone_repo_action")
-        .expect("expected splash clone repository button")
+        .debug_bounds("home_clone_repo_action")
+        .expect("expected Home clone repository button")
         .center();
     cx.simulate_mouse_move(clone_center, None, gpui::Modifiers::default());
     test_support::wait_for_native_tooltip(cx);
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
-        Some("Clone repository".to_string())
+        Some("Clone a repository from a URL".to_string())
     );
 }
 
@@ -3793,7 +4261,7 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
         let _ = window.draw(app);
     });
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    let splash_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
     assert!(
         !splash_active,
         "expected splash screen to disappear after opening a repo"
@@ -3836,7 +4304,7 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     cx.debug_bounds("repository_entry_screen")
         .expect("expected splash screen after closing the last repo");
 
-    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    let splash_active = cx.update(|_window, app| view.read(app).is_home_screen_active());
     assert!(
         splash_active,
         "expected splash screen to return after closing the last repo"
@@ -3891,6 +4359,49 @@ fn confirm_terminal_shutdown_close_window_removes_the_window(cx: &mut gpui::Test
     });
 
     assert_eq!(cx.cx.update(|app| app.windows().len()), 0);
+}
+
+/// Terminating a workspace's terminals to delete it, in the only window, takes
+/// that window back to Home instead of closing it.
+#[gpui::test]
+fn confirm_terminal_shutdown_delete_workspace_keeps_the_last_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Alpha".into());
+    let workspace_id = workspace.id;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| view.update(app, |view, cx| view.adopt_workspace(workspace, cx)));
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.confirm_terminal_shutdown(
+                TerminalShutdownPrompt {
+                    action: TerminalShutdownAction::DeleteWorkspace { workspace_id },
+                    summary: TerminalShutdownSummary {
+                        terminal_count: 1,
+                        running_command_count: 1,
+                        repo_names: vec![],
+                    },
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(app.windows().len(), 1, "the last window stays open");
+        assert!(crate::workspaces::workspace(app, workspace_id).is_none());
+        assert_eq!(view.read(app).workspace_id, None);
+    });
 }
 
 #[gpui::test]
@@ -4439,6 +4950,8 @@ fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext
         .expect("expected Activate menu item");
     cx.debug_bounds("context_menu_open_repository_location")
         .expect("expected Open repository location menu item");
+    cx.debug_bounds("context_menu_move_to_new_window")
+        .expect("expected Move to new window menu item");
     cx.debug_bounds("context_menu_close")
         .expect("expected Close menu item");
     cx.debug_bounds("context_menu_close_repositories_to_the_right")
@@ -4453,6 +4966,26 @@ fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext
             >= px(360.0),
         "expected repository tab context menu to use its wider layout"
     );
+}
+
+#[gpui::test]
+fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state_with_count(&store, &view, cx, RepoId(1), 1);
+    open_repo_tab_context_menu(cx, "repo_tab_1");
+
+    // The click is delivered while `PopoverHost` is being updated. The move
+    // workflow must not synchronously read that same entity while GPUI still
+    // holds its update guard.
+    click_debug_selector(cx, "context_menu_move_to_new_window");
+    cx.run_until_parked();
 }
 
 #[gpui::test]
@@ -5669,7 +6202,7 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
     let badges: Vec<_> = (0..12usize)
         .filter_map(|ix| {
             let selector: &'static str =
-                Box::leak(format!("branch_workspace_badge_{ix}").into_boxed_str());
+                Box::leak(format!("branch_worktree_badge_{ix}").into_boxed_str());
             cx.debug_bounds(selector)
         })
         .collect();
@@ -5702,6 +6235,8 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
 /// regression back to that.
 #[gpui::test]
 fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -6212,4 +6747,594 @@ fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppCont
     });
 }
 
+/// Store ticks that change nothing must not lease the workspace manager:
+/// every lease notifies its observers, such as an open Settings window.
+#[gpui::test]
+fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(51);
+    let state = AppState {
+        repos: vec![RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet-unchanged-snapshot"),
+            },
+        )],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    };
+    let apply = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                test_support::apply_state_snapshot_for_test(view, Arc::new(state.clone()), cx);
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    };
+    apply(cx);
+
+    let notifications = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&notifications);
+    let _subscription = cx.update(|_window, app| {
+        app.observe_global::<crate::workspaces::WorkspaceManager>(move |_cx| {
+            counter.set(counter.get() + 1);
+        })
+    });
+    for _ in 0..4 {
+        let paths_before =
+            cx.update(|_, app| view.read(app).persisted_workspace_repo_paths.as_ptr());
+        apply(cx);
+        cx.update(|_, app| {
+            assert_eq!(
+                paths_before,
+                view.read(app).persisted_workspace_repo_paths.as_ptr(),
+                "an unchanged store tick must reuse the workspace membership"
+            )
+        });
+    }
+
+    assert_eq!(
+        notifications.get(),
+        0,
+        "an unchanged snapshot notified observers"
+    );
+}
+
 mod open_remote_in_browser;
+
+fn theme_panel_color(key: &str) -> gpui::Rgba {
+    crate::theme::AppTheme::from_key(key)
+        .unwrap_or_else(|| panic!("embedded theme `{key}`"))
+        .colors
+        .surface
+        .panel
+}
+
+/// A view restored into a customized, empty workspace with `theme_key` as its override.
+fn view_in_themed_workspace<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    theme_key: &str,
+) -> (
+    gpui::Entity<GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    gitcomet_state::session::WorkspaceId,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Themed".to_string());
+    workspace.theme_mode = Some(theme_key.to_string());
+    let workspace_id = workspace.id;
+    cx.update(|app| crate::workspaces::initialize_for_test(app, vec![workspace.clone()]));
+    let config = GitCometViewConfig {
+        workspace: WorkspaceBootstrap::Saved(Box::new(workspace)),
+        ..GitCometViewConfig::normal(None)
+    };
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    (view, cx, workspace_id)
+}
+
+#[gpui::test]
+fn workspace_theme_override_beats_the_global_preference(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx, _workspace_id) = view_in_themed_workspace(cx, "tokyo_night");
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).theme.colors.surface.panel),
+        theme_panel_color("tokyo_night"),
+        "the window starts in its workspace theme"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.set_theme_mode(
+                ThemeMode::Named("sunset_veil".to_string()),
+                window.appearance(),
+                cx,
+            );
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| test_support::sync_store_snapshot(view, cx));
+    });
+
+    let (global, panel) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (view.theme_mode.clone(), view.theme.colors.surface.panel)
+    });
+    assert_eq!(global, ThemeMode::Named("sunset_veil".to_string()));
+    assert_eq!(
+        panel,
+        theme_panel_color("tokyo_night"),
+        "a global theme change must not repaint an overridden workspace"
+    );
+}
+
+#[gpui::test]
+fn clearing_the_workspace_theme_override_falls_back_to_the_global_preference(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx, workspace_id) = view_in_themed_workspace(cx, "tokyo_night");
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.set_theme_mode(
+                ThemeMode::Named("sunset_veil".to_string()),
+                window.appearance(),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|_window, app| {
+        assert!(crate::workspaces::set_workspace_theme_mode(
+            app,
+            workspace_id,
+            None
+        ));
+        view.update(app, |view, cx| view.sync_workspace_theme_override(cx));
+    });
+
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).theme.colors.surface.panel),
+        theme_panel_color("sunset_veil")
+    );
+}
+
+#[gpui::test]
+fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let alpha = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/alpha")]);
+    let beta = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/beta")]);
+    let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
+    let beta_row: &'static str = format!("home_workspace_{}", beta.id).leak();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![alpha, beta]);
+        view.update(app, |view, _cx| {
+            view.home_recent_repos = vec![PathBuf::from("/work/gamma")];
+            view.home_pinned_repos.clear();
+        });
+        let _ = window.draw(app);
+    });
+    let gamma_row: &'static str = format!(
+        "home_recent_{}",
+        gitcomet_state::session::path_storage_key(Path::new("/work/gamma"))
+    )
+    .leak();
+    assert!(cx.debug_bounds(alpha_row).is_some());
+    assert!(cx.debug_bounds(beta_row).is_some());
+    assert!(cx.debug_bounds(gamma_row).is_some());
+
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.home_search_input
+                .update(cx, |input, cx| input.set_text("ALPHA", cx));
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds(alpha_row).is_some(),
+        "matches by name, ignoring case"
+    );
+    assert!(cx.debug_bounds(beta_row).is_none());
+    assert!(cx.debug_bounds(gamma_row).is_none());
+}
+
+#[gpui::test]
+fn opening_a_workspace_from_home_adopts_it_into_this_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Later".to_string());
+    workspace.restore_on_launch = false;
+    let id = workspace.id;
+    let row: &'static str = format!("home_workspace_{id}").leak();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let window_id = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace]);
+        let _ = window.draw(app);
+        window.window_handle().window_id()
+    });
+    assert!(cx.debug_bounds("repo_picker_toggle").is_none());
+
+    let center = cx.debug_bounds(row).expect("workspace row").center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let adopted = cx.update(|_window, app| crate::workspaces::workspace_for_window(app, window_id));
+    assert_eq!(adopted.map(|workspace| workspace.id), Some(id));
+    assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
+    assert!(
+        cx.debug_bounds("repo_picker_toggle").is_some(),
+        "the title bar shows the adopted workspace's chip on Home"
+    );
+    assert!(
+        cx.debug_bounds(row).is_none(),
+        "Home no longer lists its own workspace"
+    );
+}
+
+/// A Home window with the given saved workspaces and recent repositories, and
+/// the text-input keys bound so arrows reach the search box.
+fn home_view_with<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    workspaces: Vec<gitcomet_state::session::Workspace>,
+    recents: Vec<PathBuf>,
+) -> (gpui::Entity<GitCometView>, &'a mut gpui::VisualTestContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    cx.update(|app| crate::workspaces::initialize_for_test(app, workspaces));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |view, _cx| {
+            view.home_recent_repos = recents;
+            view.home_pinned_repos.clear();
+        });
+        let _ = window.draw(app);
+    });
+    (view, cx)
+}
+
+fn home_selected(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Option<usize> {
+    cx.update(|_window, app| view.read(app).home_selected)
+}
+
+fn press(cx: &mut gpui::VisualTestContext, keys: &str) {
+    cx.simulate_keystrokes(keys);
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Workspace {
+    let mut workspace = gitcomet_state::session::Workspace::new(vec![PathBuf::from(repo)]);
+    workspace.custom_name = Some(name.to_string());
+    workspace.restore_on_launch = false;
+    workspace
+}
+
+#[gpui::test]
+fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let workspace = named_saved_workspace("Saved", "/tmp/pr530-home");
+    let id = workspace.id;
+    let (view, cx) = home_view_with(cx, vec![workspace], Vec::new());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.sync_home_rows(cx);
+            let rows = view.home_rows.workspaces.as_ptr();
+            view.sync_home_rows(cx);
+            assert_eq!(
+                rows,
+                view.home_rows.workspaces.as_ptr(),
+                "a repaint rebuilt Home rows"
+            );
+        });
+        crate::workspaces::set_workspace_name(app, id, "Renamed");
+        view.update(app, |view, cx| {
+            view.sync_home_rows(cx);
+            assert_eq!(view.home_rows.workspaces[0].display_name(), "Renamed");
+            view.home_search_query = "missing".to_string();
+            view.sync_home_rows(cx);
+            assert!(view.home_rows.workspaces.is_empty());
+            view.home_search_query.clear();
+            view.home_recent_repos
+                .push(PathBuf::from("/tmp/pr530-recent"));
+            view.sync_home_rows(cx);
+            assert_eq!(
+                view.home_rows.repositories,
+                vec![PathBuf::from("/tmp/pr530-recent")]
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(cx, Vec::new(), Vec::new());
+    let focused = cx.update(|window, app| {
+        view.read(app)
+            .home_search_input
+            .read(app)
+            .focus_handle()
+            .is_focused(window)
+    });
+    assert!(focused, "a new window on Home is ready to type into");
+}
+
+#[gpui::test]
+fn home_selects_the_first_row_and_arrows_walk_both_columns(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(
+        cx,
+        vec![
+            named_saved_workspace("Alpha", "/work/a"),
+            named_saved_workspace("Beta", "/work/b"),
+        ],
+        vec![PathBuf::from("/work/c"), PathBuf::from("/work/d")],
+    );
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(0),
+        "the first row starts selected"
+    );
+
+    press(cx, "down down");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(2),
+        "Down continues into the repositories"
+    );
+    press(cx, "up");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(1),
+        "Up returns to the last workspace"
+    );
+    press(cx, "down down down");
+    assert_eq!(home_selected(&view, cx), Some(0), "the run wraps around");
+}
+
+#[gpui::test]
+fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(
+        cx,
+        vec![
+            named_saved_workspace("Alpha", "/work/a"),
+            named_saved_workspace("Beta", "/work/b"),
+        ],
+        vec![PathBuf::from("/work/c"), PathBuf::from("/work/d")],
+    );
+    press(cx, "down");
+    assert_eq!(home_selected(&view, cx), Some(1));
+    press(cx, "right");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(3),
+        "Right keeps the row position"
+    );
+    press(cx, "left");
+    assert_eq!(home_selected(&view, cx), Some(1), "Left jumps back");
+
+    // With text and the caret mid-text, Left edits the query instead.
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.home_search_input
+                .update(cx, |input, cx| input.set_text("work", cx));
+        });
+    });
+    cx.run_until_parked();
+    let selected = home_selected(&view, cx);
+    press(cx, "left");
+    assert_eq!(
+        home_selected(&view, cx),
+        selected,
+        "the caret moves, not the selection"
+    );
+}
+
+#[gpui::test]
+fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut empty = gitcomet_state::session::Workspace::new(Vec::new());
+    empty.custom_name = Some("Later".to_string());
+    empty.restore_on_launch = false;
+    let id = empty.id;
+    let (view, cx) = home_view_with(
+        cx,
+        vec![named_saved_workspace("Alpha", "/work/a"), empty],
+        vec![PathBuf::from("/work/c")],
+    );
+    press(cx, "down down");
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.home_search_input
+                .update(cx, |input, cx| input.set_text("later", cx));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(0),
+        "a new query selects its first match"
+    );
+
+    press(cx, "enter");
+    let window_id = cx.update(|window, _app| window.window_handle().window_id());
+    assert_eq!(
+        cx.update(|_window, app| {
+            crate::workspaces::workspace_for_window(app, window_id).map(|workspace| workspace.id)
+        }),
+        Some(id),
+        "Enter opens the selected workspace in this window"
+    );
+}
+
+#[gpui::test]
+fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let recents = (0..50)
+        .map(|ix| PathBuf::from(format!("/work/repo-{ix:02}")))
+        .collect::<Vec<_>>();
+    let row_selector = |ix: usize| -> &'static str {
+        format!(
+            "home_recent_{}",
+            gitcomet_state::session::path_storage_key(Path::new(&format!("/work/repo-{ix:02}")))
+        )
+        .leak()
+    };
+    let (view, cx) = home_view_with(cx, Vec::new(), recents);
+
+    let first = cx
+        .debug_bounds(row_selector(0))
+        .expect("first row rendered");
+    assert!(
+        cx.debug_bounds(row_selector(49)).is_none(),
+        "rows far below the fold are not rendered"
+    );
+    let frame = cx.debug_bounds("home_recent_list").expect("list frame");
+    let cap = first.size.height * crate::view::home::HOME_LIST_MAX_ROWS as f32;
+    assert!(
+        frame.size.height <= cap + px(16.0),
+        "the list stops growing at {} rows ({:?} > {:?})",
+        crate::view::home::HOME_LIST_MAX_ROWS,
+        frame.size.height,
+        cap
+    );
+
+    press(cx, "up");
+    assert_eq!(
+        home_selected(&view, cx),
+        Some(49),
+        "Up from the first row wraps to the last"
+    );
+    assert!(
+        cx.debug_bounds(row_selector(49)).is_some(),
+        "the selection scrolls into view"
+    );
+}
+
+#[gpui::test]
+fn home_selected_row_shows_the_enter_hint(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let alpha = named_saved_workspace("Alpha", "/work/a");
+    let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
+    let repo_row: &'static str = format!(
+        "home_recent_{}",
+        gitcomet_state::session::path_storage_key(Path::new("/work/c"))
+    )
+    .leak();
+    let (_view, cx) = home_view_with(cx, vec![alpha], vec![PathBuf::from("/work/c")]);
+
+    let hint = cx
+        .debug_bounds("home_enter_hint")
+        .expect("Enter hint on the selection");
+    let row = cx.debug_bounds(alpha_row).expect("first row");
+    assert!(
+        row.contains(&hint.center()),
+        "the hint sits on the selected row"
+    );
+
+    press(cx, "down");
+    let hint = cx
+        .debug_bounds("home_enter_hint")
+        .expect("hint follows the selection");
+    assert!(
+        cx.debug_bounds(repo_row)
+            .expect("repo row")
+            .contains(&hint.center())
+    );
+}
+
+#[gpui::test]
+fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx) = home_view_with(
+        cx,
+        Vec::new(),
+        vec![PathBuf::from("/work/c"), PathBuf::from("/work/d")],
+    );
+    // The selected row keeps its cross visible without hovering.
+    let cross = cx
+        .debug_bounds("home_recent_remove_0")
+        .expect("remove cross on the selected repository");
+    cx.simulate_click(cross.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let recents = cx.update(|_window, app| view.read(app).home_recent_repos.clone());
+    assert_eq!(recents, vec![PathBuf::from("/work/d")]);
+    assert_eq!(home_selected(&view, cx), Some(0), "a row stays selected");
+}
+
+#[gpui::test]
+fn home_cross_deletes_a_saved_workspace_but_not_an_open_one(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let saved = named_saved_workspace("Saved", "/work/a");
+    let saved_id = saved.id;
+    let mut open = named_saved_workspace("Open elsewhere", "/work/b");
+    open.restore_on_launch = true;
+    let open_id = open.id;
+    let (_view, cx) = home_view_with(cx, vec![open, saved], Vec::new());
+    let other = cx.cx.add_window(|_, _| gpui::Empty);
+    cx.cx.update(|app| {
+        crate::workspaces::sync_window(
+            app,
+            other.window_id(),
+            Some(open_id),
+            vec!["/work/b".into()],
+            None,
+        );
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    // Rows: the open workspace first (index 0, selected), then the saved one.
+    assert!(
+        cx.debug_bounds("home_workspace_remove_0").is_none(),
+        "a workspace open in another window cannot be removed from here"
+    );
+    press(cx, "down");
+    let cross = cx
+        .debug_bounds("home_workspace_remove_1")
+        .expect("remove cross on the saved workspace");
+    cx.simulate_click(cross.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert!(crate::workspaces::workspace(app, saved_id).is_none());
+        assert!(crate::workspaces::workspace(app, open_id).is_some());
+    });
+}

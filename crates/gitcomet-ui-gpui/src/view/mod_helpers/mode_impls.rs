@@ -77,6 +77,13 @@ impl AutosquashMode {
     }
 }
 
+/// What the repository picker lists. `WorkspacesOnly` is the Open Workspace chooser.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RepoPickerScope {
+    All,
+    WorkspacesOnly,
+}
+
 /// The version of the repository a local markdown link opens.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum LocalFileLinkSource {
@@ -103,7 +110,9 @@ pub(crate) enum PopoverKind {
     ErrorDetails {
         toast_id: u64,
     },
-    RepoPicker,
+    RepoPicker {
+        scope: RepoPickerScope,
+    },
     BranchPicker {
         purpose: BranchPickerPurpose,
     },
@@ -451,7 +460,6 @@ pub(crate) enum PopoverKind {
         section: TextFormatMenuSection,
     },
     ChangeTrackingSettings,
-    UiScalePicker,
     RebaseOntoConfirm {
         repo_id: RepoId,
         onto: String,
@@ -498,7 +506,7 @@ pub(crate) enum WorktreePopoverKind {
     AddPrompt,
     OpenPicker,
     RemovePicker,
-    /// The action bar's workspace badge picker: every worktree including the
+    /// The action bar's worktree badge picker: every worktree including the
     /// current one, plus a create row. Distinct from `OpenPicker`, which hides
     /// the current worktree and has no create affordance.
     BadgePicker,
@@ -585,6 +593,16 @@ pub enum InitialRepositoryLaunchMode {
 }
 
 #[derive(Clone, Debug, Default)]
+pub enum WorkspaceBootstrap {
+    /// Compatibility path for focused tools and directly-constructed test
+    /// views. Normal application windows always choose Empty or Saved.
+    #[default]
+    LegacySession,
+    Empty,
+    Saved(Box<gitcomet_state::session::Workspace>),
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct GitCometViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
     pub initial_repository_launch_mode: InitialRepositoryLaunchMode,
@@ -592,6 +610,7 @@ pub struct GitCometViewConfig {
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
     pub startup_crash_report: Option<StartupCrashReport>,
+    pub workspace: WorkspaceBootstrap,
 }
 
 impl GitCometViewConfig {
@@ -603,6 +622,7 @@ impl GitCometViewConfig {
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
+            workspace: WorkspaceBootstrap::LegacySession,
         }
     }
 
@@ -617,6 +637,7 @@ impl GitCometViewConfig {
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
+            workspace: WorkspaceBootstrap::Empty,
         }
     }
 }
@@ -674,13 +695,20 @@ pub(crate) enum FocusedMergetoolBootstrapAction {
     Complete,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct PendingRepoOpen {
+    pub(in crate::view) failure_revision: u64,
+    /// External drops own their path immediately, but are saved only after validation.
+    pub(in crate::view) persist_in_workspace: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DeferredRepoBootstrap {
     RestoreSession {
         open_repos: Vec<std::path::PathBuf>,
         active_repo: Option<std::path::PathBuf>,
     },
-    OpenRepo(std::path::PathBuf),
+    OpenRepos(Vec<std::path::PathBuf>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -944,10 +972,26 @@ pub(crate) struct TerminalShutdownSummary {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum TerminalShutdownAction {
-    CloseRepo { repo_id: RepoId },
-    CloseTerminalForRepo { repo_id: RepoId },
-    CloseTerminalTab { repo_id: RepoId, session_seq: u64 },
+    CloseRepo {
+        repo_id: RepoId,
+    },
+    MoveRepo {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
+    },
+    CloseTerminalForRepo {
+        repo_id: RepoId,
+    },
+    CloseTerminalTab {
+        repo_id: RepoId,
+        session_seq: u64,
+    },
     CloseWindow,
+    /// Closes the window (or empties the last one) and forgets its workspace.
+    DeleteWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     QuitApp,
 }
 
@@ -961,17 +1005,39 @@ pub(in crate::view) struct TerminalShutdownPrompt {
 ///
 /// Only the two irreversible ones: switching files keeps the buffer, so it
 /// needs no prompt.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum UnsavedFileEditsAction {
     /// Carries the window that asked: the retry can run seconds later, after a
     /// slow write drains, by which time "the active window" may be another one.
     CloseWindow(gpui::WindowId),
+    DeleteWorkspace {
+        window_id: gpui::WindowId,
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     QuitApp,
+    MoveRepo {
+        window_id: gpui::WindowId,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
+    },
+}
+
+impl UnsavedFileEditsAction {
+    /// A move only concerns its own repository's buffers.
+    pub(in crate::view) fn moving_repo(&self) -> Option<RepoId> {
+        match self {
+            Self::MoveRepo { repo_id, .. } => Some(*repo_id),
+            Self::CloseWindow(_) | Self::DeleteWorkspace { .. } | Self::QuitApp => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct UnsavedFileEditsPrompt {
     pub(in crate::view) action: UnsavedFileEditsAction,
+    /// Buffers were discarded, but a move still needs outstanding writes to finish.
+    pub(in crate::view) waiting_for_writes: bool,
     /// Display labels, repo-qualified when the list spans more than one repo.
     pub(in crate::view) files: Vec<SharedString>,
 }
@@ -1132,7 +1198,7 @@ pub(crate) fn should_show_startup_repository_loading_screen(
     repository_entry_interstitial_active(view_mode, has_repo_tabs) && startup_repo_bootstrap_pending
 }
 
-pub(crate) fn should_show_splash_screen(
+pub(crate) fn should_show_home_screen(
     view_mode: GitCometViewMode,
     has_repo_tabs: bool,
     startup_repo_bootstrap_pending: bool,
@@ -1141,7 +1207,7 @@ pub(crate) fn should_show_splash_screen(
         && !startup_repo_bootstrap_pending
 }
 
-pub(crate) fn titlebar_workspace_actions_enabled(
+pub(crate) fn titlebar_repo_tab_actions_enabled(
     view_mode: GitCometViewMode,
     has_repo_tabs: bool,
 ) -> bool {

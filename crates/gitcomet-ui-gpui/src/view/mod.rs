@@ -233,6 +233,7 @@ mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
+mod home;
 mod icons;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
@@ -327,7 +328,7 @@ pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WorkspaceBootstrap,
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
@@ -339,7 +340,9 @@ use panes::{
     HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
     history_primary_selection,
 };
-pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
+pub(crate) use settings_window::{
+    SettingsWindowView, open_settings_window, open_settings_window_to_workspace,
+};
 use toast_host::ToastHost;
 pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
