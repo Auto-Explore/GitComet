@@ -25,7 +25,11 @@ pub(super) struct AppearancePreferences {
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
-            metrics: crate::appearance::Appearance::default(),
+            // What a fresh session resolves to, not the neutral baseline.
+            metrics: crate::appearance::Appearance {
+                density: crate::appearance::UiDensity::PREFERENCE_DEFAULT,
+                ..crate::appearance::Appearance::default()
+            },
             theme_mode: ThemeMode::default(),
             ui_scale_percent: 100,
             date_time_format: DateTimeFormat::YmdHm,
@@ -58,6 +62,8 @@ pub(super) struct DiffPreferences {
     pub(super) annotate_enabled: bool,
     pub(super) reveal_whitespace_chars: bool,
     pub(super) word_wrap: bool,
+    /// Columns a tab advances to, unless the file or its attributes say.
+    pub(super) tab_size: u8,
     pub(super) show_line_numbers: bool,
 }
 
@@ -71,6 +77,7 @@ impl Default for DiffPreferences {
             annotate_enabled: false,
             reveal_whitespace_chars: false,
             word_wrap: false,
+            tab_size: crate::view::tab_width::DEFAULT_TAB_WIDTH,
             show_line_numbers: true,
         }
     }
@@ -338,6 +345,10 @@ impl UiPreferences {
                 annotate_enabled: session.annotate_enabled.unwrap_or(false),
                 reveal_whitespace_chars: session.diff_reveal_whitespace_chars.unwrap_or(false),
                 word_wrap: session.diff_word_wrap.unwrap_or(false),
+                tab_size: session
+                    .diff_tab_size
+                    .filter(|size| (1..=crate::view::tab_width::MAX_TAB_WIDTH).contains(size))
+                    .unwrap_or(crate::view::tab_width::DEFAULT_TAB_WIDTH),
                 show_line_numbers: session.diff_show_line_numbers.unwrap_or(true),
             },
             security: SecurityPreferences {

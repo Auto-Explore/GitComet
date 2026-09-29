@@ -1,3 +1,4 @@
+use crate::text_format::TextFormat;
 use memchr::memchr;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
@@ -604,6 +605,16 @@ pub enum DiffTarget {
     },
 }
 
+impl DiffTarget {
+    /// The single file this target shows, if it shows one.
+    pub fn file_path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::WorkingTree { path, .. } => Some(path),
+            Self::Commit { path, .. } | Self::CommitRange { path, .. } => path.as_deref(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiffPreviewTextSide {
     Old,
@@ -622,9 +633,107 @@ pub struct Diff {
     pub lines: Vec<DiffLine>,
 }
 
+/// How the two sides of one file section of a patch decode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiffSectionFormats {
+    pub old: TextFormat,
+    pub new: TextFormat,
+}
+
+impl DiffSectionFormats {
+    pub const UTF_8: Self = Self {
+        old: TextFormat::UTF_8,
+        new: TextFormat::UTF_8,
+    };
+
+    pub fn is_plain_utf8(&self) -> bool {
+        self.old.is_plain_utf8() && self.new.is_plain_utf8()
+    }
+
+    /// Guess from the section's own bytes, for callers that know nothing
+    /// about the file. Valid UTF-8 stays UTF-8.
+    pub fn sniff(section: &[u8]) -> Self {
+        Self::resolve(
+            section,
+            &crate::text_format::TextAttributes::default(),
+            None,
+        )
+    }
+
+    /// Decode patch content per side without loading or transcoding the full
+    /// files. Textconv output can use a different encoding from those files.
+    pub fn resolve(
+        section: &[u8],
+        attributes: &crate::text_format::TextAttributes,
+        encoding: Option<crate::text_format::TextEncoding>,
+    ) -> Self {
+        use crate::text_format::{ContentSniffer, SideKind};
+        let mut old = ContentSniffer::new();
+        let mut new = ContentSniffer::new();
+        let mut headers = ContentSniffer::new();
+        for line in section.split_inclusive(|&byte| byte == b'\n') {
+            match Diff::classify_unified_line_bytes(line) {
+                DiffLineKind::Remove => old.feed(&line[1..]),
+                DiffLineKind::Add => new.feed(&line[1..]),
+                DiffLineKind::Context if line.starts_with(b" ") => {
+                    old.feed(&line[1..]);
+                    new.feed(&line[1..]);
+                }
+                DiffLineKind::Hunk => {
+                    if let Some(offset) = line
+                        .get(2..)
+                        .and_then(|rest| memchr::memmem::find(rest, b"@@"))
+                    {
+                        // A truncated function name cannot override complete
+                        // file content. It only supplies evidence when the old
+                        // content is ASCII and encoding has no effect on it.
+                        headers.feed(&line[offset + 4..]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let resolve = |sniff: crate::text_format::ContentSniff| TextFormat {
+            bom: false,
+            ..sniff
+                .resolve(SideKind::GitInternal, attributes, encoding)
+                .format
+        };
+        let old = old.finish();
+        let plain_ascii = old.ascii_only
+            && old
+                .resolve(SideKind::GitInternal, attributes, encoding)
+                .source
+                == crate::text_format::FormatSource::Utf8;
+        Self {
+            old: resolve(if plain_ascii { headers.finish() } else { old }),
+            new: resolve(new.finish()),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SharedLineTextStorage {
     text: String,
+    /// Original bytes of lines decoded from another encoding; `None` when
+    /// `text` holds them verbatim.
+    raw: Option<Box<RawLineBytes>>,
+}
+
+#[derive(Debug)]
+struct RawLineBytes {
+    bytes: Vec<u8>,
+    /// One entry per parsed line, sorted by `text_start`.
+    lines: Vec<RawLineRange>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RawLineRange {
+    text_start: u32,
+    text_len: u32,
+    raw_start: u32,
+    /// Includes a trailing CR.
+    raw_len: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -647,10 +756,41 @@ impl SharedLineText {
         let text = text.into();
         let len = text.len();
         Self {
-            storage: Arc::new(SharedLineTextStorage { text }),
+            storage: Arc::new(SharedLineTextStorage { text, raw: None }),
             start: 0,
             len: u32::try_from(len).unwrap_or(u32::MAX),
         }
+    }
+
+    /// The bytes this line had in `git diff` output, trailing CR included —
+    /// what a patch must contain for `git apply` to match. Slices of a line
+    /// give their decoded text.
+    pub fn raw_bytes(&self) -> &[u8] {
+        let start = self.start as usize;
+        let end = start.saturating_add(self.len as usize);
+        if let Some(raw) = self.storage.raw.as_deref() {
+            if let Ok(ix) = raw
+                .lines
+                .binary_search_by_key(&self.start, |line| line.text_start)
+            {
+                let line = raw.lines[ix];
+                if line.text_len == self.len {
+                    let raw_start = line.raw_start as usize;
+                    return &raw.bytes[raw_start..raw_start + line.raw_len as usize];
+                }
+            }
+            return self.as_ref().as_bytes();
+        }
+        // Parsed UTF-8 keeps the stripped CR right after the line's range.
+        let bytes = self.storage.text.as_bytes();
+        let whole_line = start == 0 || bytes.get(start - 1) == Some(&b'\n');
+        if whole_line
+            && bytes.get(end) == Some(&b'\r')
+            && bytes.get(end + 1).is_none_or(|next| *next == b'\n')
+        {
+            return &bytes[start..end + 1];
+        }
+        &bytes[start..end]
     }
 
     pub fn len(&self) -> usize {
@@ -706,8 +846,10 @@ impl Deref for SharedLineText {
 impl Eq for SharedLineText {}
 
 impl PartialEq for SharedLineText {
+    /// Raw bytes count too: a line re-read as CRLF, or in another encoding,
+    /// must not be mistaken for the old one.
     fn eq(&self, other: &Self) -> bool {
-        self.as_ref() == other.as_ref()
+        self.as_ref() == other.as_ref() && self.raw_bytes() == other.raw_bytes()
     }
 }
 
@@ -737,21 +879,34 @@ impl From<SharedLineText> for Arc<str> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffTextSource {
+    /// UTF-8 content, transcoded from the file's encoding when needed.
     pub path: PathBuf,
     pub identity: Arc<str>,
+    /// How the original content was read; `None` when not resolved.
+    pub format: Option<crate::text_format::SideTextFormat>,
 }
 
 impl FileDiffTextSource {
     pub fn new(path: PathBuf) -> Self {
         let identity = Self::filesystem_identity(&path);
-        Self { path, identity }
+        Self {
+            path,
+            identity,
+            format: None,
+        }
     }
 
     pub fn with_identity(path: PathBuf, identity: impl Into<Arc<str>>) -> Self {
         Self {
             path,
             identity: identity.into(),
+            format: None,
         }
+    }
+
+    pub fn with_format(mut self, format: crate::text_format::SideTextFormat) -> Self {
+        self.format = Some(format);
+        self
     }
 
     fn filesystem_identity(path: &std::path::Path) -> Arc<str> {
@@ -835,10 +990,10 @@ impl FileDiffText {
         let mut hasher = FxHasher::default();
         path.hash(&mut hasher);
         old_source
-            .map(|source| (&source.path, &source.identity))
+            .map(|source| (&source.path, &source.identity, &source.format))
             .hash(&mut hasher);
         new_source
-            .map(|source| (&source.path, &source.identity))
+            .map(|source| (&source.path, &source.identity, &source.format))
             .hash(&mut hasher);
         old.hash(&mut hasher);
         new.hash(&mut hasher);
@@ -1020,7 +1175,7 @@ impl Diff {
     }
 
     pub fn from_unified_owned(target: DiffTarget, text: String) -> Self {
-        let storage = Arc::new(SharedLineTextStorage { text });
+        let storage = Arc::new(SharedLineTextStorage { text, raw: None });
         let bytes = storage.text.as_bytes();
         let mut lines = Vec::with_capacity(Self::line_capacity_from_bytes(bytes));
 
@@ -1044,6 +1199,143 @@ impl Diff {
         Self { target, lines }
     }
 
+    /// Parse `git diff` output bytes. `formats` is asked once per file
+    /// section (from one `diff --git` line to the next) with that section's
+    /// bytes. When every section is plain UTF-8 and the bytes are valid, this
+    /// is [`Self::from_unified_owned`] without a copy; otherwise each line is
+    /// decoded (removed lines as the old side, the rest as the new side) and
+    /// the original bytes are kept for [`SharedLineText::raw_bytes`].
+    pub fn from_unified_bytes(
+        target: DiffTarget,
+        bytes: Vec<u8>,
+        mut formats: impl FnMut(&[u8]) -> DiffSectionFormats,
+    ) -> Self {
+        let sections = Self::unified_sections(&bytes);
+        let section_formats: Vec<DiffSectionFormats> = sections
+            .iter()
+            .map(|section| formats(&bytes[section.clone()]))
+            .collect();
+        let bytes = if section_formats
+            .iter()
+            .all(DiffSectionFormats::is_plain_utf8)
+        {
+            match String::from_utf8(bytes) {
+                Ok(text) => return Self::from_unified_owned(target, text),
+                Err(err) => err.into_bytes(),
+            }
+        } else {
+            bytes
+        };
+
+        let mut text = String::with_capacity(bytes.len() + bytes.len() / 4);
+        let mut ranges = Vec::with_capacity(Self::line_capacity_from_bytes(&bytes));
+        let mut kinds = Vec::with_capacity(ranges.capacity());
+        for (section, section_format) in sections.into_iter().zip(section_formats) {
+            let mut start = section.start;
+            while start < section.end {
+                let line_end = memchr(b'\n', &bytes[start..section.end])
+                    .map_or(section.end, |offset| start + offset);
+                let line = Self::trim_unified_line_bytes(&bytes[start..line_end]);
+                let kind = Self::classify_unified_line_bytes(line);
+                let text_start = text.len();
+                Self::decode_unified_line(line, kind, section_format, &mut text);
+                ranges.push(RawLineRange {
+                    text_start: u32::try_from(text_start).unwrap_or(u32::MAX),
+                    text_len: u32::try_from(text.len() - text_start).unwrap_or(u32::MAX),
+                    raw_start: u32::try_from(start).unwrap_or(u32::MAX),
+                    raw_len: u32::try_from(line_end - start).unwrap_or(u32::MAX),
+                });
+                kinds.push(kind);
+                // Separates lines so a range never runs into the next one.
+                text.push('\n');
+                start = line_end + 1;
+            }
+        }
+
+        let storage = Arc::new(SharedLineTextStorage {
+            text,
+            raw: Some(Box::new(RawLineBytes {
+                bytes,
+                lines: ranges.clone(),
+            })),
+        });
+        let lines = ranges
+            .iter()
+            .zip(kinds)
+            .map(|(range, kind)| {
+                let start = range.text_start as usize;
+                DiffLine {
+                    kind,
+                    text: SharedLineText::from_storage(
+                        &storage,
+                        start..start + range.text_len as usize,
+                    ),
+                }
+            })
+            .collect();
+        Self { target, lines }
+    }
+
+    /// Byte ranges of each file section; output before the first `diff `
+    /// line is a section of its own.
+    fn unified_sections(bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
+        let mut sections = Vec::new();
+        let mut section_start = 0usize;
+        let mut line_start = 0usize;
+        while line_start < bytes.len() {
+            let rest = &bytes[line_start..];
+            if line_start > section_start
+                && (rest.starts_with(b"diff --git ") || rest.starts_with(b"diff --cc "))
+            {
+                sections.push(section_start..line_start);
+                section_start = line_start;
+            }
+            match memchr(b'\n', rest) {
+                Some(offset) => line_start += offset + 1,
+                None => break,
+            }
+        }
+        if section_start < bytes.len() || sections.is_empty() {
+            sections.push(section_start..bytes.len());
+        }
+        sections
+    }
+
+    fn decode_unified_line(
+        line: &[u8],
+        kind: DiffLineKind,
+        formats: DiffSectionFormats,
+        out: &mut String,
+    ) {
+        let decode_into = |bytes: &[u8], format: TextFormat, out: &mut String| {
+            out.push_str(&crate::text_format::decode(bytes, format).text);
+        };
+        match kind {
+            DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
+                if matches!(line.first(), Some(b'+' | b'-' | b' ')) =>
+            {
+                let format = if kind == DiffLineKind::Remove {
+                    formats.old
+                } else {
+                    formats.new
+                };
+                out.push(char::from(line[0]));
+                decode_into(&line[1..], format, out);
+            }
+            DiffLineKind::Hunk => {
+                // Git takes function context from the old side.
+                let context_start = line
+                    .get(2..)
+                    .and_then(|rest| memchr::memmem::find(rest, b"@@"))
+                    .map_or(line.len(), |offset| offset + 4);
+                let context_start = context_start.min(line.len());
+                decode_into(&line[..context_start], TextFormat::UTF_8, out);
+                decode_into(&line[context_start..], formats.old, out);
+            }
+            _ => decode_into(line, TextFormat::UTF_8, out),
+        }
+    }
+
     pub fn from_unified_iter<'a>(
         target: DiffTarget,
         lines: impl IntoIterator<Item = &'a str>,
@@ -1057,10 +1349,37 @@ impl Diff {
 
     /// Read a unified diff, cutting it at the display limits rather than failing.
     fn read_unified_text_with_limits<R: std::io::Read>(
-        mut reader: R,
+        reader: R,
         max_bytes: u64,
         max_lines: usize,
     ) -> std::io::Result<(String, Option<String>)> {
+        let (bytes, notice) = Self::read_unified_bytes_with_limits(reader, max_bytes, max_lines)?;
+        let text = String::from_utf8(bytes).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unified diff is not valid UTF-8: {err}"),
+            )
+        })?;
+        Ok((text, notice))
+    }
+
+    /// Raw `git diff` output cut at the display limits, and the notice to show
+    /// when it was cut.
+    pub fn read_unified_bytes<R: std::io::Read>(
+        reader: R,
+    ) -> std::io::Result<(Vec<u8>, Option<String>)> {
+        Self::read_unified_bytes_with_limits(
+            reader,
+            Self::MAX_UNIFIED_BYTES,
+            Self::MAX_UNIFIED_LINES,
+        )
+    }
+
+    fn read_unified_bytes_with_limits<R: std::io::Read>(
+        mut reader: R,
+        max_bytes: u64,
+        max_lines: usize,
+    ) -> std::io::Result<(Vec<u8>, Option<String>)> {
         let mut bytes = Vec::new();
         (&mut reader)
             .take(max_bytes.saturating_add(1))
@@ -1076,18 +1395,11 @@ impl Diff {
             notice = Some(Self::truncation_notice(&format!("{max_bytes}-byte")));
         }
 
-        let mut text = String::from_utf8(bytes).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("unified diff is not valid UTF-8: {err}"),
-            )
-        })?;
-
-        if Self::line_capacity_from_bytes(text.as_bytes()) > max_lines {
-            text.truncate(Self::line_boundary_after_lines(text.as_bytes(), max_lines));
+        if Self::line_capacity_from_bytes(&bytes) > max_lines {
+            bytes.truncate(Self::line_boundary_after_lines(&bytes, max_lines));
             notice = Some(Self::truncation_notice(&format!("{max_lines}-line")));
         }
-        Ok((text, notice))
+        Ok((bytes, notice))
     }
 
     fn truncation_notice(limit: &str) -> String {
@@ -1143,8 +1455,8 @@ impl Diff {
         max_bytes: u64,
         max_lines: usize,
     ) -> std::io::Result<Self> {
-        let (text, notice) = Self::read_unified_text_with_limits(reader, max_bytes, max_lines)?;
-        let mut diff = Self::from_unified_owned(target, text);
+        let (bytes, notice) = Self::read_unified_bytes_with_limits(reader, max_bytes, max_lines)?;
+        let mut diff = Self::from_unified_bytes(target, bytes, DiffSectionFormats::sniff);
         if let Some(notice) = notice {
             diff.lines.push(DiffLine {
                 kind: DiffLineKind::Header,
@@ -1223,6 +1535,12 @@ mod tests {
     use std::io::Cursor;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn review_truncated_hunk_context_does_not_change_side_encoding() {
+        let patch = b"@@ -1 +1 @@ function \xc3\n-\xc3\xa4\n+\xc3\xb6\n";
+        assert_eq!(DiffSectionFormats::sniff(patch), DiffSectionFormats::UTF_8);
+    }
 
     #[test]
     fn uncommitted_commit_id_detects_zero_and_empty_for_any_hash_length() {
@@ -1317,6 +1635,99 @@ index 1111111..2222222 100644\n\
         assert_eq!(diff.lines[0].kind, DiffLineKind::Hunk);
         assert_eq!(diff.lines[1].text.as_ref(), "-old");
         assert_eq!(diff.lines[2].text.as_ref(), "+new");
+    }
+
+    fn target(path: &str) -> DiffTarget {
+        DiffTarget::WorkingTree {
+            path: PathBuf::from(path),
+            area: DiffArea::Unstaged,
+        }
+    }
+
+    #[test]
+    fn crlf_lines_keep_their_cr_in_raw_bytes() {
+        let unified = "@@ -1 +1 @@\r\n-old\r\n+new\n context\r\r\n";
+        let diff =
+            Diff::from_unified_reader(target("a.txt"), Cursor::new(unified.as_bytes())).unwrap();
+        assert_eq!(diff.lines[1].text.raw_bytes(), b"-old\r");
+        assert_eq!(diff.lines[2].text.raw_bytes(), b"+new");
+        // Only the final CR was stripped; one CR stays in the text.
+        assert_eq!(diff.lines[3].text.as_ref(), " context\r");
+        assert_eq!(diff.lines[3].text.raw_bytes(), b" context\r\r");
+        // A slice is not a whole line and gets its text.
+        let slice = diff.lines[1].text.slice(1..4).unwrap();
+        assert_eq!(slice.raw_bytes(), b"old");
+    }
+
+    #[test]
+    fn crlf_and_lf_versions_of_a_line_are_not_equal() {
+        let crlf = Diff::from_unified(target("a.txt"), "+x\r\n");
+        let lf = Diff::from_unified(target("a.txt"), "+x\n");
+        assert_eq!(crlf.lines[0].text.as_ref(), lf.lines[0].text.as_ref());
+        assert_ne!(crlf, lf);
+    }
+
+    #[test]
+    fn non_utf8_output_decodes_per_side_and_keeps_raw_bytes() {
+        let raw: &[u8] = b"diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@ caf\xe9\n caf\xe9\r\n-na\xefve\n+na\xc3\xafve\n";
+        let latin1 = TextFormat {
+            encoding: crate::text_format::TextEncoding::WINDOWS_1252,
+            bom: false,
+        };
+        let diff =
+            Diff::from_unified_bytes(target("a.txt"), raw.to_vec(), |_| DiffSectionFormats {
+                old: latin1,
+                new: TextFormat::UTF_8,
+            });
+        let texts: Vec<&str> = diff.lines.iter().map(|line| line.text.as_ref()).collect();
+        // The context line decodes as the new side (UTF-8), so 0xE9 is invalid there.
+        assert_eq!(texts[4], "@@ -1,2 +1,2 @@ café");
+        assert_eq!(texts[5], " caf\u{fffd}");
+        assert_eq!(texts[6], "-naïve");
+        assert_eq!(texts[7], "+naïve");
+        assert_eq!(diff.lines[5].text.raw_bytes(), b" caf\xe9\r");
+        assert_eq!(diff.lines[6].text.raw_bytes(), b"-na\xefve");
+        assert_eq!(diff.lines[6].kind, DiffLineKind::Remove);
+        assert_eq!(diff.lines[0].kind, DiffLineKind::Header);
+    }
+
+    #[test]
+    fn reader_decodes_a_latin1_patch_instead_of_failing() {
+        let raw = b"diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-caf\xe9 cr\xe8me br\xfbl\xe9e\n+caf\xe9 cr\xe8me br\xfbl\xe9e!\n";
+        let diff = Diff::from_unified_reader(target("a.txt"), Cursor::new(&raw[..])).unwrap();
+        assert_eq!(diff.lines[2].text.as_ref(), "-café crème brûlée");
+        assert_eq!(
+            diff.lines[3].text.raw_bytes(),
+            b"+caf\xe9 cr\xe8me br\xfbl\xe9e!"
+        );
+    }
+
+    #[test]
+    fn hunk_context_supplies_old_side_encoding_when_changed_lines_are_ascii() {
+        let diff = Diff::from_unified_bytes(
+            target("a.txt"),
+            b"@@ -6 +6 @@ caf\xe9\n-old\n+\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n".to_vec(),
+            DiffSectionFormats::sniff,
+        );
+        assert_eq!(diff.lines[0].text.as_ref(), "@@ -6 +6 @@ café");
+        assert_eq!(diff.lines[2].text.as_ref(), "+日本語");
+    }
+
+    #[test]
+    fn sections_split_on_diff_headers() {
+        let raw = b"diff --git a/a b/a\n+1\ndiff --git a/b b/b\n+2\n";
+        let mut seen = Vec::new();
+        let _ = Diff::from_unified_bytes(target("a"), raw.to_vec(), |section| {
+            seen.push(section.to_vec());
+            DiffSectionFormats::UTF_8
+        });
+        assert_eq!(
+            seen,
+            vec![
+                b"diff --git a/a b/a\n+1\n".to_vec(),
+                b"diff --git a/b b/b\n+2\n".to_vec()
+            ]
+        );
     }
 
     #[test]

@@ -2078,7 +2078,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut state,
         Msg::ApplyWorktreePatch {
             repo_id,
-            patch: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            patch: "@@ -1 +1 @@\n-old\n+new\n".to_string().into(),
             reverse: true,
         },
     );
@@ -2349,8 +2349,9 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::SaveWorktreeFile {
             repo_id,
             path: PathBuf::from("src/lib.rs"),
-            contents: "fn main() {}".to_string(),
+            contents: "fn main() {}".to_string().into(),
             stage: true,
+            completion: None,
         },
     );
     assert!(matches!(
@@ -3333,6 +3334,93 @@ fn submodule_trust_check_pending_marks_and_clears_around_the_check() {
     );
     assert!(state.submodule_trust_check_pending.is_none());
     assert!(state.submodule_trust_prompt.is_some());
+}
+
+#[test]
+fn a_failed_submodule_trust_check_is_reported_on_its_repo() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked {
+            repo_id,
+            result: Err(Error::new(ErrorKind::Backend(
+                "config unreadable".to_string(),
+            ))),
+        }),
+    );
+
+    assert!(effects.is_empty());
+    let diagnostics = &state.repos[0].feedback.diagnostics;
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].kind, crate::model::DiagnosticKind::Error);
+    assert!(
+        diagnostics[0]
+            .message
+            .starts_with("Submodule trust check failed")
+    );
+    assert!(diagnostics[0].message.contains("config unreadable"));
+}
+
+#[test]
+fn report_error_lands_on_its_repo_or_as_an_app_notification() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let report = |repo_id, message: &str| Msg::ReportError {
+        repo_id,
+        message: message.to_string(),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        report(Some(repo_id), "repo error"),
+    );
+    // A closed repo's error still reaches the user.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        report(Some(RepoId(9)), "closed repo"),
+    );
+    reduce(&mut repos, &id_alloc, &mut state, report(None, "app error"));
+    reduce(&mut repos, &id_alloc, &mut state, report(None, "  "));
+
+    let diagnostics = &state.repos[0].feedback.diagnostics;
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].message, "repo error");
+    let notifications = state
+        .notifications
+        .iter()
+        .map(|notification| (notification.kind, notification.message.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notifications,
+        vec![
+            (crate::model::AppNotificationKind::Error, "closed repo"),
+            (crate::model::AppNotificationKind::Error, "app error"),
+        ]
+    );
 }
 
 #[test]

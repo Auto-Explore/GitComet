@@ -7,6 +7,8 @@
     windows_subsystem = "windows"
 )]
 
+#[cfg(feature = "ui-gpui-runtime")]
+mod browser_instance;
 mod cli;
 #[cfg(feature = "ui-gpui-runtime")]
 mod crashlog;
@@ -216,6 +218,34 @@ fn main() {
                     std::process::exit(exit_code::SUCCESS);
                 }
 
+                let path = browser_instance::normalize_browser_path(path);
+                let browser_open_target = gitcomet_state::session::load()
+                    .browser_open_target
+                    .as_deref()
+                    .and_then(gitcomet_ui_gpui::BrowserOpenTarget::from_key)
+                    .unwrap_or_default();
+                let initial_browser_request = gitcomet_ui_gpui::BrowserOpenRequest {
+                    path: path.clone(),
+                    target: browser_open_target,
+                };
+                let mut browser_instance =
+                    match browser_instance::start_or_forward(initial_browser_request.clone()) {
+                        Ok(browser_instance::StartResult::Forwarded) => {
+                            std::process::exit(exit_code::SUCCESS);
+                        }
+                        Ok(browser_instance::StartResult::Primary(primary)) => Some(primary),
+                        Err(err) => {
+                            eprintln!(
+                                "Could not initialize the GitComet browser-instance broker; \
+                             launching this process independently: {err}"
+                            );
+                            None
+                        }
+                    };
+                let browser_requests = browser_instance
+                    .as_mut()
+                    .and_then(browser_instance::PrimaryBrowserInstance::take_requests);
+
                 let startup_crash_report = crashlog::take_startup_report();
                 if let Some(report) = startup_crash_report.as_ref() {
                     // Keep the recovery path visible even if WSLg cannot create
@@ -234,10 +264,9 @@ fn main() {
                         summary: report.summary,
                         crash_log_path: report.crash_log_path,
                     });
-                let run_result =
-                    gitcomet_ui_gpui::run_with_startup_crash_report_and_shutdown_callback(
+                let run_result = gitcomet_ui_gpui::run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
                         backend,
-                        path.clone(),
+                        initial_browser_request,
                         startup_report,
                         Some(|| {
                             if let Err(err) = crashlog::finish_session() {
@@ -246,6 +275,7 @@ fn main() {
                                 );
                             }
                         }),
+                        browser_requests,
                     );
                 match run_result {
                     Ok(

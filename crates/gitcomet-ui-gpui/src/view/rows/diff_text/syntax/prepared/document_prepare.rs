@@ -432,6 +432,7 @@ pub(crate) fn prepared_line_span(
 /// the Jinja host tree -- which has that markup as a single opaque `text` node --
 /// was the only tree left, and clicking any tag lit nothing at all.
 pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
+    tab_width: usize,
     document: PreparedSyntaxDocument,
     line_ix: usize,
     display_offset: usize,
@@ -444,8 +445,8 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
 
     let clicked = line_span(line_ix)?;
     let clicked_line = text.get(clicked.clone())?;
-    let offset =
-        clicked.start + clicked_raw_offset_for_display_offset(clicked_line, display_offset)?;
+    let offset = clicked.start
+        + clicked_raw_offset_for_display_offset(tab_width, clicked_line, display_offset)?;
 
     let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {
         let bytes = text.as_bytes();
@@ -484,8 +485,8 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
             if start < end {
                 out.push(PreparedSyntaxPairSpan {
                     line_ix: ix,
-                    display_range: display_offset_for_raw_offset(line, start)
-                        ..display_offset_for_raw_offset(line, end),
+                    display_range: display_offset_for_raw_offset(tab_width, line, start)
+                        ..display_offset_for_raw_offset(tab_width, line, end),
                 });
             }
             if span.end >= range.end {
@@ -525,6 +526,7 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
 /// there are dropped -- while a name used on both sides of a `{% for %}` is
 /// still one set, which is the entire point of a combined layer.
 pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
+    tab_width: usize,
     document: PreparedSyntaxDocument,
     line_ix: usize,
     display_offset: usize,
@@ -547,7 +549,8 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
     // A caret boundary beyond the line names nothing. The view separately
     // rejects pixel clicks in trailing blank space, whose clamped boundary can
     // equal the valid end boundary produced by the final glyph's right half.
-    let Some(raw_offset) = clicked_raw_offset_for_display_offset(clicked_line, display_offset)
+    let Some(raw_offset) =
+        clicked_raw_offset_for_display_offset(tab_width, clicked_line, display_offset)
     else {
         return Vec::new();
     };
@@ -576,8 +579,8 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
             let end = range.end.clamp(span.start, span.end) - span.start;
             (start < end).then(|| PreparedSyntaxPairSpan {
                 line_ix: ix,
-                display_range: display_offset_for_raw_offset(line, start)
-                    ..display_offset_for_raw_offset(line, end),
+                display_range: display_offset_for_raw_offset(tab_width, line, start)
+                    ..display_offset_for_raw_offset(tab_width, line, end),
             })
         })
         .collect()

@@ -99,6 +99,8 @@ pub struct QuickSearchBar<V: 'static> {
     on_newline: Option<BarCallback<V>>,
     navigation: Option<Navigation<V>>,
     on_close: Option<BarCallback<V>>,
+    sidebar: bool,
+    on_clear: Option<BarCallback<V>>,
 }
 
 impl<V: 'static> QuickSearchBar<V> {
@@ -111,6 +113,8 @@ impl<V: 'static> QuickSearchBar<V> {
             on_newline: None,
             navigation: None,
             on_close: None,
+            sidebar: false,
+            on_clear: None,
         }
     }
 
@@ -119,6 +123,21 @@ impl<V: 'static> QuickSearchBar<V> {
     /// `relative`, so a later element can overlay the input (a scrollbar).
     pub fn input(mut self, element: impl IntoElement) -> Self {
         self.input.push(element.into_any_element());
+        self
+    }
+
+    /// A full-width, two-row layout for narrow panels. The input owns its
+    /// leading icon; options and status share the second row.
+    pub fn sidebar(mut self) -> Self {
+        self.sidebar = true;
+        self
+    }
+
+    pub fn on_clear(
+        mut self,
+        on_clear: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    ) -> Self {
+        self.on_clear = Some(Rc::new(on_clear));
         self
     }
 
@@ -175,6 +194,8 @@ impl<V: 'static> QuickSearchBar<V> {
             on_newline,
             navigation,
             on_close,
+            sidebar,
+            on_clear,
         } = self;
         let id = |suffix: &str| -> SharedString { format!("{prefix}_{suffix}").into() };
         let selector = |suffix: &str| {
@@ -197,25 +218,61 @@ impl<V: 'static> QuickSearchBar<V> {
             theme.colors.foreground.secondary
         };
 
+        let mut input_row = div()
+            .flex()
+            .items_center()
+            .min_w(px(0.0))
+            .when(sidebar, |row| row.w_full())
+            .child(
+                div()
+                    .relative()
+                    .when(sidebar, |slot| {
+                        slot.flex_1().min_w(px(0.0)).py(ui_scale.px(4.0))
+                    })
+                    .when(!sidebar, |slot| {
+                        slot.w(ui_scale.px(220.0)).min_w(ui_scale.px(140.0))
+                    })
+                    .debug_selector(selector("input_slot"))
+                    .children(input),
+            );
+        if let Some(on_clear) = on_clear {
+            input_row = input_row.child(
+                Button::new(id("clear"), "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.foreground.secondary,
+                        ui_scale.px(12.0),
+                    ))
+                    .borderless()
+                    .style(ButtonStyle::Subtle)
+                    .on_click(theme, cx, move |this, _, window, cx| {
+                        on_clear(this, window, cx)
+                    })
+                    .w(compact_icon_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Clear search".into())
+                    .debug_selector(selector("clear")),
+            );
+        }
+        let mut input_row = Some(input_row);
+        let sidebar_input = if sidebar { input_row.take() } else { None };
         let mut bar = div()
             .flex()
             .items_start()
             .gap(ui_scale.px(2.0))
-            .px(ui_scale.px(4.0))
-            .py(ui_scale.px(2.0))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .border_color(theme.colors.stroke.default)
-            .bg(theme.colors.surface.raised)
-            .shadow(crate::theme::shadow_surface(theme))
-            .child(
-                div()
-                    .relative()
-                    .w(ui_scale.px(220.0))
-                    .min_w(ui_scale.px(140.0))
-                    .debug_selector(selector("input_slot"))
-                    .children(input),
-            );
+            .when(sidebar, |bar| bar.w_full().min_w(px(0.0)))
+            .when(!sidebar, |bar| {
+                bar.px(ui_scale.px(4.0))
+                    .py(ui_scale.px(2.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(theme.colors.stroke.default)
+                    .bg(theme.colors.surface.raised)
+                    .shadow(crate::theme::shadow_surface(theme))
+            });
+        if let Some(input) = input_row {
+            bar = bar.child(input);
+        }
 
         if let Some(on_newline) = on_newline {
             bar = bar.child(
@@ -280,9 +337,13 @@ impl<V: 'static> QuickSearchBar<V> {
 
         bar = bar.child(
             div()
-                .w(ui_scale.px(104.0))
-                .min_w(ui_scale.px(104.0))
-                .max_w(ui_scale.px(104.0))
+                .when(sidebar, |label| label.flex_1().min_w(px(0.0)))
+                .when(!sidebar, |label| {
+                    label
+                        .w(ui_scale.px(104.0))
+                        .min_w(ui_scale.px(104.0))
+                        .max_w(ui_scale.px(104.0))
+                })
                 .h(compact_control_height)
                 .flex()
                 .items_center()
@@ -354,7 +415,27 @@ impl<V: 'static> QuickSearchBar<V> {
             );
         }
 
-        bar
+        if let Some(input) = sidebar_input {
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w(px(0.0))
+                .px(ui_scale.px(4.0))
+                .py(ui_scale.px(2.0))
+                .rounded(px(theme.radii.control))
+                .border_1()
+                .border_color(if status.is_error() {
+                    theme.colors.status.danger.foreground
+                } else {
+                    theme.colors.stroke.default
+                })
+                .bg(theme.colors.surface.raised)
+                .child(input)
+                .child(bar)
+        } else {
+            bar
+        }
     }
 }
 

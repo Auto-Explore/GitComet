@@ -1788,6 +1788,8 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
 fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     cx: &mut gpui::TestAppContext,
 ) {
+    let tab_width = 4;
+
     const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
     const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
@@ -1963,7 +1965,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
             .worktree_preview_line_raw_text(0)
             .expect("streamed preview line should be addressable");
         let (_, materialized_metrics) = crate::perf_alloc::measure_allocations(|| {
-            let full_text = crate::view::file_diff_display_text(&raw_text);
+            let full_text = crate::view::file_diff_display_text(tab_width, &raw_text);
             std::hint::black_box(full_text.len());
         });
         assert!(
@@ -2794,6 +2796,8 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
 /// hitbox it measures against — but on its own scroll handle.
 #[gpui::test]
 fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2806,8 +2810,9 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
         std::process::id()
     ));
     let file_rel = std::path::PathBuf::from("wide.rs");
-    let mut rows: Vec<String> = (0..20).map(|ix| format!("fn line_{ix}() {{}}")).collect();
-    // The needle sits well past any plausible viewport width.
+    let mut rows: Vec<String> = (0..60).map(|ix| format!("fn line_{ix}() {{}}")).collect();
+    // Start outside the virtualized viewport, with the needle also well past
+    // its right edge. The search has to wait for the newly visible line's width.
     rows.push(format!("// {}needle", "pad ".repeat(200)));
     let lines: Arc<Vec<String>> = Arc::new(rows);
     let preview_text = lines.join("\n");
@@ -2849,11 +2854,15 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(pane.is_file_preview_active());
-        let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
-        assert!(
-            handle.max_offset().x > px(0.0),
-            "the fixture must overflow sideways for this to mean anything; max={:?}",
-            handle.max_offset()
+        assert_eq!(
+            pane.worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .x,
+            px(0.0),
+            "the long line must start outside the measured viewport"
         );
     });
 
@@ -2884,11 +2893,19 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
             pane.diff_search_matches
         );
         let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        // Virtualized lines acquire their width when they enter the viewport.
+        // The search must reveal the long line before its overflow is known.
+        assert!(
+            handle.max_offset().x > px(0.0),
+            "the fixture must overflow sideways for this to mean anything; max={:?}",
+            handle.max_offset()
+        );
         assert!(
             handle.offset().x < px(0.0),
             "expected the preview to scroll right to the match, x stayed at {:?}",
             handle.offset(),
         );
+        assert_eq!(pane.diff_search_horizontal_reveal, None);
     });
 
     let _ = std::fs::remove_dir_all(&workdir);

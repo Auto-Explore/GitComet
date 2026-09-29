@@ -4,6 +4,8 @@ use gpui::{App, Pixels, Window};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum UiDensity {
+    /// The neutral baseline (`Default`): chrome and scale helpers that must
+    /// not take density measure against it.
     #[default]
     Compact,
     Comfortable,
@@ -11,6 +13,9 @@ pub(crate) enum UiDensity {
 }
 
 impl UiDensity {
+    /// What a user who never chose a density gets.
+    pub(crate) const PREFERENCE_DEFAULT: Self = Self::Comfortable;
+
     pub(crate) const ALL: [Self; 3] = [Self::Compact, Self::Comfortable, Self::Spacious];
 
     /// Position on the compact-to-comfortable ramp. Spacious continues the same
@@ -103,7 +108,7 @@ pub(crate) struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            density: UiDensity::Compact,
+            density: UiDensity::default(),
             ui_font_size_px: FontRole::Ui.default_size(),
             editor_font_size_px: FontRole::Editor.default_size(),
             markdown_preview_font_size_px: FontRole::Markdown.default_size(),
@@ -119,7 +124,7 @@ impl Appearance {
                 .ui_density
                 .as_deref()
                 .and_then(UiDensity::from_key)
-                .unwrap_or_default(),
+                .unwrap_or(UiDensity::PREFERENCE_DEFAULT),
             ui_font_size_px: FontRole::Ui.sanitize(session.ui_font_size_px),
             editor_font_size_px: FontRole::Editor.sanitize(session.editor_font_size_px),
             markdown_preview_font_size_px: FontRole::Markdown
@@ -150,8 +155,16 @@ impl Appearance {
 
     /// Places a per-element (compact, comfortable) pair on the density ramp.
     /// Each element's own delta was measured, so scaling it keeps that intent.
+    /// Rounded to whole design pixels: Spacious's 1.6 step would otherwise
+    /// put rows and gaps on sub-pixel sizes (a 36.8 px history row).
     pub(crate) fn ramp(self, compact: f32, comfortable: f32) -> f32 {
-        compact + (comfortable - compact) * self.density.step()
+        (compact + (comfortable - compact) * self.density.step()).round()
+    }
+
+    /// Position on the density ramp (Compact 0, Comfortable 1, Spacious 1.6),
+    /// for callers that scale by a factor rather than size in pixels.
+    pub(crate) fn density_step(self) -> f32 {
+        self.density.step()
     }
 
     pub(crate) fn row_height(self, compact: f32, comfortable: f32) -> f32 {
@@ -185,6 +198,22 @@ pub(crate) fn initialize(session: &UiSession, cx: &mut App) {
     cx.set_global(AppearanceInitialized(true));
 }
 
+/// Tests that measure Compact layouts install it before building a view, so
+/// the view's own initialization (Comfortable for a fresh session) is skipped.
+#[cfg(test)]
+pub(crate) fn pin_compact_for_test(cx: &mut App) {
+    pin_density_for_test(cx, UiDensity::Compact);
+}
+
+#[cfg(test)]
+pub(crate) fn pin_density_for_test(cx: &mut App, density: UiDensity) {
+    cx.set_global(Appearance {
+        density,
+        ..Appearance::default()
+    });
+    cx.set_global(AppearanceInitialized(true));
+}
+
 pub(crate) fn editor_size(window: &Window, cx: &App) -> Pixels {
     crate::ui_scale::design_px_from_window(current(cx).editor_font_size_px as f32, window)
 }
@@ -197,7 +226,11 @@ mod tests {
     fn legacy_sessions_and_invalid_values_have_bounded_defaults() {
         assert_eq!(
             Appearance::from_session(&UiSession::default()),
-            Appearance::default()
+            Appearance {
+                density: UiDensity::PREFERENCE_DEFAULT,
+                ..Appearance::default()
+            },
+            "a fresh session gets the preferred density over the baseline"
         );
         let session = UiSession {
             ui_density: Some("unknown".into()),
@@ -207,7 +240,7 @@ mod tests {
             ..UiSession::default()
         };
         let appearance = Appearance::from_session(&session);
-        assert_eq!(appearance.density, UiDensity::Compact);
+        assert_eq!(appearance.density, UiDensity::Comfortable);
         assert_eq!(
             (appearance.ui_font_size_px, appearance.editor_font_size_px),
             (10, 32)
@@ -278,7 +311,33 @@ mod tests {
         }
 
         assert_eq!(UiDensity::from_key("nonsense"), None);
-        assert_eq!(UiDensity::default(), UiDensity::Compact);
+        assert_eq!(
+            UiDensity::default(),
+            UiDensity::Compact,
+            "the neutral baseline"
+        );
+        assert_eq!(UiDensity::PREFERENCE_DEFAULT, UiDensity::Comfortable);
+    }
+
+    #[test]
+    fn every_density_sizes_controls_in_whole_design_pixels() {
+        // Spacious's 1.6 step put the history row at 36.8 px, which left
+        // scroll anchors a fraction of a pixel off and rows on sub-pixel edges.
+        for density in UiDensity::ALL {
+            let metrics = Appearance {
+                density,
+                ..Appearance::default()
+            };
+            for (compact, comfortable) in [(24.0, 32.0), (2.0, 6.0), (4.0, 6.0), (10.0, 12.0)] {
+                let size = metrics.ramp(compact, comfortable);
+                assert_eq!(
+                    size.fract(),
+                    0.0,
+                    "{density:?} ramp({compact}, {comfortable}) = {size}"
+                );
+                assert!(size >= compact, "{density:?} never shrinks below Compact");
+            }
+        }
     }
 
     #[test]

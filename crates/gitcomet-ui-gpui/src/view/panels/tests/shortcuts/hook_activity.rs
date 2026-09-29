@@ -657,6 +657,8 @@ fn hook_activity_dialog_only_suppresses_completion_for_its_own_repository(
 fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     cx: &mut gpui::TestAppContext,
 ) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -682,12 +684,12 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     let activity_bounds = cx
         .debug_bounds("bottom_hook_activity")
         .expect("expected Git hook Activity button");
-    let zoom_bounds = cx
-        .debug_bounds("bottom_status_bar_zoom")
-        .expect("expected bottom status bar zoom button");
+    let brand_bounds = cx
+        .debug_bounds("bottom_status_bar_brand")
+        .expect("expected bottom status bar branding chip");
     assert!(
-        activity_bounds.right() <= zoom_bounds.left(),
-        "the Activity button must sit immediately before zoom"
+        activity_bounds.right() <= brand_bounds.left(),
+        "the Activity button must sit at the end of the toggle group, before branding"
     );
 
     let mut repo_with_hook = repo.clone();
@@ -772,9 +774,14 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         .debug_bounds("hook_activity_run_714")
         .expect("expected active run in history");
     let run_row_height: f32 = run_row.size.height.into();
+    let expected_row_height: f32 = cx.update(|_window, app| {
+        crate::ui_scale::UiScale::current(app)
+            .row_height(48.0, 56.0)
+            .into()
+    });
     assert!(
-        run_row_height >= scaled(47.0) && run_row_height <= scaled(49.0),
-        "run history should use compact two-line rows (height={run_row_height})"
+        (run_row_height - expected_row_height).abs() <= scaled(1.0),
+        "run history should use two-line rows at the selected density (height={run_row_height})"
     );
     assert!(
         cx.debug_bounds("hook_activity_run_timestamp_714").is_some(),
@@ -1132,10 +1139,18 @@ fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     let idle_button = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
 
-    let zoom = cx
-        .debug_bounds("bottom_status_bar_zoom")
-        .expect("expected bottom status bar zoom button");
-    cx.simulate_click(zoom.center(), Modifiers::default());
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::ChangeTrackingSettings,
+                    point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
     draw_and_drain_test_window(cx);
     assert!(
         popover_is_open(cx, &view),

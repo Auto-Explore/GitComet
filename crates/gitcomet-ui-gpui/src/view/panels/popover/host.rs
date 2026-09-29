@@ -93,7 +93,7 @@ impl PopoverHost {
     pub(super) fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
-        let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker));
+        let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker { .. }));
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.title_bar.update(cx, |title_bar, cx| {
@@ -836,7 +836,7 @@ impl PopoverHost {
             _branch_picker_search_input_subscription: None,
             _upstream_picker_search_input_subscription: None,
             _worktree_picker_search_input_subscription: None,
-            _workspace_picker_search_input_subscription: None,
+            _worktree_badge_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
             _history_author_filter_search_input_subscription: None,
@@ -855,6 +855,7 @@ impl PopoverHost {
             pinned_branches_by_repo,
             collapsed_items_by_repo,
             branch_filter_query: String::new(),
+            branch_search: crate::view::sidebar_search::SidebarSearch::new("", Default::default()),
             tag_push_preview_key: None,
             tag_push_cancellations: Vec::new(),
             push_upstream_tag_mode: None,
@@ -865,6 +866,10 @@ impl PopoverHost {
             hook_activity_history_scroll: ScrollHandle::new(),
             hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
+            error_details_selected: None,
+            error_details_text: Default::default(),
+            error_details_scroll: ScrollHandle::new(),
+            error_details_rail_scroll: ScrollHandle::new(),
             commit_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
@@ -875,12 +880,16 @@ impl PopoverHost {
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             context_menu_scroll: ScrollHandle::new(),
+            pin_menu_entries: None,
+            pin_menu_scroll: UniformListScrollHandle::default(),
             context_menu_scroll_anchors: Vec::new(),
             expanded_history_ref: None,
             repo_picker_selected_index: None,
             repo_picker_search_query: String::new(),
             cached_recent_repos: Vec::new(),
             cached_pinned_repos: Vec::new(),
+            cached_workspaces: Vec::new(),
+            cached_workspace_id: None,
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
@@ -888,7 +897,7 @@ impl PopoverHost {
             branch_picker_selected_index: None,
             upstream_picker_selected_index: None,
             worktree_picker_selected_index: None,
-            workspace_picker_selected_index: None,
+            worktree_badge_picker_selected_index: None,
             pending_worktree_add_prefill: None,
             submodule_picker_selected_index: None,
             file_history_selected_index: None,
@@ -896,7 +905,7 @@ impl PopoverHost {
             history_author_suggestions: None,
             branch_picker_rows_cache: rows_cache::RowsCache::default(),
             upstream_picker_rows_cache: rows_cache::RowsCache::default(),
-            workspace_picker_rows_cache: rows_cache::RowsCache::default(),
+            worktree_badge_picker_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_rows_cache: rows_cache::RowsCache::default(),
             stash_picker_rows_cache: rows_cache::RowsCache::default(),
             file_history_rows_cache: rows_cache::RowsCache::default(),
@@ -909,7 +918,7 @@ impl PopoverHost {
             file_history_search_input: None,
             history_author_filter_search_input: None,
             worktree_picker_search_input: None,
-            workspace_picker_search_input: None,
+            worktree_badge_picker_search_input: None,
             submodule_picker_search_input: None,
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
@@ -1020,7 +1029,7 @@ impl PopoverHost {
                 &self.file_history_search_input,
                 &self.history_author_filter_search_input,
                 &self.worktree_picker_search_input,
-                &self.workspace_picker_search_input,
+                &self.worktree_badge_picker_search_input,
                 &self.submodule_picker_search_input,
                 &self.stash_picker_search_input,
             ]
@@ -1053,6 +1062,14 @@ impl PopoverHost {
 
     pub(in crate::view) fn is_hook_activity_workflow_open(&self) -> bool {
         self.hook_activity_workflow_repo_id().is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn error_details_text_for_test(
+        &self,
+        key: &str,
+    ) -> Option<Entity<components::TextInput>> {
+        self.error_details_text.input_for_test(key)
     }
 
     #[cfg(test)]
@@ -1233,12 +1250,40 @@ impl PopoverHost {
         matches!(self.popover, Some(PopoverKind::UnsavedFileEditsConfirm(_)))
     }
 
+    #[cfg(test)]
+    pub(crate) fn activate_closed_repo_picker_entry_for_test(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        repo_picker::activate(self, repo_picker::RepoPickerEntry::Closed(path), cx);
+    }
+
+    /// The toast host's errors changed: repaint the error details dialog, or
+    /// close it once none is left.
+    pub(in crate::view) fn error_notices_changed(
+        &mut self,
+        errors: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !matches!(self.popover, Some(PopoverKind::ErrorDetails { .. })) {
+            return;
+        }
+        if errors == 0 {
+            self.close_popover(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();
         if dismissing_hook_activity {
             self.hook_activity_text = Default::default();
         }
+        self.error_details_selected = None;
+        self.error_details_text = Default::default();
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -1248,6 +1293,7 @@ impl PopoverHost {
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
         self.context_menu_scroll_anchors.clear();
+        self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
         self.expanded_history_ref = None;
         self.picker_row_menu = None;
@@ -1395,6 +1441,7 @@ impl PopoverHost {
             Some(
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
+                    | PopoverKind::TextFormatMenu { .. }
                     | PopoverKind::WebLinkMenu { .. }
                     | PopoverKind::LocalFileLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
@@ -2501,6 +2548,18 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
+        if matches!(
+            kind,
+            PopoverKind::RepoPicker { .. } | PopoverKind::RepoTabMenu { .. }
+        ) {
+            self.cached_workspaces = crate::workspaces::workspaces(cx);
+            // This method can run from a listener owned by the root view, so
+            // reading that entity here would re-enter an in-progress update.
+            // The group manager already owns the same window-to-group mapping.
+            self.cached_workspace_id =
+                crate::workspaces::workspace_for_window(cx, window.window_handle().window_id())
+                    .map(|group| group.id);
+        }
         if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
         | PopoverKind::RevertCommitConfirm { repo_id, commit_id } = &kind
         {
@@ -2583,6 +2642,7 @@ impl PopoverHost {
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
         self.context_menu_scroll_anchors.clear();
+        self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
         self.expanded_history_ref = None;
         self.repo_picker_selected_index = None;
@@ -2594,7 +2654,7 @@ impl PopoverHost {
         self.branch_picker_selected_index = None;
         self.upstream_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
-        self.workspace_picker_selected_index = None;
+        self.worktree_badge_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
         self.file_history_selected_index = None;
         self.history_author_filter_selected_index = None;
@@ -2603,7 +2663,7 @@ impl PopoverHost {
         // keeps the memory from outliving the picker that needed it.
         self.branch_picker_rows_cache.clear();
         self.upstream_picker_rows_cache.clear();
-        self.workspace_picker_rows_cache.clear();
+        self.worktree_badge_picker_rows_cache.clear();
         self.repo_picker_rows_cache.clear();
         self.stash_picker_rows_cache.clear();
         self.file_history_rows_cache.clear();
@@ -2621,6 +2681,13 @@ impl PopoverHost {
             window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
+                PopoverKind::ErrorDetails { toast_id } => {
+                    self.error_details_selected = Some(*toast_id);
+                    self.error_details_text = Default::default();
+                    self.error_details_scroll = ScrollHandle::new();
+                    self.error_details_rail_scroll = ScrollHandle::new();
+                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                }
                 PopoverKind::HookActivity {
                     repo_id,
                     operation_id,
@@ -2653,7 +2720,7 @@ impl PopoverHost {
                     self.hook_activity_output_scroll = ScrollHandle::new();
                     self.hook_activity_output_scroll.scroll_to_bottom();
                 }
-                PopoverKind::RepoPicker => {
+                PopoverKind::RepoPicker { .. } => {
                     let ui_session = session::load();
                     self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);
                     self.cached_recent_repos = ui_session.recent_repos;
@@ -2922,7 +2989,7 @@ impl PopoverHost {
                     repo_id,
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 } => {
-                    let _ = self.ensure_workspace_picker_search_input(window, cx);
+                    let _ = self.ensure_worktree_badge_picker_search_input(window, cx);
                     self.store
                         .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
                 }
@@ -3119,14 +3186,25 @@ impl PopoverHost {
         cx.notify();
     }
 
+    #[cfg(test)]
     pub(in crate::view) fn set_branch_filter_query(
         &mut self,
         query: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.branch_filter_query == query {
+        self.set_branch_search(query, self.branch_search.matcher.options(), cx);
+    }
+
+    pub(in crate::view) fn set_branch_search(
+        &mut self,
+        query: String,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.branch_filter_query == query && self.branch_search.matcher.options() == options {
             return;
         }
+        self.branch_search = crate::view::sidebar_search::SidebarSearch::new(&query, options);
         self.branch_filter_query = query;
         cx.notify();
     }
@@ -3178,8 +3256,7 @@ impl PopoverHost {
         crate::view::branch_sidebar::is_collapsed(items, collapse_key)
     }
 
-    /// How many pinned branches the section is actually showing, for the pinned
-    /// header's "Unpin all (N)".
+    /// Visible pinned roots for the branch section's "Unpin all (N)".
     ///
     /// Counting raw pin keys would overcount: the row builder skips a pin whose
     /// branch no longer exists, and skips one filtered out by the branch
@@ -3192,19 +3269,10 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return 0;
         };
-        let filter = self.active_branch_filter().unwrap_or_default();
-        self.pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .map_or(0, |items| {
-                items
-                    .iter()
-                    .filter(|key| {
-                        crate::view::branch_sidebar::pinned_branch_renders(
-                            repo, key, section, filter,
-                        )
-                    })
-                    .count()
-            })
+        self.pinned_branches_by_repo.get(&repo.spec.workdir).map_or(0, |items| {
+            crate::view::branch_sidebar::matching_pinned_roots(repo, items, &self.branch_search).iter()
+                .filter(|row| matches!(row, BranchSidebarRow::Branch { section: candidate, .. } | BranchSidebarRow::GroupHeader { section: candidate, .. } if *candidate == section)).count()
+        })
     }
 
     pub(in crate::view) fn is_branch_pinned(
@@ -3213,13 +3281,17 @@ impl PopoverHost {
         section: BranchSection,
         name: &str,
     ) -> bool {
+        let key = crate::view::branch_sidebar::branch_pin_storage_key(section, name);
+        self.is_sidebar_item_pinned(repo_id, &key)
+    }
+
+    pub(in crate::view) fn is_sidebar_item_pinned(&self, repo_id: RepoId, key: &str) -> bool {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return false;
         };
-        let key = crate::view::branch_sidebar::branch_pin_storage_key(section, name);
         self.pinned_branches_by_repo
             .get(&repo.spec.workdir)
-            .is_some_and(|items| items.contains(&key))
+            .is_some_and(|items| items.contains(key))
     }
 
     pub(in crate::view) fn set_date_time_format(
@@ -3288,24 +3360,10 @@ impl PopoverHost {
         });
     }
 
-    pub(in crate::view) fn set_theme_mode(
-        &mut self,
-        next: ThemeMode,
-        appearance: gpui::WindowAppearance,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.theme_mode == next {
-            return;
-        }
-
-        self.theme_mode = next.clone();
-        self.set_theme(next.resolve_theme(appearance), cx);
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_theme_mode(next.clone(), appearance, cx);
-            });
-        });
+    /// Track the global theme preference, which `schedule_ui_settings_persist`
+    /// writes back. The visual theme arrives separately through `set_theme`.
+    pub(in crate::view) fn sync_global_theme_mode(&mut self, next: ThemeMode) {
+        self.theme_mode = next;
     }
 
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
@@ -3459,13 +3517,13 @@ impl PopoverHost {
     /// it can read the filter without knowing which picker it is over.
     pub(super) fn open_picker_search_input(&self) -> Option<&Entity<components::TextInput>> {
         match &self.popover {
-            Some(PopoverKind::RepoPicker) => self.repo_picker_search_input.as_ref(),
+            Some(PopoverKind::RepoPicker { .. }) => self.repo_picker_search_input.as_ref(),
             Some(PopoverKind::FileHistory { .. }) => self.file_history_search_input.as_ref(),
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_search_input.as_ref(),
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 ..
-            }) => self.workspace_picker_search_input.as_ref(),
+            }) => self.worktree_badge_picker_search_input.as_ref(),
             _ => None,
         }
     }
@@ -3477,26 +3535,26 @@ impl PopoverHost {
     /// say so.
     pub(super) fn open_picker_selected_index(&mut self) -> Option<&mut Option<usize>> {
         match &self.popover {
-            Some(PopoverKind::RepoPicker) => Some(&mut self.repo_picker_selected_index),
+            Some(PopoverKind::RepoPicker { .. }) => Some(&mut self.repo_picker_selected_index),
             Some(PopoverKind::FileHistory { .. }) => Some(&mut self.file_history_selected_index),
             Some(PopoverKind::BranchPicker { .. }) => Some(&mut self.branch_picker_selected_index),
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 ..
-            }) => Some(&mut self.workspace_picker_selected_index),
+            }) => Some(&mut self.worktree_badge_picker_selected_index),
             _ => None,
         }
     }
 
     pub(super) fn open_picker_selected_index_value(&self) -> Option<usize> {
         match &self.popover {
-            Some(PopoverKind::RepoPicker) => self.repo_picker_selected_index,
+            Some(PopoverKind::RepoPicker { .. }) => self.repo_picker_selected_index,
             Some(PopoverKind::FileHistory { .. }) => self.file_history_selected_index,
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_selected_index,
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                 ..
-            }) => self.workspace_picker_selected_index,
+            }) => self.worktree_badge_picker_selected_index,
             _ => None,
         }
     }

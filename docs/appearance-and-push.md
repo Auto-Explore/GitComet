@@ -1,7 +1,7 @@
 # Appearance and push options
 
 In **Settings → General**, choose **Compact**, **Comfortable** or **Spacious**
-density. Compact is the default. Each step adds space around controls and
+density. Comfortable is the default. Each step adds space around controls and
 increases button, menu and list-row targets for pointer and trackpad use;
 Spacious continues the same step further again. Density changes spacing only —
 font sizes are a separate setting. Staging actions and the commit composer keep

@@ -746,7 +746,17 @@ impl Render for RepoTabsBarView {
         // Tabs are transparent, so a label fading out has to land on whatever
         // is actually behind it: the bar for an idle tab, the content strip
         // for the active one.
-        let strip_bg = crate::view::chrome::title_bar_background(theme, window.is_window_active());
+        let workspace_color = crate::workspaces::with_workspace_for_window(
+            cx,
+            window.window_handle().window_id(),
+            |workspace| workspace.color,
+        )
+        .flatten();
+        let strip_bg = crate::view::chrome::title_bar_background(
+            theme,
+            window.is_window_active(),
+            workspace_color,
+        );
 
         // Reveal the active tab when the repository changes, then leave the
         // offset alone so manual scrolling sticks.
@@ -1269,7 +1279,7 @@ impl Render for RepoTabsBarView {
             .can_drop(|dragged, _window, _cx| {
                 dragged
                     .downcast_ref::<gpui::ExternalPaths>()
-                    .is_some_and(|paths| matches!(paths.paths(), [_]))
+                    .is_some_and(|paths| !paths.paths().is_empty())
             })
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {

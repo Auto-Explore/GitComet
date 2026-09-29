@@ -89,25 +89,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self
-            .popover_host
-            .read(cx)
-            .is_kind_open(&PopoverKind::RepoPicker)
-        {
-            self.popover_host.update(cx, |host, cx| {
-                host.close_popover_and_restore_focus(window, cx)
-            });
-            return;
-        }
-
-        // The chevron has no painted bounds yet in a window that has not drawn
-        // its titlebar (the "open a new window, then show the switcher" path),
-        // so fall back to the centred placement there.
-        let Some(anchor) = self.title_bar.read(cx).repo_picker_toggle_bounds() else {
-            self.open_repository_switcher_centered(window, cx);
-            return;
-        };
-        self.open_popover_for_bounds(PopoverKind::RepoPicker, anchor, window, cx);
+        self.toggle_repo_picker(RepoPickerScope::All, window, cx);
     }
 
     /// Command-palette entry point: the palette itself is centred, so the
@@ -117,7 +99,60 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.open_popover_centered(PopoverKind::RepoPicker, window, cx);
+        self.open_popover_centered(
+            PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Open Workspace: the same picker, listing only workspaces.
+    pub(crate) fn toggle_workspace_picker(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toggle_repo_picker(RepoPickerScope::WorkspacesOnly, window, cx);
+    }
+
+    pub(crate) fn open_workspace_picker_centered(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover_centered(
+            PopoverKind::RepoPicker {
+                scope: RepoPickerScope::WorkspacesOnly,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn toggle_repo_picker(
+        &mut self,
+        scope: RepoPickerScope,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let kind = PopoverKind::RepoPicker { scope };
+        if self.popover_host.read(cx).is_kind_open(&kind) {
+            self.popover_host.update(cx, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+            return;
+        }
+
+        // The chevron has no painted bounds in a window that has not drawn it
+        // (a new window, or Home without a workspace), so fall back to the
+        // centred placement there.
+        let Some(anchor) = self.title_bar.read(cx).repo_picker_toggle_bounds() else {
+            self.open_popover_centered(kind, window, cx);
+            return;
+        };
+        self.open_popover_for_bounds(kind, anchor, window, cx);
     }
 
     pub(crate) fn show_open_repo_panel_fallback(
@@ -162,6 +197,31 @@ impl GitCometView {
         true
     }
 
+    /// Select a repository known to belong to this window, even if its saved
+    /// tabs have not reached the view snapshot yet. `OpenRepo` is idempotent at
+    /// the store: queued behind `RestoreSession` it selects the restored tab,
+    /// and after restoration it selects the already-open repository.
+    pub(crate) fn activate_or_open_repo_path(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.repo_id_for_path(&path).is_some() {
+            self.activate_repo_path(&path, cx);
+        } else if self
+            .pending_repo_open_reservations
+            .get(&path)
+            .is_some_and(|pending| !pending.persist_in_workspace)
+        {
+            // Select the queued drop without treating its unvalidated path as
+            // a normal open before the view catches up.
+            self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+            cx.notify();
+        } else {
+            self.open_repo_path_locally(path, cx);
+        }
+    }
+
     pub(crate) fn close_active_repo_tab(&mut self, cx: &mut gpui::Context<Self>) -> bool {
         let Some(repo_id) = self.active_repo_id() else {
             return false;
@@ -175,6 +235,73 @@ impl GitCometView {
         self.store.dispatch(Msg::CloseRepo { repo_id });
         cx.notify();
         true
+    }
+
+    pub(crate) fn request_move_repo_to_workspace(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if crate::app::repository_move_target_is_noop(
+            cx,
+            self.window_handle.window_id(),
+            target_workspace,
+        ) {
+            return;
+        }
+        if !self.prepare_repo_move(repo_id, &path, target_workspace, cx) {
+            return;
+        }
+
+        let action = TerminalShutdownAction::MoveRepo {
+            repo_id,
+            path: path.clone(),
+            target_workspace,
+        };
+        if self.request_terminal_shutdown_action(action, cx) {
+            return;
+        }
+        crate::app::move_repository_to_workspace_from_view(
+            cx,
+            self.window_handle.window_id(),
+            repo_id,
+            path,
+            target_workspace,
+        );
+    }
+
+    /// Also checked at the deferred transfer boundary: validation or editor
+    /// saves may still be pending after a menu or terminal dialog was opened.
+    pub(crate) fn prepare_repo_move(
+        &mut self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        target_workspace: Option<session::WorkspaceId>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !self.store.snapshot().repos.iter().any(|repo| {
+            repo.id == repo_id
+                && repo.spec.workdir == path
+                && !repo.is_provisional_external_drop_open()
+        }) {
+            return false;
+        }
+        !self.request_unsaved_file_edits_prompt(
+            UnsavedFileEditsAction::MoveRepo {
+                window_id: self.window_handle.window_id(),
+                repo_id,
+                path: path.to_path_buf(),
+                target_workspace,
+            },
+            cx,
+        )
+    }
+
+    pub(crate) fn detach_repo_for_move(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
+        self.store.dispatch(Msg::MoveRepoOut { repo_id });
+        cx.notify();
     }
 
     pub(crate) fn activate_previous_repo_tab(&mut self, cx: &mut gpui::Context<Self>) -> bool {
@@ -220,9 +347,155 @@ impl GitCometView {
         path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.store.dispatch(Msg::OpenRepo(path));
+        crate::app::open_repository_from_view(cx, self.window_handle.window_id(), path);
         self.open_repo_panel = false;
         cx.notify();
+    }
+
+    pub(crate) fn open_repo_path_locally(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.reserve_pending_repo_open(&path, true, cx);
+        if self.store.snapshot().git_runtime.is_available() {
+            self.store.dispatch(Msg::OpenRepo(path));
+        } else {
+            self.queue_repo_open_until_git_recovers(path);
+        }
+        self.open_repo_panel = false;
+        cx.notify();
+    }
+
+    pub(crate) fn open_dropped_repo_locally(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.reserve_pending_repo_open(&path, false, cx);
+        self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+        cx.notify();
+    }
+
+    /// Publish ownership before the store reduces the open. Normal opens also
+    /// reserve durable membership so a move can safely detach its source.
+    fn reserve_pending_repo_open(
+        &mut self,
+        path: &std::path::Path,
+        persist_in_workspace: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let failure_revision = self.store.snapshot().repo_open_failure_revision;
+        self.pending_repo_open_reservations
+            .entry(path.to_path_buf())
+            .or_insert(PendingRepoOpen {
+                failure_revision,
+                persist_in_workspace,
+            });
+        if persist_in_workspace {
+            self.pending_repo_open_active = Some(path.to_path_buf());
+        }
+        self.sync_workspace_and_registry(cx);
+    }
+
+    /// The last window outlives its deleted workspace: it forgets it and
+    /// returns to Home instead of closing.
+    pub(crate) fn reset_to_home_after_workspace_delete(&mut self, cx: &mut gpui::Context<Self>) {
+        crate::workspaces::discard_workspace_for_window(cx, self.window_handle.window_id());
+        // The window no longer claims the deleted id, in its syncs or the
+        // window registry. A stale snapshot that still lists repositories can
+        // briefly create an anonymous workspace; it goes once they close.
+        self.workspace_id = None;
+        self.pending_repo_open_reservations.clear();
+        self.pending_repo_open_active = None;
+        let repo_ids: Vec<RepoId> = self
+            .store
+            .snapshot()
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect();
+        if !repo_ids.is_empty() {
+            self.store.dispatch(Msg::CloseRepos {
+                repo_ids,
+                activate_after: None,
+            });
+        }
+        self.workspace_changed(cx);
+        cx.notify();
+    }
+
+    /// Take `workspace` as this (empty) window's workspace. The window keeps
+    /// its own placement; layout, repositories, colour and theme come along.
+    pub(crate) fn adopt_workspace(
+        &mut self,
+        workspace: session::Workspace,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let layout = workspace.layout.clone();
+        let scale = self.ui_scale();
+        if let Some(width) = layout.sidebar_width {
+            self.set_sidebar_width_from_pixels(scale.px(width as f32));
+        }
+        if let Some(width) = layout.details_width {
+            self.set_details_width_from_pixels(scale.px(width as f32));
+        }
+        self.details_pane.update(cx, |pane, _cx| {
+            if let Some(height) = layout.change_tracking_height {
+                pane.set_change_tracking_height_from_pixels(Some(scale.px(height as f32)));
+            }
+            if let Some(height) = layout.untracked_height {
+                pane.set_untracked_height_from_pixels(Some(scale.px(height as f32)));
+            }
+        });
+        self.set_sidebar_collapsed(layout.sidebar_collapsed, cx);
+        self.clamp_pane_widths_to_window();
+
+        self.workspace_id = Some(workspace.id);
+        self.persisted_workspace_repo_paths
+            .clone_from(&workspace.repositories);
+        self.persisted_workspace_active_repository
+            .clone_from(&workspace.active_repository);
+        if !workspace.repositories.is_empty() {
+            // Pending bootstrap keeps the saved membership through snapshots
+            // taken before the store has reduced the restore.
+            self.startup_repo_bootstrap_pending = true;
+            if self.state.git_runtime.is_available() {
+                self.store.dispatch(Msg::RestoreSession {
+                    open_repos: workspace.repositories,
+                    active_repo: workspace.active_repository,
+                });
+            } else {
+                self.deferred_repo_bootstrap = Some(DeferredRepoBootstrap::RestoreSession {
+                    open_repos: workspace.repositories,
+                    active_repo: workspace.active_repository,
+                });
+            }
+        }
+        self.sync_workspace_and_registry(cx);
+        self.workspace_changed(cx);
+    }
+
+    fn queue_repo_open_until_git_recovers(&mut self, path: std::path::PathBuf) {
+        let push_unique = |paths: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf| {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        };
+        match self.deferred_repo_bootstrap.as_mut() {
+            Some(DeferredRepoBootstrap::RestoreSession {
+                open_repos,
+                active_repo,
+            }) => {
+                push_unique(open_repos, path.clone());
+                *active_repo = Some(path);
+            }
+            Some(DeferredRepoBootstrap::OpenRepos(paths)) => push_unique(paths, path),
+            None => {
+                self.deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepos(vec![path]));
+            }
+        }
+        self.startup_repo_bootstrap_pending = true;
     }
 
     #[cfg(target_os = "macos")]

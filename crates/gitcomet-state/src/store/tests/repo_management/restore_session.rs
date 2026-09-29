@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn pr530_restore_preserves_repositories_opened_while_waiting_for_git() {
+    for external_drop in [false, true] {
+        let mut repos = FxHashMap::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::test_default();
+        let incoming = std::env::temp_dir().join("pr530-incoming");
+        let saved = std::env::temp_dir().join("pr530-saved");
+        let open = if external_drop {
+            Msg::OpenRepoFromExternalDrop(incoming.clone())
+        } else {
+            Msg::OpenRepo(incoming.clone())
+        };
+        reduce(&mut repos, &id_alloc, &mut state, open);
+        let existing_id = state.active_repo.unwrap();
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RestoreSession {
+                open_repos: vec![saved.clone(), incoming.clone()],
+                active_repo: Some(saved.clone()),
+            },
+        );
+        assert_eq!(state.repos.len(), 2);
+        let existing = state
+            .repos
+            .iter()
+            .find(|repo| repo.spec.workdir == incoming)
+            .unwrap();
+        assert_eq!(
+            existing.id, existing_id,
+            "restore replaced a live repository"
+        );
+        assert_eq!(existing.is_provisional_external_drop_open(), external_drop);
+        assert_eq!(
+            state.active_repo,
+            Some(existing_id),
+            "an explicit open keeps focus"
+        );
+        assert!(state.repos.iter().any(|repo| repo.spec.workdir == saved));
+    }
+}
+
+#[test]
 fn remote_branches_loaded_sets_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);

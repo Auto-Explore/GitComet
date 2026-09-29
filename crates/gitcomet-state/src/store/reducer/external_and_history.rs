@@ -6,8 +6,8 @@ use super::repo_management::{
 };
 use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
-    append_requested_status_refresh_effects, clear_banner_error_for_repo, diff_reload_effects,
-    push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
+    append_requested_status_refresh_effects, diff_reload_effects, push_diagnostic,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
@@ -123,6 +123,7 @@ pub(super) fn reload_repo(
     super::refresh_selected_head_gitlink(repos, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
+    effects.extend(super::util::reload_selected_text_attributes(repo_state));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // The view re-requests sidebar data only when its request changes, so
     // worktrees and stashes reset above would otherwise stay NotLoaded.
@@ -241,6 +242,9 @@ pub(super) fn repo_externally_changed(
     };
 
     effects.extend(file_browser_effect);
+    if change.text_attributes || change.verification_context {
+        effects.extend(super::util::reload_selected_text_attributes(repo_state));
+    }
 
     // Tag reloads are driven by the `tags` flag alone, independent of
     // `git_state`, so any change that sets `tags` refreshes them regardless of
@@ -841,7 +845,6 @@ fn finish_repo_action(
     completion: RepoActionCompletion,
 ) -> Vec<Effect> {
     let rebuild_selected_head_gitlink = repo_action_clears_head_dependent_state(action);
-    let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
@@ -854,7 +857,6 @@ fn finish_repo_action(
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
-                clear_banner = true;
             }
             RepoActionCompletion::ExpectedNoop => {}
             RepoActionCompletion::Failed(e) => {
@@ -862,9 +864,6 @@ fn finish_repo_action(
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
-    }
-    if clear_banner {
-        clear_banner_error_for_repo(state, repo_id);
     }
 
     // HEAD-changing actions invalidate this cache when they start. Classify the

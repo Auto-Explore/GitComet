@@ -776,24 +776,33 @@ fn wrapped_line_index_for_y_handles_row_boundaries() {
 #[test]
 fn line_display_columns_expands_tabs_to_tab_stops() {
     // No tabs: display columns equal the char/byte count.
-    assert_eq!(line_display_columns(""), 0);
-    assert_eq!(line_display_columns("abcd"), 4);
+    assert_eq!(
+        line_display_columns("", TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+        0
+    );
+    assert_eq!(
+        line_display_columns("abcd", TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+        4
+    );
 
     // A leading tab advances to the first tab stop, not one column.
-    assert_eq!(line_display_columns("\t"), TEXT_INPUT_WRAP_TAB_STOP_COLUMNS);
+    assert_eq!(
+        line_display_columns("\t", TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+        TEXT_INPUT_WRAP_TAB_STOP_COLUMNS
+    );
     // "ab\t" -> 2 columns, then advance to the next multiple of the tab stop.
     assert_eq!(
-        line_display_columns("ab\t"),
+        line_display_columns("ab\t", TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
         TEXT_INPUT_WRAP_TAB_STOP_COLUMNS
     );
     // A tab landing exactly on a stop still advances a full tab width.
     assert_eq!(
-        line_display_columns("abcd\t"),
+        line_display_columns("abcd\t", TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
         TEXT_INPUT_WRAP_TAB_STOP_COLUMNS * 2
     );
     // Several leading tabs (common source indentation).
     assert_eq!(
-        line_display_columns("\t\tx"),
+        line_display_columns("\t\tx", TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
         TEXT_INPUT_WRAP_TAB_STOP_COLUMNS * 2 + 1
     );
 
@@ -808,7 +817,11 @@ fn line_display_columns_expands_tabs_to_tab_stops() {
                 reference += 1;
             }
         }
-        assert_eq!(line_display_columns(sample), reference, "sample={sample:?}");
+        assert_eq!(
+            line_display_columns(sample, TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+            reference,
+            "sample={sample:?}"
+        );
     }
 }
 
@@ -937,9 +950,18 @@ fn content_width_cache_tracks_line_splits_joins_and_undo(cx: &mut gpui::TestAppC
 
 #[test]
 fn estimate_wrap_rows_for_line_handles_tabs_and_overflow() {
-    assert_eq!(estimate_wrap_rows_for_line("abcd", 4), 1);
-    assert_eq!(estimate_wrap_rows_for_line("abcde", 4), 2);
-    assert_eq!(estimate_wrap_rows_for_line("a\tb", 4), 2);
+    assert_eq!(
+        estimate_wrap_rows_for_line("abcd", 4, TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+        1
+    );
+    assert_eq!(
+        estimate_wrap_rows_for_line("abcde", 4, TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+        2
+    );
+    assert_eq!(
+        estimate_wrap_rows_for_line("a\tb", 4, TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
+        2
+    );
 }
 
 #[test]
@@ -1001,7 +1023,7 @@ fn estimate_wrap_rows_for_line_matches_reference_for_ascii_tabs() {
     for wrap_columns in (TEXT_INPUT_WRAP_TAB_STOP_COLUMNS + 1)..=12 {
         for sample in samples {
             assert_eq!(
-                estimate_wrap_rows_for_line(sample, wrap_columns),
+                estimate_wrap_rows_for_line(sample, wrap_columns, TEXT_INPUT_WRAP_TAB_STOP_COLUMNS),
                 reference_wrap_rows_for_line(sample, wrap_columns),
                 "sample={sample:?}, wrap_columns={wrap_columns}"
             );
@@ -3863,4 +3885,41 @@ fn select_all_takes_ownership_only_when_it_highlights_something(cx: &mut gpui::T
         cx.update(|_window, app| elsewhere.is_stale(app)),
         "select-all over real text is a highlight and must take the selection"
     );
+}
+
+/// Left at the start and Right at the end still reset the vertical goal
+/// column and scroll the caret into view; the edge flag only rides along.
+#[gpui::test]
+fn arrow_keys_at_the_text_edges_keep_caret_bookkeeping(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("first\nsecond", cx);
+            for (offset, press_left) in [(0, true), (input.text().len(), false)] {
+                input.move_to(offset, cx);
+                input.interaction.vertical_motion_x = Some(px(40.0));
+                input.interaction.pending_cursor_autoscroll = false;
+                if press_left {
+                    input.left(&Left, window, cx);
+                    assert!(input.take_arrow_left_at_start_pressed());
+                } else {
+                    input.right(&Right, window, cx);
+                    assert!(input.take_arrow_right_at_end_pressed());
+                }
+                assert_eq!(input.cursor_offset(), offset);
+                assert_eq!(input.interaction.vertical_motion_x, None);
+                assert!(input.interaction.pending_cursor_autoscroll);
+            }
+        });
+    });
 }

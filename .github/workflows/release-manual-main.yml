@@ -12,6 +12,11 @@ on:
         required: true
         default: "1"
         type: string
+      rpm_release:
+        description: "RPM package release suffix (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
+        type: string
       prerelease:
         description: "Mark GitHub release as prerelease"
         required: true
@@ -78,6 +83,22 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Release tag: $tag"
+
+      # build-release-artifacts checks these too, but only after the tag is pushed.
+      - name: Validate package revisions
+        env:
+          DEB_REVISION: ${{ github.event.inputs.deb_revision }}
+          RPM_RELEASE: ${{ github.event.inputs.rpm_release }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DEB_REVISION" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error title=Invalid Debian revision::Expected a positive integer like 1, 2, or 3."
+            exit 1
+          fi
+          if ! [[ "$RPM_RELEASE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error title=Invalid RPM release::Expected a positive integer like 1, 2, or 3."
+            exit 1
+          fi
 
       - name: Verify crate version matches release version
         run: |
@@ -153,6 +174,7 @@ jobs:
       tag: ${{ needs.validate.outputs.tag }}
       version: ${{ needs.validate.outputs.version }}
       deb_revision: ${{ github.event.inputs.deb_revision }}
+      rpm_release: ${{ github.event.inputs.rpm_release }}
       release_id: ${{ needs.create_release.outputs.release_id }}
     secrets: inherit
 
@@ -184,19 +206,6 @@ jobs:
       version: ${{ needs.validate.outputs.version }}
       tap_repo: ${{ vars.HOMEBREW_TAP_REPO }}
       tap_branch: ${{ vars.HOMEBREW_TAP_BRANCH }}
-      dry_run: false
-    secrets: inherit
-
-  deploy_aur:
-    name: Deploy AUR metadata
-    needs: [validate, build_and_upload, publish_release]
-    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' }}
-    uses: ./.github/workflows/deploy-aur.yml
-    with:
-      tag: ${{ needs.validate.outputs.tag }}
-      version: ${{ needs.validate.outputs.version }}
-      aur_repo: ${{ vars.AUR_GIT_REPOSITORY }}
-      aur_branch: ${{ vars.AUR_GIT_BRANCH }}
       dry_run: false
     secrets: inherit
 

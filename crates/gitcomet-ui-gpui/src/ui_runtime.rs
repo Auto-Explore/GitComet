@@ -7,6 +7,8 @@ use std::time::Duration;
 pub(crate) enum UiRuntimeMode {
     Live,
     Deterministic,
+    #[cfg(test)]
+    DeterministicAutoRestore,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +28,13 @@ impl UiRuntime {
     pub(crate) const fn deterministic() -> Self {
         Self {
             mode: UiRuntimeMode::Deterministic,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn deterministic_auto_restore() -> Self {
+        Self {
+            mode: UiRuntimeMode::DeterministicAutoRestore,
         }
     }
 
@@ -62,13 +71,20 @@ impl UiRuntime {
     }
 
     pub(crate) const fn auto_restores_session(self) -> bool {
-        matches!(self.mode, UiRuntimeMode::Live)
+        match self.mode {
+            UiRuntimeMode::Live => true,
+            UiRuntimeMode::Deterministic => false,
+            #[cfg(test)]
+            UiRuntimeMode::DeterministicAutoRestore => true,
+        }
     }
 
     pub(crate) const fn diff_syntax_foreground_parse_budget(self) -> Duration {
         match self.mode {
             UiRuntimeMode::Live => Duration::from_millis(1),
             UiRuntimeMode::Deterministic => Duration::from_millis(2),
+            #[cfg(test)]
+            UiRuntimeMode::DeterministicAutoRestore => Duration::from_millis(2),
         }
     }
 }

@@ -300,6 +300,8 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
 fn main_window_focus_shortcut_works_after_blur(cx: &mut gpui::TestAppContext) {
     let _visual = crate::test_support::lock_visual_test();
     let (root, _, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
     refresh_and_draw(cx);
     cx.deactivate_window();
     cx.update(|window, app| {

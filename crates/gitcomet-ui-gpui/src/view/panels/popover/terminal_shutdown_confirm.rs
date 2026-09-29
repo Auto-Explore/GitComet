@@ -14,6 +14,8 @@ pub(super) fn panel(
     let title = match prompt.action {
         TerminalShutdownAction::QuitApp => "Quit GitComet?",
         TerminalShutdownAction::CloseWindow => "Close window?",
+        TerminalShutdownAction::DeleteWorkspace { .. } => "Delete workspace?",
+        TerminalShutdownAction::MoveRepo { .. } => "Move repository?",
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?",
@@ -21,6 +23,8 @@ pub(super) fn panel(
     let confirm_label = match prompt.action {
         TerminalShutdownAction::QuitApp => "Terminate and quit",
         TerminalShutdownAction::CloseWindow => "Terminate and close",
+        TerminalShutdownAction::DeleteWorkspace { .. } => "Terminate and delete",
+        TerminalShutdownAction::MoveRepo { .. } => "Terminate and move",
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Terminate and close",
@@ -38,7 +42,9 @@ pub(super) fn panel(
     let show_repo_list = !repo_names.is_empty()
         && matches!(
             prompt.action,
-            TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp
+            TerminalShutdownAction::CloseWindow
+                | TerminalShutdownAction::DeleteWorkspace { .. }
+                | TerminalShutdownAction::QuitApp
         );
 
     let mut dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH).text(

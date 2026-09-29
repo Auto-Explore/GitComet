@@ -285,12 +285,17 @@ pub enum Effect {
     SaveWorktreeFile {
         repo_id: RepoId,
         path: PathBuf,
-        contents: String,
+        contents: super::message::ContentBytes,
         stage: bool,
+        completion: Option<smol::channel::Sender<bool>>,
     },
     AppendGitignorePatterns {
         repo_id: RepoId,
         patterns: Vec<String>,
+    },
+    AppendGitattributesRule {
+        repo_id: RepoId,
+        rule: String,
     },
 
     CheckoutBranch {
@@ -440,15 +445,15 @@ pub enum Effect {
     },
     StageHunk {
         repo_id: RepoId,
-        patch: String,
+        patch: super::ContentBytes,
     },
     UnstageHunk {
         repo_id: RepoId,
-        patch: String,
+        patch: super::ContentBytes,
     },
     ApplyWorktreePatch {
         repo_id: RepoId,
-        patch: String,
+        patch: super::ContentBytes,
         reverse: bool,
     },
     StagePath {

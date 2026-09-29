@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }

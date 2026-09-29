@@ -4522,8 +4522,9 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
         Msg::SaveWorktreeFile {
             repo_id: RepoId(1),
             path: PathBuf::from("a.txt"),
-            contents: "new\n".to_string(),
+            contents: "new\n".to_string().into(),
             stage: false,
+            completion: None,
         },
     );
     assert!(!state.repos[0].git_operation_in_flight());

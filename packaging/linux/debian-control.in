@@ -1,0 +1,13 @@
+Source: gitcomet
+Maintainer: AutoExplore Oy <info@autoexplore.ai>
+Section: utils
+Priority: optional
+Standards-Version: 4.7.0
+Homepage: https://gitcomet.dev/
+
+Package: gitcomet
+Architecture: @DEB_ARCH@
+Depends: git, ${shlibs:Depends}, libvulkan1 | libegl1
+Recommends: libwayland-client0, libwayland-egl1, hicolor-icon-theme
+Suggests: git-lfs, gnupg, openssh-client, xdg-utils, xdg-desktop-portal, fonts-noto-cjk, fonts-noto-color-emoji
+Description: Fast, resource-efficient Git GUI written in Rust.

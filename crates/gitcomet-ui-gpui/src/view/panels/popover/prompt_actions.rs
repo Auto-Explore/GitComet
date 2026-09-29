@@ -55,7 +55,10 @@ impl PopoverHost {
                 repo_id,
                 operation_id,
             } => hook_activity::panel(self, repo_id, operation_id, window, cx),
-            PopoverKind::RepoPicker => repo_picker::panel(self, cx),
+            PopoverKind::ErrorDetails { toast_id } => {
+                error_details::panel(self, toast_id, window, cx)
+            }
+            PopoverKind::RepoPicker { .. } => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::UpstreamPicker { repo_id, branch } => {
                 upstream_picker::panel(self, repo_id, branch, cx)
@@ -149,7 +152,9 @@ impl PopoverHost {
                     WorktreePopoverKind::RemovePicker => {
                         worktree_picker::panel(self, repo_id, true, cx)
                     }
-                    WorktreePopoverKind::BadgePicker => workspace_picker::panel(self, repo_id, cx),
+                    WorktreePopoverKind::BadgePicker => {
+                        worktree_badge_picker::panel(self, repo_id, cx)
+                    }
                     WorktreePopoverKind::RemoveConfirm { path, branch } => {
                         worktree_remove_confirm::panel(self, repo_id, path, branch, cx)
                     }
@@ -301,13 +306,15 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }
+            PopoverKind::TextFormatMenu { section } => {
+                self.context_menu_view(PopoverKind::TextFormatMenu { section }, cx)
+            }
             PopoverKind::CommitFileSortMenu { list } => {
                 self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
-            PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::CommitOptionsMenu { repo_id } => {
@@ -488,8 +495,11 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::PinnedSectionMenu { repo_id, section } => {
-                self.context_menu_view(PopoverKind::PinnedSectionMenu { repo_id, section }, cx)
+            PopoverKind::SidebarPinnedOverflow { repo_id, bottom } => {
+                self.sidebar_pin_overflow_view(repo_id, bottom, window_h / 2.0, cx)
+            }
+            PopoverKind::SidebarAncestorMenu { repo_id, section } => {
+                self.context_menu_view(PopoverKind::SidebarAncestorMenu { repo_id, section }, cx)
             }
             PopoverKind::DeleteBranchesConfirm {
                 repo_id,

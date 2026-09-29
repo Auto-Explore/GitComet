@@ -32,6 +32,7 @@ macro_rules! exact_filtered_target {
 }
 
 exact_filtered_target!(bench_open_repo_selected => bench_open_repo);
+exact_filtered_target!(bench_sidebar_sticky_selected => bench_sidebar_sticky);
 exact_filtered_target!(bench_branch_sidebar_selected => bench_branch_sidebar, [
     "branch_sidebar/local_heavy",
     "branch_sidebar/remote_fanout",
@@ -242,6 +243,7 @@ criterion_group! {
     config = performance_benches::benchmark_criterion();
     targets =
         bench_open_repo_selected,
+        bench_sidebar_sticky_selected,
         bench_branch_sidebar_selected,
         bench_branch_sidebar_extreme_scale_selected,
         bench_branch_sidebar_cache_selected,

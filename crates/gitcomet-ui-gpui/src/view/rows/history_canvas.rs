@@ -1999,7 +1999,10 @@ mod tests {
     #[test]
     fn the_ref_chip_keeps_its_proportion_in_a_comfortable_row() {
         use crate::appearance::{Appearance, UiDensity};
-        let compact = Appearance::default();
+        let compact = Appearance {
+            density: UiDensity::Compact,
+            ..Appearance::default()
+        };
         let comfortable = Appearance {
             density: UiDensity::Comfortable,
             ..Appearance::default()

@@ -269,7 +269,15 @@ fn exiting_file_browsing_stays_live_until_explicitly_started_again() {
     );
 
     // Unrelated traffic must not drag the tree back to the selected commit.
-    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::DismissBannerError);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReportError {
+            repo_id: None,
+            message: "unrelated".to_string(),
+        },
+    );
     assert!(file_browser_loads(&effects).is_empty());
     assert_eq!(state.repos[0].browsing_commit(), None);
 
@@ -455,7 +463,15 @@ fn a_manual_browse_elsewhere_sticks_until_the_selection_moves() {
         FileSource::Commit(c.clone()),
     );
 
-    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::DismissBannerError);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReportError {
+            repo_id: None,
+            message: "unrelated".to_string(),
+        },
+    );
     assert!(file_browser_loads(&effects).is_empty());
     assert_eq!(state.repos[0].browsing_commit(), Some(&c));
 

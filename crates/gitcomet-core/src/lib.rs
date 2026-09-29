@@ -9,6 +9,7 @@ pub mod file_diff;
 pub mod fs_utils;
 pub mod git_operation;
 pub mod git_ops_trace;
+pub mod gitattributes;
 pub mod gitignore;
 pub mod hex;
 pub mod history_find;
@@ -23,6 +24,7 @@ pub mod remote_url;
 pub mod services;
 pub mod signing_tools;
 pub mod squash;
+pub mod text_format;
 pub mod text_search;
 pub mod text_utils;
 

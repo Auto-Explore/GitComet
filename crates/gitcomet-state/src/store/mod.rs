@@ -22,7 +22,6 @@ mod worker_channel;
 
 use effects::RepoTaskToken;
 use effects::{EffectExecutors, schedule_effect};
-#[cfg(any(test, feature = "test-support"))]
 use executor::StoreExecutorPool;
 use executor::{
     TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
@@ -62,6 +61,7 @@ fn is_control_msg(msg: &Msg) -> bool {
         Msg::OpenRepo(_)
             | Msg::OpenRepoFromExternalDrop(_)
             | Msg::CloseRepo { .. }
+            | Msg::MoveRepoOut { .. }
             | Msg::CloseRepos { .. }
             | Msg::CancelGitOperation { .. }
             | Msg::SetActiveRepo { .. }
@@ -397,41 +397,22 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
 
         thread::spawn(move || {
-            #[cfg(any(test, feature = "test-support"))]
+            // General effects share process-wide workers. Repository loads
+            // need a bounded pool per window: blocking opens and filesystem
+            // scans in one window must not consume another window's capacity.
             let executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Primary,
                 default_worker_threads(),
             );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let executor = TaskExecutor::new(default_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
-            let repo_load_executor = TaskExecutor::shared_for_store(
-                StoreExecutorPool::RepoLoad,
-                repo_load_worker_threads(),
-            );
-            #[cfg(not(any(test, feature = "test-support")))]
             let repo_load_executor = TaskExecutor::new(repo_load_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
                 metadata_worker_threads(),
             );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let metadata_executor = TaskExecutor::new(metadata_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
             let signature_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1);
-            #[cfg(not(any(test, feature = "test-support")))]
-            let signature_executor = TaskExecutor::new(1);
-
-            #[cfg(any(test, feature = "test-support"))]
             let session_persist_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
-            #[cfg(not(any(test, feature = "test-support")))]
-            let session_persist_executor = TaskExecutor::new(1);
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
@@ -487,7 +468,7 @@ impl AppStore {
                         }
                         repo_task_tokens.clear();
                     }
-                    Msg::CloseRepo { repo_id } => {
+                    Msg::CloseRepo { repo_id } | Msg::MoveRepoOut { repo_id } => {
                         repo_monitors.stop(*repo_id);
                         if let Some(token) = repo_task_tokens.remove(repo_id) {
                             repo_load_trace::trace!(

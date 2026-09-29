@@ -38,7 +38,7 @@ pub use containers::{
 pub use containers::{panel, pill};
 pub use context_menu::{
     ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, context_menu, context_menu_description,
-    context_menu_header, context_menu_label, context_menu_separator,
+    context_menu_group, context_menu_header, context_menu_label, context_menu_separator,
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
@@ -51,9 +51,10 @@ pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_t
 pub use picker_prompt::PickerPromptHeader;
 pub use picker_prompt::picker_prompt_layout;
 pub use picker_prompt::{
-    PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent, PickerPromptGeometry,
-    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, PickerPromptOrder,
-    picker_prompt_layout_ordered, row_height as picker_row_height,
+    OnRemoveFn, PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent,
+    PickerPromptGeometry, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout,
+    PickerPromptOrder, PickerRowKey, PickerRowSpec, picker_prompt_layout_ordered, picker_row,
+    remove_row_button, row_height as picker_row_height, selected_hint_pill, workspace_picker_item,
 };
 pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus};
 pub use repository_badge::{
@@ -66,7 +67,7 @@ pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
 pub use tab_bar::{TabBar, TabBarScroll};
 pub use text_fade::{FadingText, trailing_fade};
-pub use toast::{ToastKind, toast};
+pub use toast::{TOAST_BADGE_PX, TOAST_WIDTH_PX, ToastKind, toast};
 pub use tokens::*;
 pub(crate) use truncated_text::{
     PathTruncationAlignmentGroup, TruncatedText, TruncatedTextFlex, TruncatedTextTooltipMode,

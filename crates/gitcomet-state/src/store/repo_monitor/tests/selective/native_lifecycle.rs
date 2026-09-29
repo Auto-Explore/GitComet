@@ -379,6 +379,7 @@ fn metadata_noise_in_a_mixed_event_preserves_real_changes() {
             git_state: false,
             tags: false,
             verification_context: false,
+            text_attributes: false,
         })
     );
 }

@@ -2,7 +2,10 @@ use super::*;
 
 #[test]
 fn popover_width_spec_scales_with_zoom() {
-    let spec = popover_width_spec(&PopoverKind::RepoPicker).expect("repo picker width");
+    let spec = popover_width_spec(&PopoverKind::RepoPicker {
+        scope: RepoPickerScope::All,
+    })
+    .expect("repo picker width");
     let default_scale = ui_scale::UiScale::from_percent(100);
     let zoomed_scale = ui_scale::UiScale::from_percent(200);
 
@@ -34,8 +37,8 @@ fn sort_menu_is_wider_than_the_narrow_menus_it_used_to_share() {
         list: crate::view::rows::FileListId::CommitFiles,
     })
     .expect("sort menu width");
-    let narrow =
-        popover_width_spec(&PopoverKind::UiScalePicker).expect("a still-narrow menu for contrast");
+    let narrow = popover_width_spec(&PopoverKind::DiffContentModeSettings)
+        .expect("a still-narrow menu for contrast");
 
     assert!(sort.preferred_px(scale) > narrow.preferred_px(scale));
     assert!(sort.max_px(scale) > narrow.max_px(scale));

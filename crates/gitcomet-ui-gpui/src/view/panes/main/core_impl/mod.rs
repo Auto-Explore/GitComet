@@ -191,6 +191,9 @@ impl MainPaneView {
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
+            // How the file is read: a new choice or new attributes re-read it.
+            repo.diff_state.text_override_rev.hash(&mut hasher);
+            repo.diff_state.text_attributes_rev.hash(&mut hasher);
             // The historical-browse tint keys off content-preview mode, which can
             // share a diff_target with a plain diff of the same commit+path.
             repo.diff_state.content_preview.hash(&mut hasher);
@@ -415,13 +418,18 @@ impl MainPaneView {
             cx.notify();
             return;
         }
-        let output = save_payload.output;
+        let workdir = repo.spec.workdir.clone();
         let exit_code = focused_mergetool_save_exit_code(
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
+        // Written back in the encoding the file was read in.
+        let Some(output) = self.conflict_output_bytes_for_save(save_payload.output, cx) else {
+            cx.notify();
+            return;
+        };
         self.finish_focused_mergetool_output(
-            &repo.spec.workdir,
+            &workdir,
             &path,
             FocusedMergetoolOutput::Write(output.as_bytes()),
             exit_code,
@@ -430,19 +438,27 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn focused_mergetool_write_side_and_exit(
-        &self,
+        &mut self,
         repo_id: RepoId,
         path: &std::path::Path,
         bytes: &[u8],
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        let Some(workdir) = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.spec.workdir.clone())
+        else {
             self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
             cx.quit();
             return;
         };
+        // Whole-side restoration uses the stage's original bytes. Its encoding
+        // can differ from the current file's, and the current file may be absent.
         self.finish_focused_mergetool_output(
-            &repo.spec.workdir,
+            &workdir,
             path,
             FocusedMergetoolOutput::Write(bytes),
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
@@ -733,6 +749,10 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.conflict_resolver.output_save_format.is_some() {
+            self.conflict_resolver.output_saved_format = self.conflict_output_text_format();
+            self.conflict_resolver.output_save_format = None;
+        }
         self.conflict_resolved_output_saved_snapshot =
             (!self.conflict_resolved_output_is_streamed()).then(|| {
                 self.conflict_resolver_input
@@ -2181,6 +2201,7 @@ impl MainPaneView {
         }
 
         self.state = next;
+        self.settle_file_editor_saves(cx);
         // A closed repo tab takes its `RepoId` with it; buffers stashed under it
         // can never be saved again and would block every future close.
         self.prune_orphaned_file_editor_stash();

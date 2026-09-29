@@ -294,7 +294,6 @@ pub(super) fn panel(
         .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
         .selected_index(this.history_author_filter_selected_index)
         .marked_index(rows.marked_index)
-        .accent_selection()
         // A busy repository has thousands of contributors, and the list windows
         // itself past a couple of viewports: only the rows on screen are built.
         // Keyboard navigation scrolls by the row geometry to match

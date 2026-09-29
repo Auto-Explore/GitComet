@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::RepoSpec;
+use gitcomet_core::domain::{Branch, RemoteBranch, RepoSpec};
 use gitcomet_state::model::{AppState, Loadable, RepoState};
 
 fn open_repo(repo_id: RepoId, workdir: &str) -> RepoState {
@@ -259,5 +259,139 @@ fn merge_entry_names_and_gates_on_the_commits_own_repository(cx: &mut gpui::Test
     assert!(
         !active_disabled,
         "the other repository being busy says nothing about this one"
+    );
+}
+
+#[gpui::test]
+fn copy_branch_name_entries_follow_the_commits_branches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    // The active tab is a different, empty repository: the entries must come
+    // from the repository the menu was opened for.
+    let active_id = RepoId(2);
+    let commit_id = CommitId("0123456789abcdef".into());
+    let other_commit = CommitId("fedcba9876543210".into());
+    let local = |name: &str, target: &CommitId| Branch {
+        name: name.into(),
+        target: target.clone(),
+        upstream: None,
+        divergence: None,
+    };
+    let remote = |name: &str, target: &CommitId| RemoteBranch {
+        remote: "origin".into(),
+        name: name.into(),
+        target: target.clone(),
+    };
+
+    let copy_entries = |cx: &mut gpui::VisualTestContext,
+                        branches: Vec<Branch>,
+                        remote_branches: Vec<RemoteBranch>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = open_repo(repo_id, "/tmp/copy-branch-name");
+                repo.branches = Loadable::Ready(Arc::new(branches));
+                repo.remote_branches = Loadable::Ready(Arc::new(remote_branches));
+                let state = Arc::new(AppState {
+                    repos: vec![repo, open_repo(active_id, "/tmp/copy-branch-name-active")],
+                    active_repo: Some(active_id),
+                    ..AppState::test_default()
+                });
+                this.state = Arc::clone(&state);
+                this.ui_model
+                    .update(cx, |model, cx| model.set_state(state, cx));
+                cx.notify();
+            });
+        });
+        // The popover host picks up the new state once that update ends.
+        let model = cx
+            .update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::CommitMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+            })
+            .expect("expected a commit context menu model");
+        let labels: Vec<String> = model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                _ => None,
+            })
+            .collect();
+        // The copy entries sit directly under "Copy commit SHA".
+        if let Some(first) = labels
+            .iter()
+            .position(|l| l.starts_with("Copy branch name"))
+        {
+            assert_eq!(labels[first - 1], "Copy commit SHA");
+        }
+        model
+            .items
+            .iter()
+            // No ref group is expanded here, so these are only the commit-level
+            // entries, not the "Copy branch name" inside a branch's own group.
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.starts_with("Copy branch name") =>
+                {
+                    match action.as_ref() {
+                        ContextMenuAction::CopyText { text } => {
+                            Some((label.to_string(), text.clone()))
+                        }
+                        _ => panic!("{label} must copy text"),
+                    }
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // One local branch: a plain entry, preferred over its remote-tracking ref.
+    assert_eq!(
+        copy_entries(
+            cx,
+            vec![
+                local("feat/app-cert-check", &commit_id),
+                local("main", &other_commit)
+            ],
+            vec![remote("feat/app-cert-check", &commit_id)],
+        ),
+        vec![("Copy branch name".into(), "feat/app-cert-check".into())]
+    );
+
+    // Several local branches: one entry each, named.
+    assert_eq!(
+        copy_entries(
+            cx,
+            vec![local("feat/a", &commit_id), local("feat/b", &commit_id)],
+            Vec::new(),
+        ),
+        vec![
+            ("Copy branch name feat/a".into(), "feat/a".into()),
+            ("Copy branch name feat/b".into(), "feat/b".into()),
+        ]
+    );
+
+    // Only a remote branch: copy it the way its own menu does.
+    assert_eq!(
+        copy_entries(cx, Vec::new(), vec![remote("feat/x", &commit_id)]),
+        vec![("Copy branch name".into(), "origin/feat/x".into())]
+    );
+
+    // No branch at this commit: no entry.
+    assert_eq!(
+        copy_entries(cx, vec![local("main", &other_commit)], Vec::new()),
+        Vec::<(String, String)>::new()
     );
 }

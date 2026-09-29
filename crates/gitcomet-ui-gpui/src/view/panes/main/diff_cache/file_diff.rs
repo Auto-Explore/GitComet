@@ -1923,6 +1923,15 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     let new_line_starts = Arc::clone(&new_source.line_starts);
     let old_line_count = old_source.line_count();
     let new_line_count = new_source.line_count();
+    // Git's hunks align the rows. A patch without any (git printed "Binary
+    // files differ" for UTF-16 text it cannot read) says nothing about them,
+    // so the decoded sides are diffed directly.
+    let patch_diff = patch_diff.filter(|patch| {
+        patch
+            .lines
+            .iter()
+            .any(|line| line.kind == gitcomet_core::domain::DiffLineKind::Hunk)
+    });
     let plan = Arc::new(if let Some(patch_diff) = patch_diff {
         build_file_diff_plan_from_patch(patch_diff, old_line_count, new_line_count)
     } else {
@@ -2364,6 +2373,37 @@ mod tests {
         assert_eq!(rebuild.old_line_starts.as_ref(), &[0, 6, 11]);
         assert_eq!(rebuild.new_text.as_ref(), "gamma\ndelta");
         assert_eq!(rebuild.new_line_starts.as_ref(), &[0, 6]);
+    }
+
+    #[test]
+    fn a_patch_without_hunks_diffs_the_decoded_sides_itself() {
+        // What git prints for UTF-16 text without working-tree-encoding.
+        let binary_patch = gitcomet_core::domain::Diff::from_unified(
+            gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: PathBuf::from("notes.txt"),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            },
+            "diff --git a/notes.txt b/notes.txt\nBinary files a/notes.txt and b/notes.txt differ\n",
+        );
+        let file = gitcomet_core::domain::FileDiffText::new(
+            PathBuf::from("notes.txt"),
+            Some("hello\nsame\n".to_string()),
+            Some("hello\nchanged\n".to_string()),
+        );
+        let rebuild = build_file_diff_cache_rebuild_with_patch(
+            &file,
+            Path::new("/tmp/repo"),
+            Some(&binary_patch),
+            DiffWhitespaceMode::Show,
+        )
+        .expect("rebuild");
+        assert!(
+            rebuild
+                .rows
+                .iter()
+                .any(|row| row.kind != gitcomet_core::file_diff::FileDiffRowKind::Context),
+            "the changed line must not be shown as unchanged"
+        );
     }
 
     #[test]

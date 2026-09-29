@@ -131,7 +131,7 @@ impl PopoverHost {
             let page_rows = if keys.page_up || keys.page_down {
                 let ui_scale = super::popover_ui_scale(cx);
                 let two_line = branch_picker::is_checkout_picker(this)
-                    || workspace_picker_state(this).is_some()
+                    || worktree_badge_picker_state(this).is_some()
                     || upstream_picker_state(this).is_some()
                     || matches!(this.popover, Some(PopoverKind::FileHistory { .. }));
                 let row_height = components::picker_row_height(ui_scale, two_line);
@@ -188,7 +188,7 @@ impl PopoverHost {
                 &input,
                 window,
                 cx,
-                |this| matches!(this.popover, Some(PopoverKind::RepoPicker)),
+                |this| matches!(this.popover, Some(PopoverKind::RepoPicker { .. })),
                 |this| &mut this.repo_picker_selected_index,
                 // Navigation walks the same filtered order the picker renders,
                 // so Enter can't land on a different repository than the
@@ -540,25 +540,28 @@ impl PopoverHost {
         input
     }
 
-    pub(super) fn ensure_workspace_picker_search_input(
+    pub(super) fn ensure_worktree_badge_picker_search_input(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
-            &mut self.workspace_picker_search_input,
+            &mut self.worktree_badge_picker_search_input,
             "Select or type to create a worktree",
             window,
             cx,
         );
-        if self._workspace_picker_search_input_subscription.is_none() {
-            self._workspace_picker_search_input_subscription =
+        if self
+            ._worktree_badge_picker_search_input_subscription
+            .is_none()
+        {
+            self._worktree_badge_picker_search_input_subscription =
                 Some(Self::picker_search_subscription(
                     &input,
                     window,
                     cx,
-                    |this| workspace_picker_state(this).is_some(),
-                    |this| &mut this.workspace_picker_selected_index,
+                    |this| worktree_badge_picker_state(this).is_some(),
+                    |this| &mut this.worktree_badge_picker_selected_index,
                     |this, query, cx| {
                         // A menu floating over a row takes the arrow keys, and an
                         // edit to the filter dismisses it.
@@ -566,14 +569,14 @@ impl PopoverHost {
                         if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
                             return Some(
                                 (0..actions.len())
-                                    .map(workspace_picker::WorkspaceRow::RowAction)
+                                    .map(worktree_badge_picker::WorktreeBadgeRow::RowAction)
                                     .collect::<Vec<_>>(),
                             );
                         }
-                        let repo_id = workspace_picker_state(this)?;
+                        let repo_id = worktree_badge_picker_state(this)?;
                         // Layout-driven so Enter can never land on a different
                         // row than the highlighted one.
-                        Some(workspace_picker::nav_targets(this, repo_id, query))
+                        Some(worktree_badge_picker::nav_targets(this, repo_id, query))
                     },
                     |this, cx| {
                         // Escape backs out of the menu before it closes the picker.
@@ -588,15 +591,15 @@ impl PopoverHost {
                         if this.picker_row_menu.is_some() {
                             return;
                         }
-                        let Some(repo_id) = workspace_picker_state(this) else {
+                        let Some(repo_id) = worktree_badge_picker_state(this) else {
                             return;
                         };
                         let query = this
-                            .workspace_picker_search_input
+                            .worktree_badge_picker_search_input
                             .as_ref()
                             .map(|input| input.read(cx).text().trim().to_string())
                             .unwrap_or_default();
-                        let rows = workspace_picker::cached(this, repo_id, &query);
+                        let rows = worktree_badge_picker::cached(this, repo_id, &query);
                         this.scroll_picker_prompt_to_row(
                             &rows.geometry(super::popover_ui_scale(cx)),
                             sel,
@@ -606,11 +609,13 @@ impl PopoverHost {
                     },
                     |this, payload, query, window, cx| {
                         // Enter runs the highlighted menu entry while a menu is up.
-                        if let Some(workspace_picker::WorkspaceRow::RowAction(ix)) = payload {
+                        if let Some(worktree_badge_picker::WorktreeBadgeRow::RowAction(ix)) =
+                            payload
+                        {
                             picker_row_menu::activate_nth(this, ix, window, cx);
                             return;
                         }
-                        let Some(repo_id) = workspace_picker_state(this) else {
+                        let Some(repo_id) = worktree_badge_picker_state(this) else {
                             return;
                         };
                         // "Select or type to create a worktree": after typing,
@@ -620,7 +625,7 @@ impl PopoverHost {
                         let row = payload.or_else(|| {
                             (!query.trim().is_empty())
                                 .then(|| {
-                                    workspace_picker::nav_targets(this, repo_id, query.trim())
+                                    worktree_badge_picker::nav_targets(this, repo_id, query.trim())
                                         .into_iter()
                                         .next()
                                 })
@@ -629,7 +634,7 @@ impl PopoverHost {
                         let Some(row) = row else {
                             return;
                         };
-                        workspace_picker::activate(this, repo_id, row, &query, window, cx);
+                        worktree_badge_picker::activate(this, repo_id, row, &query, window, cx);
                     },
                 ));
         }
@@ -909,7 +914,7 @@ fn worktree_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
     }
 }
 
-fn workspace_picker_state(this: &PopoverHost) -> Option<RepoId> {
+fn worktree_badge_picker_state(this: &PopoverHost) -> Option<RepoId> {
     match &this.popover {
         Some(PopoverKind::Repo {
             repo_id,

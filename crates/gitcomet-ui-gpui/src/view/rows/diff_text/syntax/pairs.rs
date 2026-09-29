@@ -615,37 +615,21 @@ fn delimits_whole_node(
 }
 
 /// The tab width the row canvases expand to.
-use crate::view::diff_utils::DIFF_TEXT_TAB_WIDTH as DISPLAY_TAB_WIDTH;
-
 /// Convert an offset in a row's *display* text back to an offset in the raw
 /// line.
 ///
-/// The row canvases expand every tab to [`DISPLAY_TAB_WIDTH`] spaces before the
-/// text is shaped (`diff_text_full_line_for_region`), so a click offset counts
-/// expanded columns while the tree-sitter tree indexes real bytes. Without this
-/// every pair in a tab-indented file lands three columns per indent level off.
+/// The row canvases expand tabs to tab stops before the text is shaped
+/// (`diff_text_full_line_for_region`), so a click offset counts expanded
+/// columns while the tree-sitter tree indexes real bytes. Without this every
+/// pair in a tab-indented file lands several columns per indent level off.
 ///
 /// An offset landing inside an expanded tab resolves to that tab.
-pub(in crate::view) fn raw_offset_for_display_offset(line: &str, display_offset: usize) -> usize {
-    if !line.contains('\t') {
-        return display_offset.min(line.len());
-    }
-    let mut display = 0usize;
-    for (raw, ch) in line.char_indices() {
-        let width = if ch == '\t' {
-            DISPLAY_TAB_WIDTH
-        } else {
-            ch.len_utf8()
-        };
-        // The character whose display span covers the offset -- `>=` on the span
-        // *start* would hand back the following character for any offset landing
-        // inside a four-column tab.
-        if display + width > display_offset {
-            return raw;
-        }
-        display += width;
-    }
-    line.len()
+pub(in crate::view) fn raw_offset_for_display_offset(
+    tab_width: usize,
+    line: &str,
+    display_offset: usize,
+) -> usize {
+    crate::view::tab_width::raw_offset_for_display_offset(tab_width, line, display_offset)
 }
 
 /// The raw offset for a click's caret boundary, or `None` when that boundary is
@@ -656,31 +640,20 @@ pub(in crate::view) fn raw_offset_for_display_offset(line: &str, display_offset:
 /// pointer is in trailing blank space; the view keeps those geometrically
 /// distinct and rejects the latter before calling the syntax layer.
 pub(in crate::view) fn clicked_raw_offset_for_display_offset(
+    tab_width: usize,
     line: &str,
     display_offset: usize,
 ) -> Option<usize> {
-    (display_offset <= crate::view::diff_utils::diff_text_display_len(line))
-        .then(|| raw_offset_for_display_offset(line, display_offset))
+    (display_offset <= crate::view::diff_utils::diff_text_display_len(tab_width, line))
+        .then(|| raw_offset_for_display_offset(tab_width, line, display_offset))
 }
 
 /// Convert an offset in a raw line to the display column the canvas painted it
 /// at -- the inverse of [`raw_offset_for_display_offset`].
-pub(in crate::view) fn display_offset_for_raw_offset(line: &str, raw_offset: usize) -> usize {
-    if !line.contains('\t') {
-        return raw_offset.min(line.len());
-    }
-    let mut display = 0usize;
-    for (raw, ch) in line.char_indices() {
-        if raw >= raw_offset {
-            return display;
-        }
-        display += if ch == '\t' {
-            DISPLAY_TAB_WIDTH
-        } else {
-            ch.len_utf8()
-        };
-    }
-    // Past the last character: the line's whole display width, which is what
-    // the canvas measured when it painted the row.
-    crate::view::diff_utils::diff_text_display_len(line)
+pub(in crate::view) fn display_offset_for_raw_offset(
+    tab_width: usize,
+    line: &str,
+    raw_offset: usize,
+) -> usize {
+    crate::view::tab_width::display_offset_for_raw_offset(tab_width, line, raw_offset)
 }
