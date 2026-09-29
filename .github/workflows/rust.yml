@@ -49,6 +49,8 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Check Rust source layout
+        run: bash scripts/check-rust-source-size.sh
       - name: Install Python for CI helpers
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -110,6 +112,8 @@ jobs:
         run: cargo clippy --locked -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
       - name: Clippy (headless app)
         run: cargo clippy --locked -p gitcomet --no-default-features --features gix -- -D warnings
+      - name: Check crate dependency boundaries
+        run: python3 scripts/ci/boundaries.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
