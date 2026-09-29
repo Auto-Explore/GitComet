@@ -1064,6 +1064,7 @@ impl GitCometView {
         let annotate_enabled = ui_preferences.diff.annotate_enabled;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
@@ -1406,19 +1407,6 @@ impl GitCometView {
             )
         });
 
-        let error_banner_input = cx.new(|cx| {
-            components::TextInput::new(
-                components::TextInputOptions {
-                    multiline: true,
-                    read_only: true,
-                    chromeless: true,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
-        });
-
         let auth_prompt_username_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -1518,6 +1506,13 @@ impl GitCometView {
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
 
+        // The error details dialog shows what the toast host holds.
+        let toast_errors_subscription = cx.observe(&toast_host, |this, toast_host, cx| {
+            let errors = toast_host.read(cx).error_notices().len();
+            this.popover_host
+                .update(cx, |host, cx| host.error_notices_changed(errors, cx));
+        });
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1531,6 +1526,7 @@ impl GitCometView {
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _open_repo_input_subscription: open_repo_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
+            _toast_errors_subscription: toast_errors_subscription,
             view_mode,
             theme_mode,
             theme: initial_theme,
@@ -1590,6 +1586,7 @@ impl GitCometView {
             annotate_enabled,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
             remote_markdown_image_policy,
@@ -1641,7 +1638,6 @@ impl GitCometView {
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
-            error_banner_input,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
@@ -1716,8 +1712,6 @@ impl GitCometView {
             .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.error_banner_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_username_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_secret_input
@@ -1757,7 +1751,6 @@ impl GitCometView {
         self.toast_host.update(cx, |_host, cx| cx.notify());
         self.popover_host.update(cx, |_host, cx| cx.notify());
         self.open_repo_input.update(cx, |_input, cx| cx.notify());
-        self.error_banner_input.update(cx, |_input, cx| cx.notify());
         self.auth_prompt_username_input
             .update(cx, |_input, cx| cx.notify());
         self.auth_prompt_secret_input
@@ -2374,72 +2367,14 @@ impl GitCometView {
         rows
     }
 
-    pub(super) fn show_error_banner(&mut self, repo_id: Option<RepoId>, message: String) {
-        if message.trim().is_empty() {
-            return;
-        }
-
-        if self
-            .state
-            .banner_error
-            .as_ref()
-            .is_some_and(|banner| banner.repo_id == repo_id && banner.message == message)
-        {
-            return;
-        }
-
-        self.store
-            .dispatch(Msg::ShowBannerError { repo_id, message });
-    }
-
-    pub(super) fn split_error_banner_message(
-        err_text: &str,
-    ) -> (Option<SharedString>, SharedString) {
-        let lines: Vec<&str> = err_text.lines().collect();
-        let Some(cmd_start) = lines.iter().position(|line| line.starts_with("    git ")) else {
-            return (None, err_text.to_string().into());
-        };
-
-        let mut cmd_end = cmd_start;
-        while cmd_end < lines.len() && lines[cmd_end].starts_with("    ") {
-            cmd_end += 1;
-        }
-
-        let command = lines[cmd_start..cmd_end]
-            .iter()
-            .map(|line| line.strip_prefix("    ").unwrap_or(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let mut body_lines: Vec<String> = Vec::with_capacity(lines.len());
-        for line in &lines[..cmd_start] {
-            body_lines.push((*line).to_string());
-        }
-        for line in &lines[cmd_end..] {
-            body_lines.push(line.strip_prefix("    ").unwrap_or(line).to_string());
-        }
-
-        let mut collapsed: Vec<String> = Vec::with_capacity(body_lines.len());
-        let mut prev_blank = false;
-        for line in body_lines {
-            let blank = line.trim().is_empty();
-            if blank && prev_blank {
-                continue;
-            }
-            collapsed.push(line);
-            prev_blank = blank;
-        }
-
-        (Some(command.into()), collapsed.join("\n").into())
-    }
-
-    pub(super) fn should_show_error_banner_overflow_hint(err_text: &str) -> bool {
-        err_text.lines().count() > ERROR_BANNER_OVERFLOW_HINT_MIN_LINES
-            || err_text.len() > ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS
-    }
-
-    pub(super) fn should_render_generic_error_banner(auth_prompt_active: bool) -> bool {
-        !auth_prompt_active
+    /// Show an error until the user closes it.
+    pub(in crate::view) fn report_error(
+        &mut self,
+        report: ErrorReport,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toast_host
+            .update(cx, |host, cx| host.push_error(report, cx));
     }
 
     pub(super) fn auth_prompt_banner_colors(theme: AppTheme) -> (gpui::Rgba, gpui::Rgba) {
@@ -2498,8 +2433,8 @@ impl GitCometView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if matches!(kind, components::ToastKind::Error) {
-            self.show_error_banner(self.active_repo_id(), message);
+        if kind == components::ToastKind::Error {
+            self.report_error(ErrorReport::message(self.active_repo_id(), message), cx);
             return;
         }
         self.toast_host
@@ -2515,8 +2450,14 @@ impl GitCometView {
         link_label: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if matches!(kind, components::ToastKind::Error) {
-            self.show_error_banner(self.active_repo_id(), message);
+        if kind == components::ToastKind::Error {
+            let report = ErrorReport::message(self.active_repo_id(), message).with_action(
+                ErrorAction::OpenUrl {
+                    url: link_url,
+                    label: link_label,
+                },
+            );
+            self.report_error(report, cx);
             return;
         }
         self.toast_host.update(cx, |host, cx| {
@@ -2591,8 +2532,6 @@ impl GitCometView {
                                 format!("Failed to open link: {err}"),
                                 cx,
                             );
-                            // The banner an Error becomes never touches `cx`.
-                            cx.notify();
                         }
                     },
                 );
@@ -2680,23 +2619,17 @@ impl GitCometView {
         platform_open::spawn_launch(
             cx,
             move || open_url(url),
-            |this, result, cx| {
-                match result {
-                    Ok(()) => this.push_toast(
-                        components::ToastKind::Success,
-                        "Opened crash report page in your browser.".to_string(),
-                        cx,
-                    ),
-                    Err(err) => this.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open browser: {err}"),
-                        cx,
-                    ),
-                }
-                // `push_toast` sends an Error straight to `show_error_banner`,
-                // which never touches `cx`, so without this the error path would
-                // depend entirely on a store round-trip to repaint.
-                cx.notify();
+            |this, result, cx| match result {
+                Ok(()) => this.push_toast(
+                    components::ToastKind::Success,
+                    "Opened crash report page in your browser.".to_string(),
+                    cx,
+                ),
+                Err(err) => this.push_toast(
+                    components::ToastKind::Error,
+                    format!("Failed to open browser: {err}"),
+                    cx,
+                ),
             },
         );
     }

@@ -9,12 +9,13 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::{
-    Diff, DiffArea, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
-    FileDiffTextSource,
+    Diff, DiffArea, DiffPreviewTextSide, DiffSectionFormats, DiffTarget, FileDiffImage,
+    FileDiffText, FileDiffTextSource,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, Result};
+use gitcomet_core::text_format::TextEncoding;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Read, Write};
@@ -28,6 +29,7 @@ const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 1024;
 
 impl GixRepo {
+    #[cfg(test)]
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         self.diff_file_text_impl_cancellable(target, &CancellationToken::new())
     }
@@ -143,51 +145,87 @@ impl GixRepo {
         )
     }
 
-    pub(super) fn diff_parsed_impl(&self, target: &DiffTarget) -> Result<Diff> {
-        if let Some(diff) = self.synthetic_simple_commit_path_diff(target)? {
-            return Ok(diff);
-        }
-
-        let target = target.clone();
-        run_git_parsed_stdout(
-            self.build_unified_diff_command(&target),
-            "git diff",
-            true,
-            move |stdout| {
-                Diff::from_unified_reader(target, stdout).map_err(|err| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "failed to parse unified git diff output: {err}"
-                    )))
-                })
-            },
-        )
-    }
-
-    pub(super) fn diff_parsed_cancellable_impl(
+    /// File text with both sides decoded to UTF-8 (see `text_decode`).
+    pub(super) fn diff_file_text_decoded_impl(
         &self,
         target: &DiffTarget,
+        encoding: Option<TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        let Some(text) = self.diff_file_text_impl_cancellable(target, cancellation)? else {
+            return Ok(None);
+        };
+        let attributes = self.text_attributes_impl(&text.path).unwrap_or_default();
+        self.decode_file_diff_text(text, &attributes, encoding, cancellation)
+            .map(Some)
+    }
+
+    /// The patch for `target`, decoded like the file view decodes the file.
+    pub(super) fn diff_parsed_with_encoding_impl(
+        &self,
+        target: &DiffTarget,
+        encoding: Option<TextEncoding>,
         cancellation: &CancellationToken,
     ) -> Result<Diff> {
         cancellation.check_cancelled()?;
-        if let Some(diff) = self.synthetic_simple_commit_path_diff(target)? {
+        let attributes = target
+            .file_path()
+            .map(|path| self.text_attributes_impl(path).unwrap_or_default());
+        // An `encoding` attribute applies even to bytes that are valid UTF-8.
+        let attribute_encoding = attributes.as_ref().is_some_and(|attributes| {
+            attributes
+                .encoding
+                .as_ref()
+                .is_some_and(|attr| attr.encoding.is_some())
+        });
+        let default_reading = encoding.is_none() && !attribute_encoding;
+        if default_reading && let Some(diff) = self.synthetic_simple_commit_path_diff(target)? {
             cancellation.check_cancelled()?;
             return Ok(diff);
         }
 
-        let target = target.clone();
-        run_git_parsed_stdout_cancellable(
-            self.build_unified_diff_command(&target),
+        let (bytes, notice) = run_git_parsed_stdout_cancellable(
+            self.build_unified_diff_command(target),
             "git diff",
             true,
             cancellation,
             move |stdout| {
-                Diff::from_unified_reader(target, stdout).map_err(|err| {
+                Diff::read_unified_bytes(stdout).map_err(|err| {
                     Error::new(ErrorKind::Backend(format!(
-                        "failed to parse unified git diff output: {err}"
+                        "failed to read unified git diff output: {err}"
                     )))
                 })
             },
-        )
+        )?;
+        // Plain UTF-8 output keeps the zero-copy parse; only other bytes, or an
+        // explicit encoding, pay for decoding.
+        let bytes = if default_reading {
+            match String::from_utf8(bytes) {
+                Ok(text) => Ok(text),
+                Err(err) => Err(err.into_bytes()),
+            }
+        } else {
+            Err(bytes)
+        };
+        let mut diff = match bytes {
+            Ok(text) => Diff::from_unified_owned(target.clone(), text),
+            Err(bytes) if let Some(attributes) = &attributes => {
+                Diff::from_unified_bytes(target.clone(), bytes, |section| {
+                    DiffSectionFormats::resolve(section, attributes, encoding)
+                })
+            }
+            Err(bytes) => {
+                Diff::from_unified_bytes(target.clone(), bytes, DiffSectionFormats::sniff)
+            }
+        };
+        if let Some(notice) = notice {
+            diff.lines.push(gitcomet_core::domain::DiffLine {
+                kind: gitcomet_core::domain::DiffLineKind::Header,
+                text: notice.into(),
+            });
+        }
+        cancellation.check_cancelled()?;
+        Ok(diff)
     }
 
     fn file_diff_source_from_blob_id(
@@ -292,17 +330,26 @@ impl GixRepo {
             attributes_fingerprint.and_then(|_| DiskFileStamp::read_for_verification_memo(&full));
         #[cfg(test)]
         WORKTREE_FILTER_RUNS.with(|runs| runs.set(runs.get() + 1));
+        let attributes = super::text_attributes::resolve_text_attributes(repo, path);
         let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "gix worktree filter pipeline: {e}"
             )))
         })?;
-        let file = std::fs::File::open(&full).map_err(io_err_to_error)?;
-        let normalized = pipeline.convert_to_git(file, path, &index).map_err(|e| {
-            Error::new(ErrorKind::Backend(format!(
-                "gix worktree-to-git conversion: {e}"
-            )))
-        })?;
+        let converted;
+        let normalized = if attributes.working_tree_encoding().is_some() && !attributes.has_filter {
+            // gix only knows WHATWG labels (and reads `latin-1` as cp1252);
+            // git uses iconv's. Decode with ours, then normalize EOL and ident.
+            converted = worktree_encoding_to_git(repo, &index, path, &full, &attributes)?;
+            gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(&converted)
+        } else {
+            let file = std::fs::File::open(&full).map_err(io_err_to_error)?;
+            pipeline.convert_to_git(file, path, &index).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix worktree-to-git conversion: {e}"
+                )))
+            })?
+        };
 
         let mut tmp_file =
             tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
@@ -377,6 +424,8 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffText>> {
         cancellation.check_cancelled()?;
+        // Worktree normalization consults config as well as attributes.
+        let repo = self.repo_with_current_config()?;
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 let full_path = if path.is_absolute() {
@@ -388,7 +437,6 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self.repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -461,7 +509,6 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -491,7 +538,6 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self.repo();
                 let old = self.file_diff_source_from_revision_path(
                     &repo,
                     from_commit_id.as_ref(),
@@ -836,23 +882,139 @@ impl GixRepo {
     }
 
     pub(super) fn conflict_session_impl(&self, path: &Path) -> Result<Option<ConflictSession>> {
+        self.conflict_session_with_encoding_impl(path, None)
+    }
+
+    /// The conflict session with every side decoded: the stages as git stores
+    /// them, the working-tree file as it sits on disk.
+    pub(super) fn conflict_session_with_encoding_impl(
+        &self,
+        path: &Path,
+        encoding: Option<TextEncoding>,
+    ) -> Result<Option<ConflictSession>> {
+        use gitcomet_core::text_format::SideKind;
+
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-        let repo = self.repo();
+        let repo = self.repo_with_current_config()?;
         let stage_data = gix_index_conflict_stage_data(&repo, &repo_path)?;
         let Some(conflict_kind) = stage_data.conflict_kind else {
             return Ok(None);
         };
-
-        let stages = conflict_file_stages_from_stage_data(&repo_path, stage_data);
-        let current =
-            read_worktree_file_conflict_payload_known_optional(&self.spec.workdir, &repo_path);
-
-        let base = ConflictPayload::from_stage_parts(stages.base_bytes, stages.base);
-        let ours = ConflictPayload::from_stage_parts(stages.ours_bytes, stages.ours);
-        let theirs = ConflictPayload::from_stage_parts(stages.theirs_bytes, stages.theirs);
+        let attributes = super::text_attributes::resolve_text_attributes(&repo, &repo_path);
+        let [
+            (base, base_format),
+            (ours, ours_format),
+            (theirs, theirs_format),
+        ] = super::text_decode::decode_conflict_stages(
+            [
+                stage_data.base_bytes,
+                stage_data.ours_bytes,
+                stage_data.theirs_bytes,
+            ],
+            &attributes,
+            encoding,
+        );
+        let (mut current, current_format) = match std::fs::read(self.spec.workdir.join(&repo_path))
+        {
+            Ok(bytes) => {
+                let (payload, format) = ConflictPayload::decode(
+                    Some(Arc::from(bytes)),
+                    None,
+                    SideKind::Worktree,
+                    &attributes,
+                    encoding,
+                );
+                (Some(payload), format)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (Some(ConflictPayload::Absent), None)
+            }
+            Err(_) => (None, None),
+        };
 
         let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
+        let stage_formats = [base_format, ours_format, theirs_format];
+        let automatic_text = strategy == ConflictResolverStrategy::FullTextResolver
+            && encoding.is_none()
+            && attributes.working_tree_encoding().is_none()
+            && stage_formats
+                .into_iter()
+                .flatten()
+                .all(|format| format.is_writable());
+        let stages = [
+            (&base, base_format),
+            (&ours, ours_format),
+            (&theirs, theirs_format),
+        ];
+        // ASCII is shared by these encodings; detecting an ASCII base as UTF-8
+        // does not itself imply a conversion between the branches.
+        let non_ascii_encodings = || {
+            stages.into_iter().filter_map(|(payload, format)| {
+                payload.as_bytes().filter(|bytes| !bytes.is_ascii())?;
+                format.map(|format| format.format.encoding)
+            })
+        };
+        let mixed_encodings = non_ascii_encodings()
+            .any(|encoding| non_ascii_encodings().any(|other| encoding != other));
+        let decode_mixed = automatic_text
+            && mixed_encodings
+            && stage_formats
+                .into_iter()
+                .flatten()
+                .all(|format| format.format.encoding.is_ascii_compatible());
+        let mixed_current = if decode_mixed {
+            current.as_ref().and_then(|payload| {
+                super::text_decode::decode_mixed_conflict(
+                    payload,
+                    stage_formats,
+                    stages.map(|(payload, _)| payload),
+                    &attributes,
+                )
+            })
+        } else {
+            None
+        };
+        // A mixed marker document has no single source encoding. Its decoded
+        // output uses UTF-8; original bytes remain available in `current`.
+        let needs_utf8 = mixed_current.is_some()
+            || automatic_text
+                && current_format.is_some_and(|format| {
+                    format.is_writable()
+                        && stages.into_iter().any(|(payload, stage_format)| {
+                            stage_format.is_some_and(|stage| {
+                                stage.format.encoding != format.format.encoding
+                            }) && payload.as_text().is_some_and(|text| {
+                                !text.is_ascii()
+                                    && gitcomet_core::text_format::encode(text, format.format)
+                                        .is_err()
+                            })
+                        })
+                });
+        let ambiguous_mixed = decode_mixed && mixed_current.is_none()
+            && current.as_ref().and_then(ConflictPayload::as_bytes).is_some_and(|bytes| {
+                gitcomet_core::conflict_session::parse_conflict_marker_ranges_bytes(bytes).iter().any(|segment| {
+                    matches!(segment, gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Conflict(_))
+                })
+            });
+        if let Some(decoded) = mixed_current {
+            current = Some(decoded);
+        }
+        let output_format = (needs_utf8 || ambiguous_mixed).then(|| {
+            let mut format = gitcomet_core::text_format::SideTextFormat::utf8(
+                gitcomet_core::text_format::LineEndingStats::from_bytes(
+                    current
+                        .as_ref()
+                        .and_then(ConflictPayload::as_text)
+                        .unwrap_or_default()
+                        .as_bytes(),
+                ),
+            );
+            // Unknown context cannot be safely saved as guessed text.
+            format.malformed = ambiguous_mixed;
+            format
+        });
+        let current_payload = current.clone();
         let session = if strategy == ConflictResolverStrategy::FullTextResolver {
             // Full-text sessions use one stage-derived merge plan for aligned
             // rows, conflict regions, and the marker projection while retaining
@@ -870,7 +1032,10 @@ impl GixRepo {
             // worktree payload (including an absent payload) for their
             // specialized completion behavior.
             match current {
-                Some(ConflictPayload::Text(current)) => ConflictSession::from_merged_shared_text(
+                Some(
+                    ConflictPayload::Text(current)
+                    | ConflictPayload::EncodedText { text: current, .. },
+                ) => ConflictSession::from_merged_shared_text(
                     repo_path,
                     conflict_kind,
                     base,
@@ -889,6 +1054,10 @@ impl GixRepo {
                 None => ConflictSession::new(repo_path, conflict_kind, base, ours, theirs),
             }
         };
+        let mut session = session;
+        session.current = current_payload;
+        session.current_format = current_format;
+        session.output_format = output_format;
         Ok(Some(session))
     }
 
@@ -933,7 +1102,11 @@ impl GixRepo {
         else {
             return Ok(None);
         };
-        // Binary blob: `git diff` answers with "Binary files ... differ".
+        // Binary blob: `git diff` answers with "Binary files ... differ". Text
+        // that is not UTF-8 is left to the decoding parse too.
+        if memchr::memchr(0, &body_bytes[..body_bytes.len().min(8000)]).is_some() {
+            return Ok(None);
+        }
         let Ok(body_text) = String::from_utf8(body_bytes) else {
             return Ok(None);
         };
@@ -998,7 +1171,75 @@ fn conflict_file_stages_from_stage_data(
     }
 }
 
-fn to_repo_path(path: &Path, workdir: &Path) -> Result<PathBuf> {
+/// `convert_to_git` for a `working-tree-encoding` file: decode to UTF-8, then
+/// apply the path's line-ending and ident normalization.
+fn worktree_encoding_to_git(
+    repo: &gix::Repository,
+    index: &gix::index::State,
+    path: &Path,
+    full: &Path,
+    attributes: &gitcomet_core::text_format::TextAttributes,
+) -> Result<Vec<u8>> {
+    use gix::error::ErrorExt as _;
+    use gix::filter::plumbing::eol;
+
+    let raw = std::fs::read(full).map_err(io_err_to_error)?;
+    // No override: resolving the attribute lets a UTF-16 label yield to the
+    // file's BOM, as iconv does.
+    let decoded = gitcomet_core::text_format::decode_bytes(
+        &raw,
+        gitcomet_core::text_format::SideKind::Worktree,
+        attributes,
+        None,
+    );
+    let text = decoded.text.as_bytes();
+    let policy = attributes.eol_policy;
+    let digest = match (policy.normalized, policy.auto) {
+        (false, _) => eol::AttributesDigest::Binary,
+        (true, false) => eol::AttributesDigest::TextInput,
+        (true, true) => eol::AttributesDigest::TextAutoInput,
+    };
+    let index_path = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let index_blob = index
+        .entry_by_path(index_path.as_ref())
+        .map(|entry| entry.id);
+    let mut index_object = |buf: &mut Vec<u8>| -> gix::ExnResult<Option<()>> {
+        let Some(id) = index_blob else {
+            return Ok(None);
+        };
+        let object = repo.find_object(id).map_err(|error| error.raise_erased())?;
+        buf.clear();
+        buf.extend_from_slice(&object.data);
+        Ok(Some(()))
+    };
+    let mut out = Vec::new();
+    let changed = eol::convert_to_git(
+        text,
+        digest,
+        &mut out,
+        &mut index_object,
+        eol::convert_to_git::Options::default(),
+    )
+    .map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "worktree-to-git line ending conversion: {e}"
+        )))
+    })?;
+    let normalized = if changed { out.as_slice() } else { text };
+    if attributes.ident {
+        let mut contracted = Vec::new();
+        if gix::filter::plumbing::ident::undo(normalized, &mut contracted).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "worktree-to-git ident conversion: {e}"
+            )))
+        })? {
+            return Ok(contracted);
+        }
+    }
+    Ok(if changed { out } else { text.to_vec() })
+}
+
+pub(super) fn to_repo_path(path: &Path, workdir: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Ok(path.to_path_buf());
     }
@@ -1116,18 +1357,6 @@ fn read_worktree_image_file_bytes_cancellable(
         }
         ensure_image_diff_side_size(path, (bytes.len() + read) as u64)?;
         bytes.extend_from_slice(&chunk[..read]);
-    }
-}
-
-fn read_worktree_file_conflict_payload_known_optional(
-    workdir: &Path,
-    path: &Path,
-) -> Option<ConflictPayload> {
-    let full = workdir.join(path);
-    match std::fs::read(&full) {
-        Ok(bytes) => Some(ConflictPayload::from_bytes(bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(ConflictPayload::Absent),
-        Err(_) => None,
     }
 }
 
@@ -1552,6 +1781,15 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         .ok()?
         .matching_attributes(&mut outcome);
     let mut hasher = FxHasher::default();
+    let config = repo.config_snapshot();
+    for key in [
+        "core.autocrlf",
+        "core.eol",
+        "core.safecrlf",
+        "core.checkRoundtripEncoding",
+    ] {
+        config.string(key).hash(&mut hasher);
+    }
     for matched in outcome.iter() {
         let assignment = matched.assignment;
         if assignment.name.as_str() == "filter"
@@ -1577,7 +1815,7 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
 /// regular file only when its bytes are identical. Shared by the worktree and
 /// preview caches, both of which live in the shared temp directory.
 /// Returns whether this call created the file at `cache_path`.
-fn persist_worktree_git_cache_file(
+pub(super) fn persist_worktree_git_cache_file(
     tmp_file: tempfile::NamedTempFile,
     cache_path: &Path,
 ) -> Result<bool> {
@@ -1697,7 +1935,7 @@ fn preview_blob_cache_path(
     std::env::temp_dir().join(format!("gitcomet-diff-preview-{hash:016x}{suffix}"))
 }
 
-fn io_err_to_error(error: std::io::Error) -> Error {
+pub(super) fn io_err_to_error(error: std::io::Error) -> Error {
     Error::new(ErrorKind::Io(error.kind()))
 }
 

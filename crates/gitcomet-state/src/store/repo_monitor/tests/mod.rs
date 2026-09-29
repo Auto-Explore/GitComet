@@ -237,6 +237,39 @@ fn resolve_git_dir_handles_dot_git_directory() {
 }
 
 #[test]
+fn watcher_marks_attribute_inputs_without_marking_ordinary_file_edits() {
+    let dir = unique_temp_dir("gitcomet-attribute-watch");
+    let workdir = dir.path();
+    fs::create_dir_all(workdir.join(".git/info")).unwrap();
+    for (path, expected) in [
+        ("a.txt", false),
+        (".git/index", false),
+        (".git/HEAD", false),
+        (".gitattributes", true),
+        ("nested/.gitattributes", true),
+        (".git/info/attributes", true),
+    ] {
+        let event = notify::Event {
+            kind: EventKind::Any,
+            paths: vec![workdir.join(path)],
+            attrs: Default::default(),
+        };
+        let change = classify_change(
+            workdir,
+            Some(&workdir.join(".git")),
+            &mut TestRules::default(),
+            &event,
+        )
+        .unwrap();
+        assert_eq!(change.text_attributes, expected, "{path}: {change:?}");
+        assert_eq!(
+            merge_change(change, RepoExternalChange::Worktree).text_attributes,
+            expected
+        );
+    }
+}
+
+#[test]
 fn resolve_git_dir_parses_dot_git_file() {
     let dir = unique_temp_dir("gitcomet-monitor-test");
     let workdir = dir.path().join("repo");
@@ -263,6 +296,7 @@ fn merge_change_coalesces_to_both() {
             git_state: true,
             tags: false,
             verification_context: false,
+            text_attributes: false,
         }
     );
     assert_eq!(
@@ -273,6 +307,7 @@ fn merge_change_coalesces_to_both() {
             git_state: true,
             tags: false,
             verification_context: false,
+            text_attributes: false,
         }
     );
     assert_eq!(
@@ -339,6 +374,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             git_state: true,
             tags: false,
             verification_context: false,
+            text_attributes: false,
         })
     );
 }

@@ -754,22 +754,24 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
 
 /// Render a whole document as one flowing element tree.
 pub(in crate::view) fn render_markdown_document(
+    tab_width: usize,
     document: &Arc<MarkdownPreviewDocument>,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
     let blocks = context.blocks.blocks(document);
-    render_markdown_document_with_blocks(document, &blocks, context)
+    render_markdown_document_with_blocks(tab_width, document, &blocks, context)
 }
 
 /// As [`render_markdown_document`], for a document whose blocks are already
 /// grouped — the inline diff keeps them with the document.
 pub(in crate::view) fn render_markdown_document_with_blocks(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     blocks: &[MarkdownBlock],
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
     let column = document_pointer_listeners(
-        render_windowed_block_column(document, blocks, context),
+        render_windowed_block_column(tab_width, document, blocks, context),
         context,
     );
 
@@ -809,6 +811,7 @@ pub(in crate::view) fn render_markdown_document_with_blocks(
 /// the shorter side of a band is left blank and the two stay lined up. The old
 /// side takes `split_ratio` of the width.
 pub(in crate::view) fn render_markdown_diff_split(
+    tab_width: usize,
     diff: &MarkdownPreviewDiff,
     left: &MarkdownDocumentContext,
     right: &MarkdownDocumentContext,
@@ -937,6 +940,7 @@ pub(in crate::view) fn render_markdown_diff_split(
                 return side.child(empty_split_side(notice, context));
             }
             side.child(render_block_column(
+                tab_width,
                 document,
                 blocks,
                 band.rows.start,
@@ -1050,6 +1054,7 @@ fn split_side(context: &MarkdownDocumentContext, split_ratio: f32) -> gpui::Stat
 /// A document's top-level blocks as a windowed column: the blocks near the
 /// viewport, each with the gap above it, between spacers for the rest.
 fn render_windowed_block_column(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     blocks: &[MarkdownBlock],
     context: &MarkdownDocumentContext,
@@ -1121,6 +1126,7 @@ fn render_windowed_block_column(
             item = item.child(render_column_gap(blocks, ix, context, false));
         }
         item.child(render_column_block(
+            tab_width,
             document,
             &blocks[ix],
             rows_from,
@@ -1144,12 +1150,14 @@ struct BlockNesting {
 /// Blocks stacked with the gaps between them. `first_row` is where the rows
 /// this column shows begin.
 fn render_block_column(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     blocks: &[MarkdownBlock],
     first_row: usize,
     context: &MarkdownDocumentContext,
 ) -> gpui::Div {
     render_nested_block_column(
+        tab_width,
         document,
         blocks,
         first_row,
@@ -1165,6 +1173,7 @@ fn render_block_column(
 /// a quote's contents inside its bar. Change marks belong to the top-level
 /// blocks only.
 fn render_nested_block_column(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     blocks: &[MarkdownBlock],
     first_row: usize,
@@ -1181,7 +1190,7 @@ fn render_nested_block_column(
             .checked_sub(1)
             .map_or(first_row, |previous| blocks[previous].row_range().end);
         column = column.child(render_column_block(
-            document, block, rows_from, context, nesting,
+            tab_width, document, block, rows_from, context, nesting,
         ));
     }
     column
@@ -1219,6 +1228,7 @@ fn render_column_gap(
 /// removed. `rows_from` is where the rows it answers for begin: alignment
 /// padding before it belongs to it.
 fn render_column_block(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     block: &MarkdownBlock,
     rows_from: usize,
@@ -1226,7 +1236,7 @@ fn render_column_block(
     nesting: BlockNesting,
 ) -> AnyElement {
     let range = block.row_range();
-    let mut rendered = render_block(document, block, context, nesting);
+    let mut rendered = render_block(tab_width, document, block, context, nesting);
     // A row with no text box of its own — a picture, a rule, a gap — is
     // revealed by bringing its block into view. Alignment padding is left to
     // the other column, which draws the row it stands in for.
@@ -1324,6 +1334,7 @@ fn render_block_gap(
 }
 
 fn render_block(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     block: &MarkdownBlock,
     context: &MarkdownDocumentContext,
@@ -1344,7 +1355,9 @@ fn render_block(
 
     match block {
         MarkdownBlock::Heading { level, row_ix } => wrapper
-            .child(render_heading(*level, *row_ix, document, context))
+            .child(render_heading(
+                tab_width, *level, *row_ix, document, context,
+            ))
             .into_any_element(),
         MarkdownBlock::Paragraph(row_ix) => match document.rows.get(*row_ix) {
             // A footnote definition reads as its label and then its text, like
@@ -1353,6 +1366,7 @@ fn render_block(
                 .w_full()
                 .min_w(px(0.0))
                 .child(render_marked_row(
+                    tab_width,
                     *row_ix,
                     row,
                     indent.saturating_sub(1),
@@ -1361,7 +1375,8 @@ fn render_block(
                 .into_any_element(),
             Some(row) => wrapper
                 .child(recorded(
-                    row_shell(*row_ix, row, context).child(render_row_line(*row_ix, row, context)),
+                    row_shell(*row_ix, row, context)
+                        .child(render_row_line(tab_width, *row_ix, row, context)),
                     MarkdownBoxKind::Row(*row_ix),
                     context,
                 ))
@@ -1369,14 +1384,22 @@ fn render_block(
             None => wrapper.into_any_element(),
         },
         MarkdownBlock::List(_) => wrapper
-            .child(render_list(rows, context, nesting.indent_base))
+            .child(render_list(tab_width, rows, context, nesting.indent_base))
             .into_any_element(),
         MarkdownBlock::Blockquote(range) => wrapper
-            .child(render_blockquote(document, range.clone(), context, nesting))
+            .child(render_blockquote(
+                tab_width,
+                document,
+                range.clone(),
+                context,
+                nesting,
+            ))
             .into_any_element(),
-        MarkdownBlock::Code(_) => wrapper.child(render_code(rows, context)).into_any_element(),
+        MarkdownBlock::Code(_) => wrapper
+            .child(render_code(tab_width, rows, context))
+            .into_any_element(),
         MarkdownBlock::Table(_) => wrapper
-            .child(render_table(rows, context))
+            .child(render_table(tab_width, rows, context))
             .into_any_element(),
         MarkdownBlock::Image(_) => non_text_block_shell(document, block.row_range(), context)
             .when_some(rows.first(), |wrapper, (row_ix, row)| {
@@ -1596,12 +1619,13 @@ fn row_cursor(shell: gpui::Div, row_ix: usize, context: &MarkdownDocumentContext
 /// text rather than between its words. Every other arrangement — badges alone,
 /// a logo before a heading, an icon after a label — comes out in order.
 fn render_row_line(
+    tab_width: usize,
     row_ix: usize,
     row: &MarkdownPreviewRow,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
     if row.inline_images.is_empty() {
-        return render_row_text(row_ix, row, context);
+        return render_row_text(tab_width, row_ix, row, context);
     }
 
     // A picture written at offset 0 comes before the text; everything else
@@ -1624,7 +1648,7 @@ fn render_row_line(
     // element is what registers the row's hit-test box, and without one a drag
     // across the row finds no target and the selection skips over it.
     if !row.text.is_empty() || context.view.is_some() {
-        line = line.child(render_row_text(row_ix, row, context));
+        line = line.child(render_row_text(tab_width, row_ix, row, context));
     }
     for inline in trailing() {
         line = line.child(render_inline_image(row_ix, inline, context));
@@ -1705,6 +1729,7 @@ fn render_inline_image(
 
 /// One row's text, wrapping naturally and — when interactive — selectable.
 fn render_row_text(
+    tab_width: usize,
     row_ix: usize,
     row: &MarkdownPreviewRow,
     context: &MarkdownDocumentContext,
@@ -1712,6 +1737,7 @@ fn render_row_text(
     // The flowing document renders one element per source row, so the row
     // index is also the index the search cursor addresses.
     let styled = crate::view::rows::markdown_preview_styled_row_with_query(
+        tab_width,
         context.theme,
         row,
         row_ix,
@@ -1765,6 +1791,7 @@ fn render_row_text(
     .debug_selector(move || format!("markdown_preview_text_box_{row_ix}"))
     .child(
         MarkdownFlowText::new(
+            tab_width,
             view,
             row_ix,
             context.text_region,
@@ -1779,6 +1806,7 @@ fn render_row_text(
 }
 
 fn render_heading(
+    tab_width: usize,
     level: u8,
     row_ix: usize,
     document: &MarkdownPreviewDocument,
@@ -1797,7 +1825,7 @@ fn render_heading(
     let mut heading = row_shell(row_ix, row, context)
         .text_size(scaled(font_size, context))
         .font_weight(FontWeight::BOLD)
-        .child(render_row_line(row_ix, row, context));
+        .child(render_row_line(tab_width, row_ix, row, context));
 
     // Only the top two levels get a rule under them, the way a rendered
     // README reads.
@@ -1813,10 +1841,16 @@ fn render_heading(
     recorded(heading, MarkdownBoxKind::Row(row_ix), context)
 }
 
-fn render_list(rows: RowRun<'_>, context: &MarkdownDocumentContext, indent_base: u8) -> AnyElement {
+fn render_list(
+    tab_width: usize,
+    rows: RowRun<'_>,
+    context: &MarkdownDocumentContext,
+    indent_base: u8,
+) -> AnyElement {
     let mut list = div().flex().flex_col().w_full().min_w(px(0.0));
     for (row_ix, row) in rows.iter() {
         list = list.child(render_marked_row(
+            tab_width,
             row_ix,
             row,
             row.indent_level.saturating_sub(indent_base),
@@ -1830,6 +1864,7 @@ fn render_list(rows: RowRun<'_>, context: &MarkdownDocumentContext, indent_base:
 /// checkbox, or a footnote's label. A later row of the same item keeps the
 /// marker column empty so its text lines up.
 fn render_marked_row(
+    tab_width: usize,
     row_ix: usize,
     row: &MarkdownPreviewRow,
     indent: u8,
@@ -1868,7 +1903,7 @@ fn render_marked_row(
                 context,
             ))
             .child(marker_slot)
-            .child(render_row_line(row_ix, row, context)),
+            .child(render_row_line(tab_width, row_ix, row, context)),
         MarkdownBoxKind::Row(row_ix),
         context,
     )
@@ -1917,6 +1952,7 @@ fn render_task_checkbox(
 }
 
 fn render_blockquote(
+    tab_width: usize,
     document: &MarkdownPreviewDocument,
     range: Range<usize>,
     context: &MarkdownDocumentContext,
@@ -1960,6 +1996,7 @@ fn render_blockquote(
         );
     }
     body = body.child(render_nested_block_column(
+        tab_width,
         document,
         &blocks,
         range.start,
@@ -1984,7 +2021,11 @@ fn render_blockquote(
         .into_any_element()
 }
 
-fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElement {
+fn render_code(
+    tab_width: usize,
+    rows: RowRun<'_>,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
     let first_row_ix = rows.first().map(|(row_ix, _)| row_ix).unwrap_or_default();
     let last_row_ix = rows.iter().last().map(|(row_ix, _)| row_ix);
     let mut body = div()
@@ -2006,7 +2047,7 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
     }
     for (row_ix, row) in rows.iter() {
         body = body.child(recorded(
-            row_shell(row_ix, row, context).child(render_row_line(row_ix, row, context)),
+            row_shell(row_ix, row, context).child(render_row_line(tab_width, row_ix, row, context)),
             MarkdownBoxKind::Row(row_ix),
             context,
         ));
@@ -2064,7 +2105,11 @@ fn render_code_padding(
 /// An inline diff interleaves the old table's rows with the new one's, so a
 /// block can mix tables of different widths: the widest sets the grid, and a
 /// narrower row is filled out with empty cells.
-fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElement {
+fn render_table(
+    tab_width: usize,
+    rows: RowRun<'_>,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
     let first_row_ix = rows.first().map(|(row_ix, _)| row_ix).unwrap_or_default();
     let column_count = rows
         .iter()
@@ -2128,6 +2173,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
         };
         // Styled once for the row; each cell paints its slice.
         let styled = crate::view::rows::markdown_preview_styled_row_with_query(
+            tab_width,
             context.theme,
             row,
             row_ix,
@@ -2167,6 +2213,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
                     MarkdownTableAlign::None | MarkdownTableAlign::Left => cell,
                 })
                 .child(render_cell_text(
+                    tab_width,
                     row_ix,
                     row,
                     column,
@@ -2198,6 +2245,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
 /// One table cell's text: its slice of the row's styled text, selectable in
 /// row coordinates.
 fn render_cell_text(
+    tab_width: usize,
     row_ix: usize,
     row: &MarkdownPreviewRow,
     column: usize,
@@ -2208,6 +2256,7 @@ fn render_cell_text(
     let styled = super::diff_text::slice_cached_diff_styled_text(
         row_styled,
         super::history::markdown_preview_expanded_slice_range(
+            tab_width,
             row.text.as_ref(),
             row_styled.text.len(),
             &range,
@@ -2247,6 +2296,7 @@ fn render_cell_text(
     .debug_selector(move || format!("markdown_preview_cell_text_box_{row_ix}_{column}"))
     .child(
         MarkdownFlowText::new(
+            tab_width,
             view,
             row_ix,
             context.text_region,
@@ -2375,6 +2425,8 @@ mod tests {
     #[test]
     #[ignore]
     fn timing_table_preview_frames() {
+        let tab_width = 4;
+
         use crate::view::markdown_preview::parse_markdown;
         use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
@@ -2425,7 +2477,7 @@ mod tests {
             };
             let start = std::time::Instant::now();
             for _ in 0..FRAMES {
-                drop(render_markdown_document(&document, &context));
+                drop(render_markdown_document(tab_width, &document, &context));
             }
             eprintln!(
                 "timing flowing_table[{label}] {:?}/frame",

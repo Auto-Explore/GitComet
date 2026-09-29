@@ -4586,33 +4586,20 @@ fn repo_tab_context_menu_close_others_is_disabled_for_single_repo(cx: &mut gpui:
         .expect("expected disabled close-others item to leave the menu open");
 }
 
-#[test]
-fn generic_error_banner_is_hidden_when_auth_prompt_is_active() {
-    assert!(GitCometView::should_render_generic_error_banner(false));
-    assert!(!GitCometView::should_render_generic_error_banner(true));
-}
-
-#[test]
-fn error_banner_overflow_hint_is_hidden_for_short_errors() {
-    assert!(!GitCometView::should_show_error_banner_overflow_hint(
-        "Submodule failed:\n\nfatal: branch not found"
-    ));
-}
-
-#[test]
-fn error_banner_overflow_hint_is_shown_for_long_command_failures() {
-    let error = [
-        "Submodule failed:",
-        "",
-        "    git submodule add --branch git-subtree /tmp/src comet2",
-        "",
-        "    Cloning into '/tmp/comet2'...",
-        "    done.",
-        "    fatal: 'origin/git-subtree' is not a commit and a branch 'git-subtree' cannot be created from it",
-        "    fatal: unable to checkout submodule 'comet2'",
-    ]
-    .join("\n");
-    assert!(GitCometView::should_show_error_banner_overflow_hint(&error));
+/// The errors on screen as `(repo, message)`, newest first.
+fn error_toasts(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> Vec<(Option<RepoId>, String)> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .error_notices()
+            .into_iter()
+            .map(|(_, notice)| (notice.repo_id, notice.message.clone()))
+            .collect()
+    })
 }
 
 #[test]
@@ -4625,12 +4612,9 @@ fn auth_prompt_banner_colors_use_accent_palette() {
 }
 
 #[gpui::test]
-fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
-    cx: &mut gpui::TestAppContext,
-) {
+fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(1);
@@ -4666,22 +4650,71 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
         });
     });
 
-    wait_until("store-backed banner error", || {
-        let snapshot = store_for_assert.snapshot();
-        snapshot
-            .banner_error
-            .as_ref()
-            .is_some_and(|banner| banner.repo_id == Some(repo_id) && banner.message == error)
+    assert_eq!(
+        error_toasts(cx, &view),
+        vec![(Some(repo_id), error.clone())]
+    );
+    // A snapshot that repeats nothing new adds nothing.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
     });
+    assert_eq!(error_toasts(cx, &view).len(), 1);
 }
 
 #[gpui::test]
-fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
+fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(1);
+    let message = "Failed to persist session state while opening: disk full".to_string();
+    let mut next = AppState::test_default();
+    let mut repo = open_repo_state_with_workdir("/tmp/persist-repo");
+    repo.feedback
+        .diagnostics
+        .push(gitcomet_state::model::DiagnosticEntry {
+            time: std::time::SystemTime::now(),
+            kind: DiagnosticKind::Error,
+            message: message.clone(),
+        });
+    next.notifications
+        .push(gitcomet_state::model::AppNotification {
+            time: std::time::SystemTime::now(),
+            kind: gitcomet_state::model::AppNotificationKind::Error,
+            message: message.clone(),
+        });
+    next.active_repo = Some(repo_id);
+    next.repos.push(repo);
+    let next = Arc::new(next);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+    });
+
+    let counts = cx.update(|_window, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .error_notices()
+            .into_iter()
+            .map(|(_, notice)| (notice.message.clone(), notice.count))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(counts, vec![(message, 1)]);
+}
+
+#[gpui::test]
+fn apply_state_snapshot_routes_clone_progress_errors_into_global_error_toasts(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -4711,21 +4744,19 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
     });
     cx.run_until_parked();
 
-    wait_until("global clone banner error", || {
-        let snapshot = store_for_assert.snapshot();
-        snapshot.banner_error.as_ref().is_some_and(|banner| {
-            banner.repo_id.is_none()
-                && banner.message
-                    == "Clone failed:\n\ngit@github.com: Permission denied (publickey)."
-        })
-    });
+    assert_eq!(
+        error_toasts(cx, &view),
+        vec![(
+            None,
+            "Clone failed:\n\ngit@github.com: Permission denied (publickey).".to_string()
+        )]
+    );
 }
 
 #[gpui::test]
 fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -4748,13 +4779,12 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::T
         });
     });
 
-    wait_until("empty passphrase should show banner error", || {
-        store_for_assert
-            .snapshot()
-            .banner_error
-            .as_ref()
-            .is_some_and(|b| b.message.contains("Passphrase is required"))
-    });
+    assert!(
+        error_toasts(cx, &view)
+            .iter()
+            .any(|(_, message)| message.contains("Passphrase is required")),
+        "an empty passphrase shows an error, visible above the auth prompt"
+    );
 }
 
 #[gpui::test]
@@ -4798,7 +4828,6 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -4823,13 +4852,11 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
         });
     });
 
-    wait_until("empty username should show banner error", || {
-        store_for_assert
-            .snapshot()
-            .banner_error
-            .as_ref()
-            .is_some_and(|b| b.message.contains("Username is required"))
-    });
+    assert!(
+        error_toasts(cx, &view)
+            .iter()
+            .any(|(_, message)| message.contains("Username is required"))
+    );
 }
 
 #[gpui::test]
@@ -5259,6 +5286,8 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
                     (RepoId(1), PathBuf::from("b.rs")),
                     crate::view::panes::main::StashedFileEdit {
                         text: SharedString::from("edited\n"),
+                        text_format: None,
+                        source_text_format: None,
                         cursor: 0,
                         text_fingerprint: 1,
                         saved_fingerprint: 2,
@@ -5437,6 +5466,8 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
                     (RepoId(1), PathBuf::from("b.rs")),
                     crate::view::panes::main::StashedFileEdit {
                         text: SharedString::from("edited\n"),
+                        text_format: None,
+                        source_text_format: None,
                         cursor: 0,
                         text_fingerprint: 1,
                         saved_fingerprint: 2,

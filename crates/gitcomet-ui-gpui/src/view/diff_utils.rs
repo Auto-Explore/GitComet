@@ -1,23 +1,14 @@
 use super::*;
 
 const MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE: usize = 64;
-pub(in crate::view) const DIFF_TEXT_TAB_WIDTH: usize = 4;
 
 pub(in crate::view) fn multiline_text_copy_capacity_hint(line_count: usize) -> usize {
     line_count.saturating_mul(MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE)
 }
 
-pub(in crate::view) fn diff_text_display_len(text: &str) -> usize {
-    if !text.contains('\t') {
-        return text.len();
-    }
-
-    text.chars().fold(0usize, |len, ch| {
-        len.saturating_add(match ch {
-            '\t' => DIFF_TEXT_TAB_WIDTH,
-            _ => ch.len_utf8(),
-        })
-    })
+/// Byte length of a line once its tabs are expanded to tab stops.
+pub(in crate::view) fn diff_text_display_len(tab_width: usize, text: &str) -> usize {
+    crate::view::tab_width::expanded_len(tab_width, text)
 }
 
 fn scrollbar_markers_from_bucket_flags(buckets: &[u8]) -> Vec<components::ScrollbarMarker> {
@@ -494,6 +485,9 @@ pub(super) fn enclosing_hunk_src_ix(diff: &[AnnotatedDiffLine], src_ix: usize) -
 pub(super) trait UnifiedDiffLine {
     fn kind(&self) -> gitcomet_core::domain::DiffLineKind;
     fn text(&self) -> &str;
+    /// The line as `git diff` printed it, in the file's encoding and with its
+    /// CR — what a patch must carry for `git apply` to match.
+    fn raw(&self) -> &[u8];
 }
 
 impl UnifiedDiffLine for AnnotatedDiffLine {
@@ -503,6 +497,10 @@ impl UnifiedDiffLine for AnnotatedDiffLine {
 
     fn text(&self) -> &str {
         self.text.as_ref()
+    }
+
+    fn raw(&self) -> &[u8] {
+        self.text.raw_bytes()
     }
 }
 
@@ -514,6 +512,19 @@ impl UnifiedDiffLine for gitcomet_core::domain::DiffLine {
     fn text(&self) -> &str {
         self.text.as_ref()
     }
+
+    fn raw(&self) -> &[u8] {
+        self.text.raw_bytes()
+    }
+}
+
+fn push_patch_line(out: &mut Vec<u8>, line: &[u8]) {
+    out.extend_from_slice(line);
+    out.push(b'\n');
+}
+
+fn patch_has_content(patch: &[u8]) -> bool {
+    patch.iter().any(|byte| !byte.is_ascii_whitespace())
 }
 
 fn unified_patch_file_and_hunk_bounds<T: UnifiedDiffLine>(
@@ -564,12 +575,12 @@ fn unified_patch_capacity<T: UnifiedDiffLine>(
 ) -> usize {
     lines[file_start..header_end]
         .iter()
-        .map(|l| l.text().len().saturating_add(1))
+        .map(|l| l.raw().len().saturating_add(1))
         .sum::<usize>()
         .saturating_add(
             lines[hunk_start..hunk_end]
                 .iter()
-                .map(|l| l.text().len().saturating_add(1))
+                .map(|l| l.raw().len().saturating_add(1))
                 .sum::<usize>(),
         )
 }
@@ -577,28 +588,26 @@ fn unified_patch_capacity<T: UnifiedDiffLine>(
 pub(super) fn build_unified_patch_for_hunk(
     diff: &[impl UnifiedDiffLine],
     hunk_src_ix: usize,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     let lines = diff;
     let (file_start, header_end, hunk_end) =
         unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
 
     let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
-    let mut out = String::with_capacity(capacity);
+    let mut out = Vec::with_capacity(capacity);
     for line in &lines[file_start..header_end] {
-        out.push_str(line.text());
-        out.push('\n');
+        push_patch_line(&mut out, line.raw());
     }
     for line in &lines[hunk_src_ix..hunk_end] {
-        out.push_str(line.text());
-        out.push('\n');
+        push_patch_line(&mut out, line.raw());
     }
-    (!out.trim().is_empty()).then_some(out)
+    patch_has_content(&out).then_some(out)
 }
 
 pub(super) fn build_unified_patch_for_hunks(
     diff: &[AnnotatedDiffLine],
     hunk_src_ixs: &[usize],
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     if hunk_src_ixs.is_empty() {
         return None;
     }
@@ -607,15 +616,15 @@ pub(super) fn build_unified_patch_for_hunks(
     hunks.sort_unstable();
     hunks.dedup();
 
-    let mut out = String::new();
+    let mut out = Vec::new();
     for hunk_src_ix in hunks {
         let Some(patch) = build_unified_patch_for_hunk(diff, hunk_src_ix) else {
             continue;
         };
-        out.push_str(&patch);
+        out.extend_from_slice(&patch);
     }
 
-    (!out.trim().is_empty()).then_some(out)
+    patch_has_content(&out).then_some(out)
 }
 
 #[derive(Clone, Copy)]
@@ -625,9 +634,9 @@ enum UnselectedHunkLineBehavior {
 }
 
 fn append_unselected_hunk_line(
-    out: &mut String,
-    line_text: &str,
-    expected_prefix: char,
+    out: &mut Vec<u8>,
+    line: &[u8],
+    expected_prefix: u8,
     behavior: UnselectedHunkLineBehavior,
     prev_included: &mut bool,
 ) {
@@ -636,10 +645,9 @@ fn append_unselected_hunk_line(
             *prev_included = false;
         }
         UnselectedHunkLineBehavior::KeepAsContext => {
-            let content = line_text.strip_prefix(expected_prefix).unwrap_or(line_text);
-            out.push(' ');
-            out.push_str(content);
-            out.push('\n');
+            let content = line.strip_prefix(&[expected_prefix]).unwrap_or(line);
+            out.push(b' ');
+            push_patch_line(out, content);
             *prev_included = true;
         }
     }
@@ -651,7 +659,7 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
     selected_src_ixs: &FxHashSet<usize>,
     unselected_add: UnselectedHunkLineBehavior,
     unselected_remove: UnselectedHunkLineBehavior,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     if selected_src_ixs.is_empty() {
         return None;
     }
@@ -661,15 +669,13 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
         unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
 
     let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
-    let mut out = String::with_capacity(capacity);
+    let mut out = Vec::with_capacity(capacity);
     for line in &lines[file_start..header_end] {
-        out.push_str(line.text());
-        out.push('\n');
+        push_patch_line(&mut out, line.raw());
     }
 
     // Keep the original hunk header; `git apply --recount` will adjust counts.
-    out.push_str(lines[hunk_src_ix].text());
-    out.push('\n');
+    push_patch_line(&mut out, lines[hunk_src_ix].raw());
 
     let mut has_change = false;
     let mut prev_included = false;
@@ -679,10 +685,9 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
         .take(hunk_end)
         .skip(hunk_src_ix + 1)
     {
-        if line.text().starts_with("\\") {
+        if line.raw().starts_with(b"\\") {
             if prev_included {
-                out.push_str(line.text());
-                out.push('\n');
+                push_patch_line(&mut out, line.raw());
             }
             continue;
         }
@@ -690,15 +695,14 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
         match line.kind {
             gitcomet_core::domain::DiffLineKind::Add => {
                 if selected_src_ixs.contains(&ix) {
-                    out.push_str(line.text());
-                    out.push('\n');
+                    push_patch_line(&mut out, line.raw());
                     has_change = true;
                     prev_included = true;
                 } else {
                     append_unselected_hunk_line(
                         &mut out,
-                        line.text(),
-                        '+',
+                        line.raw(),
+                        b'+',
                         unselected_add,
                         &mut prev_included,
                     );
@@ -706,29 +710,23 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
             }
             gitcomet_core::domain::DiffLineKind::Remove => {
                 if selected_src_ixs.contains(&ix) {
-                    out.push_str(line.text());
-                    out.push('\n');
+                    push_patch_line(&mut out, line.raw());
                     has_change = true;
                     prev_included = true;
                 } else {
                     append_unselected_hunk_line(
                         &mut out,
-                        line.text(),
-                        '-',
+                        line.raw(),
+                        b'-',
                         unselected_remove,
                         &mut prev_included,
                     );
                 }
             }
-            gitcomet_core::domain::DiffLineKind::Context => {
-                out.push_str(line.text());
-                out.push('\n');
-                prev_included = true;
-            }
-            gitcomet_core::domain::DiffLineKind::Header
+            gitcomet_core::domain::DiffLineKind::Context
+            | gitcomet_core::domain::DiffLineKind::Header
             | gitcomet_core::domain::DiffLineKind::Hunk => {
-                out.push_str(line.text());
-                out.push('\n');
+                push_patch_line(&mut out, line.raw());
                 prev_included = true;
             }
         }
@@ -741,7 +739,7 @@ pub(super) fn build_unified_patch_for_hunk_selection(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
     selected_src_ixs: &FxHashSet<usize>,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     build_unified_patch_for_hunk_selection_with_unselected_behavior(
         diff,
         hunk_src_ix,
@@ -761,7 +759,7 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
     selected_src_ixs: &FxHashSet<usize>,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     build_unified_patch_for_hunk_selection_with_unselected_behavior(
         diff,
         hunk_src_ix,
@@ -777,7 +775,7 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_reverse_apply(
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &FxHashSet<usize>,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     use gitcomet_core::domain::DiffLineKind as K;
     use std::collections::BTreeMap;
 
@@ -799,23 +797,23 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
         by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
     }
 
-    let mut out = String::new();
+    let mut out = Vec::new();
     for (hunk_src_ix, src_ixs) in by_hunk {
         let Some(patch) = build_unified_patch_for_hunk_selection(diff, hunk_src_ix, &src_ixs)
         else {
             continue;
         };
-        out.push_str(&patch);
+        out.extend_from_slice(&patch);
     }
 
-    (!out.trim().is_empty()).then_some(out)
+    patch_has_content(&out).then_some(out)
 }
 
 /// Multi-hunk form of [`build_unified_patch_for_hunk_selection_for_reverse_apply`].
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &FxHashSet<usize>,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     use gitcomet_core::domain::DiffLineKind as K;
     use std::collections::BTreeMap;
 
@@ -837,17 +835,17 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_ap
         by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
     }
 
-    let mut out = String::new();
+    let mut out = Vec::new();
     for (hunk_src_ix, src_ixs) in by_hunk {
         let Some(patch) =
             build_unified_patch_for_hunk_selection_for_reverse_apply(diff, hunk_src_ix, &src_ixs)
         else {
             continue;
         };
-        out.push_str(&patch);
+        out.extend_from_slice(&patch);
     }
 
-    (!out.trim().is_empty()).then_some(out)
+    patch_has_content(&out).then_some(out)
 }
 
 pub(super) fn context_menu_selection_range_from_diff_text(
@@ -1146,6 +1144,7 @@ mod tests {
     fn build_unified_patch_for_hunks_includes_multiple_hunks() {
         let diff = example_two_hunk_diff();
         let patch = build_unified_patch_for_hunks(&diff, &[4, 9]).expect("patch");
+        let patch = String::from_utf8(patch).expect("UTF-8 patch");
         assert!(patch.contains("@@ -1,3 +1,3 @@"));
         assert!(patch.contains("@@ -5,3 +5,4 @@"));
     }
@@ -1157,6 +1156,7 @@ mod tests {
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
+        let patch = String::from_utf8(patch).expect("UTF-8 patch");
         assert!(patch.contains("@@ -1,3 +1,3 @@"));
         assert!(patch.contains("@@ -5,3 +5,4 @@"));
         assert!(patch.contains("-line2"));
@@ -1179,6 +1179,7 @@ mod tests {
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
+        let patch = String::from_utf8(patch).expect("UTF-8 patch");
         assert!(patch.contains("diff --git a/a.txt b/a.txt"));
         assert!(patch.contains("diff --git a/b.txt b/b.txt"));
         assert!(patch.contains("+a"));
@@ -1192,6 +1193,7 @@ mod tests {
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
+        let patch = String::from_utf8(patch).expect("UTF-8 patch");
 
         assert!(patch.contains("-line2"));
         assert!(patch.contains("+line2_mod"));
@@ -1208,6 +1210,7 @@ mod tests {
         let patch =
             build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(&diff, &selected)
                 .expect("patch");
+        let patch = String::from_utf8(patch).expect("UTF-8 patch");
 
         assert!(patch.contains("-line2"));
         assert!(patch.contains("+line2_mod"));
@@ -1322,8 +1325,12 @@ mod tests {
 
     #[test]
     fn diff_text_display_len_expands_tabs_without_allocating() {
-        assert_eq!(diff_text_display_len("hello"), 5);
-        assert_eq!(diff_text_display_len("\twide\tcell"), 16);
+        let tab_width = 4;
+
+        assert_eq!(diff_text_display_len(tab_width, "hello"), 5);
+        // Tab stops of 4: "    wide" then a tab to column 12.
+        assert_eq!(diff_text_display_len(tab_width, "\twide\tcell"), 16);
+        assert_eq!(diff_text_display_len(tab_width, "ab\tc"), 5);
     }
 
     #[test]

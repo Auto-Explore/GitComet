@@ -32,6 +32,8 @@ fn tree_sitter_allocator_is_installed_before_any_test_runs() {
 /// bash block could be answered by the html grammar.
 #[test]
 fn injection_cache_separates_same_bytes_under_different_grammars() {
+    let tab_width = 4;
+
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 
     let body = "<p>a</p>\n";
@@ -86,8 +88,12 @@ fn injection_cache_separates_same_bytes_under_different_grammars() {
     // document rather than the sibling revision still sitting in the cache.
     let fence_line_ix = 3;
     let open_angle = body.find('<').expect("the tag opens the injected line");
-    let pair =
-        prepared_document_syntax_pair_at_display_offset(bash_document, fence_line_ix, open_angle);
+    let pair = prepared_document_syntax_pair_at_display_offset(
+        tab_width,
+        bash_document,
+        fence_line_ix,
+        open_angle,
+    );
     assert!(
         pair.is_none(),
         "bash owns these bytes and has no tag pair in them, but the html \
@@ -99,6 +105,8 @@ fn injection_cache_separates_same_bytes_under_different_grammars() {
 
 #[test]
 fn injection_cache_identity_includes_the_host_language() {
+    let tab_width = 4;
+
     reset_prepared_syntax_cache();
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 
@@ -140,10 +148,10 @@ fn injection_cache_identity_includes_the_host_language() {
         "identical source bytes parsed under different host grammars need distinct identities"
     );
 
-    let html_pair = prepared_document_syntax_pair_at_display_offset(html, 1, 0)
+    let html_pair = prepared_document_syntax_pair_at_display_offset(tab_width, html, 1, 0)
         .expect("HTML's JavaScript injection should retain its JSX tag tree");
     assert_eq!(html_pair.kind, SyntaxPairKind::Tag);
-    let vue_pair = prepared_document_syntax_pair_at_display_offset(vue, 1, 0)
+    let vue_pair = prepared_document_syntax_pair_at_display_offset(tab_width, vue, 1, 0)
         .expect("Vue's TSX injection should pair the component tags");
     assert_eq!(vue_pair.kind, SyntaxPairKind::Tag);
 
@@ -152,6 +160,8 @@ fn injection_cache_identity_includes_the_host_language() {
 
 #[test]
 fn reused_prefix_chunks_carry_injection_trees_to_the_new_revision() {
+    let tab_width = 4;
+
     reset_prepared_syntax_cache();
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 
@@ -202,7 +212,7 @@ fn reused_prefix_chunks_carry_injection_trees_to_the_new_revision() {
         })),
         "the reused prefix's injection tree should be re-keyed to the new revision"
     );
-    let pair = prepared_document_syntax_pair_at_display_offset(reparsed_document, 1, 0)
+    let pair = prepared_document_syntax_pair_at_display_offset(tab_width, reparsed_document, 1, 0)
         .expect("pair lookup should retain the unchanged injected prefix tree");
     assert_eq!(pair.kind, SyntaxPairKind::Tag);
     assert_eq!(pair.open[0].display_range, 0..5);
@@ -216,6 +226,8 @@ fn reused_prefix_chunks_carry_injection_trees_to_the_new_revision() {
 /// for that line's already-cached tokens does no work.
 #[test]
 fn prepared_pair_lookup_rebuilds_an_evicted_injection_tree() {
+    let tab_width = 4;
+
     reset_prepared_syntax_cache();
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 
@@ -251,8 +263,13 @@ fn prepared_pair_lookup_rebuilds_an_evicted_injection_tree() {
         "the test must evict the first fence's injection tree before lookup"
     );
 
-    let pair = prepared_document_syntax_pair_at_display_offset(document, body_line_indices[0], 0)
-        .expect("pair lookup should rebuild the evicted HTML injection tree");
+    let pair = prepared_document_syntax_pair_at_display_offset(
+        tab_width,
+        document,
+        body_line_indices[0],
+        0,
+    )
+    .expect("pair lookup should rebuild the evicted HTML injection tree");
     let first_body = &bodies[0];
     assert_eq!(pair.kind, SyntaxPairKind::Tag);
     assert_eq!(
@@ -281,6 +298,8 @@ fn prepared_pair_lookup_rebuilds_an_evicted_injection_tree() {
 /// than accepting the outer grammar's answer.
 #[test]
 fn prepared_pair_lookup_rebuilds_an_evicted_nested_injection_tree() {
+    let tab_width = 4;
+
     reset_prepared_syntax_cache();
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 
@@ -331,9 +350,13 @@ fn prepared_pair_lookup_rebuilds_an_evicted_nested_injection_tree() {
     let first_body = &script_bodies[0];
     let open = first_body.find('(').expect("opening parenthesis");
     let close = first_body.rfind(')').expect("closing parenthesis");
-    let pair =
-        prepared_document_syntax_pair_at_display_offset(document, script_line_indices[0], open)
-            .expect("pair lookup should rebuild the evicted nested JavaScript tree");
+    let pair = prepared_document_syntax_pair_at_display_offset(
+        tab_width,
+        document,
+        script_line_indices[0],
+        open,
+    )
+    .expect("pair lookup should rebuild the evicted nested JavaScript tree");
     assert_eq!(pair.kind, SyntaxPairKind::Bracket);
     assert_eq!(pair.open[0].display_range, open..open + 1);
     assert_eq!(pair.close[0].display_range, close..close + 1);

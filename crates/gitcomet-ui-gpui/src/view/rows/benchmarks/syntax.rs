@@ -102,8 +102,11 @@ impl SyntaxPairLookupFixture {
     }
 
     pub fn run_lookup(&self) -> u64 {
+        let tab_width = 4;
+
         let mut h = FxHasher::default();
         let pair = prepared_diff_syntax_pair_at_display_offset(
+            tab_width,
             self.document,
             self.line_ix,
             self.display_offset,
@@ -369,10 +372,13 @@ impl FileDiffSyntaxPrepareFixture {
         document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
         line_ix: usize,
     ) -> u64 {
+        let tab_width = 4;
+
         let line_ix = line_ix.min(lines.len().saturating_sub(1));
         let text = lines.get(line_ix).map(String::as_str).unwrap_or("");
         let styled =
             super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                tab_width,
                 self.theme,
                 text,
                 &[],
@@ -402,10 +408,13 @@ impl FileDiffSyntaxPrepareFixture {
         document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
         line_ix: usize,
     ) -> u64 {
+        let tab_width = 4;
+
         let line_ix = line_ix.min(line_count.saturating_sub(1));
         let text = super::diff_text::resolved_output_line_text(text, line_starts, line_ix);
         let styled =
             super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                tab_width,
                 self.theme,
                 text,
                 &[],
@@ -560,9 +569,12 @@ impl FileDiffSyntaxReparseFixture {
         lines: &[String],
         document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
     ) -> u64 {
+        let tab_width = 4;
+
         let text = lines.first().map(String::as_str).unwrap_or("");
         let styled =
             super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                tab_width,
                 self.theme,
                 text,
                 &[],
@@ -738,6 +750,8 @@ impl FileDiffInlineSyntaxProjectionFixture {
     }
 
     fn hash_window_step(&self, start: usize, window: usize) -> (u64, bool) {
+        let tab_width = 4;
+
         if self.inline_rows.is_empty() || window == 0 {
             return (0, false);
         }
@@ -753,6 +767,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
             .collect::<Vec<_>>();
         let styled_rows =
             super::diff_text::build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+                tab_width,
                 self.theme,
                 Some(self.language),
                 super::diff_text::PreparedDiffSyntaxTextSource {
@@ -1249,6 +1264,8 @@ impl WorktreePreviewRenderFixture {
         window: usize,
         prepared_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
     ) -> u64 {
+        let tab_width = 4;
+
         if self.lines.is_empty() || window == 0 {
             return 0;
         }
@@ -1263,7 +1280,7 @@ impl WorktreePreviewRenderFixture {
                 &self.line_starts,
                 line_ix,
             );
-            let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+            let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(tab_width,
                 self.theme,
                 &highlight_palette,
                 super::diff_text::PreparedDiffTextBuildRequest {
@@ -1538,7 +1555,16 @@ impl MarkdownPreviewScrollFixture {
     }
 
     pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
-        hash_markdown_preview_window(&self.host, self.theme, &self.document, start, window)
+        let tab_width = 4;
+
+        hash_markdown_preview_window(
+            tab_width,
+            &self.host,
+            self.theme,
+            &self.document,
+            start,
+            window,
+        )
     }
 
     pub fn run_scroll_step_with_metrics(
@@ -1633,20 +1659,43 @@ impl MarkdownPreviewFixture {
     }
 
     pub fn run_render_single_step(&self, start: usize, window: usize) -> u64 {
-        hash_markdown_preview_window(&self.host, self.theme, &self.single, start, window)
+        let tab_width = 4;
+
+        hash_markdown_preview_window(
+            tab_width,
+            &self.host,
+            self.theme,
+            &self.single,
+            start,
+            window,
+        )
     }
 
     /// Measure first-window diff rendering metrics (used for sidecar emission).
     pub fn measure_first_window_diff(&self, window: usize) -> MarkdownPreviewFirstWindowMetrics {
+        let tab_width = 4;
+
         let old_total = self.diff_preview.old.rows.len();
         let new_total = self.diff_preview.new.rows.len();
         let old_end = window.min(old_total);
         let new_end = window.min(new_total);
 
-        let old_rows_rendered =
-            render_markdown_preview_window(&self.host, self.theme, &self.diff_old, 0, old_end);
-        let new_rows_rendered =
-            render_markdown_preview_window(&self.host, self.theme, &self.diff_new, 0, new_end);
+        let old_rows_rendered = render_markdown_preview_window(
+            tab_width,
+            &self.host,
+            self.theme,
+            &self.diff_old,
+            0,
+            old_end,
+        );
+        let new_rows_rendered = render_markdown_preview_window(
+            tab_width,
+            &self.host,
+            self.theme,
+            &self.diff_new,
+            0,
+            new_end,
+        );
 
         MarkdownPreviewFirstWindowMetrics {
             old_total_rows: old_total as u64,
@@ -1662,14 +1711,28 @@ impl MarkdownPreviewFixture {
     }
 
     pub fn run_render_diff_step(&self, start: usize, window: usize) -> u64 {
+        let tab_width = 4;
+
         if window == 0 {
             return 0;
         }
 
-        let left_rows =
-            render_markdown_preview_window(&self.host, self.theme, &self.diff_old, start, window);
-        let right_rows =
-            render_markdown_preview_window(&self.host, self.theme, &self.diff_new, start, window);
+        let left_rows = render_markdown_preview_window(
+            tab_width,
+            &self.host,
+            self.theme,
+            &self.diff_old,
+            start,
+            window,
+        );
+        let right_rows = render_markdown_preview_window(
+            tab_width,
+            &self.host,
+            self.theme,
+            &self.diff_new,
+            start,
+            window,
+        );
 
         let mut h = FxHasher::default();
         start.hash(&mut h);
@@ -1751,6 +1814,7 @@ impl MarkdownElementHost {
 }
 
 fn hash_markdown_preview_window(
+    tab_width: usize,
     host: &MarkdownElementHost,
     theme: AppTheme,
     document: &MarkdownBenchDocument,
@@ -1761,7 +1825,7 @@ fn hash_markdown_preview_window(
         return 0;
     }
 
-    let rows = render_markdown_preview_window(host, theme, document, start, window);
+    let rows = render_markdown_preview_window(tab_width, host, theme, document, start, window);
     let mut h = FxHasher::default();
     start.hash(&mut h);
     window.hash(&mut h);
@@ -1773,6 +1837,7 @@ fn hash_markdown_preview_window(
 /// window`, as a frame builds the blocks near the viewport, and return how
 /// many rows those blocks hold.
 fn render_markdown_preview_window(
+    tab_width: usize,
     host: &MarkdownElementHost,
     theme: AppTheme,
     document: &MarkdownBenchDocument,
@@ -1811,7 +1876,12 @@ fn render_markdown_preview_window(
             change_extents: None,
             tasks_editable: false,
         };
-        super::render_markdown_document_with_blocks(&shared, &blocks[first..last], &context)
+        super::render_markdown_document_with_blocks(
+            tab_width,
+            &shared,
+            &blocks[first..last],
+            &context,
+        )
     });
     rows
 }

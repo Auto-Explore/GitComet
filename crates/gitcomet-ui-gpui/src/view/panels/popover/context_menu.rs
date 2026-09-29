@@ -41,6 +41,7 @@ mod submodule_inner_diff;
 mod submodule_section;
 mod tag;
 mod terminal;
+mod text_format_menu;
 mod ui_scale_picker;
 mod web_link;
 mod worktree;
@@ -643,6 +644,9 @@ impl PopoverHost {
             PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
             PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
+            PopoverKind::TextFormatMenu { section } => {
+                Some(text_format_menu::model(self, *section, cx))
+            }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu {
@@ -1117,6 +1121,38 @@ impl PopoverHost {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_file_list_sort(list, sort, cx);
                 });
+            }
+            ContextMenuAction::SetTextEncoding { encoding } => {
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_text_encoding_override(encoding, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SaveWithEncoding { format } => {
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_save_text_format(format, cx);
+                    });
+                });
+            }
+            ContextMenuAction::ConvertLineEndings { ending } => {
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.convert_file_editor_line_endings(ending, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SetTabSize { size } => {
+                self.main_pane
+                    .update(cx, |pane, _| pane.set_tab_size_override(size));
+            }
+            ContextMenuAction::AddGitattributesRule { rule } => {
+                self.main_pane
+                    .update(cx, |pane, _| pane.add_text_encoding_rule(rule));
             }
             ContextMenuAction::SetDiffContentMode { mode } => {
                 self.diff_content_mode = mode;
@@ -1677,7 +1713,7 @@ impl PopoverHost {
                 patch,
                 reverse,
             } => {
-                if patch.trim().is_empty() {
+                if patch.is_blank() {
                     self.push_toast(
                         components::ToastKind::Error,
                         "Patch is empty".to_string(),
@@ -1694,7 +1730,7 @@ impl PopoverHost {
                 patch,
                 reverse,
             } => {
-                if patch.trim().is_empty() {
+                if patch.is_blank() {
                     self.push_toast(
                         components::ToastKind::Error,
                         "Patch is empty".to_string(),
@@ -2031,12 +2067,13 @@ impl PopoverHost {
         &self,
         repo_id: RepoId,
         hunk_src_ix: usize,
-    ) -> Option<String> {
+    ) -> Option<gitcomet_state::msg::ContentBytes> {
         let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
         let Loadable::Ready(diff) = &repo.diff_state.diff else {
             return None;
         };
         crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)
+            .map(Into::into)
     }
 
     fn scroll_context_menu_selection(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {

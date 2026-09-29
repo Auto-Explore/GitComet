@@ -382,6 +382,8 @@ fn syntax_corpus_tokens_are_slices_of_their_own_line() {
 /// return trip starts from the projected position.
 #[test]
 fn syntax_corpus_pairs_agree_from_both_ends() {
+    let tab_width = 4;
+
     let root = corpus_or_skip!();
     let mut failures: Vec<String> = Vec::new();
     let mut probes = 0usize;
@@ -413,10 +415,11 @@ fn syntax_corpus_pairs_agree_from_both_ends() {
                 probes_in_file += 1;
                 probes += 1;
 
-                let column = display_offset_for_raw_offset(line, token.range.start);
+                let column = display_offset_for_raw_offset(tab_width, line, token.range.start);
                 // No pair is a legitimate answer: the corpus is full of
                 // deliberately unbalanced and malformed text.
                 let Some(hit) = prepared_document_syntax_pair_at_display_offset(
+                    tab_width,
                     sample.document,
                     line_ix,
                     column,
@@ -436,8 +439,10 @@ fn syntax_corpus_pairs_agree_from_both_ends() {
                         ));
                         continue;
                     }
-                    let width =
-                        crate::view::diff_utils::diff_text_display_len(sample.line(span.line_ix));
+                    let width = crate::view::diff_utils::diff_text_display_len(
+                        tab_width,
+                        sample.line(span.line_ix),
+                    );
                     if span.display_range.start >= span.display_range.end
                         || span.display_range.end > width
                     {
@@ -468,6 +473,7 @@ fn syntax_corpus_pairs_agree_from_both_ends() {
                     .saturating_sub(1)
                     .max(far.display_range.start);
                 let back = prepared_document_syntax_pair_at_display_offset(
+                    tab_width,
                     sample.document,
                     far.line_ix,
                     far_column,
@@ -696,6 +702,8 @@ fn syntax_corpus_dump() {
 /// ```
 #[test]
 fn syntax_pair_probe() {
+    let tab_width = 4;
+
     let Some(requested) = std::env::var_os("GITCOMET_SYNTAX_PAIRS") else {
         println!("skipping pair probe: set $GITCOMET_SYNTAX_PAIRS to <path>:<line>");
         return;
@@ -733,33 +741,36 @@ fn syntax_pair_probe() {
         line_ix + 1
     );
     println!("  {line}");
-    let width = crate::view::diff_utils::diff_text_display_len(line);
+    let width = crate::view::diff_utils::diff_text_display_len(tab_width, line);
     for column in 0..=width {
         let at = line
             .chars()
             .nth(column)
             .map_or_else(|| "<eol>".to_string(), |ch| format!("{ch:?}"));
-        let rendered =
-            match prepared_document_syntax_pair_at_display_offset(sample.document, line_ix, column)
-            {
-                Some(hit) => {
-                    let span = |s: &PreparedSyntaxPairSpan| {
-                        format!(
-                            "{}:{}..{}",
-                            s.line_ix + 1,
-                            s.display_range.start,
-                            s.display_range.end
-                        )
-                    };
+        let rendered = match prepared_document_syntax_pair_at_display_offset(
+            tab_width,
+            sample.document,
+            line_ix,
+            column,
+        ) {
+            Some(hit) => {
+                let span = |s: &PreparedSyntaxPairSpan| {
                     format!(
-                        "{:?} open={} close={}",
-                        hit.kind,
-                        hit.open.iter().map(span).collect::<Vec<_>>().join(","),
-                        hit.close.iter().map(span).collect::<Vec<_>>().join(","),
+                        "{}:{}..{}",
+                        s.line_ix + 1,
+                        s.display_range.start,
+                        s.display_range.end
                     )
-                }
-                None => "-".to_string(),
-            };
+                };
+                format!(
+                    "{:?} open={} close={}",
+                    hit.kind,
+                    hit.open.iter().map(span).collect::<Vec<_>>().join(","),
+                    hit.close.iter().map(span).collect::<Vec<_>>().join(","),
+                )
+            }
+            None => "-".to_string(),
+        };
         println!("  col {column:>3} {at:<8} {rendered}");
     }
 }

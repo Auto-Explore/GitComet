@@ -1,6 +1,404 @@
 use super::*;
 use gitcomet_core::domain::Upstream;
 
+/// Exercise a worker effect and feed all its replies through the reducer.
+fn apply_effect_with_state_for_test(
+    executor: &super::executor::TaskExecutor,
+    backend: &Arc<dyn GitBackend>,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    effect: Effect,
+) -> Vec<Effect> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        executor,
+        executor,
+        backend,
+        repos,
+        state.clone(),
+        tx,
+        effect,
+    );
+    let mut followups = Vec::new();
+    loop {
+        match recv_effect_message(&rx, Duration::from_secs(5)) {
+            Ok(reply) => followups.extend(reduce(repos, &AtomicU64::new(9600), state, reply)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return followups,
+            Err(error) => panic!("effect did not finish: {error}"),
+        }
+    }
+}
+
+fn selected_diff_effect(effects: Vec<Effect>) -> Effect {
+    effects
+        .into_iter()
+        .find(|effect| matches!(effect, Effect::LoadSelectedDiff { .. }))
+        .expect("selected diff refresh")
+}
+
+#[test]
+fn attribute_refresh_redecodes_staged_and_commit_diffs() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path();
+    run_git(workdir, &["init", "-q"]);
+    run_git(workdir, &["config", "user.name", "Test"]);
+    run_git(workdir, &["config", "user.email", "test@example.com"]);
+    run_git(workdir, &["config", "commit.gpgsign", "false"]);
+    fs::write(workdir.join("menu.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4\n").unwrap();
+    run_git(workdir, &["add", "menu.txt"]);
+    run_git(workdir, &["commit", "-qm", "base"]);
+    fs::write(workdir.join("menu.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4!\n").unwrap();
+    run_git(workdir, &["commit", "-qam", "change"]);
+    fs::write(workdir.join("menu.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4!!\n").unwrap();
+    run_git(workdir, &["add", "menu.txt"]);
+
+    let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+    let repo = backend.open(workdir).unwrap();
+    let repo_id = RepoId(9530);
+    let mut repos = FxHashMap::default();
+    repos.insert(repo_id, repo.clone());
+    let executor = super::executor::TaskExecutor::new(1);
+    let resolve_commit = |revision: &str| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["rev-parse", revision])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        CommitId(String::from_utf8(output.stdout).unwrap().trim().into())
+    };
+    let head = resolve_commit("HEAD");
+    let base = resolve_commit("HEAD^");
+    for (target, expected) in [
+        (
+            DiffTarget::WorkingTree {
+                path: "menu.txt".into(),
+                area: DiffArea::Staged,
+            },
+            "Привет!!\n",
+        ),
+        (
+            DiffTarget::Commit {
+                commit_id: head.clone(),
+                path: Some("menu.txt".into()),
+            },
+            "Привет!\n",
+        ),
+        (
+            DiffTarget::CommitRange {
+                from_commit_id: base,
+                to_commit_id: Some(head),
+                path: Some("menu.txt".into()),
+            },
+            "Привет!\n",
+        ),
+    ] {
+        fs::write(
+            workdir.join(".gitattributes"),
+            "*.txt encoding=windows-1252\n",
+        )
+        .unwrap();
+        let mut state = AppState::test_default();
+        let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
+        repo_state.diff_state.diff_target = Some(target.clone());
+        repo_state.diff_state.text_attributes = Loadable::Ready(Arc::new(
+            repo.text_attributes(Path::new("menu.txt")).unwrap(),
+        ));
+        let original = Arc::new(
+            repo.diff_parsed_with_encoding_cancellable(&target, None, &CancellationToken::new())
+                .unwrap(),
+        );
+        repo_state.diff_state.diff = Loadable::Ready(original.clone());
+        repo_state.diff_state.diff_file = Loadable::Ready(
+            repo.diff_file_text_with_encoding_cancellable(&target, None, &CancellationToken::new())
+                .unwrap()
+                .map(Arc::new),
+        );
+        state.repos.push(repo_state);
+        state.active_repo = Some(repo_id);
+
+        fs::write(workdir.join(".gitattributes"), "*.txt encoding=koi8-r\n").unwrap();
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(9531),
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: crate::msg::RepoExternalChange {
+                    text_attributes: true,
+                    ..crate::msg::RepoExternalChange::Worktree
+                },
+            },
+        );
+        let followups = apply_effect_with_state_for_test(
+            &executor,
+            &backend,
+            &mut repos,
+            &mut state,
+            selected_diff_effect(effects),
+        );
+        assert!(
+            matches!(&state.repos[0].diff_state.diff, Loadable::Ready(diff) if Arc::ptr_eq(diff, &original)),
+            "keep content visible until the replacement arrives"
+        );
+        let reload = selected_diff_effect(followups);
+        assert!(matches!(
+            reload,
+            Effect::LoadSelectedDiff {
+                load_patch_diff: true,
+                load_file_text: true,
+                ..
+            }
+        ));
+        assert!(
+            apply_effect_with_state_for_test(&executor, &backend, &mut repos, &mut state, reload)
+                .is_empty(),
+            "an unchanged attribute reply must not reload again"
+        );
+
+        let diff_state = &state.repos[0].diff_state;
+        assert_eq!(diff_state.diff_target.as_ref(), Some(&target));
+        let Loadable::Ready(diff) = &diff_state.diff else {
+            panic!("patch did not reload")
+        };
+        assert!(
+            diff.lines
+                .iter()
+                .any(|line| line.kind == gitcomet_core::domain::DiffLineKind::Add
+                    && line.text.as_ref() == format!("+{}", expected.trim_end()))
+        );
+        let Loadable::Ready(Some(file)) = &diff_state.diff_file else {
+            panic!("file text did not reload")
+        };
+        assert_eq!(
+            fs::read_to_string(&file.new_source.as_ref().unwrap().path).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn saving_attributes_preserves_choices_even_when_the_rule_is_shadowed() {
+    use gitcomet_core::text_format::{TextEncoding, TextOverride};
+    for shadow in [
+        None,
+        Some("sub/.gitattributes"),
+        Some(".git/info/attributes"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = dir.path();
+        run_git(workdir, &["init", "-q"]);
+        fs::create_dir(workdir.join("sub")).unwrap();
+        fs::write(workdir.join("sub/menu.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4\n").unwrap();
+        fs::write(
+            workdir.join(".gitattributes"),
+            "*.txt encoding=windows-1252\n",
+        )
+        .unwrap();
+        if let Some(shadow) = shadow {
+            fs::write(workdir.join(shadow), "*.txt encoding=windows-1252\n").unwrap();
+        }
+        let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+        let repo = backend.open(workdir).unwrap();
+        let repo_id = RepoId(9540);
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, repo.clone());
+        let mut state = AppState::test_default();
+        let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
+        let path = PathBuf::from("sub/menu.txt");
+        repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        });
+        repo_state.diff_state.content_preview = true;
+        repo_state.diff_state.text_attributes =
+            Loadable::Ready(Arc::new(repo.text_attributes(&path).unwrap()));
+        let chosen = TextOverride {
+            encoding: TextEncoding::from_label("koi8-r"),
+            tab_size: Some(3),
+        };
+        repo_state.diff_state.text_override = Some(crate::model::OpenFileTextOverride {
+            path: path.clone(),
+            value: chosen,
+        });
+        state.repos.push(repo_state);
+        state.active_repo = Some(repo_id);
+        let executor = super::executor::TaskExecutor::new(1);
+        let rule = "/sub/menu.txt encoding=KOI8-R".to_string();
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(9541),
+            &mut state,
+            Msg::AppendGitattributesRule {
+                repo_id,
+                rule: rule.clone(),
+            },
+        );
+        let followups = apply_effect_with_state_for_test(
+            &executor,
+            &backend,
+            &mut repos,
+            &mut state,
+            effects.into_iter().next().unwrap(),
+        );
+        apply_effect_with_state_for_test(
+            &executor,
+            &backend,
+            &mut repos,
+            &mut state,
+            selected_diff_effect(followups),
+        );
+        assert!(
+            fs::read_to_string(workdir.join(".gitattributes"))
+                .unwrap()
+                .ends_with(&format!("{rule}\n"))
+        );
+        let diff = &state.repos[0].diff_state;
+        assert_eq!(
+            diff.text_override_for(&path),
+            Some(chosen),
+            "shadow: {shadow:?}"
+        );
+        assert_eq!(diff.text_override_rev, 0);
+        let Loadable::Ready(attributes) = &diff.text_attributes else {
+            panic!("attributes did not reload")
+        };
+        assert_eq!(
+            attributes.encoding.as_ref().unwrap().encoding,
+            if shadow.is_some() {
+                Some(TextEncoding::WINDOWS_1252)
+            } else {
+                chosen.encoding
+            }
+        );
+        let decoded = gitcomet_core::text_format::decode_bytes(
+            &fs::read(workdir.join(&path)).unwrap(),
+            gitcomet_core::text_format::SideKind::Worktree,
+            attributes,
+            diff.selected_encoding_override(),
+        )
+        .text
+        .into_owned();
+        assert_eq!(decoded, "Привет\n");
+    }
+}
+
+#[test]
+fn repository_refreshes_reload_selected_text_attributes_from_git() {
+    use crate::msg::RepoExternalChange;
+    use gitcomet_core::text_format::{TabWidthSource, TextEncoding};
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q"]);
+    let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+    let repo = backend.open(dir.path()).unwrap();
+    let repo_id = RepoId(9521);
+    let path = PathBuf::from("menu.txt");
+    let mut repos = FxHashMap::default();
+    repos.insert(repo_id, repo.clone());
+    let executor = super::executor::TaskExecutor::new(1);
+    let id_alloc = AtomicU64::new(9522);
+    for refresh in [
+        Msg::ReloadRepo { repo_id },
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange {
+                text_attributes: true,
+                ..RepoExternalChange::Worktree
+            },
+        },
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange {
+                text_attributes: true,
+                ..RepoExternalChange::Index
+            },
+        },
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange {
+                text_attributes: true,
+                ..RepoExternalChange::GitState
+            },
+        },
+    ] {
+        fs::write(
+            dir.path().join(".gitattributes"),
+            "/menu.txt encoding=windows-1252 whitespace=tabwidth=2\n",
+        )
+        .unwrap();
+        let original = repo.text_attributes(&path).unwrap();
+        let mut state = AppState::test_default();
+        let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
+        repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        });
+        // This preview reads from disk and does not otherwise load a diff.
+        repo_state.diff_state.content_preview = true;
+        repo_state.diff_state.text_attributes = Loadable::Ready(Arc::new(original.clone()));
+        let original_rev = repo_state.diff_state.text_attributes_rev;
+        state.repos.push(repo_state);
+        state.active_repo = Some(repo_id);
+        fs::write(
+            dir.path().join(".gitattributes"),
+            "/menu.txt encoding=koi8-r whitespace=tabwidth=8\n",
+        )
+        .unwrap();
+        let effects = reduce(&mut repos, &id_alloc, &mut state, refresh);
+        let load = effects
+            .into_iter()
+            .find(|effect| matches!(effect, Effect::LoadSelectedDiff { .. }))
+            .expect("a refresh must request the selected file's attributes");
+        let (tx, rx) = std::sync::mpsc::channel();
+        schedule_effect_with_state_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            state.clone(),
+            tx,
+            load,
+        );
+        let reply = recv_effect_message(&rx, Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            reply,
+            Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded { .. })
+        ));
+        reduce(&mut repos, &id_alloc, &mut state, reply);
+        let diff = &state.repos[0].diff_state;
+        let Loadable::Ready(attributes) = &diff.text_attributes else {
+            panic!("attributes did not load")
+        };
+        assert_ne!(attributes.as_ref(), &original);
+        assert_eq!(
+            attributes.encoding.as_ref().and_then(|attr| attr.encoding),
+            TextEncoding::from_label("koi8-r")
+        );
+        let tab = attributes.tab_width.unwrap();
+        assert_eq!(tab.columns, 8);
+        assert_eq!(tab.source, TabWidthSource::Attribute);
+        assert!(diff.text_attributes_rev > original_rev);
+        let revision = diff.text_attributes_rev;
+        let attributes = attributes.as_ref().clone();
+        // An unchanged refresh should not churn the editor's decoding key.
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path: path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                result: Ok(attributes),
+            }),
+        );
+        assert_eq!(state.repos[0].diff_state.text_attributes_rev, revision);
+    }
+}
+
 #[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
     for cancel_repo_loads in [false, true] {
@@ -1941,7 +2339,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
-            contents: contents.to_string(),
+            contents: contents.to_string().into(),
             stage: true,
         },
     );
@@ -1999,7 +2397,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: escaped_path,
-            contents: "escape".to_string(),
+            contents: "escape".to_string().into(),
             stage: false,
         },
     );
@@ -5915,7 +6313,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from("nested/new.txt"),
-                contents: "content".to_string(),
+                contents: "content".to_string().into(),
                 stage: true,
             },
             1,
@@ -6068,21 +6466,21 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::StageHunk {
                 repo_id,
-                patch: "@@ -1 +1 @@".to_string(),
+                patch: "@@ -1 +1 @@".to_string().into(),
             },
             1,
         ),
         (
             Effect::UnstageHunk {
                 repo_id,
-                patch: "@@ -1 +1 @@".to_string(),
+                patch: "@@ -1 +1 @@".to_string().into(),
             },
             1,
         ),
         (
             Effect::ApplyWorktreePatch {
                 repo_id,
-                patch: "@@ -1 +1 @@".to_string(),
+                patch: "@@ -1 +1 @@".to_string().into(),
                 reverse: true,
             },
             1,

@@ -535,6 +535,21 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
     }
 
+    /// The default tab size, from the settings window.
+    pub(in crate::view) fn set_diff_tab_size(&mut self, next: u8, cx: &mut gpui::Context<Self>) {
+        let next = next.clamp(1, crate::view::tab_width::MAX_TAB_WIDTH);
+        if self.diff_tab_size == next {
+            return;
+        }
+        self.diff_tab_size = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.diff.tab_size = next;
+        });
+        self.schedule_ui_settings_persist(cx);
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_default_tab_size(next, cx));
+    }
+
     pub(super) fn apply_diff_show_line_numbers_preference(
         &mut self,
         next: bool,

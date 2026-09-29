@@ -4,7 +4,7 @@ use super::*;
 #[cfg(feature = "benchmarks")]
 #[inline]
 pub(crate) fn benchmark_text_input_wrap_rows_for_line(text: &str, wrap_columns: usize) -> usize {
-    estimate_wrap_rows_for_line(text, wrap_columns)
+    estimate_wrap_rows_for_line(text, wrap_columns, TEXT_INPUT_WRAP_TAB_STOP_COLUMNS)
 }
 
 pub(super) fn wrap_width_cache_key(wrap_width: Pixels) -> i32 {
@@ -190,9 +190,9 @@ pub(super) fn wrap_columns_for_width(wrap_width: Pixels, font_size: Pixels) -> u
 /// horizontal scroll bound reflects rendered tab expansion instead of raw byte
 /// length (a tab is one byte but advances to the next tab stop when rendered).
 #[inline]
-pub(super) fn line_display_columns(line_text: &str) -> usize {
+pub(super) fn line_display_columns(line_text: &str, tab_stop: usize) -> usize {
     let bytes = line_text.as_bytes();
-    let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+    let tab_stop = tab_stop.max(1);
 
     // ASCII fast path: jump between tabs and advance whole segments at once.
     if line_text.is_ascii() {
@@ -219,10 +219,20 @@ pub(super) fn line_display_columns(line_text: &str) -> usize {
     column
 }
 
-pub(super) fn estimate_wrap_rows_for_text(text: &str, wrap_columns: usize) -> Vec<usize> {
+pub(super) fn estimate_wrap_rows_for_text(
+    text: &str,
+    wrap_columns: usize,
+    tab_stop: usize,
+) -> Vec<usize> {
     let line_starts = compute_line_starts(text);
     let mut rows = Vec::with_capacity(line_starts.len().max(1));
-    estimate_wrap_rows_with_line_starts(text, line_starts.as_slice(), wrap_columns, &mut rows);
+    estimate_wrap_rows_with_line_starts(
+        text,
+        line_starts.as_slice(),
+        wrap_columns,
+        tab_stop,
+        &mut rows,
+    );
     rows
 }
 
@@ -230,6 +240,7 @@ pub(super) fn estimate_wrap_rows_with_line_starts(
     text: &str,
     line_starts: &[usize],
     wrap_columns: usize,
+    tab_stop: usize,
     rows: &mut Vec<usize>,
 ) {
     let line_count = line_starts.len().max(1);
@@ -239,7 +250,7 @@ pub(super) fn estimate_wrap_rows_with_line_starts(
             std::thread::yield_now();
         }
         let line_text = line_text_for_index(text, line_starts, line_ix);
-        *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns);
+        *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns, tab_stop);
     }
 }
 
@@ -247,6 +258,7 @@ pub(super) fn estimate_wrap_rows_budgeted(
     text: &str,
     line_starts: &[usize],
     wrap_columns: usize,
+    tab_stop: usize,
     rows: &mut [usize],
     current: &[bool],
     budget: Duration,
@@ -266,23 +278,27 @@ pub(super) fn estimate_wrap_rows_budgeted(
         }
         if !current.get(line_ix).copied().unwrap_or(false) {
             let line_text = line_text_for_index(text, line_starts, line_ix);
-            *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns);
+            *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns, tab_stop);
         }
     }
 }
 
 #[inline]
-pub(super) fn estimate_wrap_rows_for_line(line_text: &str, wrap_columns: usize) -> usize {
+pub(super) fn estimate_wrap_rows_for_line(
+    line_text: &str,
+    wrap_columns: usize,
+    tab_stop: usize,
+) -> usize {
     if line_text.is_empty() {
         return 1;
     }
     let wrap_columns = wrap_columns.max(1);
+    let tab_stop = tab_stop.max(1);
     let bytes = line_text.as_bytes();
 
     // ASCII fast path: process segments between tabs in O(1) each
     // instead of iterating character by character.
     if line_text.is_ascii() {
-        let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
         let mut rows = 1usize;
         let mut column = 0usize;
         let mut pos = 0usize;
@@ -293,7 +309,7 @@ pub(super) fn estimate_wrap_rows_for_line(line_text: &str, wrap_columns: usize) 
                 if seg > 0 {
                     advance_ascii_segment(&mut rows, &mut column, seg, wrap_columns);
                 }
-                advance_ascii_tab_common(&mut rows, &mut column, wrap_columns);
+                advance_ascii_tab_common(&mut rows, &mut column, wrap_columns, tab_stop);
                 pos = tab_pos + 1;
             }
         } else {
@@ -302,7 +318,7 @@ pub(super) fn estimate_wrap_rows_for_line(line_text: &str, wrap_columns: usize) 
                 if seg > 0 {
                     advance_ascii_segment(&mut rows, &mut column, seg, wrap_columns);
                 }
-                advance_ascii_tab_general(&mut rows, &mut column, wrap_columns);
+                advance_ascii_tab_general(&mut rows, &mut column, wrap_columns, tab_stop);
                 pos = tab_pos + 1;
             }
         }
@@ -319,12 +335,7 @@ pub(super) fn estimate_wrap_rows_for_line(line_text: &str, wrap_columns: usize) 
     let mut column = 0usize;
     for ch in line_text.chars() {
         let width = if ch == '\t' {
-            let rem = column % TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
-            if rem == 0 {
-                TEXT_INPUT_WRAP_TAB_STOP_COLUMNS
-            } else {
-                TEXT_INPUT_WRAP_TAB_STOP_COLUMNS - rem
-            }
+            tab_stop - column % tab_stop
         } else {
             1
         };
@@ -371,10 +382,13 @@ pub(super) fn advance_ascii_segment(
 }
 
 #[inline]
-pub(super) fn advance_ascii_tab_common(rows: &mut usize, column: &mut usize, wrap_columns: usize) {
-    debug_assert!(TEXT_INPUT_WRAP_TAB_STOP_COLUMNS.is_power_of_two());
-    let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
-    let tab_width = tab_stop - (*column & (tab_stop - 1));
+pub(super) fn advance_ascii_tab_common(
+    rows: &mut usize,
+    column: &mut usize,
+    wrap_columns: usize,
+    tab_stop: usize,
+) {
+    let tab_width = tab_stop - *column % tab_stop;
     if *column > wrap_columns - tab_width {
         *rows += 1;
         *column = tab_width;
@@ -384,8 +398,12 @@ pub(super) fn advance_ascii_tab_common(rows: &mut usize, column: &mut usize, wra
 }
 
 #[inline]
-pub(super) fn advance_ascii_tab_general(rows: &mut usize, column: &mut usize, wrap_columns: usize) {
-    let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+pub(super) fn advance_ascii_tab_general(
+    rows: &mut usize,
+    column: &mut usize,
+    wrap_columns: usize,
+    tab_stop: usize,
+) {
     let rem = *column % tab_stop;
     let tab_width = if rem == 0 { tab_stop } else { tab_stop - rem };
     if tab_width >= wrap_columns {

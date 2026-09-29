@@ -1368,6 +1368,17 @@ impl MainPaneView {
             return;
         };
         if self.is_file_editor_active() {
+            // With auto-save on, leaving is a save; one that cannot be written
+            // keeps the editor open instead of hiding the edits in the stash.
+            if self.auto_save_file_edits
+                && self.file_editor_dirty
+                && !self.file_editor_loading
+                && !self.file_disk_notice_awaits_editor()
+                && !self.save_file_editor_buffer(cx)
+            {
+                cx.notify();
+                return;
+            }
             // Whatever is unsaved is either written or kept, never dropped.
             self.flush_file_editor_buffer(cx);
             self.store.dispatch(Msg::ExitDiffEditMode { repo_id });
@@ -1425,7 +1436,11 @@ impl MainPaneView {
         {
             return;
         }
-        self.save_file_editor_buffer(cx);
+        // Nothing was written (the text cannot be encoded): stay with the edits.
+        if !self.save_file_editor_buffer(cx) {
+            cx.notify();
+            return;
+        }
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
@@ -1721,6 +1736,8 @@ impl MainPaneView {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        self.sync_display_tab_width(cx);
+        let tab_width = self.display_tab_width;
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
@@ -2072,10 +2089,13 @@ impl MainPaneView {
                     // control over a body with no buffer is a trap.
                     // Discard sits before Save, so the pair reads as the two
                     // ways out of an unsaved buffer in the order they are meant.
-                    .when(is_file_editor && !self.auto_save_file_edits, |d| {
-                        d.child(self.file_editor_discard_button(theme, cx))
-                            .child(self.file_editor_save_button(theme, cx))
-                    });
+                    .when(
+                        is_file_editor && self.file_editor_shows_save_controls(),
+                        |d| {
+                            d.child(self.file_editor_discard_button(theme, cx))
+                                .child(self.file_editor_save_button(theme, cx))
+                        },
+                    );
             } else {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
@@ -2103,10 +2123,13 @@ impl MainPaneView {
                 // Saving is explicit only when auto-save is off; with it on the
                 // button would never be enabled long enough to click, and
                 // neither would the Discard beside it.
-                .when(is_file_editor && !self.auto_save_file_edits, |d| {
-                    d.child(self.file_editor_discard_button(theme, cx))
-                        .child(self.file_editor_save_button(theme, cx))
-                });
+                .when(
+                    is_file_editor && self.file_editor_shows_save_controls(),
+                    |d| {
+                        d.child(self.file_editor_discard_button(theme, cx))
+                            .child(self.file_editor_save_button(theme, cx))
+                    },
+                );
         }
 
         if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {
@@ -2286,6 +2309,7 @@ impl MainPaneView {
             );
 
         let disk_notice = self.render_file_disk_notice(theme, cx);
+        let text_format_strip = self.text_format_strip(cx);
 
         let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)
@@ -2335,6 +2359,7 @@ impl MainPaneView {
                                     let image_root = self.markdown_preview_image_root();
                                     let drawn_pictures = rows::MarkdownDrawnPictures::default();
                                     let body = rows::render_markdown_document(
+                                        tab_width,
                                         &document,
                                         &rows::MarkdownDocumentContext {
                                             theme,
@@ -3326,6 +3351,7 @@ impl MainPaneView {
                     .h_full()
                     .child(body),
             )
+            .when_some(text_format_strip, |d, strip| d.child(strip))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker { view: cx.entity() })
     }

@@ -296,6 +296,7 @@ pub(super) fn summarize(
         git_state: false,
         tags: false,
         verification_context: false,
+        text_attributes: false,
     };
     let structural = structural_event(event);
     for path in &event.paths {
@@ -306,6 +307,17 @@ pub(super) fn summarize(
         let mut lstat: Option<Option<fs::Metadata>> = None;
         if class == PathClass::Cache || snapshot.is_git_directory_modify(path, event) {
             continue;
+        }
+        if class != PathClass::Outside
+            && (path
+                .file_name()
+                .is_some_and(|name| name == ".gitattributes")
+                || snapshot
+                    .git_roots
+                    .iter()
+                    .any(|root| path == &root.join("info/attributes")))
+        {
+            change.text_attributes = true;
         }
         // A regular file holds no inputs. Any input that vanished when it
         // replaced a directory changed its stamp, checked at the same flush;
@@ -642,6 +654,7 @@ pub(super) fn repo_monitor_thread(
                         git_state: false,
                         tags: false,
                         verification_context: false,
+                        text_attributes: false,
                     }),
                     RepoExternalChange {
                         worktree: false,
@@ -649,6 +662,7 @@ pub(super) fn repo_monitor_thread(
                         git_state: false,
                         tags: false,
                         verification_context: false,
+                        text_attributes: false,
                     },
                 ));
             }
