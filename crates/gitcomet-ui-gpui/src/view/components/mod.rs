@@ -38,7 +38,7 @@ pub use containers::{
 pub use containers::{panel, pill};
 pub use context_menu::{
     ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, context_menu, context_menu_description,
-    context_menu_header, context_menu_label, context_menu_separator,
+    context_menu_group, context_menu_header, context_menu_label, context_menu_separator,
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};

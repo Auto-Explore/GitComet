@@ -326,7 +326,17 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
     }
     let pins: Rc<[BranchSidebarRow]> = pins.into();
     let mut combined = pins.to_vec();
-    combined.extend(rows);
+    for row in rows {
+        // One blank slot before each section. Stuck headers stack over it.
+        if scope.is_none()
+            && !combined.is_empty()
+            && super::sidebar_sticky::header_key(&row)
+                .is_some_and(|key| branch_sidebar::is_top_level_collapse_key(key))
+        {
+            combined.push(BranchSidebarRow::SectionSpacer);
+        }
+        combined.push(row);
+    }
     let rows: Rc<[BranchSidebarRow]> = combined.into();
     let structure = Rc::new(super::sidebar_sticky::SidebarStructure::with_pins(
         &rows,
@@ -337,6 +347,10 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
         .iter()
         .enumerate()
         .map(|(ix, row)| {
+            if matches!(row, BranchSidebarRow::SectionSpacer) {
+                let next = rows.get(ix + 1).map(super::sidebar_sticky::row_key);
+                return format!("gap:{}", next.unwrap_or_default()).into();
+            }
             let key = super::sidebar_sticky::row_key(row);
             if ix < pins.len() {
                 if matches!(
@@ -510,6 +524,91 @@ mod tests {
         assert!(
             Rc::ptr_eq(&first.row_keys, &second.row_keys),
             "unchanged refresh reformatted every row key"
+        );
+    }
+
+    #[test]
+    fn section_gaps_precede_every_section_except_the_first_row() {
+        let (state, pins) = review_cache_fixture();
+        let empty = BTreeMap::new();
+        let gaps = |p: &SidebarPresentation| {
+            let gaps: Vec<_> = p
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| matches!(row, BranchSidebarRow::SectionSpacer))
+                .map(|(ix, _)| ix)
+                .collect();
+            let expected: Vec<_> = p
+                .structure
+                .sections
+                .iter()
+                .filter(|ix| **ix > 0)
+                .map(|ix| ix - 1)
+                .collect();
+            assert_eq!(gaps, expected);
+            assert_eq!(
+                p.row_keys.iter().collect::<BTreeSet<_>>().len(),
+                p.row_keys.len()
+            );
+            gaps
+        };
+        let plain = build_sidebar_presentation(
+            &mut SidebarPresentationCache::default(),
+            &state,
+            &empty,
+            &empty,
+            "",
+        )
+        .unwrap();
+        assert!(matches!(
+            plain.rows[0],
+            BranchSidebarRow::SectionHeader { .. }
+        ));
+        assert!(plain.structure.sections.len() > 1);
+        assert_eq!(gaps(&plain).len(), plain.structure.sections.len() - 1);
+        assert!(!matches!(
+            plain.rows.last(),
+            Some(BranchSidebarRow::SectionSpacer)
+        ));
+
+        let pinned = build_sidebar_presentation(
+            &mut SidebarPresentationCache::default(),
+            &state,
+            &empty,
+            &pins,
+            "",
+        )
+        .unwrap();
+        assert!(!pinned.pins.is_empty());
+        assert_eq!(pinned.structure.sections[0], pinned.pins.len() + 1);
+        assert_eq!(gaps(&pinned).len(), pinned.structure.sections.len());
+
+        let filtered = build_sidebar_presentation(
+            &mut SidebarPresentationCache::default(),
+            &state,
+            &empty,
+            &empty,
+            "feat/A",
+        )
+        .unwrap();
+        gaps(&filtered);
+
+        let rail = build_sidebar_presentation_scoped(
+            &mut SidebarPresentationCache::default(),
+            &state,
+            &empty,
+            &pins,
+            "",
+            Default::default(),
+            Some(branch_sidebar::local_section_storage_key()),
+        )
+        .unwrap();
+        assert!(
+            !rail
+                .rows
+                .iter()
+                .any(|row| matches!(row, BranchSidebarRow::SectionSpacer))
         );
     }
 

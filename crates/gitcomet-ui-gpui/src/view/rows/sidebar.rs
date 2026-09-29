@@ -58,8 +58,6 @@ pub(in crate::view) fn sidebar_list_row_height(
     ui_scale::design_px_from_percent(sidebar_list_row_height_px(theme), ui_scale_percent)
 }
 
-/// Height of placeholders for rows painted by a sticky decoration.
-pub(in crate::view) const BRANCH_TREE_SPACER_HEIGHT_PX: f32 = 8.0;
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
@@ -782,13 +780,10 @@ impl SidebarPaneView {
                         .map(|row| paint_header(row.into_any_element(), row_surface))
                         .into_any_element()
                 }
+                // A full slot: uniform_list sizes every row from item 0.
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", ix))
-                    .h(if is_collapsed_popover {
-                        scaled_px(BRANCH_TREE_SPACER_HEIGHT_PX)
-                    } else {
-                        sidebar_list_row_height(theme, ui_scale_percent)
-                    })
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .into_any_element(),
                 BranchSidebarRow::StashHeader {

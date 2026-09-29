@@ -143,7 +143,7 @@ fn action_menu_title(base: &'static str, tracking_branch_name: Option<&str>) -> 
     }
 }
 
-fn context_menu_entry_debug_selector(label: &str) -> String {
+pub(super) fn context_menu_entry_debug_selector(label: &str) -> String {
     let mut slug = String::with_capacity(label.len());
     let mut previous_was_separator = true;
 
@@ -2243,6 +2243,7 @@ impl PopoverHost {
         let tooltip_host = self.tooltip_host.clone();
         let entry_tooltips = model.entry_tooltips.clone();
         let entry_debug_selectors = model.entry_debug_selectors.clone();
+        let groups = model.groups.clone();
         let shortcut_keycaps = model.shortcut_keycaps;
 
         let focus = self.context_menu_focus_handle.clone();
@@ -2375,181 +2376,228 @@ impl PopoverHost {
                     }
                 }),
             )
-            .children(model.items.into_iter().enumerate().map(move |(ix, item)| {
-                match item {
-                    ContextMenuItem::Separator => {
-                        components::context_menu_separator(theme, ui_scale)
-                            .id(("context_menu_sep", ix))
-                            .into_any_element()
-                    }
-                    ContextMenuItem::Header(title) => components::context_menu_header(
-                        theme,
-                        ui_scale,
-                        title,
-                        Some(tooltip_host.clone()),
-                        cx,
-                    )
-                    .id(("context_menu_header", ix))
-                    .into_any_element(),
-                    ContextMenuItem::Description(text) => components::context_menu_description(
-                        theme,
-                        ui_scale,
-                        text,
-                        Some(tooltip_host.clone()),
-                        cx,
-                    )
-                    .id(("context_menu_description", ix))
-                    .into_any_element(),
-                    ContextMenuItem::Label(text) => components::context_menu_label(
-                        theme,
-                        ui_scale,
-                        text,
-                        Some(tooltip_host.clone()),
-                        cx,
-                    )
-                    .id(("context_menu_label", ix))
-                    .into_any_element(),
-                    ContextMenuItem::Segmented { label, segments } => {
-                        // Same construction as the toolbar's Inline/Split style
-                        // toggles: one bordered pill, dividers between segments,
-                        // the active one filled.
-                        let mut control = div()
-                            .id(("context_menu_segmented", ix))
-                            .flex()
-                            .items_center()
-                            .h(components::control_height(ui_scale))
-                            .rounded(px(theme.radii.row))
-                            .border_1()
-                            .border_color(theme.colors.stroke.default)
-                            .overflow_hidden()
-                            .p(px(1.0));
-                        for (seg_ix, segment) in segments.into_iter().enumerate() {
-                            if seg_ix > 0 {
-                                control = control.child(
-                                    div().h_full().w(px(1.0)).bg(theme.colors.stroke.default),
-                                );
-                            }
-                            let ContextMenuSegment {
-                                id,
-                                label,
-                                tooltip,
-                                selected,
-                                action,
-                            } = segment;
-                            let debug_selector = id.clone();
-                            let mut button = components::Button::new(id, label)
-                                .borderless()
-                                .style(components::ButtonStyle::Subtle)
-                                .selected(selected)
-                                .selected_bg(theme.colors.interaction.pressed_background)
-                                .on_click(theme, cx, move |this, _e, window, cx| {
-                                    this.context_menu_activate_action(action.clone(), window, cx);
-                                })
-                                .debug_selector(move || debug_selector.to_string());
-                            if let Some(tooltip) = tooltip {
-                                button = button.gitcomet_tooltip(theme, tooltip);
-                            }
-                            control = control.child(button);
+            .children(group_context_menu_rows(
+                model
+                    .items
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(ix, item)| match item {
+                        ContextMenuItem::Separator => {
+                            components::context_menu_separator(theme, ui_scale)
+                                .id(("context_menu_sep", ix))
+                                .into_any_element()
                         }
-                        components::context_menu_label(
+                        ContextMenuItem::Header(title) => components::context_menu_header(
                             theme,
                             ui_scale,
-                            label,
+                            title,
                             Some(tooltip_host.clone()),
                             cx,
                         )
-                        .id(("context_menu_segmented_row", ix))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(control)
-                        .into_any_element()
-                    }
-                    ContextMenuItem::Entry {
-                        label,
-                        icon,
-                        shortcut,
-                        disabled,
-                        action,
-                    } => {
-                        let selected = selected_for_render == Some(ix);
-                        let debug_selector = entry_debug_selectors
-                            .get(&ix)
-                            .map(|selector| selector.to_string())
-                            .unwrap_or_else(|| context_menu_entry_debug_selector(label.as_ref()));
-                        let tooltip_text = entry_tooltips
-                            .get(&ix)
-                            .cloned()
-                            .or_else(|| context_menu_entry_tooltip(action.as_ref()));
-                        let tooltip_host_for_move = tooltip_host.clone();
-                        let tooltip_text_for_move = tooltip_text.clone();
-                        let tooltip_host_for_hover = tooltip_host.clone();
-                        let activate_on_release = model_for_mouse.clone();
-                        let icon_slot = match icon {
-                            Some(icon) => components::ContextMenuIconSlot::Icon(icon),
-                            None if reserve_icon_column => {
-                                components::ContextMenuIconSlot::Reserved
-                            }
-                            None => components::ContextMenuIconSlot::None,
-                        };
-                        let row =
-                            components::ContextMenuEntry::new(("context_menu_entry", ix), label)
-                                .group_header(matches!(
-                                    action.as_ref(),
-                                    ContextMenuAction::ToggleHistoryRefGroup { .. }
-                                ))
-                                .icon(icon_slot)
-                                .shortcut(shortcut)
-                                .shortcut_keycaps(shortcut_keycaps)
-                                .selected(selected)
-                                .disabled(disabled)
-                                .tooltip_host(tooltip_host.clone())
-                                .render(theme, ui_scale, cx)
-                                .anchor_scroll(scroll_anchors.get(ix).cloned())
-                                .debug_selector(move || debug_selector.clone());
-
-                        row.on_mouse_move(cx.listener(
-                            move |this, event: &MouseMoveEvent, _w, cx| {
-                                this.context_menu_selected_ix = Some(ix);
-                                if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
-                                    let _ = tooltip_host_for_move.update(cx, |host, cx| {
-                                        host.on_mouse_moved(event.position, cx);
-                                        host.set_tooltip_text_if_changed(
-                                            Some(tooltip_text.clone()),
+                        .id(("context_menu_header", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Description(text) => components::context_menu_description(
+                            theme,
+                            ui_scale,
+                            text,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_description", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Label(text) => components::context_menu_label(
+                            theme,
+                            ui_scale,
+                            text,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_label", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Segmented { label, segments } => {
+                            // Same construction as the toolbar's Inline/Split style
+                            // toggles: one bordered pill, dividers between segments,
+                            // the active one filled.
+                            let mut control = div()
+                                .id(("context_menu_segmented", ix))
+                                .flex()
+                                .items_center()
+                                .h(components::control_height(ui_scale))
+                                .rounded(px(theme.radii.row))
+                                .border_1()
+                                .border_color(theme.colors.stroke.default)
+                                .overflow_hidden()
+                                .p(px(1.0));
+                            for (seg_ix, segment) in segments.into_iter().enumerate() {
+                                if seg_ix > 0 {
+                                    control = control.child(
+                                        div().h_full().w(px(1.0)).bg(theme.colors.stroke.default),
+                                    );
+                                }
+                                let ContextMenuSegment {
+                                    id,
+                                    label,
+                                    tooltip,
+                                    selected,
+                                    action,
+                                } = segment;
+                                let debug_selector = id.clone();
+                                let mut button = components::Button::new(id, label)
+                                    .borderless()
+                                    .style(components::ButtonStyle::Subtle)
+                                    .selected(selected)
+                                    .selected_bg(theme.colors.interaction.pressed_background)
+                                    .on_click(theme, cx, move |this, _e, window, cx| {
+                                        this.context_menu_activate_action(
+                                            action.clone(),
+                                            window,
                                             cx,
                                         );
+                                    })
+                                    .debug_selector(move || debug_selector.to_string());
+                                if let Some(tooltip) = tooltip {
+                                    button = button.gitcomet_tooltip(theme, tooltip);
+                                }
+                                control = control.child(button);
+                            }
+                            components::context_menu_label(
+                                theme,
+                                ui_scale,
+                                label,
+                                Some(tooltip_host.clone()),
+                                cx,
+                            )
+                            .id(("context_menu_segmented_row", ix))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(control)
+                            .into_any_element()
+                        }
+                        ContextMenuItem::Entry {
+                            label,
+                            icon,
+                            shortcut,
+                            disabled,
+                            action,
+                        } => {
+                            let selected = selected_for_render == Some(ix);
+                            let debug_selector = entry_debug_selectors
+                                .get(&ix)
+                                .map(|selector| selector.to_string())
+                                .unwrap_or_else(|| {
+                                    context_menu_entry_debug_selector(label.as_ref())
+                                });
+                            let tooltip_text = entry_tooltips
+                                .get(&ix)
+                                .cloned()
+                                .or_else(|| context_menu_entry_tooltip(action.as_ref()));
+                            let tooltip_host_for_move = tooltip_host.clone();
+                            let tooltip_text_for_move = tooltip_text.clone();
+                            let tooltip_host_for_hover = tooltip_host.clone();
+                            let activate_on_release = model_for_mouse.clone();
+                            let icon_slot = match icon {
+                                Some(icon) => components::ContextMenuIconSlot::Icon(icon),
+                                None if reserve_icon_column => {
+                                    components::ContextMenuIconSlot::Reserved
+                                }
+                                None => components::ContextMenuIconSlot::None,
+                            };
+                            let row = components::ContextMenuEntry::new(
+                                ("context_menu_entry", ix),
+                                label,
+                            )
+                            .icon(icon_slot)
+                            .shortcut(shortcut)
+                            .shortcut_keycaps(shortcut_keycaps)
+                            .selected(selected)
+                            .disabled(disabled)
+                            .tooltip_host(tooltip_host.clone())
+                            .render(theme, ui_scale, cx)
+                            .anchor_scroll(scroll_anchors.get(ix).cloned())
+                            .debug_selector(move || debug_selector.clone());
+
+                            row.on_mouse_move(cx.listener(
+                                move |this, event: &MouseMoveEvent, _w, cx| {
+                                    this.context_menu_selected_ix = Some(ix);
+                                    if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
+                                        let _ = tooltip_host_for_move.update(cx, |host, cx| {
+                                            host.on_mouse_moved(event.position, cx);
+                                            host.set_tooltip_text_if_changed(
+                                                Some(tooltip_text.clone()),
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                    cx.notify();
+                                },
+                            ))
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                if *hovering {
+                                    this.context_menu_selected_ix = Some(ix);
+                                    cx.notify();
+                                } else if let Some(tooltip_text) = tooltip_text.as_ref() {
+                                    let _ = tooltip_host_for_hover.update(cx, |host, cx| {
+                                        host.clear_tooltip_if_matches(tooltip_text, cx);
                                     });
                                 }
-                                cx.notify();
-                            },
-                        ))
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            if *hovering {
-                                this.context_menu_selected_ix = Some(ix);
-                                cx.notify();
-                            } else if let Some(tooltip_text) = tooltip_text.as_ref() {
-                                let _ = tooltip_host_for_hover.update(cx, |host, cx| {
-                                    host.clear_tooltip_if_matches(tooltip_text, cx);
-                                });
-                            }
-                        }))
-                        .on_menu_activate(
-                            disabled,
-                            cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                                this.context_menu_activate_model_entry(
-                                    &activate_on_release,
-                                    ix,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .into_any_element()
-                    }
-                }
-            }))
+                            }))
+                            .on_menu_activate(
+                                disabled,
+                                cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                    this.context_menu_activate_model_entry(
+                                        &activate_on_release,
+                                        ix,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element()
+                        }
+                    }),
+                &groups,
+                theme,
+                ui_scale,
+            ))
     }
+}
+
+/// Wrap each model group's rows in one tinted block; other rows pass through.
+fn group_context_menu_rows(
+    rows: impl Iterator<Item = AnyElement>,
+    groups: &[std::ops::Range<usize>],
+    theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
+) -> Vec<AnyElement> {
+    let mut out = Vec::new();
+    let mut groups = groups.iter().filter(|range| !range.is_empty()).peekable();
+    let mut block = Vec::new();
+    let mut previous_end = None;
+    for (ix, row) in rows.enumerate() {
+        let Some(range) = groups.peek().filter(|range| range.start <= ix) else {
+            out.push(row);
+            continue;
+        };
+        block.push(row);
+        if ix + 1 == range.end {
+            let start = range.start;
+            // Neighbouring blocks would merge into one tint without a gap.
+            let spaced = previous_end == Some(start);
+            previous_end = Some(range.end);
+            groups.next();
+            out.push(
+                components::context_menu_group(theme, ui_scale, spaced)
+                    .id(("context_menu_group", start))
+                    .debug_selector(move || format!("context_menu_group_{start}"))
+                    .children(block.drain(..))
+                    .into_any_element(),
+            );
+        }
+    }
+    out.extend(block);
+    out
 }
 
 fn interactive_rebase_action_menu_model(

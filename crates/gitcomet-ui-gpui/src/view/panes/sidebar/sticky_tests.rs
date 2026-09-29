@@ -413,6 +413,155 @@ fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
 }
 
 #[gpui::test]
+fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(1_000);
+    Arc::make_mut(&mut state).repos[0].worktrees =
+        long_list_tests::fixture(40, CollapsedSidebarSection::Worktrees).repos[0]
+            .worktrees
+            .clone();
+    Arc::make_mut(&mut state).repos[0].stashes =
+        long_list_tests::fixture(100, CollapsedSidebarSection::Stashes).repos[0]
+            .stashes
+            .clone();
+    let repo_id = state.repos[0].id.0;
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state.clone(), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
+    test_support::redraw(cx);
+    let (rows, sections, remote, row_height) = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let p = pane.branch_sidebar_presentation_cached().unwrap();
+            let handle = pane.branches_scroll.0.borrow();
+            let row_height = handle.last_item_size.unwrap().contents.height / p.rows.len() as f32;
+            (
+                p.rows.clone(),
+                p.structure.sections.clone(),
+                p.structure.headers[branch_sidebar::remote_section_storage_key()],
+                row_height,
+            )
+        })
+    });
+    assert_eq!(sections.len(), 5);
+    for section in &sections[1..] {
+        assert!(matches!(rows[section - 1], BranchSidebarRow::SectionSpacer));
+    }
+    let set_offset = |cx: &mut gpui::VisualTestContext, offset: Pixels| {
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), -offset));
+                cx.notify();
+            })
+        });
+        test_support::redraw(cx);
+    };
+    // Overlay rows in stack order: (row, painted bounds, natural top).
+    let sticky = |cx: &mut gpui::VisualTestContext| {
+        let (decorated, natural) = cx.update(|_, app| {
+            let pane = pane.read(app);
+            let handle = pane.branches_scroll.0.borrow();
+            (
+                pane.decorated_sidebar_rows(),
+                handle.base_handle.bounds().top() + handle.base_handle.offset().y,
+            )
+        });
+        let mut painted = Vec::new();
+        for ix in decorated.iter().copied() {
+            let bounds = cx.debug_bounds(selector(ix)).unwrap();
+            painted.push((ix, bounds, natural + row_height * ix));
+        }
+        painted
+    };
+    let near = |a: Pixels, b: Pixels| (a - b).abs() < px(0.5);
+    // A gap slot slides under the edge stacks: stuck neighbours always touch.
+    let assert_stacks_touch = |painted: &[(usize, Bounds<Pixels>, Pixels)]| {
+        for pair in painted.windows(2) {
+            let (a, above, above_natural) = pair[0];
+            let (b, below, below_natural) = pair[1];
+            if below.top() > below_natural + px(0.5) || above.top() < above_natural - px(0.5) {
+                assert!(near(below.top(), above.bottom()), "gap between {a} and {b}");
+            }
+        }
+    };
+
+    // At the top, every later section waits in the bottom stack.
+    let painted = sticky(cx);
+    assert_stacks_touch(&painted);
+    for (ix, bounds, natural) in &painted {
+        if sections[1..].contains(ix) {
+            assert!(
+                bounds.top() < *natural - px(0.5),
+                "section {ix} is not stuck"
+            );
+        }
+    }
+
+    // Navigating to the last section stacks every header above it, gap-free.
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.navigate_sidebar_header(branch_sidebar::stash_section_storage_key().into(), cx)
+        })
+    });
+    test_support::redraw(cx);
+    let painted = sticky(cx);
+    let list_top = cx.update(|_, app| {
+        pane.read(app)
+            .branches_scroll
+            .0
+            .borrow()
+            .base_handle
+            .bounds()
+            .top()
+    });
+    assert!(near(painted[0].1.top(), list_top));
+    for pair in painted.windows(2) {
+        assert!(near(pair[1].1.top(), pair[0].1.bottom()));
+    }
+    assert_eq!(painted.last().unwrap().0, sections[4]);
+
+    // Scrolling along, a section shows one blank slot above its header.
+    let last_local = remote - 2;
+    assert!(matches!(rows[last_local], BranchSidebarRow::Branch { .. }));
+    set_offset(cx, row_height * remote - px(400.0));
+    let painted = sticky(cx);
+    assert_stacks_touch(&painted);
+    let (_, header, natural) = *painted.iter().find(|(ix, ..)| *ix == remote).unwrap();
+    assert!(near(header.top(), natural));
+    let branch = cx
+        .debug_bounds(format!("branch_row_{repo_id}_{last_local}").leak())
+        .unwrap();
+    assert!(near(header.top() - branch.bottom(), row_height));
+
+    // Leaving the stack, the gap grows from zero rather than jumping.
+    let rank = painted.iter().position(|(ix, ..)| *ix == remote).unwrap();
+    for (natural_y, gap) in [(rank as f32 - 0.5, 0.0), (rank as f32 + 0.5, 0.5)] {
+        set_offset(cx, row_height * remote - row_height * natural_y);
+        let painted = sticky(cx);
+        assert_eq!(painted[rank].0, remote);
+        assert!(
+            near(
+                painted[rank].1.top() - painted[rank - 1].1.bottom(),
+                row_height * gap
+            ),
+            "gap at natural y {natural_y}"
+        );
+    }
+}
+
+#[gpui::test]
 fn sticky_sidebar_pins_share_scrolling_filtering_and_virtualized_overflow(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1705,7 +1854,15 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                     .any(|(fill, _)| *fill == crate::view::selected_branch_row_bg(theme).into())
             );
             assert!(cx.debug_bounds("sidebar_pinned_area").is_none());
-            let header = cx.debug_bounds("sidebar_sticky_header_2").unwrap();
+            let local = cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    pane.branch_sidebar_presentation_cached()
+                        .unwrap()
+                        .structure
+                        .sections[0]
+                })
+            });
+            let header = cx.debug_bounds(selector(local)).unwrap();
             let pinned_row = cx.debug_bounds("pinned_branch_row_81_0").unwrap();
             let tree_row = cx.debug_bounds("sidebar_sticky_selected_branch").unwrap();
             let panel = cx.debug_bounds("branch_sidebar_scroll_container").unwrap();
@@ -1714,9 +1871,13 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                 assert_eq!(row.right(), panel.right());
             }
             let pin = cx.debug_bounds("sidebar_pin_marker_0").unwrap();
-            let header_toggle = cx.debug_bounds("sidebar_header_toggle_2").unwrap();
+            let header_toggle = cx
+                .debug_bounds(format!("sidebar_header_toggle_{local}").leak())
+                .unwrap();
             let pin_icon = cx.debug_bounds("sidebar_branch_icon_Pins_0").unwrap();
-            let header_icon = cx.debug_bounds("sidebar_header_icon_2").unwrap();
+            let header_icon = cx
+                .debug_bounds(format!("sidebar_header_icon_{local}").leak())
+                .unwrap();
             assert_eq!(pin.left(), header_toggle.left());
             assert_eq!(pin_icon.left(), header_icon.left());
             assert_eq!(pin_icon.size.width, header_icon.size.width);

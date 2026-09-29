@@ -581,6 +581,9 @@ struct ContextMenuModel {
     /// Stable debug selectors for menus whose entries predate the shared context-menu
     /// renderer. Sparse so ordinary menus continue deriving selectors from labels.
     entry_debug_selectors: FxHashMap<usize, SharedString>,
+    /// Item ranges painted as one tinted block: an inline submenu's header
+    /// plus the rows it expands to. Sparse and ordered.
+    groups: Vec<std::ops::Range<usize>>,
 }
 
 impl ContextMenuModel {
@@ -590,6 +593,7 @@ impl ContextMenuModel {
             shortcut_keycaps: false,
             entry_tooltips: FxHashMap::default(),
             entry_debug_selectors: FxHashMap::default(),
+            groups: Vec::new(),
         }
     }
 

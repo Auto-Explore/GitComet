@@ -232,13 +232,27 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
         .border_color(theme.colors.stroke.subtle)
 }
 
+/// One inline submenu (its header row plus the rows it expands to) on the
+/// sidebar-header surface, so rows that act on the same object read as a unit.
+/// Rows inside keep a transparent rest, so hover and selection overlays land
+/// on the tint instead of replacing it.
+pub fn context_menu_group(theme: AppTheme, ui_scale: impl Into<UiScale>, spaced: bool) -> Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale.into());
+    div()
+        .flex()
+        .flex_col()
+        .items_stretch()
+        .rounded(px(theme.radii.row))
+        .bg(theme.colors.surface.panel)
+        .when(spaced, |group| group.mt(scaled_px(2.0)))
+}
+
 pub struct ContextMenuEntry {
     id: ElementId,
     label: ContextMenuText,
     icon: ContextMenuIconSlot,
     shortcut: Option<SharedString>,
     shortcut_keycaps: bool,
-    group_header: bool,
     selected: bool,
     disabled: bool,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
@@ -252,7 +266,6 @@ impl ContextMenuEntry {
             icon: ContextMenuIconSlot::None,
             shortcut: None,
             shortcut_keycaps: false,
-            group_header: false,
             selected: false,
             disabled: false,
             tooltip_host: None,
@@ -276,11 +289,6 @@ impl ContextMenuEntry {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
-        self
-    }
-
-    pub fn group_header(mut self, group_header: bool) -> Self {
-        self.group_header = group_header;
         self
     }
 
@@ -331,7 +339,6 @@ fn context_menu_entry<V: 'static>(
         icon,
         shortcut,
         shortcut_keycaps,
-        group_header,
         selected,
         disabled,
         tooltip_host,
@@ -345,60 +352,52 @@ fn context_menu_entry<V: 'static>(
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
-    let group_background = group_header.then_some(theme.colors.surface.panel);
-    let mut row = crate::kit::menu::menu_item_with_background(
-        id,
-        theme,
-        ui_scale,
-        selected,
-        disabled,
-        group_background,
-    )
-    .text_color(text_color)
-    .child(
-        div()
-            .flex()
-            .items_center()
-            .gap(scaled_px(8.0))
-            .flex_1()
-            .min_w(px(0.0))
-            .overflow_hidden()
-            .when(!matches!(icon, ContextMenuIconSlot::None), |row| {
-                row.child(
+    let mut row = crate::kit::menu::menu_item(id, theme, ui_scale, selected, disabled)
+        .text_color(text_color)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(scaled_px(8.0))
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .when(!matches!(icon, ContextMenuIconSlot::None), |row| {
+                    row.child(
+                        div()
+                            .w(scaled_px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(icon_path, |this, path| {
+                                this.child(crate::view::icons::svg_icon(
+                                    path,
+                                    icon_color,
+                                    scaled_px(13.0),
+                                ))
+                            }),
+                    )
+                })
+                .child(
                     div()
-                        .w(scaled_px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when_some(icon_path, |this, path| {
-                            this.child(crate::view::icons::svg_icon(
-                                path,
-                                icon_color,
-                                scaled_px(13.0),
-                            ))
-                        }),
-                )
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .text_size(theme.ui_text(MENU_PRIMARY_REMS * 16.0))
-                    .line_height(ui_scale.ui_text(18.0))
-                    .text_color(text_color)
-                    .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
-                    .when(max_lines > 1, |s| s.line_clamp(max_lines))
-                    .child(context_menu_text_content(
-                        label,
-                        tooltip_host,
-                        cx,
-                        max_lines,
-                        text_color,
-                        theme.ui_text(MENU_PRIMARY_REMS * 16.0),
-                        None,
-                    )),
-            ),
-    );
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_size(theme.ui_text(MENU_PRIMARY_REMS * 16.0))
+                        .line_height(ui_scale.ui_text(18.0))
+                        .text_color(text_color)
+                        .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
+                        .when(max_lines > 1, |s| s.line_clamp(max_lines))
+                        .child(context_menu_text_content(
+                            label,
+                            tooltip_host,
+                            cx,
+                            max_lines,
+                            text_color,
+                            theme.ui_text(MENU_PRIMARY_REMS * 16.0),
+                            None,
+                        )),
+                ),
+        );
 
     let mut end = div()
         .flex()
@@ -727,26 +726,31 @@ mod tests {
                         .debug_selector(|| "row_collapse_command".to_string()),
                 )
                 .child(
-                    ContextMenuEntry::new("closed_group", "Remote branch origin/main")
-                        .group_header(true)
-                        .icon(ContextMenuIconSlot::Icon("icons/chevron_right.svg".into()))
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_closed_group".to_string()),
+                    context_menu_group(theme, scale, false)
+                        .debug_selector(|| "closed_group".to_string())
+                        .child(
+                            ContextMenuEntry::new("closed_group", "Remote branch origin/main")
+                                .icon(ContextMenuIconSlot::Icon("icons/chevron_right.svg".into()))
+                                .render(theme, scale, cx)
+                                .debug_selector(|| "row_closed_group".to_string()),
+                        ),
                 )
                 .child(
-                    ContextMenuEntry::new("open_group", "Remote branch upstream/main")
-                        .group_header(true)
-                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_open_group".to_string()),
-                )
-                .child(
-                    ContextMenuEntry::new("selected_group", "Selected group")
-                        .group_header(true)
-                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
-                        .selected(true)
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_selected_group".to_string()),
+                    context_menu_group(theme, scale, true)
+                        .debug_selector(|| "open_group".to_string())
+                        .child(
+                            ContextMenuEntry::new("open_group", "Remote branch upstream/main")
+                                .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
+                                .render(theme, scale, cx)
+                                .debug_selector(|| "row_open_group".to_string()),
+                        )
+                        .child(
+                            ContextMenuEntry::new("selected_group", "Checkout")
+                                .icon(ContextMenuIconSlot::Reserved)
+                                .selected(true)
+                                .render(theme, scale, cx)
+                                .debug_selector(|| "row_selected_group".to_string()),
+                        ),
                 )
                 .child(
                     context_menu_header(theme, scale, SharedString::from("Header"), None, cx)
@@ -813,13 +817,20 @@ mod tests {
                     "{selector} must match a plain entry at {density:?} density"
                 );
             }
-            for selector in ["row_closed_group", "row_open_group"] {
+            for selector in ["closed_group", "open_group"] {
                 assert!(
                     crate::test_support::painted_control_quads(cx, selector)
                         .iter()
                         .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
                 );
             }
+            // One block spans the header and its rows; neighbours stay apart.
+            let closed = cx.debug_bounds("closed_group").unwrap();
+            let open = cx.debug_bounds("open_group").unwrap();
+            let header = cx.debug_bounds("row_open_group").unwrap();
+            let action = cx.debug_bounds("row_selected_group").unwrap();
+            assert_eq!((open.top(), open.bottom()), (header.top(), action.bottom()));
+            assert!(open.top() > closed.bottom());
             assert!(
                 crate::test_support::painted_control_quads(cx, "row_selected_group")
                     .iter()
