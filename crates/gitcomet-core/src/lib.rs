@@ -16,6 +16,7 @@ pub mod history_index;
 pub mod merge;
 pub mod merge_extraction;
 pub mod mergetool_trace;
+pub mod op_trace;
 pub mod path_utils;
 pub mod platform;
 pub mod process;

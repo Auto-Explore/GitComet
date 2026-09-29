@@ -462,6 +462,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         signature_executor: &metadata_executor,
         session_persist_executor: &session_persist_executor,
         backend: &backend,
+        publication: &std::sync::atomic::AtomicU64::new(0),
     }
     .handle_effects(&repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();
