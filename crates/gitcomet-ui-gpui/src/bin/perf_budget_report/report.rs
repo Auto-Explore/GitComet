@@ -42,9 +42,9 @@ pub(crate) fn build_report_markdown(
         let _ = writeln!(markdown, "### Timing Budgets");
         let _ = writeln!(
             markdown,
-            "| Benchmark | Threshold | Mean | Mean 95% upper | Status |"
+            "| Benchmark | Kind | Threshold | Mean | Mean 95% upper | Status |"
         );
-        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- |");
+        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- | --- |");
 
         for result in timing_results {
             let mean = result
@@ -57,8 +57,9 @@ pub(crate) fn build_report_markdown(
                 .unwrap_or_else(|| "n/a".to_string());
             let _ = writeln!(
                 markdown,
-                "| `{}` | <= {} | {} | {} | {} {} |",
+                "| `{}` | {} | <= {} | {} | {} | {} {} |",
                 result.spec.label,
+                measurement_kind_for_bench(result.spec.label).as_str(),
                 format_duration_ns(result.spec.threshold_ns),
                 mean,
                 mean_upper,
@@ -73,9 +74,9 @@ pub(crate) fn build_report_markdown(
         let _ = writeln!(markdown, "### Structural Budgets");
         let _ = writeln!(
             markdown,
-            "| Benchmark | Metric | Expectation | Observed | Status |"
+            "| Benchmark | Kind | Metric | Expectation | Observed | Status |"
         );
-        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- |");
+        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- | --- |");
 
         for result in structural_results {
             let observed = result
@@ -84,8 +85,9 @@ pub(crate) fn build_report_markdown(
                 .unwrap_or_else(|| "n/a".to_string());
             let _ = writeln!(
                 markdown,
-                "| `{}` | `{}` | {} | {} | {} {} |",
+                "| `{}` | {} | `{}` | {} | {} | {} {} |",
                 result.spec.bench,
+                measurement_kind_for_bench(result.spec.bench).as_str(),
                 result.spec.metric,
                 result
                     .spec

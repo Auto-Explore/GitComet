@@ -92,6 +92,12 @@ impl PerfAllocMetrics {
     }
 }
 
+/// Only a binary that installs [`TRACKING_MIMALLOC`] as its global allocator
+/// ever routes an allocation through it, so any recorded allocation proves it.
+pub fn tracking_allocator_is_global() -> bool {
+    TRACKING_MIMALLOC.stats().allocations > 0
+}
+
 pub fn current_alloc_metrics() -> PerfAllocMetrics {
     TRACKING_MIMALLOC.stats().into()
 }
@@ -163,6 +169,12 @@ mod tests {
 
     #[global_allocator]
     static GLOBAL: &PerfTrackingAllocator = &TRACKING_MIMALLOC;
+
+    #[test]
+    fn tracking_allocator_reports_itself_when_global() {
+        drop(std::hint::black_box(vec![0u8; 16]));
+        assert!(tracking_allocator_is_global());
+    }
 
     #[test]
     fn measure_allocations_tracks_requested_bytes() {
