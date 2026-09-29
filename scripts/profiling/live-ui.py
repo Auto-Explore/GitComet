@@ -352,7 +352,8 @@ class HeadlessCompositor:
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
              ping_ms=None, save_file=SAVE_FILE, wrap=None):
-    binary, repository = binary.resolve(), repository.resolve()
+    # Absolute: the app runs with its working directory in `output`.
+    binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
     env = seed_profile(output, repository)
@@ -764,6 +765,8 @@ def report(directories):
 
 
 def main():
+    # Turn SIGTERM into SystemExit so cleanup kills the app and compositor.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     fixture = commands.add_parser("fixture")

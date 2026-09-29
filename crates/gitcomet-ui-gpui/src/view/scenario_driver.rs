@@ -204,13 +204,14 @@ pub(crate) fn start_if_requested(cx: &mut App) {
     {
         Ok(scenario) => scenario,
         Err(error) => {
+            // A scenario run must end: a harness waits for this process.
             eprintln!("ui scenario: cannot load {path:?}: {error}");
-            return;
+            std::process::exit(2);
         }
     };
     if !crate::ui_probe::jsonl_enabled() {
         eprintln!("ui scenario: needs GITCOMET_UI_PROBE=1 and GITCOMET_UI_PROBE_JSONL");
-        return;
+        std::process::exit(2);
     }
     cx.spawn(async move |cx| run(scenario, cx).await).detach();
 }
