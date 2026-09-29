@@ -1078,9 +1078,9 @@ impl GixRepo {
 /// Hex names are decoded against the repository's own hash kind. gix infers
 /// the kind from the digit count alone (up to 40 digits is SHA-1), so a name
 /// of the other width would be compared against hashes of a different length
-/// and panic once objects are packed. Such names are resolved here instead,
-/// and a spec with a hex run wider than the repository digest is never handed
-/// to gix.
+/// and panic once objects are packed. Hex names — with or without a `~`/`^`
+/// suffix — are resolved here instead, and a spec with a hex run wider than
+/// the repository digest is never handed to gix.
 ///
 /// Workaround: once gix takes the hash kind from the repository instead of the
 /// hex length, the helpers below can be deleted and this can call
@@ -1092,46 +1092,148 @@ fn find_commit_by_id<'repo>(
     let spec = id.as_ref();
     let object = if is_hex_object_name(spec) {
         find_hex_object(repo, spec)?
+    } else if let Some((name, suffix)) = split_hex_name_suffix(spec) {
+        // A navigation or peel suffix on a hex name: resolve the name here and
+        // let gix apply the suffix to the full id, so it never guesses the
+        // hash kind.
+        let oid = resolve_hex_id(repo, name)?.ok_or_else(|| unknown_revision(spec))?;
+        let rewritten = format!("{oid}{suffix}");
+        if contains_hex_run_longer_than(&rewritten, repo.object_hash().len_in_hex()) {
+            return Err(unknown_revision(spec));
+        }
+        rev_parse_object(repo, &rewritten, spec)?
     } else if contains_hex_run_longer_than(spec, repo.object_hash().len_in_hex()) {
-        // gix would decode this run as a prefix of the wrong kind; no object
-        // can carry it, so only a reference can resolve the spec.
-        find_reference_object(repo, spec)?
+        // gix would decode this run as a prefix of the wrong kind.
+        find_over_wide_object(repo, spec)?
     } else {
-        repo.rev_parse_single(spec)
-            .and_then(|id| id.object())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+        rev_parse_object(repo, spec, spec)?
     };
     object
         .peel_to_commit()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))
 }
 
-/// The object named by a full or abbreviated hexadecimal id, with git's
-/// reference precedence.
+/// `rev_parse_single(..).object()`, reporting `label` in the error.
+fn rev_parse_object<'repo>(
+    repo: &'repo gix::Repository,
+    spec: &str,
+    label: &str,
+) -> Result<gix::Object<'repo>> {
+    repo.rev_parse_single(spec)
+        .and_then(|id| id.object())
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {label}: {e}"))))
+}
+
+/// The object named by a full or abbreviated hexadecimal id.
 fn find_hex_object<'repo>(repo: &'repo gix::Repository, spec: &str) -> Result<gix::Object<'repo>> {
+    let oid = resolve_hex_id(repo, spec)?.ok_or_else(|| unknown_revision(spec))?;
+    load_object(repo, spec, oid)
+}
+
+/// Resolve a hexadecimal name to an object id, with git's reference
+/// precedence: a full id names an object directly, an abbreviation prefers a
+/// reference of the same name and then the unique object matching the prefix,
+/// and a name wider than the digest can only be a reference.
+fn resolve_hex_id(repo: &gix::Repository, spec: &str) -> Result<Option<gix::ObjectId>> {
     let kind = repo.object_hash();
 
     // Wider than the digest: never an object here, but a reference may carry
     // the name.
     if spec.len() > kind.len_in_hex() {
-        return find_reference_object(repo, spec);
+        return peel_reference_id(repo, spec);
     }
 
     // A full id names an object directly.
     if spec.len() == kind.len_in_hex() {
-        let oid = decode_hex_object_id(spec, kind).ok_or_else(|| unknown_revision(spec))?;
-        return load_object(repo, spec, oid);
+        return Ok(decode_hex_object_id(spec, kind));
     }
 
     // An abbreviation: a reference of the same name wins, then the unique
     // object matching the prefix.
     if let Some(oid) = peel_reference_id(repo, spec)? {
-        return load_object(repo, spec, oid);
+        return Ok(Some(oid));
     }
-    match lookup_hex_prefix(repo, spec)? {
-        Some(oid) => load_object(repo, spec, oid),
-        None => Err(unknown_revision(spec)),
+    lookup_hex_prefix(repo, spec)
+}
+
+/// Split `spec` into a leading hexadecimal name and a `~`/`^` suffix, when it
+/// has one. Reflog selectors (`@{…}`) are left alone: they apply to a
+/// reference name, which has to stay intact for gix to resolve it.
+fn split_hex_name_suffix(spec: &str) -> Option<(&str, &str)> {
+    let name_len = spec.bytes().take_while(u8::is_ascii_hexdigit).count();
+    if name_len < gix::hash::Prefix::MIN_HEX_LEN || name_len == spec.len() {
+        return None;
     }
+    let suffix = &spec[name_len..];
+    (suffix.starts_with('~') || suffix.starts_with('^')).then_some((&spec[..name_len], suffix))
+}
+
+/// Resolve a spec whose hex runs are wider than the repository digest, which
+/// gix would decode as prefixes of the wrong kind.
+fn find_over_wide_object<'repo>(
+    repo: &'repo gix::Repository,
+    spec: &str,
+) -> Result<gix::Object<'repo>> {
+    let digest = repo.object_hash().len_in_hex();
+
+    // A reference name before a `~`/`^` suffix: apply the suffix to its full
+    // id.
+    if let Some((name, suffix)) = split_name_suffix(spec) {
+        if let Some(oid) = peel_reference_id(repo, name)? {
+            let rewritten = format!("{oid}{suffix}");
+            if !contains_hex_run_longer_than(&rewritten, digest) {
+                return rev_parse_object(repo, &rewritten, spec);
+            }
+        }
+        return Err(unknown_revision(spec));
+    }
+
+    // `name@{n}`: the n-th reflog entry of the reference `name`.
+    if let Some((name, index)) = split_reflog_suffix(spec) {
+        return find_reflog_object(repo, name, index, spec)?.ok_or_else(|| unknown_revision(spec));
+    }
+
+    // The whole spec can still be a reference.
+    find_reference_object(repo, spec)
+}
+
+/// Split `spec` at its first `~` or `^` into the name before it and the
+/// suffix. References cannot contain either character, so the split point is
+/// unambiguous.
+fn split_name_suffix(spec: &str) -> Option<(&str, &str)> {
+    let split = spec.find(['~', '^'])?;
+    (split > 0).then(|| (&spec[..split], &spec[split..]))
+}
+
+/// Split `spec` into a reference name and a numeric reflog selector, as in
+/// `name@{2}`.
+fn split_reflog_suffix(spec: &str) -> Option<(&str, usize)> {
+    let open = spec.rfind("@{")?;
+    let index = spec[open + 2..].strip_suffix('}')?.parse().ok()?;
+    (open > 0).then_some((&spec[..open], index))
+}
+
+/// The object named by `name@{index}`, read from the reference's reflog.
+fn find_reflog_object<'repo>(
+    repo: &'repo gix::Repository,
+    name: &str,
+    index: usize,
+    spec: &str,
+) -> Result<Option<gix::Object<'repo>>> {
+    let Some(reference) = repo.try_find_reference(name).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix find reference {name}: {e}"
+        )))
+    })?
+    else {
+        return Ok(None);
+    };
+    let mut platform = reference.log_iter();
+    let lines = reflog_lines_rev(&mut platform, spec, Some(index.saturating_add(1)))?;
+    let Some(line) = lines.get(index) else {
+        return Ok(None);
+    };
+    Ok(Some(load_object(repo, spec, line.new_oid)?))
 }
 
 /// The object named by a reference, or an error when no reference has the name.
@@ -1200,9 +1302,12 @@ fn lookup_hex_prefix(repo: &gix::Repository, spec: &str) -> Result<Option<gix::O
 }
 
 /// Decode an all-hex object name into a zero-padded id of `kind`; a trailing
-/// odd digit keeps only its high nibble. `hex` must not be longer than an id
-/// of `kind`.
+/// odd digit keeps only its high nibble. Names longer than an id of `kind` are
+/// rejected.
 fn decode_hex_object_id(hex: &str, kind: gix::hash::Kind) -> Option<gix::ObjectId> {
+    if hex.len() > kind.len_in_hex() {
+        return None;
+    }
     let mut id = gix::ObjectId::null(kind);
     for (slot, pair) in id.as_mut_slice().iter_mut().zip(hex.as_bytes().chunks(2)) {
         let high = (pair[0] as char).to_digit(16)? as u8;
