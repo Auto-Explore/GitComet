@@ -92,6 +92,101 @@ fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::
     }
 }
 
+fn open_environment_page(
+    cx: &mut gpui::TestAppContext,
+) -> (Entity<SettingsWindowView>, &mut gpui::VisualTestContext) {
+    let (view, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    cx.update(|_, app| {
+        let mut environment = app.global::<crate::environment::Environment>().0.clone();
+        environment.system.cpu_model = Some("Recorded CPU 9000".into());
+        app.set_global(crate::environment::Environment(environment));
+    });
+    view.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::Environment, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    (view, cx)
+}
+
+fn clipboard_text(cx: &mut gpui::VisualTestContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui::test]
+fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (_view, cx) = open_environment_page(cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+
+    let drag = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let value = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` bounds"));
+        let start = point(value.left() + px(1.0), value.center().y);
+        let end = point(value.right() - px(1.0), value.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+    };
+
+    drag(cx, "settings_window_cpu_value");
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("Recorded CPU 9000"));
+
+    // Rows in the graphics sections carry an index suffix.
+    drag(cx, "settings_window_rendering_1_value");
+    cx.simulate_keystrokes("secondary-c");
+    let rendering = clipboard_text(cx).expect("copied rendering value");
+    assert!(
+        !rendering.is_empty() && rendering != "Recorded CPU 9000",
+        "{rendering:?}"
+    );
+}
+
+#[gpui::test]
+fn environment_copy_button_sits_compact_in_the_card_header(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (view, cx) = open_environment_page(cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+
+    let bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` bounds"))
+    };
+    let card = bounds(cx, "settings_window_environment");
+    let button = bounds(cx, "settings_window_copy_environment");
+    let first_row = bounds(cx, "settings_window_build");
+    assert!(
+        button.size.width < card.size.width / 4.0,
+        "button spans the card: button={button:?}, card={card:?}"
+    );
+    assert!(
+        button.right() <= card.right() && card.right() - button.right() < px(16.0),
+        "button is not at the trailing edge: button={button:?}, card={card:?}"
+    );
+    assert!(
+        button.top() - card.top() < px(8.0) && button.bottom() <= first_row.top(),
+        "button is not in the header: button={button:?}, card={card:?}, row={first_row:?}"
+    );
+
+    cx.simulate_mouse_move(button.center(), None, Modifiers::default());
+    cx.simulate_click(button.center(), Modifiers::default());
+    cx.run_until_parked();
+    let summary = view.update(cx, |settings, _| {
+        settings.runtime_info.environment.summary()
+    });
+    assert_eq!(clipboard_text(cx), Some(summary));
+}
+
 fn wait_for_store(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,

@@ -228,7 +228,7 @@ impl Render for SettingsWindowView {
         let show_overflow_probe = false;
 
         let content = if show_overflow_probe {
-            self.overflow_probe_content(theme).into_any_element()
+            self.overflow_probe_content(theme, cx).into_any_element()
         } else {
             match self.current_view {
                 SettingsView::Root => {
@@ -2153,25 +2153,7 @@ impl Render for SettingsWindowView {
                         }),
                     );
 
-                    let mut environment_card = self
-                        .card("settings_window_environment", "Environment", theme)
-                        .child(components::Button::new("settings_window_copy_environment", "Copy environment details")
-                            .on_click(theme, cx, |this, _, window, cx| {
-                                this.copy_environment_details(window, cx);
-                            }));
-                    for (index, section) in self.runtime_info.environment.sections().into_iter().enumerate() {
-                        environment_card = environment_card.child(
-                            div().px_2().pt_3().pb_2().font_weight(FontWeight::MEDIUM).child(section.title),
-                        );
-                        for row in section.rows {
-                            let id = if index == 0 {
-                                format!("settings_window_{}", row.key)
-                            } else {
-                                format!("settings_window_{}_{}", row.key, index)
-                            };
-                            environment_card = environment_card.child(self.info_row(id, row.label, row.value.into(), theme));
-                        }
-                    }
+                    let environment_card = self.environment_card(theme, cx);
 
                     let links_card = self
                         .card("settings_window_links", "Links", theme)

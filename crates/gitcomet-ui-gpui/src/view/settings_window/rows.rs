@@ -447,7 +447,7 @@ impl SettingsWindowView {
         &self,
         id: impl Into<SharedString>,
         label: &'static str,
-        value: SharedString,
+        value: impl IntoElement,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
         let id = id.into();
@@ -492,6 +492,7 @@ impl SettingsWindowView {
                     .child(
                         div()
                             .min_w(px(0.0))
+                            .max_w_full()
                             .text_size(theme.ui_text(14.0))
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
@@ -501,6 +502,95 @@ impl SettingsWindowView {
                             .child(value),
                     ),
             )
+    }
+
+    /// Environment rows hold read-only fields so their values can be selected.
+    pub(super) fn environment_card(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let copy_button = components::Button::new("settings_window_copy_environment", "Copy")
+            .style(components::ButtonStyle::Outlined)
+            .start_slot(svg_icon(
+                "icons/copy.svg",
+                theme.colors.foreground.secondary,
+                self.row_scale(theme).px(12.0),
+            ))
+            .on_click(theme, cx, |this, _, window, cx| {
+                this.copy_environment_details(window, cx);
+            });
+        let mut card = self.card_with_action(
+            "settings_window_environment",
+            "Environment",
+            copy_button,
+            theme,
+        );
+        let mut shown = FxHashSet::default();
+        for (index, section) in self
+            .runtime_info
+            .environment
+            .sections()
+            .into_iter()
+            .enumerate()
+        {
+            card = card.child(
+                div()
+                    .px_2()
+                    .pt_3()
+                    .pb_2()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(section.title),
+            );
+            for row in section.rows {
+                let id: SharedString = if index == 0 {
+                    format!("settings_window_{}", row.key)
+                } else {
+                    format!("settings_window_{}_{}", row.key, index)
+                }
+                .into();
+                let input = self.environment_value_input(id.clone(), row.value, theme, cx);
+                shown.insert(id.clone());
+                card = card.child(self.info_row(id, row.label, input, theme));
+            }
+        }
+        // Graphics sections follow the open windows.
+        self.environment_value_inputs
+            .retain(|id, _| shown.contains(id));
+        card
+    }
+
+    fn environment_value_input(
+        &mut self,
+        id: SharedString,
+        value: String,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let input = self
+            .environment_value_inputs
+            .entry(id)
+            .or_insert_with(|| {
+                cx.new(|cx| {
+                    let mut input = components::TextInput::new_inert(
+                        components::TextInputOptions {
+                            read_only: true,
+                            chromeless: true,
+                            ..Default::default()
+                        },
+                        cx,
+                    );
+                    input.set_display_text(cx);
+                    input.set_display_truncation(Some(components::TextTruncationProfile::End), cx);
+                    input
+                })
+            })
+            .clone();
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(value, cx);
+        });
+        input
     }
 
     pub(super) fn link_row(
@@ -784,7 +874,22 @@ impl SettingsWindowView {
             })
     }
 
-    pub(super) fn overflow_probe_content(&self, theme: AppTheme) -> Stateful<gpui::Div> {
+    pub(super) fn overflow_probe_content(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let info_value = self.environment_value_input(
+            "settings_window_overflow_info".into(),
+            self.runtime_info
+                .environment
+                .system
+                .operating_system
+                .clone()
+                .unwrap_or_default(),
+            theme,
+            cx,
+        );
         div()
             .id("settings_window_overflow_probe_view")
             .w_full()
@@ -814,7 +919,7 @@ impl SettingsWindowView {
                     .child(self.info_row(
                         "settings_window_overflow_info",
                         "Deliberately long info label for overflow coverage",
-                        self.runtime_info.environment.system.operating_system.clone().unwrap_or_default().into(),
+                        info_value,
                         theme,
                     ))
                     .child(self.link_row(
@@ -1352,23 +1457,35 @@ impl SettingsWindowView {
         title: &'static str,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .w_full()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .px_2()
-                    .pb_2()
-                    .text_size(theme.ui_text(18.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme.colors.foreground.primary)
-                    .child(title),
-            )
+        card_shell(id).child(card_title(title, theme).pb_2())
+    }
+
+    /// A card whose title row ends in one compact action.
+    pub(super) fn card_with_action(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        action: impl IntoElement,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        card_shell(id).child(
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .pb_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    card_title(title, theme)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .line_clamp(1)
+                        .whitespace_nowrap()
+                        .overflow_hidden(),
+                )
+                .child(div().flex_none().pr_2().child(action)),
+        )
     }
 
     pub(super) fn subsection_heading(
@@ -1507,4 +1624,24 @@ impl SettingsWindowView {
             )
             .child(list)
     }
+}
+
+fn card_shell(id: &'static str) -> Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.to_string())
+        .w_full()
+        .min_w(px(0.0))
+        .flex()
+        .flex_col()
+        .gap_2()
+}
+
+fn card_title(title: &'static str, theme: AppTheme) -> gpui::Div {
+    div()
+        .px_2()
+        .text_size(theme.ui_text(18.0))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.colors.foreground.primary)
+        .child(title)
 }

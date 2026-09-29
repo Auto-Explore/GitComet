@@ -571,6 +571,8 @@ pub(crate) struct SettingsWindowView {
     nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    /// Read-only fields behind the Environment values, keyed by row id.
+    environment_value_inputs: FxHashMap<SharedString, Entity<components::TextInput>>,
     signing_tools_probe: Option<gpui::Task<()>>,
     signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
@@ -1250,6 +1252,7 @@ impl SettingsWindowView {
             nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            environment_value_inputs: FxHashMap::default(),
             signing_tools_probe,
             signing_tools_cancellation: Default::default(),
             git_executable_mode,
