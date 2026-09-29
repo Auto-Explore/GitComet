@@ -126,14 +126,14 @@ pub(in crate::view) enum ContextMenuAction {
         path: std::path::PathBuf,
     },
     /// Flip one sidebar collapse key — the branch tree's counterpart to
-    /// clicking a group or section header.
+    /// clicking a group chevron or a rail section header.
     ToggleSidebarCollapseKey {
         collapse_key: SharedString,
     },
     /// Drive one sidebar collapse key to an explicit state.
     ///
     /// For rows whose rendered state can diverge from the stored key — a live
-    /// branch filter force-expands the pinned sections — where a flip would
+    /// branch filter force-expands groups — where a flip would
     /// move the key the opposite way from what the entry's label promised.
     SetSidebarCollapseKey {
         collapse_key: SharedString,
@@ -299,6 +299,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         section: BranchSection,
         name: String,
+    },
+    ToggleBranchGroupPin {
+        repo_id: RepoId,
+        group_key: String,
     },
     SetHistoryScope {
         repo_id: RepoId,
@@ -597,6 +601,9 @@ struct ContextMenuModel {
     /// Stable debug selectors for menus whose entries predate the shared context-menu
     /// renderer. Sparse so ordinary menus continue deriving selectors from labels.
     entry_debug_selectors: FxHashMap<usize, SharedString>,
+    /// Item ranges painted as one tinted block: an inline submenu's header
+    /// plus the rows it expands to. Sparse and ordered.
+    groups: Vec<std::ops::Range<usize>>,
 }
 
 impl ContextMenuModel {
@@ -606,6 +613,7 @@ impl ContextMenuModel {
             shortcut_keycaps: false,
             entry_tooltips: FxHashMap::default(),
             entry_debug_selectors: FxHashMap::default(),
+            groups: Vec::new(),
         }
     }
 

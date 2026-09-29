@@ -495,8 +495,11 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::PinnedSectionMenu { repo_id, section } => {
-                self.context_menu_view(PopoverKind::PinnedSectionMenu { repo_id, section }, cx)
+            PopoverKind::SidebarPinnedOverflow { repo_id, bottom } => {
+                self.sidebar_pin_overflow_view(repo_id, bottom, window_h / 2.0, cx)
+            }
+            PopoverKind::SidebarAncestorMenu { repo_id, section } => {
+                self.context_menu_view(PopoverKind::SidebarAncestorMenu { repo_id, section }, cx)
             }
             PopoverKind::DeleteBranchesConfirm {
                 repo_id,

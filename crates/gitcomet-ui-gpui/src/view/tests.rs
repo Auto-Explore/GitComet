@@ -3448,6 +3448,64 @@ fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
+fn pane_resize_grips_paint_on_hover_in_the_application_layout(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
+    test_support::redraw(cx);
+
+    for selector in ["pane_resize_sidebar", "pane_resize_details"] {
+        let handle = cx
+            .debug_bounds(selector)
+            .expect("resize strip should be present");
+        assert!(handle.size.width > px(0.0) && handle.size.height > px(44.0));
+        cx.simulate_mouse_move(handle.center(), None, gpui::Modifiers::default());
+        for pressed in [false, true] {
+            if pressed {
+                cx.simulate_mouse_down(
+                    handle.center(),
+                    gpui::MouseButton::Left,
+                    gpui::Modifiers::default(),
+                );
+            }
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+                let theme = view.read(app).theme;
+                let tint = if pressed {
+                    theme.colors.accent.foreground
+                } else {
+                    with_alpha(theme.colors.foreground.primary, if theme.is_dark { 0.34 } else { 0.30 })
+                };
+                let scale = window.scale_factor();
+                let quad = window.painted_quads().into_iter()
+                    .find(|quad| {
+                        let bounds = quad.bounds;
+                        quad.background == tint.into()
+                            && bounds.size.width.0 > 0.0 && bounds.size.height.0 > 0.0
+                            && (bounds.center().x.0 - f32::from(handle.center().x) * scale).abs() < 1.0
+                            && (bounds.center().y.0 - f32::from(handle.center().y) * scale).abs() < 1.0
+                    }).unwrap_or_else(|| panic!("{selector}: no grip centered in {handle:?}, pressed={pressed}"));
+                let max_radius = quad.bounds.size.width.0.min(quad.bounds.size.height.0) / 2.0;
+                for radius in [quad.corner_radii.top_left, quad.corner_radii.top_right, quad.corner_radii.bottom_left, quad.corner_radii.bottom_right] {
+                    assert!(radius.0 <= max_radius + 0.5,
+                        "{selector}: radius {radius:?} exceeds grip bounds {:?} and makes the grip invisible", quad.bounds);
+                }
+            });
+        }
+        cx.simulate_mouse_up(
+            handle.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+    }
+}
+
+#[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -3514,20 +3572,11 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         .debug_bounds("collapsed_sidebar_popover")
         .expect("expected collapsed Files popover");
     assert!(
-        cx.debug_bounds("collapsed_file_browser_rows").is_some(),
-        "collapsed Files should render its virtualized row band"
+        cx.debug_bounds("file_browser_scroll_container").is_some(),
+        "collapsed Files shares the virtualized file list"
     );
-    assert!(
-        cx.debug_bounds("file_browser_scroll_container").is_none(),
-        "collapsed Files must not use the full-sidebar virtualized viewport"
-    );
-    let scroll = cx.update(|_window, app| {
-        view.read(app)
-            .sidebar_pane
-            .read(app)
-            .collapsed_popover_scroll
-            .clone()
-    });
+    let scroll =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).list_scroll_for_test());
     assert!(
         scroll.max_offset().y > px(0.0),
         "collapsed popover scrollbar must observe overflowing rows"
@@ -3536,47 +3585,24 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         components::Scrollbar::thumb_visible_for_test(&scroll, panel.size.height),
         "collapsed popover must render a scrollbar thumb for overflowing rows"
     );
-    let surface = cx
-        .debug_bounds("collapsed_sidebar_popover_content")
-        .expect("expected collapsed popover scroll surface");
-    let scrollbar_before = cx
-        .debug_bounds("collapsed_sidebar_popover_scrollbar")
-        .expect("expected collapsed popover scrollbar");
-    assert_eq!(
-        (scrollbar_before.top(), scrollbar_before.bottom()),
-        (surface.top(), surface.bottom()),
-        "scrollbar track must be anchored to the visible surface"
-    );
-
-    let before = cx
-        .debug_bounds("file_browser_row_0")
-        .expect("expected first file row")
-        .top();
+    let surface = cx.debug_bounds("file_browser_scroll_container").unwrap();
+    let search_toggle = cx.debug_bounds("collapsed_popover_filter_toggle").unwrap();
+    let before = scroll.offset();
     cx.simulate_event(gpui::ScrollWheelEvent {
-        position: panel.center(),
+        position: surface.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
         ..Default::default()
     });
     test_support::redraw(cx);
-    let after = cx
-        .debug_bounds("file_browser_row_0")
-        .expect("expected first file row after scroll")
-        .top();
-    let scrollbar_after = cx
-        .debug_bounds("collapsed_sidebar_popover_scrollbar")
-        .expect("expected collapsed popover scrollbar after scroll");
-    assert!(
-        after < before - px(1.0),
-        "mouse wheel must move collapsed file rows (before={before:?}, after={after:?})"
-    );
+    assert!(scroll.offset().y < before.y);
     assert_eq!(
-        scrollbar_after, scrollbar_before,
-        "scrollbar track must stay fixed while its content scrolls"
+        cx.debug_bounds("collapsed_popover_filter_toggle").unwrap(),
+        search_toggle
     );
 }
 
 #[gpui::test]
-fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestAppContext) {
+fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -3612,7 +3638,7 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     );
 
     assert!(
-        cx.debug_bounds("collapsed_popover_filter_bar").is_none(),
+        cx.debug_bounds("sidebar_branches_search").is_none(),
         "the popover filter must stay hidden until its header toggle is used"
     );
     let toggle = cx
@@ -3644,7 +3670,7 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     test_support::redraw(cx);
 
     let filter_bar = cx
-        .debug_bounds("collapsed_popover_filter_bar")
+        .debug_bounds("sidebar_branches_search")
         .expect("expected the toggle to reveal the popover filter");
     // The branch sits under a `feature/` group header, so it is not row zero.
     let first_row = ["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"]
@@ -3665,14 +3691,14 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     test_support::redraw(cx);
 
     assert!(
-        cx.debug_bounds("branch_filter_group_remote").is_some(),
-        "a Local popover filter must also surface Remote matches, under a Remote label"
+        cx.debug_bounds("branch_row_1_1").is_none(),
+        "a Local search must not show a branch that only exists on Remote"
     );
     let query = cx.update(|_window, app| {
         view.read(app)
             .sidebar_pane
             .read(app)
-            .collapsed_popover_filter_query
+            .branch_filter_query
             .clone()
     });
     assert_eq!(
@@ -5530,6 +5556,81 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_, app| view.update(app, |view, cx| view.set_sidebar_collapsed(false, cx)));
+    cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
+
+    for scale in [100, 150] {
+        let mut previous: Option<[gpui::Size<Pixels>; 2]> = None;
+        for density in [
+            crate::appearance::UiDensity::Compact,
+            crate::appearance::UiDensity::Comfortable,
+            crate::appearance::UiDensity::Spacious,
+        ] {
+            cx.update(|_, app| {
+                app.set_global(crate::appearance::Appearance {
+                    density,
+                    ..Default::default()
+                });
+                ui_scale::set_current(app, scale);
+                view.update(app, |view, cx| {
+                    view.notify_font_preferences_changed(cx);
+                    // Real scale changes resize the panel too. Measure the
+                    // natural tab widths with room for both header actions;
+                    // the minimum-width search test covers constrained tabs.
+                    test_support::set_sidebar_width_for_test(
+                        view,
+                        px(320.0 * scale as f32 / 100.0),
+                        cx,
+                    );
+                });
+            });
+            test_support::redraw(cx);
+            let sizes = ["sidebar_tab_branches", "sidebar_tab_files"]
+                .map(|selector| cx.debug_bounds(selector).unwrap().size);
+            if let Some(previous) = previous {
+                for (current, previous) in sizes.iter().zip(previous) {
+                    assert!(
+                        current.width > previous.width,
+                        "tab width must grow at {density:?}"
+                    );
+                    assert!(
+                        current.height > previous.height,
+                        "tab height must grow at {density:?}"
+                    );
+                }
+            }
+            previous = Some(sizes);
+        }
+    }
+}
+
+#[gpui::test]
+fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, _| window.activate_window());
+    test_support::redraw(cx);
+    cx.simulate_mouse_down(
+        point(px(300.0), px(300.0)),
+        gpui::MouseButton::Left,
+        Default::default(),
+    );
+    cx.update(|window, app| assert!(crate::press_gesture::pointer_is_down(window, app)));
+    cx.deactivate_window();
+    cx.update(|window, app| assert!(!crate::press_gesture::pointer_is_down(window, app)));
+}
+
+#[gpui::test]
 fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppContext) {
     // The trailing action stays put as its data becomes available; switching
     // tabs swaps it for the action belonging to that tree.
@@ -6167,8 +6268,11 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         .expect("the feat/ group renders a row");
     assert_eq!(
         group_row.size.height,
-        px(24.0),
-        "branch hierarchy rows must remain 24 px tall"
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            rows::sidebar::sidebar_list_row_height(root.theme, root.ui_scale_percent)
+        }),
+        "branch hierarchy rows must follow the selected density"
     );
     let center = group_row.center();
     cx.simulate_mouse_move(center, None, gpui::Modifiers::default());

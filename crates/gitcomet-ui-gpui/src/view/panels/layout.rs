@@ -4216,7 +4216,10 @@ mod tests {
             density: crate::appearance::UiDensity::Comfortable,
             ..crate::appearance::Appearance::default()
         };
-        let compact = crate::appearance::Appearance::default();
+        let compact = crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        };
 
         assert!(commit_file_filter_tab_pad_x(comfortable) > commit_file_filter_tab_pad_x(compact));
 

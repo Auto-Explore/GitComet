@@ -2336,6 +2336,8 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
 fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
     let backend = Arc::new(StashTestBackend::default());
     let gate = backend.gate.clone();
+    // The expanded sidebar requests stashes as soon as the repository opens.
+    let pending = gate.hold();
     let (store, events) = AppStore::new_test(backend);
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
@@ -2353,7 +2355,6 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
 
     let section_ix = wait_for_debug_index(cx, &_view, "stash_section", 64);
     let section_selector = debug_selector("stash_section", section_ix);
-    let pending = gate.hold();
     click_debug_selector(cx, section_selector, 1);
 
     let selector = stash_spinner_selector(repo_id);
@@ -2507,15 +2508,19 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
     sync_view_for_tests(cx, &view);
 
     // Nothing is revealed on hover at the trailing edge any more: the `⋮` button
-    // is gone, so the worktree badge owns the row's right edge, one trailing pad
-    // in from it.
+    // is gone. Content keeps its inset plus trailing padding while the row's
+    // background reaches the panel edge.
     assert!(
         cx.debug_bounds(debug_selector("branch_dots", badge_ix))
             .is_none(),
         "expected the branch row's `⋮` slot to be gone"
     );
     assert!(
-        (row_bounds.right() - badge_bounds.right() - px(4.0)).abs() <= px(1.0),
+        (row_bounds.right()
+            - badge_bounds.right()
+            - px(crate::view::components::ROW_HIGHLIGHT_INSET_PX + 4.0))
+        .abs()
+            <= px(1.0),
         "expected branch worktree badge to sit one trailing pad off the row's right edge, \
          row right {:?} badge right {:?}",
         row_bounds.right(),

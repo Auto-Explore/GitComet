@@ -232,6 +232,21 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
         .border_color(theme.colors.stroke.subtle)
 }
 
+/// One inline submenu (its header row plus the rows it expands to) on the
+/// sidebar-header surface, so rows that act on the same object read as a unit.
+/// Rows inside keep a transparent rest, so hover and selection overlays land
+/// on the tint instead of replacing it.
+pub fn context_menu_group(theme: AppTheme, ui_scale: impl Into<UiScale>, spaced: bool) -> Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale.into());
+    div()
+        .flex()
+        .flex_col()
+        .items_stretch()
+        .rounded(px(theme.radii.row))
+        .bg(theme.colors.surface.panel)
+        .when(spaced, |group| group.mt(scaled_px(2.0)))
+}
+
 pub struct ContextMenuEntry {
     id: ElementId,
     label: ContextMenuText,
@@ -711,11 +726,59 @@ mod tests {
                         .debug_selector(|| "row_keycap".to_string()),
                 )
                 .child(
+                    ContextMenuEntry::new("collapse_command", "Collapse feat/")
+                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
+                        .render(theme, scale, cx)
+                        .debug_selector(|| "row_collapse_command".to_string()),
+                )
+                .child(
+                    context_menu_group(theme, scale, false)
+                        .debug_selector(|| "closed_group".to_string())
+                        .child(
+                            ContextMenuEntry::new("closed_group", "Remote branch origin/main")
+                                .icon(ContextMenuIconSlot::Icon("icons/chevron_right.svg".into()))
+                                .render(theme, scale, cx)
+                                .debug_selector(|| "row_closed_group".to_string()),
+                        ),
+                )
+                .child(
+                    context_menu_group(theme, scale, true)
+                        .debug_selector(|| "open_group".to_string())
+                        .child(
+                            ContextMenuEntry::new("open_group", "Remote branch upstream/main")
+                                .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
+                                .render(theme, scale, cx)
+                                .debug_selector(|| "row_open_group".to_string()),
+                        )
+                        .child(
+                            ContextMenuEntry::new("selected_group", "Checkout")
+                                .icon(ContextMenuIconSlot::Reserved)
+                                .selected(true)
+                                .render(theme, scale, cx)
+                                .debug_selector(|| "row_selected_group".to_string()),
+                        ),
+                )
+                .child(
                     context_menu_header(theme, scale, SharedString::from("Header"), None, cx)
                         .id("row_header_id")
                         .debug_selector(|| "row_header".to_string()),
                 )
         }
+    }
+
+    #[gpui::test]
+    fn review_collapse_commands_do_not_inherit_group_header_background(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _guard = crate::test_support::lock_visual_test();
+        let theme = AppTheme::from_key("sunset_veil").unwrap();
+        let (_view, cx) = cx.add_window_view(|_, _| RowKinds { theme });
+        crate::view::test_support::redraw(cx);
+        assert!(
+            !crate::test_support::painted_control_quads(cx, "row_collapse_command")
+                .iter()
+                .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
+        );
     }
 
     /// Every kind of menu row is one height, at both densities. Keycaps and
@@ -742,7 +805,14 @@ mod tests {
                 .expect("expected a plain entry to render")
                 .size
                 .height;
-            for selector in ["row_text_shortcut", "row_keycap", "row_header"] {
+            for selector in [
+                "row_text_shortcut",
+                "row_keycap",
+                "row_header",
+                "row_closed_group",
+                "row_open_group",
+                "row_selected_group",
+            ] {
                 let height = cx
                     .debug_bounds(selector)
                     .unwrap_or_else(|| panic!("expected {selector} to render"))
@@ -753,6 +823,26 @@ mod tests {
                     "{selector} must match a plain entry at {density:?} density"
                 );
             }
+            for selector in ["closed_group", "open_group"] {
+                assert!(
+                    crate::test_support::painted_control_quads(cx, selector)
+                        .iter()
+                        .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
+                );
+            }
+            // One block spans the header and its rows; neighbours stay apart.
+            let closed = cx.debug_bounds("closed_group").unwrap();
+            let open = cx.debug_bounds("open_group").unwrap();
+            let header = cx.debug_bounds("row_open_group").unwrap();
+            let action = cx.debug_bounds("row_selected_group").unwrap();
+            assert_eq!((open.top(), open.bottom()), (header.top(), action.bottom()));
+            assert!(open.top() > closed.bottom());
+            assert!(
+                crate::test_support::painted_control_quads(cx, "row_selected_group")
+                    .iter()
+                    .any(|(fill, _)| *fill == theme.hover_overlay().into()),
+                "group backgrounds must preserve keyboard selection feedback"
+            );
         }
     }
 

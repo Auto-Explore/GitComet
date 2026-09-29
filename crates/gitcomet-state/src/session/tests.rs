@@ -1905,7 +1905,12 @@ fn persist_ui_settings_round_trips_repo_sidebar_pinned_branches() {
     let mut repo_sidebar_pinned_branches = BTreeMap::new();
     repo_sidebar_pinned_branches.insert(
         repo_a.clone(),
-        BTreeSet::from(["local:main".to_string(), "remote:origin/main".to_string()]),
+        BTreeSet::from([
+            "local:main".to_string(),
+            "remote:origin/main".to_string(),
+            "group:local:feat/nested".to_string(),
+            "group:remote:team/origin:feat".to_string(),
+        ]),
     );
 
     persist_ui_settings_to_path(
