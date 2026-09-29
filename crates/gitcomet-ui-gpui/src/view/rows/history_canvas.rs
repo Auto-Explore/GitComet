@@ -205,6 +205,35 @@ fn shape_truncated_line_cached_from(
         font_family,
         truncate_from,
         "…",
+        &[],
+    )
+}
+
+/// [`shape_truncated_line_cached`] with find matches drawn in `highlights`.
+#[allow(clippy::too_many_arguments)]
+fn shape_highlighted_line_cached(
+    window: &mut Window,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    text: &SharedString,
+    text_hash: u64,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    font_family: Option<&'static str>,
+    highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
+) -> gpui::ShapedLine {
+    shape_truncated_line_cached_from_with_affix(
+        window,
+        base_style,
+        font_size,
+        text,
+        text_hash,
+        max_width,
+        color,
+        font_family,
+        TruncateFrom::End,
+        "…",
+        highlights,
     )
 }
 
@@ -231,6 +260,7 @@ fn shape_clipped_chip_line_cached_from(
         font_family,
         truncate_from,
         "",
+        &[],
     )
 }
 
@@ -246,6 +276,7 @@ fn shape_truncated_line_cached_from_with_affix(
     font_family: Option<&'static str>,
     truncate_from: TruncateFrom,
     truncation_affix: &'static str,
+    highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
 ) -> gpui::ShapedLine {
     use std::hash::{Hash, Hasher};
 
@@ -264,6 +295,11 @@ fn shape_truncated_line_cached_from_with_affix(
         color.alpha.to_bits().hash(&mut hasher);
         matches!(truncate_from, TruncateFrom::Start).hash(&mut hasher);
         truncation_affix.hash(&mut hasher);
+        highlights.len().hash(&mut hasher);
+        for (range, style) in highlights {
+            range.hash(&mut hasher);
+            crate::text_runs::hash_highlight_style(style, &mut hasher);
+        }
         hasher.finish()
     };
 
@@ -278,18 +314,26 @@ fn shape_truncated_line_cached_from_with_affix(
     if let Some(family) = font_family {
         style.font_family = family.into();
     }
-    let runs = vec![style.to_run(text.len())];
+    let runs = crate::text_runs::text_runs_for_highlights(text, &style, highlights);
     let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
-    let (truncated, runs) = wrapper.truncate_line(
-        text.clone(),
-        max_width.max(px(0.0)),
-        truncation_affix,
-        &runs,
-        truncate_from,
-    );
-    let shaped = window
-        .text_system()
-        .shape_line(truncated, font_size, runs.as_ref(), None);
+    let mut shape = |width: Pixels| {
+        let (truncated, runs) = wrapper.truncate_line(
+            text.clone(),
+            width.max(px(0.0)),
+            truncation_affix,
+            &runs,
+            truncate_from,
+        );
+        window
+            .text_system()
+            .shape_line(truncated, font_size, runs.as_ref(), None)
+    };
+    let mut shaped = shape(max_width);
+    // The wrapper measures in the base font, so bold matches can overflow and
+    // be clipped mid-glyph; truncate again by the overshoot.
+    if !highlights.is_empty() && shaped.width > max_width {
+        shaped = shape(max_width - (shaped.width - max_width));
+    }
 
     HISTORY_TEXT_LAYOUT_CACHE.with(|cache| {
         cache.borrow_mut().put(key, shaped.clone());
@@ -1126,6 +1170,7 @@ pub(super) fn history_commit_row_canvas(
     // only when someone actually hovers it.
     commit_time: std::time::SystemTime,
     short_sha: HistoryTextVm,
+    find_highlights: Option<crate::view::panes::history::find::HistoryFindHighlights>,
     active_context_menu_invoker: Option<SharedString>,
     // The same resolver paints the row and its graph-node cutouts.
     row_paint: InteractionPaint,
@@ -1175,6 +1220,29 @@ pub(super) fn history_commit_row_canvas(
                 .line_height
                 .to_pixels(xxs_font.into(), window.rem_size());
             let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
+            // Find matches look like the sidebar's search matches.
+            let find_match_style = gpui::HighlightStyle {
+                color: Some(theme.colors.accent.foreground.into_color()),
+                font_weight: Some(gpui::FontWeight::BOLD),
+                ..gpui::HighlightStyle::default()
+            };
+            let find_match_runs = |ranges: &[std::ops::Range<usize>]| -> Vec<_> {
+                ranges
+                    .iter()
+                    .map(|range| (range.clone(), find_match_style))
+                    .collect()
+            };
+            let (summary_matches, author_matches, sha_matches) = find_highlights
+                .as_ref()
+                .map(|found| {
+                    let sha = (found.sha > 0).then_some((0..found.sha, find_match_style));
+                    (
+                        find_match_runs(&found.summary),
+                        find_match_runs(&found.author),
+                        sha.into_iter().collect::<Vec<_>>(),
+                    )
+                })
+                .unwrap_or_default();
 
             let center_y = |line_height: Pixels| {
                 let extra = (bounds.size.height - line_height).max(px(0.0));
@@ -1384,7 +1452,7 @@ pub(super) fn history_commit_row_canvas(
                 summary_bounds
             };
             if !summary.is_empty() {
-                let shaped = shape_truncated_line_cached(
+                let shaped = shape_highlighted_line_cached(
                     window,
                     &base_style,
                     sm_font,
@@ -1393,6 +1461,7 @@ pub(super) fn history_commit_row_canvas(
                     summary_text_bounds.size.width.max(px(0.0)),
                     history_summary_color(theme, is_selected_branch_tip, related_to_selection),
                     None,
+                    &summary_matches,
                 );
                 window.with_content_mask(
                     Some(ContentMask {
@@ -1536,7 +1605,7 @@ pub(super) fn history_commit_row_canvas(
                         author_bounds.size.height,
                     ),
                 );
-                let shaped = shape_truncated_line_cached(
+                let shaped = shape_highlighted_line_cached(
                     window,
                     &base_style,
                     xs_font,
@@ -1545,6 +1614,7 @@ pub(super) fn history_commit_row_canvas(
                     author_text_bounds.size.width.max(px(0.0)),
                     theme.colors.foreground.secondary,
                     None,
+                    &author_matches,
                 );
                 window.with_content_mask(
                     Some(ContentMask {
@@ -1609,7 +1679,7 @@ pub(super) fn history_commit_row_canvas(
                         sha_bounds.size.height,
                     ),
                 );
-                let shaped = shape_truncated_line_cached(
+                let shaped = shape_highlighted_line_cached(
                     window,
                     &base_style,
                     xxs_font,
@@ -1618,6 +1688,7 @@ pub(super) fn history_commit_row_canvas(
                     sha_text_bounds.size.width.max(px(0.0)),
                     theme.colors.foreground.secondary,
                     Some(UI_MONOSPACE_FONT_FAMILY),
+                    &sha_matches,
                 );
                 let origin_x = (sha_text_bounds.right() - shaped.width).max(sha_text_bounds.left());
                 window.with_content_mask(
@@ -2162,6 +2233,49 @@ mod tests {
                 clipped.text.chars().count()
                     > ellipsized.text.trim_start_matches('…').chars().count(),
                 "removing the ellipsis should expose more of the branch name"
+            );
+        })
+        .expect("history canvas test window should stay open");
+    }
+
+    /// A row painted before the find bar opened must not keep its plain
+    /// cached line once its text matches.
+    #[gpui::test]
+    fn find_match_highlights_are_part_of_the_layout_cache_key(cx: &mut gpui::TestAppContext) {
+        let window_handle = cx.add_window(|_window, _cx| gpui::Empty);
+        cx.update_window(window_handle.into(), |_, window, _| {
+            let style = window.text_style();
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            let text: SharedString = "highlight cache key: Fix login bug".into();
+            let color = AppTheme::gitcomet_dark().colors.foreground.primary;
+            let bold = gpui::HighlightStyle {
+                font_weight: Some(gpui::FontWeight::BOLD),
+                ..gpui::HighlightStyle::default()
+            };
+            let cached = || HISTORY_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().len());
+            let shape = |window: &mut Window, highlights: &[(std::ops::Range<usize>, _)]| {
+                shape_highlighted_line_cached(
+                    window,
+                    &style,
+                    font_size,
+                    &text,
+                    fx_hash_str(text.as_ref()),
+                    px(1000.0),
+                    color,
+                    None,
+                    highlights,
+                );
+            };
+
+            let before = cached();
+            shape(window, &[]);
+            shape(window, &[(21..24, bold)]);
+            shape(window, &[(21..24, bold)]);
+            shape(window, &[(25..30, bold)]);
+            assert_eq!(
+                cached() - before,
+                3,
+                "plain, one match and another match are three layouts"
             );
         })
         .expect("history canvas test window should stay open");

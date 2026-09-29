@@ -798,6 +798,42 @@ fn row_dimming_follows_the_rows_own_text() {
     );
 }
 
+#[test]
+fn row_highlights_show_why_the_row_matched() {
+    use crate::view::panes::history::find::{HistoryFindHighlights, history_find_highlights};
+
+    let query = |text: &str| HistoryFindQuery::new(text, TextSearchOptions::default());
+    let commit = authored("abcd1234ffff", "Fix login fix", "Alice Fixer");
+    let highlights = |query: Option<HistoryFindQuery>, summary: &str| {
+        history_find_highlights(query.as_ref(), &commit, summary, "Alice Fixer", "abcd1234")
+    };
+
+    assert_eq!(
+        highlights(query("fix"), "Fix login fix"),
+        Some(HistoryFindHighlights {
+            summary: vec![0..3, 10..13],
+            author: vec![6..9],
+            sha: 0,
+        }),
+        "every match in the summary and the author"
+    );
+    assert_eq!(
+        highlights(query("ABCD1234FF"), "Fix login fix"),
+        Some(HistoryFindHighlights {
+            sha: 8,
+            ..HistoryFindHighlights::default()
+        }),
+        "a SHA prefix lights up the SHA shown, never past its end"
+    );
+    assert_eq!(
+        highlights(query("login"), "stash message").map(|found| found.summary),
+        None,
+        "ranges index the text shown, which a stash row replaces"
+    );
+    assert_eq!(highlights(query("zzz"), "Fix login fix"), None);
+    assert_eq!(highlights(None, "Fix login fix"), None);
+}
+
 // ---------------------------------------------------------------------------
 // Indexed history
 // ---------------------------------------------------------------------------
@@ -924,12 +960,12 @@ struct IndexedFindRepo {
     released: AtomicBool,
 }
 
-/// The viewport's range loads run on the store's named test pools; the find
-/// scan has its own unnamed worker (see `store/effects/history_find.rs`).
+/// The find scan runs on its own named worker; the viewport's range loads run
+/// on the store's repo-load pool, whose threads are unnamed.
 fn on_find_scan_thread() -> bool {
     std::thread::current()
         .name()
-        .is_none_or(|name| !name.starts_with("gitcomet-test-store"))
+        .is_some_and(|name| name.starts_with(gitcomet_state::history_find::HISTORY_FIND_THREAD))
 }
 
 /// Repository methods the find tests never reach.

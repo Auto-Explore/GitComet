@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex, Weak};
 mod cache;
 use cache::HistoryFindCache;
 
+/// Thread-name prefix of the scan worker, so its reads are identifiable.
+pub const HISTORY_FIND_THREAD: &str = "gitcomet-history-find";
+
 #[derive(Clone, Debug, Default)]
 pub struct HistoryFindState {
     pub query: Option<HistoryFindQuery>,

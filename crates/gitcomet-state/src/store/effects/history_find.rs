@@ -1,5 +1,5 @@
 use super::*;
-use crate::history_find::{HistoryFindEffect, HistoryFindMsg};
+use crate::history_find::{HISTORY_FIND_THREAD, HistoryFindEffect, HistoryFindMsg};
 use std::sync::OnceLock;
 
 pub(super) fn schedule(
@@ -12,7 +12,7 @@ pub(super) fn schedule(
     static EXECUTOR: OnceLock<TaskExecutor> = OnceLock::new();
     let failed = work.clone();
     util::spawn_detached_with_repo_or_else(
-        EXECUTOR.get_or_init(|| TaskExecutor::new(1)),
+        EXECUTOR.get_or_init(|| TaskExecutor::named(HISTORY_FIND_THREAD, 1)),
         "history-find",
         repos,
         work.repo_id,

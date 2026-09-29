@@ -145,13 +145,30 @@ impl TaskExecutor {
     }
     #[cfg_attr(feature = "test-support", allow(dead_code))]
     pub(super) fn new(threads: usize) -> Self {
+        Self::with_workers(None, threads)
+    }
+
+    /// [`Self::new`] with workers named `{name}-{ix}`, for crash logs and tests.
+    pub(super) fn named(name: &str, threads: usize) -> Self {
+        Self::with_workers(Some(name), threads)
+    }
+
+    fn with_workers(name: Option<&str>, threads: usize) -> Self {
         let (tx, rx) = mpsc::channel::<Task>();
         let rx = Arc::new(std::sync::Mutex::new(rx));
 
         let mut worker_threads = Vec::with_capacity(threads);
-        for _ in 0..threads {
+        for ix in 0..threads {
             let rx = Arc::clone(&rx);
-            worker_threads.push(thread::spawn(move || worker_loop(rx)));
+            let mut builder = thread::Builder::new();
+            if let Some(name) = name {
+                builder = builder.name(format!("{name}-{ix}"));
+            }
+            worker_threads.push(
+                builder
+                    .spawn(move || worker_loop(rx))
+                    .expect("failed to spawn executor worker"),
+            );
         }
 
         Self {

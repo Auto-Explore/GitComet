@@ -247,6 +247,14 @@ impl HistoryView {
                     }) {
                         return None;
                     }
+                    let find_highlights =
+                        crate::view::panes::history::find::history_find_highlights(
+                            find_query.as_ref(),
+                            commit,
+                            base_row_vm.summary.as_ref(),
+                            base_row_vm.author.as_ref(),
+                            short_sha.as_ref(),
+                        );
                     Some(history_table_row(
                         theme,
                         ui_scale,
@@ -286,6 +294,7 @@ impl HistoryView {
                             commit,
                             selected,
                         ),
+                        find_highlights,
                         this.active_context_menu_invoker.as_ref(),
                         cx,
                     ))
@@ -514,6 +523,7 @@ fn history_table_row(
     is_stash_node: bool,
     // A known miss while the find bar has a query.
     find_dimmed: bool,
+    find_highlights: Option<crate::view::panes::history::find::HistoryFindHighlights>,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
@@ -568,6 +578,7 @@ fn history_table_row(
         when,
         commit.time,
         short_sha,
+        find_highlights,
         active_context_menu_invoker.cloned(),
         row_paint.clone(),
     );

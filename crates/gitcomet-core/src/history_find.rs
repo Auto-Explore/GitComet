@@ -8,6 +8,7 @@ use crate::domain::Commit;
 use crate::text_search::{TextSearchMatcher, TextSearchOptions};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::sync::Arc;
 
 /// A compiled find-bar query. The text matches the summary or the author, each
@@ -73,11 +74,23 @@ impl HistoryFindQuery {
 
     /// Match cached search text without constructing a full commit object.
     pub fn matches_fields(&self, id: &str, summary: &str, author: &str) -> bool {
-        self.sha_prefix
-            .as_deref()
-            .is_some_and(|prefix| starts_with_ignore_ascii_case(id, prefix))
+        self.sha_prefix_len(id).is_some()
             || self.matcher.is_match(summary)
             || self.matcher.is_match(author)
+    }
+
+    /// Replaces `out` with up to `max_matches` ranges of `text` (a summary or
+    /// an author) the query matches, for highlighting.
+    pub fn text_ranges_into(&self, text: &str, out: &mut Vec<Range<usize>>, max_matches: usize) {
+        self.matcher.find_ranges_into(text, out, max_matches);
+    }
+
+    /// Length of the leading part of `id` the query matched as a SHA prefix.
+    pub fn sha_prefix_len(&self, id: &str) -> Option<usize> {
+        self.sha_prefix
+            .as_deref()
+            .filter(|prefix| starts_with_ignore_ascii_case(id, prefix))
+            .map(str::len)
     }
 
     /// Whether this query can only remove matches from a previous query.
@@ -268,6 +281,22 @@ mod tests {
         let upgrade = commit("d5bb3ab2", "upgrade gix", "Havunen");
         assert!(!query("d5bb3", REGEX).matches(&upgrade));
         assert!(query("d5bb3", REGEX).matches(&commit("00000000", "revert d5bb3ab2", "A")));
+    }
+
+    /// The highlight ranges are what `matches` matched, field by field.
+    #[test]
+    fn match_ranges_follow_each_field() {
+        let mut ranges = Vec::new();
+        query("fix", PLAIN).text_ranges_into("Fix a prefix", &mut ranges, 16);
+        assert_eq!(ranges, [0..3, 9..12]);
+        query("fix", WHOLE_WORD).text_ranges_into("Fix a prefix", &mut ranges, 16);
+        assert_eq!(ranges, [0..3]);
+        query("^A", REGEX).text_ranges_into("Alice", &mut ranges, 16);
+        assert_eq!(ranges, [0..1]);
+
+        assert_eq!(query(" D5BB3 ", PLAIN).sha_prefix_len("d5bb3ab2"), Some(5));
+        assert_eq!(query("3ab2", PLAIN).sha_prefix_len("d5bb3ab2"), None);
+        assert_eq!(query("d5bb3", REGEX).sha_prefix_len("d5bb3ab2"), None);
     }
 
     /// The summary and the author are matched one at a time, so a match

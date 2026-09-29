@@ -109,6 +109,46 @@ pub(in crate::view) fn history_find_row_dimmed(
     !selected && query.is_some_and(|query| !query.matches(commit))
 }
 
+/// Most highlighted matches per cell, as in the sidebar searches.
+const HISTORY_FIND_MAX_HIGHLIGHTS: usize = 16;
+
+/// What the find query matched in a row's shown text, so the row can show
+/// why it is a match.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::view) struct HistoryFindHighlights {
+    pub(in crate::view) summary: Vec<std::ops::Range<usize>>,
+    pub(in crate::view) author: Vec<std::ops::Range<usize>>,
+    /// Leading bytes of the short SHA matched as a SHA prefix.
+    pub(in crate::view) sha: usize,
+}
+
+/// Highlights for a row showing `summary`, `author` and `short_sha`, which
+/// can differ from the commit's own text (a stash shows its message). `None`
+/// without a query or when nothing shown matches.
+pub(in crate::view) fn history_find_highlights(
+    query: Option<&HistoryFindQuery>,
+    commit: &Commit,
+    summary: &str,
+    author: &str,
+    short_sha: &str,
+) -> Option<HistoryFindHighlights> {
+    let query = query?;
+    let mut highlights = HistoryFindHighlights {
+        sha: query
+            .sha_prefix_len(commit.id.as_ref())
+            .map_or(0, |len| len.min(short_sha.len())),
+        ..HistoryFindHighlights::default()
+    };
+    query.text_ranges_into(
+        summary,
+        &mut highlights.summary,
+        HISTORY_FIND_MAX_HIGHLIGHTS,
+    );
+    query.text_ranges_into(author, &mut highlights.author, HISTORY_FIND_MAX_HIGHLIGHTS);
+    (!highlights.summary.is_empty() || !highlights.author.is_empty() || highlights.sha > 0)
+        .then_some(highlights)
+}
+
 impl HistoryView {
     pub(in crate::view) fn history_find_is_open(&self) -> bool {
         self.find.as_ref().is_some_and(|find| find.open)
