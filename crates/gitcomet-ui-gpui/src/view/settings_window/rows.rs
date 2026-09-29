@@ -18,7 +18,7 @@ pub(super) const SETTINGS_LICENSE_VERSION_COLUMN_PX: f32 = 90.0;
 const SETTINGS_NAV_COLUMN_WIDTH_PX: f32 = 200.0;
 
 impl SettingsWindowView {
-    fn row_scale(&self, theme: AppTheme) -> crate::ui_scale::UiScale {
+    pub(super) fn row_scale(&self, theme: AppTheme) -> crate::ui_scale::UiScale {
         crate::ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics)
     }
 

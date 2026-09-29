@@ -5253,7 +5253,7 @@ fn assert_diff_search_scrolls_sideways(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    cx.simulate_resize(gpui::size(px(900.0), px(560.0)));
     push_raw_patch_diff_state_with_rev(cx, &view, repo_id, fixture_name, unified, 1, true);
     wait_for_main_pane_condition(
         cx,
@@ -5309,9 +5309,104 @@ fn assert_diff_search_scrolls_sideways(
 
 #[gpui::test]
 fn diff_search_scrolls_sideways_to_a_match_far_along_a_long_line(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     assert_diff_search_scrolls_sideways(
         cx,
         gitcomet_state::model::RepoId(9141),
         "search_horizontal_reveal",
     );
+}
+
+#[gpui::test]
+fn review_split_search_retries_when_one_column_has_stale_scroll_geometry(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let patch = "diff --git a/wide.txt b/wide.txt\n--- a/wide.txt\n+++ b/wide.txt\n@@ -1 +1 @@\n-old\n+new\n".to_string();
+    push_raw_patch_diff_state_with_rev(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(9142),
+        "split_search_retry",
+        patch,
+        1,
+        true,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split diff ready",
+        |pane| pane.diff_cache_rev == 1 && pane.patch_diff_row_len() > 0,
+        |pane| (pane.diff_cache_rev, pane.patch_diff_row_len()),
+    );
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Split;
+            cx.notify();
+        })
+    });
+    draw_and_drain_test_window(cx);
+    fn assert_pending_reveal(pane: &mut crate::view::panes::MainPaneView, window: &mut Window) {
+        let ix = pane
+            .diff_text_hitboxes
+            .keys()
+            .find_map(|(ix, region)| {
+                (*region == DiffTextRegion::SplitRight
+                    && pane
+                        .diff_text_hitboxes
+                        .contains_key(&(*ix, DiffTextRegion::SplitLeft)))
+                .then_some(*ix)
+            })
+            .expect("a row painted in both columns");
+        for stale_region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
+            for region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
+                let hitbox = pane.diff_text_hitboxes.get_mut(&(ix, region)).unwrap();
+                hitbox.painted_text = if region == stale_region {
+                    format!("{}needle", "x".repeat(10_000)).into()
+                } else {
+                    "no match".into()
+                };
+                hitbox.streamed_ascii_monospace_cell_width = Some(px(8.0));
+            }
+            pane.diff_search_query = "needle".into();
+            pane.diff_search_horizontal_reveal = Some((ix, 3));
+            pane.apply_pending_diff_search_horizontal_reveal(window);
+            assert_eq!(
+                pane.diff_search_horizontal_reveal,
+                Some((ix, 2)),
+                "the settled opposite column dropped {stale_region:?}'s pending reveal"
+            );
+        }
+    }
+
+    // Run the reveal during layout, as production does: retrying schedules a
+    // frame for the current rendered view.
+    struct RevealProbe {
+        pane: Entity<crate::view::panes::MainPaneView>,
+    }
+    impl gpui::Render for RevealProbe {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let pane = self.pane.clone();
+            gpui::canvas(
+                move |_, window, app| {
+                    pane.update(app, |pane, _| {
+                        assert_pending_reveal(pane, window);
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .size_full()
+        }
+    }
+    cx.update(|window, app| {
+        let pane = view.read(app).main_pane.clone();
+        window.replace_root(app, |_, _| RevealProbe { pane });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
 }

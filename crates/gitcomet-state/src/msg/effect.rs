@@ -286,6 +286,7 @@ pub enum Effect {
         path: PathBuf,
         contents: super::message::ContentBytes,
         stage: bool,
+        completion: Option<smol::channel::Sender<bool>>,
     },
     AppendGitignorePatterns {
         repo_id: RepoId,

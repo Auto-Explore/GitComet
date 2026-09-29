@@ -1008,11 +1008,23 @@ fn reduce_inner(
         Msg::OpenRepoFromExternalDrop(path) => {
             repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
         }
+        Msg::AcknowledgeRepoOpenFailures { through_revision } => {
+            if state
+                .repo_open_failures
+                .values()
+                .any(|revision| *revision <= through_revision)
+            {
+                Arc::make_mut(&mut state.repo_open_failures)
+                    .retain(|_, revision| *revision > through_revision);
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
         Msg::CloseRepos {
             repo_ids,
             activate_after,
@@ -1909,9 +1921,10 @@ fn reduce_inner(
             path,
             contents,
             stage,
+            completion,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
+            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage, completion)
         }
         Msg::AppendGitignorePatterns { repo_id, patterns } => {
             begin_local_action(state, repo_id);

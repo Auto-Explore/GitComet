@@ -16,6 +16,7 @@ default = []
 benchmarks = [
     "gitcomet-core/benchmarks",
     "gitcomet-state/benchmarks",
+    "gitcomet-state/test-support",
     "gitcomet-git-gix/benchmarks",
     "dep:gitcomet-git-gix",
     "gpui/test-support",

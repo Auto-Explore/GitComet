@@ -266,12 +266,14 @@ pub(super) fn save_worktree_file(
     path: PathBuf,
     contents: crate::msg::ContentBytes,
     stage: bool,
+    completion: Option<smol::channel::Sender<bool>>,
 ) -> Vec<Effect> {
     vec![Effect::SaveWorktreeFile {
         repo_id,
         path,
         contents,
         stage,
+        completion,
     }]
 }
 

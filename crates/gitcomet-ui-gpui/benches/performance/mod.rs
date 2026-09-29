@@ -2,6 +2,8 @@ pub(crate) mod common;
 
 mod branch_sidebar;
 mod branch_sidebar_cache;
+mod sidebar_sticky;
+pub(crate) use sidebar_sticky::bench_sidebar_sticky;
 mod branch_sidebar_extreme_scale;
 mod clipboard;
 mod commit_details;

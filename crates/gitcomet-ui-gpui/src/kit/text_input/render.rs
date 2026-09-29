@@ -265,12 +265,21 @@ impl Render for TextInput {
             .when(multiline, |d| d.items_start())
             .when_some(leading_icon, |d, icon_path| {
                 d.child(
-                    div().pl(pad_x).flex_none().child(
-                        gpui::svg()
-                            .path(icon_path)
-                            .size(scaled_px(14.0))
-                            .text_color(style.placeholder),
-                    ),
+                    div()
+                        .pl(pad_x)
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        // Match a single-line input while keeping the icon
+                        // beside the first line as a multiline field grows.
+                        .h(self.effective_line_height(window))
+                        .when(multiline, |d| d.mt(pad_y))
+                        .child(
+                            gpui::svg()
+                                .path(icon_path)
+                                .size(scaled_px(14.0))
+                                .text_color(style.placeholder),
+                        ),
                 )
             })
             .child(text_surface);

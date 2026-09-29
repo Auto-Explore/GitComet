@@ -133,7 +133,9 @@ fn make_file_private(_file: &File) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_private_dir, open_private_append, write_private_file};
+    #[cfg(unix)]
+    use super::ensure_private_dir;
+    use super::{open_private_append, write_private_file};
     use std::io::Write as _;
 
     #[cfg(unix)]

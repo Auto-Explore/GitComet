@@ -140,7 +140,7 @@ pub(super) fn activate(
         }
         return;
     }
-    this.store.dispatch(Msg::OpenRepo(path));
+    crate::app::open_repository_from_view(cx, window.window_handle().window_id(), path);
     this.close_popover(cx);
 }
 

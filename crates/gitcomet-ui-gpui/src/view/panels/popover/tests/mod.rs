@@ -60,6 +60,6 @@ mod stash;
 mod status;
 mod submodule;
 mod upstream;
-mod workspace;
+mod worktree_badge;
 
 mod appearance_and_refs;
