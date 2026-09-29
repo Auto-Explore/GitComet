@@ -137,7 +137,15 @@ fn probe_writer(rx: mpsc::Receiver<ProbeRecord>, file: Option<File>, jsonl: Opti
                             if !threads.is_empty() {
                                 let threads: Vec<_> = threads
                                     .into_iter()
-                                    .map(|thread| json!([thread.tid, thread.name, thread.cpu_ns]))
+                                    .map(|thread| {
+                                        json!([
+                                            thread.tid,
+                                            thread.name,
+                                            thread.cpu_ns,
+                                            thread.runqueue_wait_ns,
+                                            thread.timeslices
+                                        ])
+                                    })
                                     .collect();
                                 let record =
                                     json!({"event": "threads", "at_ms": at_ms, "threads": threads});

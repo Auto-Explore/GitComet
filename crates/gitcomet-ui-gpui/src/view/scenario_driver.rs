@@ -954,11 +954,17 @@ mod tests {
         assert_eq!(scenario.steps.len(), 14);
         assert!(matches!(
             scenario.steps[4],
-            Step::Keys { repeat: 240, witness: Some(WitnessKind::CommitDetails), .. }
+            Step::Keys {
+                repeat: 240,
+                witness: Some(WitnessKind::CommitDetails),
+                ..
+            }
         ));
         assert!(matches!(
             scenario.steps[13],
-            Step::Expect { witness: WitnessKind::SearchSettled { matches: Some(100) } }
+            Step::Expect {
+                witness: WitnessKind::SearchSettled { matches: Some(100) }
+            }
         ));
     }
 

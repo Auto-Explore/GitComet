@@ -41,6 +41,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shlex
 import signal
 import statistics
 import subprocess
@@ -142,7 +143,7 @@ def clone_fixture(source, path, revision):
 
 # ---------------------------------------------------------------- scenarios
 
-def scenario(name, repository):
+def scenario(name, repository, save_file=SAVE_FILE):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
     ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
     steps = {
@@ -160,7 +161,7 @@ def scenario(name, repository):
              "flip_every": 150, "witness": {"kind": "history_scrolled"}}],
         "status-save": ready + [
             {"do": "phase", "name": "save"},
-            {"do": "write_file", "path": SAVE_FILE, "contents": "edited by the scenario\n",
+            {"do": "write_file", "path": save_file, "contents": "edited by the scenario\n",
              "repeat": 40, "interval_ms": 1500}],
         "diff-search": ready + [
             {"do": "phase", "name": "open_diff"},
@@ -254,6 +255,21 @@ def read_proc(pid):
             "voluntary_switches": switches}
 
 
+def find_app_pid(parent, binary):
+    """The measured app under a wrapper: the descendant running `binary`."""
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            # Same session as the wrapper, which leads its own session.
+            session = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[3])
+            if session == parent and os.readlink(entry / "exe") == str(binary):
+                return int(entry.name)
+        except (OSError, ValueError, IndexError):
+            continue
+    return None
+
+
 def load_average():
     return Path("/proc/loadavg").read_text().split()[:3]
 
@@ -335,13 +351,13 @@ class HeadlessCompositor:
 
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
-             ping_ms=None):
+             ping_ms=None, save_file=SAVE_FILE, wrap=None):
     binary, repository = binary.resolve(), repository.resolve()
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
     env = seed_profile(output, repository)
     scenario_file = output / "scenario.json"
-    scenario_file.write_text(json.dumps(scenario(name, repository), indent=2), encoding="utf-8")
+    scenario_file.write_text(json.dumps(scenario(name, repository, save_file), indent=2), encoding="utf-8")
     frames = output / "frames.jsonl"
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
@@ -359,7 +375,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
                "window_size": WINDOW_SIZE, "display": display,
                "refresh_hz": REFRESH_HZ if display == "headless" else None,
-               "ping_ms": ping_ms, "load_before": load_average(), "outcome": "failed"}
+               "ping_ms": ping_ms, "wrap": wrap, "load_before": load_average(), "outcome": "failed"}
     if metadata:
         (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
@@ -370,13 +386,20 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         env = compositor.environment(env)
     started = time.time()
     with open(output / "stderr.log", "wb") as stderr:
-        process = subprocess.Popen([str(binary)], env=env, cwd=output, stdin=subprocess.DEVNULL,
+        # A wrapper (perf, heaptrack) makes the run a diagnostic capture: its
+        # timings are not latency evidence. The sampled pid is then the
+        # wrapper's, so process samples follow the app via its children.
+        prefix = [part.replace("{output}", str(output)) for part in shlex.split(wrap)] if wrap else []
+        process = subprocess.Popen([*prefix, str(binary)], env=env, cwd=output, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
         try:
+            app_pid = process.pid
             while process.poll() is None:
                 if time.time() - started > timeout:
                     raise TimeoutError(f"scenario {name} did not finish within {timeout} s")
-                sample = read_proc(process.pid)
+                if prefix and app_pid == process.pid:
+                    app_pid = find_app_pid(process.pid, binary) or app_pid
+                sample = read_proc(app_pid)
                 if sample:
                     samples.append(sample)
                 time.sleep(0.25)
@@ -552,14 +575,21 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
     # /proc truncates names to 15 bytes; traced threads report full names.
     full_names = {r["tid"]: r["name"] for r in records if r["event"] == "thread" and r.get("tid")}
     main_tid = start.get("main_tid")
-    thread_cpu = {}
+    # Per thread (pool): CPU ms, run-queue wait ms (CPU contention), and
+    # timeslices (wakeups plus preemptions) across the phase.
+    thread_cpu, thread_wait, thread_wakeups = {}, {}, {}
     inside = [r for r in threads if lo <= r["at_ms"] <= hi]
     if len(inside) >= 2:
-        first = {tid: cpu for tid, _, cpu in inside[0]["threads"]}
-        for tid, name, cpu in inside[-1]["threads"]:
+        first = {row[0]: row for row in inside[0]["threads"]}
+        for row in inside[-1]["threads"]:
+            tid, name = row[0], row[1]
             name = "main" if tid == main_tid else full_names.get(tid, name)
             key = re.sub(r"-\d+$", "", name)
-            thread_cpu[key] = thread_cpu.get(key, 0) + (cpu - first.get(tid, 0)) / 1e6
+            before = first.get(tid, [tid, name, 0, 0, 0])
+            thread_cpu[key] = thread_cpu.get(key, 0) + (row[2] - before[2]) / 1e6
+            if len(row) >= 5 and len(before) >= 5:
+                thread_wait[key] = thread_wait.get(key, 0) + (row[3] - before[3]) / 1e6
+                thread_wakeups[key] = thread_wakeups.get(key, 0) + row[4] - before[4]
     return {
         "seconds": seconds,
         "frames": len(phase_draws), "frames_per_second": len(phase_draws) / seconds if seconds else None,
@@ -578,6 +608,10 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "threads": max((s["threads"] for s in phase_process), default=None),
         "fds": max((s["fds"] for s in phase_process), default=None),
         "thread_cpu_ms": dict(sorted(thread_cpu.items(), key=lambda item: -item[1])),
+        "thread_runqueue_wait_ms": dict(sorted(thread_wait.items(), key=lambda item: -item[1])),
+        "thread_timeslices_per_second": {key: value / seconds for key, value in
+                                         sorted(thread_wakeups.items(), key=lambda item: -item[1])}
+        if seconds else {},
         "inputs": {
             "count": len(inputs), "expected_witnesses": sum(r["expects_witness"] for r in inputs),
             "witnessed": sum(r["complete"] for r in inputs),
@@ -691,7 +725,7 @@ def measure(args):
                     verify_repository()
                     output = args.output / f"pair-{pair + 1}-{name}-{variant}"
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
-                                       metadata=False, display=args.display)
+                                       metadata=False, display=args.display, save_file=args.save_file)
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -748,6 +782,8 @@ def main():
     single.add_argument("--timeout", type=int, default=600)
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
+    single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
+    single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
     paired = commands.add_parser("measure")
     for name in ("baseline", "candidate", "repository", "output"):
         paired.add_argument("--" + name, type=Path, required=True)
@@ -757,6 +793,7 @@ def main():
     paired.add_argument("--reverse", action="store_true")
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
+    paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
     summary = commands.add_parser("summarize")
     summary.add_argument("directory", type=Path)
     combined = commands.add_parser("report")
@@ -768,7 +805,8 @@ def main():
         print(clone_fixture(args.source, args.directory, args.revision))
     elif args.command == "run":
         result = run_once(args.binary, args.repository, args.scenario, args.output, args.timeout,
-                          display=args.display, ping_ms=args.ping_ms)
+                          display=args.display, ping_ms=args.ping_ms, save_file=args.save_file,
+                          wrap=args.wrap)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)
