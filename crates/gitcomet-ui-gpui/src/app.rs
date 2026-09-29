@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 const WINDOW_MIN_WIDTH_PX: f32 = 820.0;
 const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
-const WINDOW_DEFAULT_WIDTH_PX: f32 = 1100.0;
-const WINDOW_DEFAULT_HEIGHT_PX: f32 = 720.0;
+const WINDOW_DEFAULT_WIDTH_PX: f32 = 1280.0;
+const WINDOW_DEFAULT_HEIGHT_PX: f32 = 800.0;
 const FOCUSED_MERGETOOL_EXIT_CANCELED: i32 = 1;
 #[cfg(test)]
 const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;
@@ -188,6 +188,24 @@ pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
 
 fn main_window_default_size_for_percent(percent: u32) -> Size<Pixels> {
     ui_scale::design_size_from_percent(WINDOW_DEFAULT_WIDTH_PX, WINDOW_DEFAULT_HEIGHT_PX, percent)
+}
+
+/// Shrinks a default window size to the primary display, never below `min_size`.
+pub(crate) fn fit_default_window_size(
+    default_size: Size<Pixels>,
+    min_size: Size<Pixels>,
+    cx: &App,
+) -> Size<Pixels> {
+    let Some(visible) = cx
+        .primary_display()
+        .map(|display| display.visible_bounds().size)
+    else {
+        return default_size;
+    };
+    size(
+        default_size.width.min(visible.width).max(min_size.width),
+        default_size.height.min(visible.height).max(min_size.height),
+    )
 }
 
 pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Size<Pixels>) {
@@ -937,7 +955,11 @@ fn open_gitcomet_window(
     let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
-    let default_size = main_window_default_size_for_percent(ui_scale.percent);
+    let default_size = fit_default_window_size(
+        main_window_default_size_for_percent(ui_scale.percent),
+        min_size,
+        cx,
+    );
     let workspace_placement = match &launch.view_config.workspace {
         WorkspaceBootstrap::Saved(workspace) => Some(workspace.placement.clone()),
         WorkspaceBootstrap::LegacySession | WorkspaceBootstrap::Empty => None,

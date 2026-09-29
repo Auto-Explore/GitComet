@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
-const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 720.0;
-const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 620.0;
+const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 880.0;
+const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 720.0;
 const SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX: f32 = 224.0;
 const SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
@@ -650,7 +650,11 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     let bounds = Bounds::centered(
         None,
-        settings_window_default_size_for_percent(ui_scale.percent),
+        crate::app::fit_default_window_size(
+            settings_window_default_size_for_percent(ui_scale.percent),
+            settings_window_min_size_for_percent(ui_scale.percent),
+            cx,
+        ),
         cx,
     );
     let ui_scale_percent = ui_scale.percent;

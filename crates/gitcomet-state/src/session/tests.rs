@@ -3406,6 +3406,50 @@ fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes(
     assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
 }
 
+/// A pre-v5 build discards a v5 file and saves its own Compact default, which
+/// must not read back as the user's choice.
+#[test]
+fn pre_v5_compact_density_is_the_old_default_not_a_choice() {
+    let seed = |label: &str, version: u32, density: &str| {
+        let path = unique_session_test_dir(label).join("session.json");
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version,
+                ui_density: Some(density.to_string()),
+                ..UiSessionFile::default()
+            },
+        )
+        .unwrap();
+        path
+    };
+
+    let v3_compact = seed("density-v3-compact", SESSION_FILE_VERSION_V3, "compact");
+    assert_eq!(load_from_path(&v3_compact).ui_density, None);
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_font_size_px: Some(15),
+            ..UiSettings::default()
+        },
+        &v3_compact,
+    )
+    .unwrap();
+    assert_eq!(
+        load_from_path(&v3_compact).ui_density,
+        None,
+        "an unrelated write must not carry the old default into a v5 file"
+    );
+
+    for (version, density) in [
+        (SESSION_FILE_VERSION_V3, "comfortable"),
+        (SESSION_FILE_VERSION_V4, "spacious"),
+        (SESSION_FILE_VERSION_V5, "compact"),
+    ] {
+        let path = seed(&format!("density-v{version}-{density}"), version, density);
+        assert_eq!(load_from_path(&path).ui_density.as_deref(), Some(density));
+    }
+}
+
 fn seed_v3_session(label: &str, open_repos: &[&str]) -> PathBuf {
     let path = unique_session_test_dir(label).join("session.json");
     persist_to_path(

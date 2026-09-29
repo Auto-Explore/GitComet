@@ -495,6 +495,9 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         _ => None,
     }?;
     file = migrate_legacy_repo_fetch_prune_setting(file);
+    if version < SESSION_FILE_VERSION_V5 {
+        file = migrate_pre_v5_default_density(file);
+    }
     let enabled = file
         .history_verify_commit_signatures_opt_in
         .unwrap_or(false);
