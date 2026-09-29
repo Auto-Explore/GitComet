@@ -3670,6 +3670,7 @@ fn timing_session_persist_cost_by_file_size() {
                 theme_mode: None,
                 created_at: Some(1_800_000_000),
                 last_opened_at: Some(1_800_000_000),
+                extensions: ExtensionNamespaces::default(),
             })
             .collect();
         persist_to_path(

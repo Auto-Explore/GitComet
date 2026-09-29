@@ -4,6 +4,7 @@ members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
   "crates/gitcomet-core",
+  "crates/gitcomet-extension-api",
   "crates/gitcomet-extension-example",
   "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
@@ -76,6 +77,7 @@ rust-version = "1.98.1"
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }

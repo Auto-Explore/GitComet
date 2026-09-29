@@ -1,0 +1,131 @@
+//! What an extension can contribute. Every descriptor is plain data plus the
+//! callbacks the host invokes on the UI thread.
+//!
+//! Views are GPUI entities the extension owns: when an extension's state
+//! changes it calls `cx.notify()` on its own entity, and the host redraws that
+//! view. No host render is needed for a contribution to update.
+
+use crate::host::{RepositoryHandle, WindowHost};
+use gitcomet_ui_kit::gpui::{AnyView, App, SharedString, Window};
+use std::path::PathBuf;
+use std::rc::Rc;
+
+/// Builds a contribution's view for one window or repository.
+pub type ViewBuilder<C> = Rc<dyn Fn(C, &mut Window, &mut App) -> AnyView>;
+
+/// Runs a command.
+pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
+
+/// A view of a repository, selectable next to History in the repository's
+/// navigation. The view is built when first selected in a window and kept
+/// while the repository stays open there.
+#[derive(Clone)]
+pub struct RepositoryViewDescriptor {
+    pub title: SharedString,
+    pub icon: SharedString,
+    pub build: ViewBuilder<RepositoryHandle>,
+}
+
+/// An item in the window's status bar, built once per window.
+#[derive(Clone)]
+pub struct StatusItemDescriptor {
+    pub build: ViewBuilder<WindowHost>,
+}
+
+/// A page in the Settings window. Settings builds only the selected page.
+#[derive(Clone)]
+pub struct SettingsPageDescriptor {
+    pub title: SharedString,
+    pub icon: SharedString,
+    /// Extra search terms matched by the Settings search.
+    pub keywords: SharedString,
+    pub build: ViewBuilder<()>,
+}
+
+/// Where a command runs: the window, and its active repository if any.
+#[derive(Clone)]
+pub struct CommandContext {
+    pub window: WindowHost,
+    pub repository: Option<RepositoryHandle>,
+}
+
+/// A command in the command palette, the target of key bindings and menu
+/// items.
+#[derive(Clone)]
+pub struct CommandDescriptor {
+    pub label: SharedString,
+    pub category: SharedString,
+    pub keywords: SharedString,
+    /// Hidden while no repository is active.
+    pub requires_repository: bool,
+    pub run: CommandHandler,
+}
+
+/// Menus that accept extension entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MenuLocation {
+    /// The application menu (macOS menu bar, and the in-window app menu).
+    Application,
+    /// A repository tab's context menu.
+    RepositoryTab,
+}
+
+/// How a repository is being opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryOrigin {
+    /// The command line or a request forwarded by another process.
+    CommandLine,
+    /// The Home screen or the open-repository dialog.
+    Chooser,
+    /// A folder dropped on a window.
+    Drop,
+    /// A saved workspace being restored.
+    WorkspaceRestore,
+}
+
+#[derive(Clone, Debug)]
+pub struct RepositoryEntryRequest {
+    pub path: PathBuf,
+    pub origin: EntryOrigin,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GateDecision {
+    Allow,
+    /// Refuse the entry; the host shows `reason`.
+    Deny {
+        reason: SharedString,
+    },
+}
+
+/// Decides whether a repository may open. Gates run in registration order;
+/// the first denial wins.
+pub type RepositoryEntryGate = Rc<dyn Fn(&RepositoryEntryRequest, &App) -> GateDecision>;
+
+/// What is being closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseScope {
+    Application,
+    Window,
+    Repository,
+}
+
+#[derive(Clone, Debug)]
+pub struct CloseRequest {
+    pub scope: CloseScope,
+    pub window: WindowHost,
+    pub repository: Option<RepositoryHandle>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CloseDecision {
+    Allow,
+    /// Ask before closing; the host shows `reason` with a way to proceed.
+    Confirm {
+        reason: SharedString,
+    },
+}
+
+/// Runs before a close, after the host's own unsaved-edit, terminal, and Git
+/// operation guards.
+pub type CloseGuard = Rc<dyn Fn(&CloseRequest, &App) -> CloseDecision>;

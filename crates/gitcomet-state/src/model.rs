@@ -1718,6 +1718,9 @@ pub struct TagPushPreviewState {
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
+    /// Unique per repository opened in this process. `RepoId`s are per store
+    /// and may be reused; the pair (window, id, lifetime) never is.
+    lifetime: u64,
     session_workdir_key: Arc<str>,
     /// A loading tab created from an external folder drop. It remains visible
     /// while the backend validates it, but session persistence must ignore it
@@ -1852,11 +1855,18 @@ pub struct ComparisonMark {
 }
 
 impl RepoState {
+    /// See the `lifetime` field.
+    pub fn lifetime(&self) -> u64 {
+        self.lifetime
+    }
+
     pub fn new_opening(id: RepoId, spec: RepoSpec) -> Self {
+        static NEXT_LIFETIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let session_workdir_key = session::path_storage_key_shared(&spec.workdir);
         Self {
             id,
             spec,
+            lifetime: NEXT_LIFETIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             session_workdir_key,
             provisional_external_drop_open: false,
             external_drop_previous_active_repo: None,

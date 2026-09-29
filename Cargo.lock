@@ -2279,6 +2279,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-extension-api"
+version = "0.2.6"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-state",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "serde_json",
+]
+
+[[package]]
 name = "gitcomet-extension-example"
 version = "0.1.0"
 dependencies = [

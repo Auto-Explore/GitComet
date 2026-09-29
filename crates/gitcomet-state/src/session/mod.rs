@@ -115,7 +115,7 @@ struct UiSessionFileV1 {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct UiSessionFile {
+pub(crate) struct UiSessionFile {
     version: u32,
     // V4 (branch-only) stored workspaces under their old "window groups" name.
     #[serde(
@@ -203,6 +203,10 @@ struct UiSessionFile {
     #[serde(skip_serializing)]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
+    /// Extension namespaces, kept verbatim: any JSON loads, so a malformed
+    /// namespace never makes the rest of the session unreadable.
+    #[serde(default, skip_serializing_if = "ExtensionNamespaces::is_absent")]
+    extensions: ExtensionNamespaces,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -448,6 +452,35 @@ fn with_session_file_persist_lock<T>(persist: impl FnOnce() -> io::Result<T>) ->
     persist()
 }
 
+/// What a session update decided.
+pub(crate) enum SessionUpdate {
+    Write,
+    Unchanged,
+}
+
+/// The session file's one read-modify-write transaction: under the persist
+/// lock, load the current file (or an empty one), let `update` change it, stamp
+/// the current version, and write it back unless `update` left it unchanged.
+///
+/// Every writer goes through here, so each one starts from what is on disk
+/// now: fields it does not touch, such as extension namespaces, survive every
+/// other writer's update, however their calls interleave.
+pub(crate) fn update_session_file(
+    path: &Path,
+    update: impl FnOnce(&mut UiSessionFile) -> SessionUpdate,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        match update(&mut file) {
+            SessionUpdate::Unchanged => Ok(()),
+            SessionUpdate::Write => {
+                file.version = CURRENT_SESSION_FILE_VERSION;
+                persist_to_path(path, &file)
+            }
+        }
+    })
+}
+
 /// On-disk version `load_file` last read per path, so the write that follows
 /// can skip the backup check's re-read.
 static LOADED_SESSION_VERSIONS: OnceLock<Mutex<FxHashMap<PathBuf, u32>>> = OnceLock::new();
@@ -592,11 +625,17 @@ pub fn user_themes_dir() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join("themes"))
 }
 
+pub use extensions::{
+    ExtensionNamespaceError, ExtensionNamespaces, MAX_EXTENSION_NAMESPACE_BYTES,
+    check_extension_namespace_size, extension_namespace, extension_namespace_from_path,
+    persist_extension_namespace, persist_extension_namespace_to_path,
+};
 use history_mode::{HistoryModeSetting, HistoryScopeSetting};
 use parse::*;
 use survey::SurveyPromptSession;
 use workspaces::*;
 
+mod extensions;
 mod history_mode;
 mod parse;
 mod paths;
