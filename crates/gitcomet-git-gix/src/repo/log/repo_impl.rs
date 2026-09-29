@@ -1075,12 +1075,11 @@ impl GixRepo {
 
 /// Resolve a `CommitId` to its commit.
 ///
-/// Hex names are decoded against the repository's own hash kind. gix infers
+/// Hex names are resolved against the repository's own hash kind. gix infers
 /// the kind from the digit count alone (up to 40 digits is SHA-1), so a name
 /// of the other width would be compared against hashes of a different length
-/// and panic once objects are packed. Hex names — with or without a `~`/`^`
-/// suffix — are resolved here instead, and a spec with a hex run wider than
-/// the repository digest is never handed to gix.
+/// and panic once objects are packed. A spec with a hex run wider than the
+/// digest is never handed to gix either.
 ///
 /// Workaround: once gix takes the hash kind from the repository instead of the
 /// hex length, the helpers below can be deleted and this can call
@@ -1131,9 +1130,7 @@ fn find_hex_object<'repo>(repo: &'repo gix::Repository, spec: &str) -> Result<gi
 }
 
 /// Resolve a hexadecimal name to an object id, with git's reference
-/// precedence: a full id names an object directly, an abbreviation prefers a
-/// reference of the same name and then the unique object matching the prefix,
-/// and a name wider than the digest can only be a reference.
+/// precedence.
 fn resolve_hex_id(repo: &gix::Repository, spec: &str) -> Result<Option<gix::ObjectId>> {
     let kind = repo.object_hash();
 
@@ -1157,8 +1154,8 @@ fn resolve_hex_id(repo: &gix::Repository, spec: &str) -> Result<Option<gix::Obje
 }
 
 /// Split `spec` into a leading hexadecimal name and a `~`/`^` suffix, when it
-/// has one. Reflog selectors (`@{…}`) are left alone: they apply to a
-/// reference name, which has to stay intact for gix to resolve it.
+/// has one. Reflog selectors (`@{…}`) are left alone: they name a reference,
+/// not an id.
 fn split_hex_name_suffix(spec: &str) -> Option<(&str, &str)> {
     let name_len = spec.bytes().take_while(u8::is_ascii_hexdigit).count();
     if name_len < gix::hash::Prefix::MIN_HEX_LEN || name_len == spec.len() {
