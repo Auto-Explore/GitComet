@@ -2,15 +2,17 @@ pub(super) use super::*;
 
 #[test]
 fn prepared_syntax_pair_is_none_outside_the_document() {
+    let tab_width = 4;
+
     let text = "fn main() {}\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
     assert_eq!(
-        prepared_document_syntax_pair_at_display_offset(document, 99, 0),
+        prepared_document_syntax_pair_at_display_offset(tab_width, document, 99, 0),
         None,
         "a line past the end has no answer"
     );
     assert_eq!(
-        prepared_document_syntax_pair_at_display_offset(document, 0, 0),
+        prepared_document_syntax_pair_at_display_offset(tab_width, document, 0, 0),
         None,
         "the caret before `fn` is inside nothing"
     );

@@ -55,6 +55,9 @@ impl PopoverHost {
                 repo_id,
                 operation_id,
             } => hook_activity::panel(self, repo_id, operation_id, window, cx),
+            PopoverKind::ErrorDetails { toast_id } => {
+                error_details::panel(self, toast_id, window, cx)
+            }
             PopoverKind::RepoPicker { .. } => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::UpstreamPicker { repo_id, branch } => {
@@ -302,6 +305,9 @@ impl PopoverHost {
             PopoverKind::HistoryAuthorFilter { repo_id } => author_filter::panel(self, repo_id, cx),
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
+            }
+            PopoverKind::TextFormatMenu { section } => {
+                self.context_menu_view(PopoverKind::TextFormatMenu { section }, cx)
             }
             PopoverKind::CommitFileSortMenu { list } => {
                 self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)

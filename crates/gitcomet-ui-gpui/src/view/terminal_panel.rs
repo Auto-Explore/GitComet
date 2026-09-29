@@ -855,7 +855,9 @@ impl GitCometView {
         // asked nothing. But flushing only *dispatches* the write, and returning
         // `false` here let the caller quit out from under it: the store never
         // reduced the message and the edits were lost. Take over the close and
-        // let it through once the write has actually drained.
+        // let it through once the write has actually drained. If encoding
+        // fails, no write was dispatched and the dirty buffer needs the
+        // Save/Discard prompt below.
         let moving_repo = action.moving_repo();
         let writes_pending = self.main_pane.update(cx, |pane, cx| {
             pane.settle_file_editor_saves(cx);
@@ -921,17 +923,23 @@ impl GitCometView {
     ) {
         self.pending_unsaved_file_edits_prompt = None;
         let moving_repo = action.moving_repo();
-        self.main_pane.update(cx, |pane, cx| {
+        let saved = self.main_pane.update(cx, |pane, cx| {
             if save && let Some(repo_id) = moving_repo {
-                pane.save_file_edits_for_repo(repo_id, cx);
+                pane.save_file_edits_for_repo(repo_id, cx)
             } else if save {
-                pane.save_all_file_edits(cx);
+                pane.save_all_file_edits(cx)
             } else if let Some(repo_id) = moving_repo {
                 pane.discard_file_edits_for_repo(repo_id, cx);
+                true
             } else {
                 pane.discard_all_file_edits(cx);
+                true
             }
         });
+
+        if !saved {
+            return;
+        }
 
         if !save {
             // Ordering note: the caller's `close_popover` defers a clear of

@@ -1200,6 +1200,35 @@ impl SettingsWindowView {
             .collect()
     }
 
+    pub(super) fn render_diff_tab_size_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| DIFF_TAB_SIZE_OPTIONS.get(ix).copied())
+            .map(|(id, size)| {
+                this.option_row(
+                    id,
+                    format!("{size} spaces"),
+                    None,
+                    this.diff_tab_size == size,
+                    theme,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_diff_tab_size(size, cx);
+                    }),
+                )
+                .into_any_element()
+            })
+            .collect()
+    }
+
     pub(super) fn render_diff_scroll_sync_option_rows(
         this: &mut Self,
         range: Range<usize>,

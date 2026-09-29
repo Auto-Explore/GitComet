@@ -343,6 +343,7 @@ impl GitCometView {
                                 this.diff_reveal_whitespace_chars,
                             ),
                             diff_word_wrap: Some(this.diff_word_wrap),
+                            diff_tab_size: Some(this.diff_tab_size),
                             diff_show_line_numbers: Some(this.diff_show_line_numbers),
                             remote_markdown_image_policy: Some(
                                 this.remote_markdown_image_policy.key().to_string(),

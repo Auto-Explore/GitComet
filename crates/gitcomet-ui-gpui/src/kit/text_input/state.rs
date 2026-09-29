@@ -881,6 +881,8 @@ pub struct TextInput {
     pub(super) display_truncation: Option<TextTruncationProfile>,
     pub(super) masked: bool,
     pub(super) line_ending: &'static str,
+    /// Columns a tab advances to when shaped.
+    pub(super) tab_size: usize,
     pub(super) style: TextInputStyle,
     pub(super) line_height_override: Option<Pixels>,
     /// Design px; scaled with the window's UI zoom at render.

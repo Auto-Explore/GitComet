@@ -46,6 +46,13 @@ pub(crate) fn activate_closed_repo_picker_entry_for_test(
     });
 }
 
+/// Close every error toast, for fixtures whose backend reports errors the
+/// test is not about: error toasts stay, and would cover the controls it clicks.
+pub(crate) fn dismiss_error_toasts(view: &Entity<GitCometView>, cx: &mut App) {
+    let toast_host = view.read(cx).toast_host.clone();
+    toast_host.update(cx, |host, cx| host.dismiss_all_errors(cx));
+}
+
 pub(crate) fn apply_state_snapshot_for_test(
     view: &mut GitCometView,
     state: Arc<AppState>,

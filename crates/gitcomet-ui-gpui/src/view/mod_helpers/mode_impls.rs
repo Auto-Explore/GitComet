@@ -92,11 +92,23 @@ pub(crate) enum LocalFileLinkSource {
     ParentOf(CommitId),
 }
 
+/// Which status-strip chip a [`PopoverKind::TextFormatMenu`] belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum TextFormatMenuSection {
+    Encoding,
+    LineEnding,
+    TabSize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     HookActivity {
         repo_id: RepoId,
         operation_id: Option<GitOperationId>,
+    },
+    /// The errors on screen, opened on the one toast `toast_id` shows.
+    ErrorDetails {
+        toast_id: u64,
     },
     RepoPicker {
         scope: RepoPickerScope,
@@ -316,10 +328,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         area: DiffArea,
         path: Option<std::path::PathBuf>,
-        hunk_patch: Option<String>,
+        hunk_patch: Option<gitcomet_state::msg::ContentBytes>,
         hunks_count: usize,
-        lines_patch: Option<String>,
-        discard_lines_patch: Option<String>,
+        lines_patch: Option<gitcomet_state::msg::ContentBytes>,
+        discard_lines_patch: Option<gitcomet_state::msg::ContentBytes>,
         lines_count: usize,
         copy_text: Option<String>,
         copy_target: Option<(usize, DiffTextRegion)>,
@@ -438,6 +450,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
     },
     DiffContentModeSettings,
+    /// A chip of the file views' status strip.
+    TextFormatMenu {
+        section: TextFormatMenuSection,
+    },
     ChangeTrackingSettings,
     RebaseOntoConfirm {
         repo_id: RepoId,

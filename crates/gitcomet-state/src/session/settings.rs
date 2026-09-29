@@ -36,6 +36,7 @@ pub struct UiSettings {
     pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
+    pub diff_tab_size: Option<u8>,
     pub diff_show_line_numbers: Option<bool>,
     pub remote_markdown_image_policy: Option<String>,
     pub allowed_remote_protocols: Option<BTreeSet<String>>,
@@ -137,6 +138,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, mergetool_show_line_numbers);
         apply_setting!(settings, file, mergetool_view_three_way);
         apply_setting!(settings, file, diff_word_wrap);
+        apply_setting!(settings, file, diff_tab_size);
         apply_setting!(settings, file, remote_markdown_image_policy);
         apply_setting!(settings, file, allowed_remote_protocols);
         apply_setting!(settings, file, check_for_updates_on_startup);

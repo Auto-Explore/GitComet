@@ -3,10 +3,10 @@ use super::util::{
     EffectAccumulator, SelectedConflictTarget, append_auto_background_metadata_effects,
     append_refresh_full_effects, append_refresh_primary_effects,
     append_start_conflict_target_reload, append_start_current_conflict_target_reload,
-    background_metadata_effect_capacity, clear_banner_error_for_repo, dedup_paths_in_order,
-    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
-    push_notification, refresh_full_effect_capacity, refresh_full_effects,
-    refresh_primary_effect_capacity, selected_conflict_target, selected_diff_load_plan,
+    background_metadata_effect_capacity, dedup_paths_in_order, format_failure_summary,
+    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
+    refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
+    selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
@@ -612,7 +612,6 @@ fn remove_repo(
     repo_id: RepoId,
     record_recent: bool,
 ) -> Vec<Effect> {
-    clear_banner_error_for_repo(state, repo_id);
     if state
         .branch_exists_prompt
         .as_ref()
@@ -720,7 +719,6 @@ pub(super) fn close_repos(
         if !close_ids.contains(&repo_id) {
             continue;
         }
-        clear_banner_error_for_repo(state, repo_id);
         append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
         if let Some(repo) = state
             .repos
@@ -1000,6 +998,7 @@ fn fill_set_active_repo_inline_impl(
                 append_start_conflict_target_reload(effects, repo_state, &conflict_path);
             }
             SelectedDiffReload::Diff(load_plan) => {
+                super::util::mark_text_attributes_loading(repo_state);
                 effects.push(Effect::LoadSelectedDiff {
                     repo_id,
                     load_patch_diff: load_plan.load_patch_diff,
@@ -1238,7 +1237,6 @@ pub(super) fn repo_opened_ok(
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
-    let mut clear_banner = false;
     let mut committed_external_drop = None;
     let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -1254,7 +1252,6 @@ pub(super) fn repo_opened_ok(
         if !should_refresh_worktrees {
             clear_cancelled_repo_loading(repo_state);
             repo_state.feedback.last_error = None;
-            clear_banner = true;
         } else {
             repo_state.set_head_branch(Loadable::Loading);
             repo_state.set_detached_head_commit(None);
@@ -1296,12 +1293,7 @@ pub(super) fn repo_opened_ok(
             // start the navigation stacks fresh.
             repo_state.navigation.main_history.clear();
             repo_state.navigation.view_history.clear();
-            clear_banner = true;
         }
-    }
-
-    if clear_banner {
-        clear_banner_error_for_repo(state, repo_id);
     }
 
     let mut effects = Vec::new();
@@ -1369,7 +1361,6 @@ fn discard_failed_repo_open(
     activation: FailedOpenActivation,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    clear_banner_error_for_repo(state, repo_id);
     push_notification(state, AppNotificationKind::Warning, message);
 
     if remove_from_recents {
@@ -1498,21 +1489,16 @@ pub(super) fn repo_opened_err(
         );
     }
 
-    let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Error(error.to_string()));
         repo_state.feedback.missing_on_disk = is_missing_repo_error(&error);
         if repo_state.feedback.missing_on_disk {
             repo_state.feedback.last_error = None;
-            clear_banner = true;
         } else {
             repo_state.feedback.last_error = Some(error.to_string());
             push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
         }
-    }
-    if clear_banner {
-        clear_banner_error_for_repo(state, repo_id);
     }
     Vec::new()
 }

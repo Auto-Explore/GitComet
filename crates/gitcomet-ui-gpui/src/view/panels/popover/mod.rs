@@ -19,6 +19,7 @@ mod create_tag_prompt;
 mod delete_branches_confirm;
 mod delete_remote_branch_confirm;
 mod discard_changes_confirm;
+mod error_details;
 mod file_history;
 mod fingerprint;
 mod force_delete_branch_confirm;
@@ -106,6 +107,7 @@ impl PopoverWidthSpec {
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
+const TEXT_FORMAT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(300.0, 220.0, 360.0);
 /// The sort menu's labels name both what is ordered and which way ("File type:
 /// Descending"), which is wider than `NARROW` leaves room for -- at 220px the
 /// icon column and padding leave ~150px of ink and the longest label ellipsises.
@@ -222,6 +224,11 @@ pub(in super::super) struct PopoverHost {
     hook_activity_history_scroll: ScrollHandle,
     hook_activity_hooks_scroll: ScrollHandle,
     hook_activity_output_scroll: ScrollHandle,
+    /// The error shown in the error details dialog, by its toast id.
+    error_details_selected: Option<u64>,
+    error_details_text: error_details::TextState,
+    error_details_scroll: ScrollHandle,
+    error_details_rail_scroll: ScrollHandle,
     /// Explicit 1-based mainline selected in the open merge-commit
     /// cherry-pick or revert confirmation. Reset every time either opens.
     commit_mainline: Option<usize>,
@@ -497,6 +504,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
+            | PopoverKind::TextFormatMenu { .. }
             | PopoverKind::CommitFileSortMenu { .. }
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::TerminalMenu { .. }
@@ -544,6 +552,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::StashDropConfirm { .. }
+            | PopoverKind::ErrorDetails { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
             | PopoverKind::RevertCommitConfirm { .. }
@@ -802,6 +811,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
         | PopoverKind::HookActivity { .. }
+        | PopoverKind::ErrorDetails { .. }
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
@@ -864,6 +874,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. } => Anchor::TopRight,
+        // The strip sits at the bottom edge; open upwards.
+        PopoverKind::TextFormatMenu { .. } => Anchor::BottomRight,
         _ => Anchor::TopLeft,
     }
 }
@@ -884,7 +896,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CloneRepo
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
-        PopoverKind::HookActivity { .. } => Some(DIALOG_900_WIDTH),
+        PopoverKind::HookActivity { .. } | PopoverKind::ErrorDetails { .. } => {
+            Some(DIALOG_900_WIDTH)
+        }
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
@@ -1023,6 +1037,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
+        PopoverKind::TextFormatMenu { .. } => Some(TEXT_FORMAT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),
         PopoverKind::DiffEditorMenu { .. } => Some(DIFF_EDITOR_MENU_WIDTH),

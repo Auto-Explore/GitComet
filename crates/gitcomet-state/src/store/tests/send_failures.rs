@@ -588,7 +588,10 @@ fn closed_receiver_while_store_is_alive_increments_store_event_failure_counter()
     let (store, event_rx) = AppStore::new_test(backend);
     drop(event_rx);
 
-    store.dispatch(Msg::DismissBannerError);
+    store.dispatch(Msg::ReportError {
+        repo_id: None,
+        message: "probe".to_string(),
+    });
 
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {

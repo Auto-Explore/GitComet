@@ -246,11 +246,12 @@ pub enum Msg {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,
     },
-    ShowBannerError {
+    /// An error to show the user: a diagnostic of the repo, or an app
+    /// notification without one.
+    ReportError {
         repo_id: Option<RepoId>,
         message: String,
     },
-    DismissBannerError,
     DismissRepoError {
         repo_id: RepoId,
     },
@@ -373,6 +374,13 @@ pub enum Msg {
     SelectDiff {
         repo_id: RepoId,
         target: DiffTarget,
+    },
+    /// Read the open file `path` with the user's encoding, line ending or tab
+    /// size; an empty value restores the attribute/detected defaults.
+    SetTextOverride {
+        repo_id: RepoId,
+        path: PathBuf,
+        value: gitcomet_core::text_format::TextOverride,
     },
     OpenInlineSubmoduleDiff {
         repo_id: RepoId,
@@ -591,15 +599,15 @@ pub enum Msg {
     },
     StageHunk {
         repo_id: RepoId,
-        patch: String,
+        patch: ContentBytes,
     },
     UnstageHunk {
         repo_id: RepoId,
-        patch: String,
+        patch: ContentBytes,
     },
     ApplyWorktreePatch {
         repo_id: RepoId,
-        patch: String,
+        patch: ContentBytes,
         reverse: bool,
     },
     CheckoutBranch {
@@ -777,7 +785,7 @@ pub enum Msg {
     SaveWorktreeFile {
         repo_id: RepoId,
         path: PathBuf,
-        contents: String,
+        contents: ContentBytes,
         stage: bool,
         /// Reports whether this exact write succeeded. A closed channel also
         /// means failure; callers must not infer success from an idle queue.
@@ -788,6 +796,12 @@ pub enum Msg {
     AppendGitignorePatterns {
         repo_id: RepoId,
         patterns: Vec<String>,
+    },
+    /// Append one rule line to the repository-root `.gitattributes`, creating
+    /// it when absent; skipped when it is already the last rule.
+    AppendGitattributesRule {
+        repo_id: RepoId,
+        rule: String,
     },
     Commit {
         repo_id: RepoId,
@@ -1300,7 +1314,7 @@ pub enum InternalMsg {
         repo_id: RepoId,
         path: PathBuf,
         result: Box<Result<Option<crate::model::ConflictFile>, Error>>,
-        conflict_session: Option<ConflictSession>,
+        conflict_session: Option<Box<ConflictSession>>,
     },
     WorktreesLoaded {
         repo_id: RepoId,
@@ -1402,6 +1416,11 @@ pub enum InternalMsg {
         repo_id: RepoId,
         target: DiffTarget,
         result: Result<Option<FileDiffText>, Error>,
+    },
+    TextAttributesLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<gitcomet_core::text_format::TextAttributes, Error>,
     },
     DiffPreviewTextFileLoaded {
         repo_id: RepoId,
@@ -1529,5 +1548,54 @@ mod tests {
         assert!(debug.contains("CloneRepoFinished"));
         assert!(debug.contains("ok: false"));
         assert!(!debug.contains("clone failed"));
+    }
+}
+
+/// Bytes for a file write or a patch, already in the file's encoding.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ContentBytes(std::sync::Arc<[u8]>);
+
+impl ContentBytes {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Nothing but whitespace.
+    pub fn is_blank(&self) -> bool {
+        self.0.iter().all(u8::is_ascii_whitespace)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl PartialEq<str> for ContentBytes {
+    fn eq(&self, other: &str) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl From<String> for ContentBytes {
+    fn from(text: String) -> Self {
+        Self(std::sync::Arc::from(text.into_bytes()))
+    }
+}
+
+impl From<&str> for ContentBytes {
+    fn from(text: &str) -> Self {
+        Self(std::sync::Arc::from(text.as_bytes()))
+    }
+}
+
+impl From<Vec<u8>> for ContentBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(std::sync::Arc::from(bytes))
+    }
+}
+
+impl From<std::sync::Arc<[u8]>> for ContentBytes {
+    fn from(bytes: std::sync::Arc<[u8]>) -> Self {
+        Self(bytes)
     }
 }

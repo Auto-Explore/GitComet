@@ -339,10 +339,6 @@ fn repo_action_finished_clears_error_and_refreshes() {
     ));
     state.active_repo = Some(RepoId(1));
     state.repos[0].feedback.last_error = Some("boom".to_string());
-    state.banner_error = Some(crate::model::BannerErrorState {
-        repo_id: Some(RepoId(1)),
-        message: "boom".to_string(),
-    });
 
     let effects = reduce(
         &mut repos,
@@ -356,7 +352,6 @@ fn repo_action_finished_clears_error_and_refreshes() {
     );
 
     assert!(state.repos[0].feedback.last_error.is_none());
-    assert!(state.banner_error.is_none());
     assert!(has_status_refresh_effects(&effects, RepoId(1)));
 }
 
@@ -1099,7 +1094,7 @@ fn repo_opened_err_records_diagnostic() {
 }
 
 #[test]
-fn repo_opened_err_not_found_marks_repo_missing_without_banner_error() {
+fn repo_opened_err_not_found_marks_repo_missing_without_reporting_an_error() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();

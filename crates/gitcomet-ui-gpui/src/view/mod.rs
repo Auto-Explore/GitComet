@@ -225,6 +225,7 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+pub(crate) mod error_notices;
 mod external_drag;
 mod file_diff_display;
 mod file_icons;
@@ -259,6 +260,7 @@ mod sidebar_presentation;
 mod splash;
 mod state_apply;
 mod status_actions;
+pub(in crate::view) mod tab_width;
 mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;
@@ -314,6 +316,7 @@ use diff_utils::{
     parse_unified_hunk_header_for_display, scrollbar_markers_from_flags,
     scrollbar_markers_from_visible_ranges,
 };
+use error_notices::{ErrorAction, ErrorNotice, ErrorReport};
 use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
@@ -368,8 +371,6 @@ const HISTORY_COL_DATE_MAX_PX: f32 = 240.0;
 const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
 const HISTORY_COL_SHA_MAX_PX: f32 = 160.0;
 const HISTORY_COL_MESSAGE_MIN_PX: f32 = 220.0;
-const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
-const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
 /// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px

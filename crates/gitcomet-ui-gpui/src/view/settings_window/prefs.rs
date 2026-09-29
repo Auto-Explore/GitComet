@@ -48,6 +48,7 @@ impl SettingsWindowView {
             annotate_enabled: None,
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
+            diff_tab_size: Some(self.diff_tab_size),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
             allowed_remote_protocols: Some(
                 self.remote_url_policy
@@ -810,6 +811,19 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_word_wrap(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_diff_tab_size(&mut self, next: u8, cx: &mut gpui::Context<Self>) {
+        if self.diff_tab_size == next {
+            return;
+        }
+
+        self.diff_tab_size = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_tab_size(next, cx);
         });
         cx.notify();
     }

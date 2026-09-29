@@ -39,6 +39,7 @@ const RESOLVED_OUTPUT_MARKER_CAP_W_PX: f32 = 8.0;
 const RESOLVED_OUTPUT_MARKER_CAP_INSET_PX: f32 = 3.0;
 
 fn build_conflict_cached_diff_styled_text(
+    tab_width: usize,
     theme: AppTheme,
     text: &str,
     word_ranges: &[Range<usize>],
@@ -48,6 +49,7 @@ fn build_conflict_cached_diff_styled_text(
     word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     build_conflict_cached_diff_styled_text_with_source_identity(
+        tab_width,
         theme,
         text,
         None,
@@ -60,6 +62,7 @@ fn build_conflict_cached_diff_styled_text(
 }
 
 fn build_conflict_cached_diff_styled_text_with_source_identity(
+    tab_width: usize,
     theme: AppTheme,
     text: &str,
     source_identity: Option<DiffTextSourceIdentity>,
@@ -71,6 +74,7 @@ fn build_conflict_cached_diff_styled_text_with_source_identity(
 ) -> CachedDiffStyledText {
     let _perf_scope = perf::span(ViewPerfSpan::StyledTextBuild);
     build_cached_diff_styled_text_with_source_identity(
+        tab_width,
         theme,
         text,
         source_identity,
@@ -129,6 +133,7 @@ fn conflict_diff_query_matcher(
 }
 
 fn build_conflict_row_base_styled(
+    tab_width: usize,
     theme: AppTheme,
     text: &str,
     source_identity: Option<DiffTextSourceIdentity>,
@@ -139,6 +144,7 @@ fn build_conflict_row_base_styled(
 ) -> PreparedDocumentLineStyledText {
     if prepared_line.document.is_some() {
         return build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+            tab_width,
             theme,
             text,
             word_ranges,
@@ -154,6 +160,7 @@ fn build_conflict_row_base_styled(
 
     PreparedDocumentLineStyledText::Cacheable(
         build_conflict_cached_diff_styled_text_with_source_identity(
+            tab_width,
             theme,
             text,
             source_identity,
@@ -390,6 +397,8 @@ impl MainPaneView {
         word_hl_kind: Option<crate::theme::DiffColorKind>,
         syntax_lang: Option<DiffSyntaxLanguage>,
     ) -> Option<(CachedDiffStyledText, bool)> {
+        let tab_width = this.display_tab_width;
+
         let text = this
             .conflict_resolver
             .three_way_line_text(column, side_line)?;
@@ -412,6 +421,7 @@ impl MainPaneView {
             Some(base) => base,
             None => {
                 owned_base = build_conflict_cached_diff_styled_text(
+                    tab_width,
                     theme,
                     text,
                     word_ranges,
@@ -436,6 +446,8 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let tab_width = this.display_tab_width;
+
         let _perf_scope = perf::span(ViewPerfSpan::RenderThreeWayRows);
         let theme = this.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
@@ -510,6 +522,7 @@ impl MainPaneView {
                     mode: DiffSyntaxMode::Auto,
                 };
                 let result = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                    tab_width,
                     theme,
                     text,
                     word_ranges,
@@ -528,6 +541,7 @@ impl MainPaneView {
                 }
             } else {
                 let styled = build_conflict_cached_diff_styled_text(
+                    tab_width,
                     theme,
                     text,
                     word_ranges,
@@ -911,6 +925,7 @@ impl MainPaneView {
                                 .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
                         });
                         elements.push(conflict_canvas::single_column_conflict_canvas(
+                            tab_width,
                             theme,
                             cx.entity(),
                             canvas_id_prefix,
@@ -979,7 +994,12 @@ impl MainPaneView {
                                 ui_scale_percent,
                             ))
                         })
-                        .child(conflict_diff_text_cell(line_text.clone(), styled, show_ws));
+                        .child(conflict_diff_text_cell(
+                            tab_width,
+                            line_text.clone(),
+                            styled,
+                            show_ws,
+                        ));
 
                     if let Some(conflict_ix) = range_ix {
                         if row_selection_enabled {
@@ -1113,6 +1133,8 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let tab_width = this.display_tab_width;
+
         // section 30 aligned row space: two-way full mode shares the three-way
         // projection. The block-local path below remains for giant files and
         // partially loaded sides.
@@ -1215,6 +1237,7 @@ impl MainPaneView {
                         .unwrap_or(&[]),
                 };
                 let styled_result = Self::conflict_split_row_styled(
+                    tab_width,
                     theme,
                     &mut this.conflict_diff_segments_cache_split,
                     &mut this.conflict_diff_query_segments_cache_split,
@@ -1270,6 +1293,7 @@ impl MainPaneView {
                             .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
                     });
                     return conflict_canvas::single_column_conflict_canvas(
+                        tab_width,
                         theme,
                         cx.entity(),
                         canvas_id_prefix,
@@ -1333,7 +1357,12 @@ impl MainPaneView {
                             ui_scale_percent,
                         ))
                     })
-                    .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
+                    .child(conflict_diff_text_cell(
+                        tab_width,
+                        text.clone(),
+                        styled,
+                        show_ws,
+                    ));
 
                 if let Some(conflict_ix) = conflict_ix {
                     let has_base = this
@@ -1409,6 +1438,8 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let tab_width = this.display_tab_width;
+
         use gitcomet_core::file_diff::FileDiffRowKind as RK;
 
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
@@ -1640,6 +1671,7 @@ impl MainPaneView {
                         .and_then(|l| u32::try_from(l + 1).ok());
 
                     let styled_result = Self::conflict_split_row_styled(
+                        tab_width,
                         theme,
                         &mut this.conflict_diff_segments_cache_split,
                         &mut this.conflict_diff_query_segments_cache_split,
@@ -1708,6 +1740,7 @@ impl MainPaneView {
                                 .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
                         });
                         elements.push(conflict_canvas::single_column_conflict_canvas(
+                            tab_width,
                             theme,
                             cx.entity(),
                             canvas_id_prefix,
@@ -1777,7 +1810,12 @@ impl MainPaneView {
                                 ui_scale_percent,
                             ))
                         })
-                        .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
+                        .child(conflict_diff_text_cell(
+                            tab_width,
+                            text.clone(),
+                            styled,
+                            show_ws,
+                        ));
 
                     if let Some(conflict_ix) = conflict_ix {
                         let has_base = this
@@ -2497,6 +2535,7 @@ impl MainPaneView {
 
     #[allow(clippy::too_many_arguments)]
     fn conflict_split_row_styled(
+        tab_width: usize,
         theme: AppTheme,
         stable_cache: &mut conflict_resolver::ConflictSplitStyledTextCache,
         query_cache: &mut conflict_resolver::ConflictSplitStyledTextCache,
@@ -2531,6 +2570,7 @@ impl MainPaneView {
                 result.styled = Some(ConflictRowStyledTextValue::StableCached);
             } else {
                 let (styled, pending) = build_conflict_row_base_styled(
+                    tab_width,
                     theme,
                     text,
                     source_identity,
@@ -2575,6 +2615,7 @@ impl MainPaneView {
                 build_cached_diff_query_overlay_styled_text(theme, base, query_matcher, emphasis)
             } else {
                 let base = build_conflict_cached_diff_styled_text_with_source_identity(
+                    tab_width,
                     theme,
                     text,
                     source_identity,
@@ -2607,6 +2648,8 @@ impl MainPaneView {
         query_matcher: Option<&DiffSearchMatcher>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let tab_width = self.display_tab_width;
+
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let show_ws = self.reveal_whitespace_chars;
@@ -2650,6 +2693,7 @@ impl MainPaneView {
         let (left_styled, right_styled) = if styling_enabled {
             (
                 Self::conflict_split_row_styled(
+                    tab_width,
                     theme,
                     &mut self.conflict_diff_segments_cache_split,
                     &mut self.conflict_diff_query_segments_cache_split,
@@ -2666,6 +2710,7 @@ impl MainPaneView {
                     prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
                 ),
                 Self::conflict_split_row_styled(
+                    tab_width,
                     theme,
                     &mut self.conflict_diff_segments_cache_split,
                     &mut self.conflict_diff_query_segments_cache_split,
@@ -2722,6 +2767,7 @@ impl MainPaneView {
                 + right_col_w
                 + conflict_scaled_px(PANE_RESIZE_HANDLE_PX, ui_scale_percent);
             return conflict_canvas::split_conflict_row_canvas(
+                tab_width,
                 theme,
                 cx.entity(),
                 visible_row_ix,
@@ -2768,6 +2814,7 @@ impl MainPaneView {
                 ))
             })
             .child(conflict_diff_text_cell(
+                tab_width,
                 left_text.clone(),
                 left_styled,
                 show_ws,
@@ -2796,6 +2843,7 @@ impl MainPaneView {
                 ))
             })
             .child(conflict_diff_text_cell(
+                tab_width,
                 right_text.clone(),
                 right_styled,
                 show_ws,
@@ -2843,6 +2891,7 @@ fn conflict_diff_line_number_cell(
 }
 
 fn conflict_diff_text_cell(
+    tab_width: usize,
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
     reveal_whitespace_chars: bool,
@@ -2876,7 +2925,7 @@ fn conflict_diff_text_cell(
     }
 
     if reveal_whitespace_chars {
-        let visible = whitespace_visible_line_styled_text_for_raw(styled, text.as_ref());
+        let visible = whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref());
         if visible.highlights.is_empty() {
             return div()
                 .flex_1()

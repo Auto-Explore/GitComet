@@ -136,6 +136,14 @@ const FILE_LIST_LAYOUT_OPTIONS: &[(&str, FileListLayout, &str)] = &[
     ),
 ];
 
+const DIFF_TAB_SIZE_OPTIONS: &[(&str, u8)] = &[
+    ("settings_window_diff_tab_size_2", 2),
+    ("settings_window_diff_tab_size_3", 3),
+    ("settings_window_diff_tab_size_4", 4),
+    ("settings_window_diff_tab_size_6", 6),
+    ("settings_window_diff_tab_size_8", 8),
+];
+
 const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
     (
         "settings_window_diff_scroll_sync_vertical",
@@ -291,6 +299,7 @@ enum SettingsSection {
     DiffContentMode,
     Diff,
     DiffViewMode,
+    DiffTabSize,
     GitLogDefaultMode,
     GitLogColumns,
     GitLogBranchNames,
@@ -318,7 +327,9 @@ impl SettingsSection {
             Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout => SettingsCategory::ChangeTracking,
-            Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
+            Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
+                SettingsCategory::Diff
+            }
             Self::GitLogDefaultMode
             | Self::GitLogColumns
             | Self::GitLogBranchNames
@@ -543,6 +554,7 @@ pub(crate) struct SettingsWindowView {
     file_list_layout_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
+    diff_tab_size_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
     remote_protocols_scroll: UniformListScrollHandle,
     remote_markdown_images_scroll: UniformListScrollHandle,
@@ -560,6 +572,7 @@ pub(crate) struct SettingsWindowView {
     diff_view_mode: DiffViewMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
+    diff_tab_size: u8,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
     remote_url_policy: RemoteUrlPolicy,
@@ -977,6 +990,7 @@ impl SettingsWindowView {
         let diff_view_mode = ui_preferences.diff.view_mode;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
@@ -1289,6 +1303,7 @@ impl SettingsWindowView {
             file_list_layout_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
+            diff_tab_size_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
             remote_protocols_scroll: UniformListScrollHandle::default(),
             remote_markdown_images_scroll: UniformListScrollHandle::default(),
@@ -1306,6 +1321,7 @@ impl SettingsWindowView {
             diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
             remote_url_policy,

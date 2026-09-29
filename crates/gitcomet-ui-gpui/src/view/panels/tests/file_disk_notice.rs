@@ -291,7 +291,7 @@ async fn own_save_does_not_raise_the_notice_before_or_after_the_write_lands(
     let model_id_before = h.with_pane(cx, |pane, app| {
         pane.file_editor_input.read(app).text_snapshot().model_id()
     });
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     assert!(h.with_pane(cx, |pane, _| !pane.file_editor_is_dirty()));
 
     // A flush for some other file arrives before the write lands: the disk
@@ -490,7 +490,7 @@ async fn external_write_back_of_the_loaded_version_after_a_save_raises_the_notic
             input.replace_utf8_range(0..0, "// header\n", cx);
         });
     });
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     std::fs::write(h.file(), "// header\nfn main() {}\n").expect("save lands");
     h.bump(cx, 1, 1);
     assert_eq!(h.notice(cx), None);
@@ -637,7 +637,7 @@ async fn auto_save_flush_keeps_edits_unwritten_while_the_notice_is_up(
     assert_eq!(h.notice(cx), Some((DiskSurface::Editor, false, false)));
 
     // Losing focus flushes; with auto-save on that is a write.
-    h.update_pane(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(!pane.flush_file_editor_buffer(cx)));
     assert!(
         h.with_pane(cx, |pane, _| pane.file_editor_is_dirty()),
         "auto-save must not answer the notice for the user"
@@ -812,7 +812,7 @@ async fn an_explicit_save_answers_the_notice(cx: &mut gpui::TestAppContext) {
     h.bump(cx, 1, 0);
     assert!(h.notice(cx).is_some());
 
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     assert_eq!(h.notice(cx), None, "saving is choosing to keep my edits");
     std::fs::write(h.file(), "// header\nfn main() {}\n").expect("save lands");
     h.bump(cx, 2, 0);

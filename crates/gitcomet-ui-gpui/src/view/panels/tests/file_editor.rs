@@ -246,7 +246,7 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
 }
 
 #[gpui::test]
-async fn file_editor_refuses_a_non_utf8_file(cx: &mut gpui::TestAppContext) {
+async fn file_editor_refuses_a_binary_file(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -256,7 +256,13 @@ async fn file_editor_refuses_a_non_utf8_file(cx: &mut gpui::TestAppContext) {
     let repo_id = gitcomet_state::model::RepoId(943);
     let workdir = unique_workdir("file_editor_binary");
     let file_rel = std::path::PathBuf::from("blob.bin");
-    std::fs::write(workdir.join(&file_rel), [0xff, 0xfe, 0x00, 0x01]).expect("write binary");
+    // NUL bytes and invalid UTF-8 that is not UTF-16 either: binary in any
+    // encoding. (`FF FE ...` would be a UTF-16 byte-order mark, i.e. text.)
+    std::fs::write(
+        workdir.join(&file_rel),
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xd8",
+    )
+    .expect("write binary");
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -1986,21 +1992,6 @@ fn advance_file_edit_drain(cx: &mut gpui::VisualTestContext, total: std::time::D
         cx.run_until_parked();
         elapsed += step;
     }
-}
-
-/// The effect-layer tests exercise real writes and their receipts. Holding the
-/// receipt here lets the UI test deterministically cover queued/slow writes.
-fn hold_editor_save_receipt(
-    pane: &mut MainPaneView,
-    repo_id: gitcomet_state::model::RepoId,
-    path: &Path,
-) -> smol::channel::Sender<bool> {
-    let (send, received) = smol::channel::bounded(1);
-    pane.file_editor_pending_saves
-        .get_mut(&(repo_id, path.to_path_buf()))
-        .expect("saving must retain a completion receipt")
-        .completions = vec![received];
-    send
 }
 
 #[gpui::test]

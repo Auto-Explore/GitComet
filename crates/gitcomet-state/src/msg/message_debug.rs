@@ -459,6 +459,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
+            InternalMsg::TextAttributesLoaded {
+                repo_id,
+                target,
+                result,
+            } => f
+                .debug_struct("TextAttributesLoaded")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
             InternalMsg::DiffPreviewTextFileLoaded {
                 repo_id,
                 target,

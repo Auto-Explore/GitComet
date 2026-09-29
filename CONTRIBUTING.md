@@ -82,7 +82,7 @@ Use `--skip-dmg` when running in restricted/sandboxed environments where `hdiuti
 The release workflow `.github/workflows/build-release-artifacts.yml` builds and publishes:
 
 - Windows: portable ZIP + MSI
-- Linux: tar.gz + AppImage + .deb
+- Linux: tar.gz + AppImage + .deb + .rpm
 - macOS: DMG + tar.gz for `arm64` and `x86_64`
 - Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and Linux AppImages plus their SHA256 values)
 
@@ -105,27 +105,12 @@ This release flow will:
 
 You can also run `.github/workflows/deploy-homebrew-tap.yml` manually for backfills or dry-runs.
 
-### AUR deployment
+### Linux packages
 
-To push `PKGBUILD` and `.SRCINFO` into the live AUR repository automatically on release:
+`scripts/package-linux.sh` builds every Linux package from one staged payload. The `.deb`, `.rpm` and AppImage include the binary, desktop entry, all five icon sizes, licence files and README. The tarball preserves its historical layout for third-party packagers: only the binary, README, `LICENSE-AGPL-3.0` and `NOTICE`. Package metadata lives in `packaging/linux/`: `debian-control.in` for the `.deb` and `gitcomet.spec` for the `.rpm`.
 
-1. Ensure the `gitcomet` AUR package repository exists.
-2. In this repo, configure:
-   - secret `AUR_PRIVATE_SSH_KEY`: the AUR-authorized SSH private key.
-   - secret `AUR_PRIVATE_SSH_KEY_PASSPHRASE`: the passphrase for that SSH key.
-   - optional variable `AUR_GIT_REPOSITORY`: AUR Git remote URL (default: `ssh://aur@aur.archlinux.org/gitcomet.git`).
-   - optional variable `AUR_GIT_BRANCH`: AUR branch for that remote (default `master`).
-3. Run `.github/workflows/release-manual-main.yml` with `draft=false`.
+Linked libraries are declared automatically by `dpkg-shlibdeps` and rpm AutoReq. Libraries the app loads at runtime (Vulkan, EGL, Wayland) are declared by hand. `scripts/check-linux-runtime-deps.sh` runs in CI and on every release build, and fails when the binary's libraries or its glibc baseline drift from those declarations.
 
-This release flow will:
+The `deb_revision` and `rpm_release` inputs of `.github/workflows/release-manual-main.yml` set the package revision (the `1` in `1.2.3-1`). Raise them when rebuilding packages for an existing version through a manual dispatch of `.github/workflows/build-release-artifacts.yml`.
 
-- download the published Linux release tarball and source tarball
-- update `PKGBUILD` `pkgver` and `sha256sums`
-- regenerate `.SRCINFO`
-- validate sources with `makepkg --verifysource`
-- clone the configured AUR repo over HTTPS for read access
-- push the updated metadata into the configured AUR repo over SSH using the configured key
-
-The previous `AUR_REPO_TOKEN` secret is no longer used.
-
-You can also run `.github/workflows/deploy-aur.yml` manually for backfills or dry-runs.
+The RPM supports Fedora 42 and newer. This repository no longer publishes to the AUR; Arch users are served by the community-maintained `gitcomet-bin` package.
