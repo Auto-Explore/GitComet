@@ -798,8 +798,10 @@ fn selected_diff_results_after_store_drop_do_not_emit_store_event_failures() {
         .recv_timeout(Duration::from_secs(1))
         .expect("selected diff load did not start");
 
-    drop(event_rx);
+    // Store first: the unblocked text-attributes result can still reach the
+    // worker, and a closed receiver under a live store is a real failure.
     drop(store);
+    drop(event_rx);
     {
         let (lock, condvar) = &*release;
         let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());

@@ -107,6 +107,106 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
     cx.update(|_, app| assert!(view.read(app).popover_host.read(app).popover.is_none()));
 }
 
+#[gpui::test]
+fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo = ref_repo();
+    let commit_id = repo.branches.ready().unwrap()[0].target.clone();
+    let state = Arc::new(AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    });
+    cx.simulate_resize(gpui::size(px(1200.0), px(1400.0)));
+    let (model, theme) = cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.state = state.clone();
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state.clone(), cx));
+            this.popover_host.update(cx, |host, cx| {
+                host.state = state.clone();
+                host.open_popover_at(
+                    PopoverKind::CommitMenu {
+                        repo_id: RepoId(1),
+                        commit_id: commit_id.clone(),
+                    },
+                    point(px(10.0), px(10.0)),
+                    window,
+                    cx,
+                );
+                host.expanded_history_ref =
+                    Some(HistoryMenuRef::Branch(BranchMenuTarget::local("release")));
+                (
+                    host.context_menu_model(host.popover.as_ref().unwrap(), cx)
+                        .unwrap(),
+                    host.theme,
+                )
+            })
+        })
+    });
+    crate::view::test_support::redraw(cx);
+
+    // Every ref is a group; only the open one carries its actions with it.
+    assert_eq!(model.groups.len(), 4);
+    let open = model
+        .groups
+        .iter()
+        .find(|range| range.len() > 1)
+        .unwrap()
+        .clone();
+    assert!(model.groups.iter().filter(|range| range.len() == 1).count() == 3);
+    assert!(matches!(model.items[open.end], ContextMenuItem::Separator));
+    let selector = |ix: usize| -> &'static str {
+        match &model.items[ix] {
+            ContextMenuItem::Entry { label, .. } => model
+                .entry_debug_selectors
+                .get(&ix)
+                .map(|selector| selector.to_string())
+                .unwrap_or_else(|| super::context_menu::context_menu_entry_debug_selector(label))
+                .leak(),
+            _ => panic!("row {ix} is not an entry"),
+        }
+    };
+    for range in &model.groups {
+        let group: &'static str = format!("context_menu_group_{}", range.start).leak();
+        assert!(
+            crate::test_support::painted_control_quads(cx, group)
+                .iter()
+                .any(|(fill, _)| *fill == theme.colors.surface.panel.into()),
+            "{group} is not on the header surface"
+        );
+    }
+    let block = cx
+        .debug_bounds(format!("context_menu_group_{}", open.start).leak())
+        .unwrap();
+    let header = cx.debug_bounds(selector(open.start)).unwrap();
+    let last = (open.clone())
+        .rev()
+        .find(|ix| matches!(model.items[*ix], ContextMenuItem::Entry { .. }))
+        .unwrap();
+    let last = cx.debug_bounds(selector(last)).unwrap();
+    assert_eq!(block.top(), header.top());
+    assert_eq!(block.bottom(), last.bottom());
+    // The commit's own actions stay on the plain menu surface below.
+    let commit_action = (open.end..model.items.len())
+        .rev()
+        .find(|ix| {
+            matches!(model.items[*ix], ContextMenuItem::Entry { .. })
+                && !model.groups.iter().any(|range| range.contains(ix))
+        })
+        .unwrap();
+    let commit_action = cx.debug_bounds(selector(commit_action)).unwrap();
+    for range in &model.groups {
+        let group = cx
+            .debug_bounds(format!("context_menu_group_{}", range.start).leak())
+            .unwrap();
+        assert!(commit_action.top() >= group.bottom());
+    }
+}
+
 /// Force push is the one entry in this menu that rewrites published history, so
 /// it sits last and behind a separator rather than among the ordinary pushes a
 /// cursor is aimed at.

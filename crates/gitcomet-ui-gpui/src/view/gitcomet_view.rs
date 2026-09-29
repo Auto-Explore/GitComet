@@ -1199,7 +1199,7 @@ impl GitCometView {
         });
 
         let sidebar_pane = cx.new(|cx| {
-            SidebarPaneView::new(
+            let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
@@ -1208,7 +1208,9 @@ impl GitCometView {
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 cx,
-            )
+            );
+            pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
+            pane
         });
         let main_pane = cx.new(|cx| {
             MainPaneView::new(
@@ -1332,6 +1334,7 @@ impl GitCometView {
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             let now = Instant::now();
             if !window.is_window_active() {
+                crate::press_gesture::clear_pointer_press(window, cx);
                 // Leaving the app is one of the two moments auto-save has to
                 // mean more than "after a pause": the pending timer would
                 // otherwise fire against a window the user has already left,
@@ -1981,6 +1984,9 @@ impl GitCometView {
         }
 
         self.sidebar_collapsed = collapsed;
+        self.sidebar_pane.update(cx, |pane, cx| {
+            pane.set_expanded_branches_visible(!collapsed, cx)
+        });
         // The collapsed-rail popover only exists while collapsed; drop it (and any
         // in-flight fade) instantly when the full sidebar comes back so it can't
         // linger over the expanded pane.

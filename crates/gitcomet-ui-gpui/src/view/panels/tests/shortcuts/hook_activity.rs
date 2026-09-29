@@ -772,9 +772,14 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         .debug_bounds("hook_activity_run_714")
         .expect("expected active run in history");
     let run_row_height: f32 = run_row.size.height.into();
+    let expected_row_height: f32 = cx.update(|_window, app| {
+        crate::ui_scale::UiScale::current(app)
+            .row_height(48.0, 56.0)
+            .into()
+    });
     assert!(
-        run_row_height >= scaled(47.0) && run_row_height <= scaled(49.0),
-        "run history should use compact two-line rows (height={run_row_height})"
+        (run_row_height - expected_row_height).abs() <= scaled(1.0),
+        "run history should use two-line rows at the selected density (height={run_row_height})"
     );
     assert!(
         cx.debug_bounds("hook_activity_run_timestamp_714").is_some(),

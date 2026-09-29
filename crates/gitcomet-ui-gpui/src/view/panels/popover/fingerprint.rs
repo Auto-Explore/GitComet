@@ -206,7 +206,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
-        | PopoverKind::PinnedSectionMenu { repo_id, .. }
+        | PopoverKind::SidebarPinnedOverflow { repo_id, .. }
+        | PopoverKind::SidebarAncestorMenu { repo_id, .. }
         | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
@@ -240,7 +241,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // both read the live branch lists, so a refresh landing while the menu
         // is up has to repaint it rather than leave a stale count.
         | PopoverKind::BranchGroupMenu { .. }
-        | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::SidebarPinnedOverflow { .. }
+        | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -894,10 +896,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             remote.hash(hasher);
             path.hash(hasher);
         }
-        PopoverKind::PinnedSectionMenu { repo_id, section } => {
-            101u8.hash(hasher);
+        PopoverKind::SidebarPinnedOverflow { repo_id, bottom } => {
+            "sidebar_pin_overflow".hash(hasher);
             repo_id.hash(hasher);
-            (*section as u8).hash(hasher);
+            bottom.hash(hasher);
+        }
+        PopoverKind::SidebarAncestorMenu { repo_id, section } => {
+            "sidebar_ancestors".hash(hasher);
+            repo_id.hash(hasher);
+            hash_branch_section(*section, hasher);
         }
         PopoverKind::DeleteBranchesConfirm {
             repo_id,

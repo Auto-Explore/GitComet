@@ -2808,8 +2808,9 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
         std::process::id()
     ));
     let file_rel = std::path::PathBuf::from("wide.rs");
-    let mut rows: Vec<String> = (0..20).map(|ix| format!("fn line_{ix}() {{}}")).collect();
-    // The needle sits well past any plausible viewport width.
+    let mut rows: Vec<String> = (0..60).map(|ix| format!("fn line_{ix}() {{}}")).collect();
+    // Start outside the virtualized viewport, with the needle also well past
+    // its right edge. The search has to wait for the newly visible line's width.
     rows.push(format!("// {}needle", "pad ".repeat(200)));
     let lines: Arc<Vec<String>> = Arc::new(rows);
     let preview_text = lines.join("\n");
@@ -2851,11 +2852,15 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(pane.is_file_preview_active());
-        let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
-        assert!(
-            handle.max_offset().x > px(0.0),
-            "the fixture must overflow sideways for this to mean anything; max={:?}",
-            handle.max_offset()
+        assert_eq!(
+            pane.worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .x,
+            px(0.0),
+            "the long line must start outside the measured viewport"
         );
     });
 
@@ -2886,11 +2891,19 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
             pane.diff_search_matches
         );
         let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        // Virtualized lines acquire their width when they enter the viewport.
+        // The search must reveal the long line before its overflow is known.
+        assert!(
+            handle.max_offset().x > px(0.0),
+            "the fixture must overflow sideways for this to mean anything; max={:?}",
+            handle.max_offset()
+        );
         assert!(
             handle.offset().x < px(0.0),
             "expected the preview to scroll right to the match, x stayed at {:?}",
             handle.offset(),
         );
+        assert_eq!(pane.diff_search_horizontal_reveal, None);
     });
 
     let _ = std::fs::remove_dir_all(&workdir);

@@ -24,7 +24,9 @@
 //! Discrete controls and canvas hitboxes use `kit::click` for completed-click
 //! ownership. Menus obey the same rule; a release never transfers ownership.
 
-use gpui::{App, DispatchPhase, MouseDownEvent, MouseMoveEvent, Window};
+use gpui::{
+    App, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window, WindowId,
+};
 
 /// Set while the press in flight belongs to an element that owns the whole
 /// press → drag → release gesture.
@@ -34,6 +36,39 @@ struct PressGesture {
 }
 
 impl gpui::Global for PressGesture {}
+
+/// Live pointer feedback has a shorter lifetime than release ownership. There
+/// is one mouse, but only its current window should suppress unrelated hover.
+#[derive(Default)]
+struct PointerPress {
+    window: Option<WindowId>,
+}
+
+impl gpui::Global for PointerPress {}
+
+pub(crate) fn pointer_is_down(window: &Window, cx: &App) -> bool {
+    cx.try_global::<PointerPress>()
+        .is_some_and(|press| press.window == Some(window.window_handle().window_id()))
+}
+
+pub(crate) fn clear_pointer_press(window: &mut Window, cx: &mut App) {
+    set_pointer_down(false, window, cx);
+}
+
+fn set_pointer_down(down: bool, window: &mut Window, cx: &mut App) {
+    let previous = cx
+        .try_global::<PointerPress>()
+        .and_then(|press| press.window);
+    let window_id = window.window_handle().window_id();
+    let next = if down {
+        Some(window_id)
+    } else {
+        previous.filter(|owner| *owner != window_id)
+    };
+    if next != previous {
+        cx.set_global(PointerPress { window: next });
+    }
+}
 
 /// True when the release being handled belongs to another element's gesture.
 pub(crate) fn is_press_claimed(cx: &App) -> bool {
@@ -63,19 +98,31 @@ fn set_claimed(claimed: bool, cx: &mut App) {
 pub(crate) fn install_reset(window: &mut Window) {
     // Capture phase, so the reset lands before the element under the pointer
     // claims the new press in the bubble phase.
-    window.on_mouse_event(|_event: &MouseDownEvent, phase, _window, cx| {
+    window.on_mouse_event(|event: &MouseDownEvent, phase, window, cx| {
         if phase == DispatchPhase::Capture {
             crate::kit::click::reset(cx);
             set_claimed(false, cx);
+            if event.button == MouseButton::Left {
+                set_pointer_down(true, window, cx);
+            }
+        }
+    });
+
+    window.on_mouse_event(|event: &MouseUpEvent, phase, window, cx| {
+        if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+            clear_pointer_press(window, cx);
         }
     });
 
     // A move with no button held means the gesture is definitively over.
     // Bounds any claim left stranded by a release the window never saw.
-    window.on_mouse_event(|event: &MouseMoveEvent, phase, _window, cx| {
-        if phase == DispatchPhase::Capture && !event.dragging() {
-            crate::kit::click::reset(cx);
-            set_claimed(false, cx);
+    window.on_mouse_event(|event: &MouseMoveEvent, phase, window, cx| {
+        if phase == DispatchPhase::Capture {
+            set_pointer_down(event.dragging(), window, cx);
+            if !event.dragging() {
+                crate::kit::click::reset(cx);
+                set_claimed(false, cx);
+            }
         }
     });
 }

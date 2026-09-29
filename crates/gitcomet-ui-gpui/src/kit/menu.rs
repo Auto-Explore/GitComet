@@ -2,7 +2,7 @@
 //! supplies content and navigation; pointer activation follows the menu gesture.
 use super::interaction::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::{theme::AppTheme, ui_scale::UiScale};
-use gpui::{Div, ElementId, Stateful, div, prelude::*, px};
+use gpui::{Div, ElementId, Rgba, Stateful, div, prelude::*, px};
 
 pub(crate) fn menu_item(
     id: impl Into<ElementId>,
@@ -11,7 +11,22 @@ pub(crate) fn menu_item(
     selected: bool,
     disabled: bool,
 ) -> Stateful<Div> {
+    menu_item_with_background(id, theme, scale, selected, disabled, None)
+}
+
+pub(crate) fn menu_item_with_background(
+    id: impl Into<ElementId>,
+    theme: AppTheme,
+    scale: impl Into<UiScale>,
+    selected: bool,
+    disabled: bool,
+    background: Option<Rgba>,
+) -> Stateful<Div> {
     let scale = scale.into().with_appearance(theme.metrics);
+    let mut interaction = InteractionStyle::menu(theme);
+    if let Some(background) = background {
+        interaction = interaction.resting_background(background);
+    }
     div()
         .id(id)
         .min_h(scale.row_height(28.0, 32.0))
@@ -29,7 +44,7 @@ pub(crate) fn menu_item(
             theme.colors.foreground.primary
         })
         .control_interaction(
-            InteractionStyle::menu(theme),
+            interaction,
             InteractionState::default()
                 .selected(selected && !disabled, theme.hover_overlay())
                 .disabled(disabled),

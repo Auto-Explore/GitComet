@@ -2279,7 +2279,10 @@ mod tests {
     /// Why the round-trip matters: Comfortable changes the heights.
     #[test]
     fn comfortable_density_makes_picker_rows_taller() {
-        let compact = UiScale::from_percent(100);
+        let compact = UiScale::from_percent(100).with_appearance(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        });
         let comfortable = compact.with_appearance(crate::appearance::Appearance {
             density: crate::appearance::UiDensity::Comfortable,
             ..crate::appearance::Appearance::default()
@@ -2289,8 +2292,11 @@ mod tests {
     }
 
     #[test]
-    fn a_detail_line_makes_a_row_one_line_box_taller() {
-        let ui_scale = UiScale::from_percent(100);
+    fn a_detail_line_adds_one_line_box_when_content_determines_row_height() {
+        let ui_scale = UiScale::from_percent(100).with_appearance(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        });
 
         assert_eq!(
             row_height(ui_scale, true) - row_height(ui_scale, false),

@@ -393,8 +393,13 @@ pub(crate) enum PopoverKind {
         /// Full slash path with no trailing separator (`feat`, `feat/sub`).
         path: String,
     },
-    /// Menu for the "Pinned Local/Remote Branches" header row.
-    PinnedSectionMenu {
+    /// Pinned roots that do not fit in the sidebar's sticky pin budget.
+    SidebarPinnedOverflow {
+        repo_id: RepoId,
+        bottom: bool,
+    },
+    /// Folder toggles for active paths when the sidebar is too short to stack them.
+    SidebarAncestorMenu {
         repo_id: RepoId,
         section: BranchSection,
     },

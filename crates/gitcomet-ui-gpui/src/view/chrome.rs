@@ -50,7 +50,12 @@ pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATIO
 /// definition, so a component cannot end up pinned to a different baseline than
 /// the bar around it.
 pub(in crate::view) fn chrome_scale() -> ui_scale::UiScale {
-    ui_scale::UiScale::from_percent(ui_scale::DEFAULT_UI_SCALE_PERCENT)
+    ui_scale::UiScale::from_percent(ui_scale::DEFAULT_UI_SCALE_PERCENT).with_appearance(
+        crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        },
+    )
 }
 
 pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
@@ -1012,7 +1017,10 @@ mod tests {
         assert_eq!(scale.px(20.0), px(20.0), "the chrome must not zoom");
         assert_eq!(
             scale.appearance,
-            crate::appearance::Appearance::default(),
+            crate::appearance::Appearance {
+                density: crate::appearance::UiDensity::Compact,
+                ..crate::appearance::Appearance::default()
+            },
             "the chrome must not take density or font size"
         );
         assert_eq!(scale.row_height(24.0, 32.0), px(24.0));
