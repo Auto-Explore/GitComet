@@ -120,6 +120,9 @@ enum Step {
     },
     /// Runs a command-palette command (setup, e.g. `toggle-terminal`).
     Command { id: String },
+    /// Opens a repository as the Open Repository flow does once a folder is
+    /// picked, as a traced input whose witness is that repository loaded.
+    OpenRepo { path: PathBuf },
     /// Minimizes the window (idle measurements).
     Minimize,
     /// Checks final state; a mismatch fails the scenario.
@@ -166,6 +169,8 @@ enum WitnessKind {
         #[serde(default)]
         matches: Option<usize>,
     },
+    /// The repository at `path` is active with status and history loaded.
+    RepoOpen { path: PathBuf },
 }
 
 impl WitnessKind {
@@ -175,6 +180,7 @@ impl WitnessKind {
             Self::DiffLoaded => "diff_loaded",
             Self::HistoryScrolled => "history_scrolled",
             Self::SearchSettled { .. } => "search_settled",
+            Self::RepoOpen { .. } => "repo_open",
         }
     }
 }
@@ -511,6 +517,17 @@ impl Driver {
                     })
                     .map_err(|e| e.to_string())
             }
+            Step::OpenRepo { path } => {
+                let path =
+                    std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let store = cx.update(|cx| Arc::clone(&self.view.read(cx).store));
+                let witness = WitnessKind::RepoOpen { path: path.clone() };
+                self.scheduled(1, 0, Some(witness), cx, move |_, _, _| {
+                    store.dispatch(Msg::OpenRepo(path.clone()));
+                    true
+                })
+                .await
+            }
             Step::Minimize => self
                 .window
                 .update(cx, |_, window, _| window.minimize_window())
@@ -626,7 +643,7 @@ impl Driver {
                 WitnessKind::SearchSettled { .. } => {
                     Baseline::Query(view.main_pane.read(cx).diff_search_query.clone())
                 }
-                WitnessKind::DiffLoaded => Baseline::None,
+                WitnessKind::DiffLoaded | WitnessKind::RepoOpen { .. } => Baseline::None,
             }
         })
     }
@@ -661,6 +678,12 @@ impl Driver {
                     selected == *target
                         && matches!(&repo.history_state.commit_details,
                             Loadable::Ready(details) if Some(&details.id) == target.as_ref())
+                }
+                WitnessKind::RepoOpen { path } => {
+                    repo.spec.workdir == *path
+                        && matches!(repo.open, Loadable::Ready(()))
+                        && matches!(repo.status, Loadable::Ready(_))
+                        && matches!(repo.history_state.log, Loadable::Ready(_))
                 }
                 WitnessKind::DiffLoaded => {
                     let diff = &repo.diff_state;
@@ -839,6 +862,12 @@ impl Driver {
                     "selected={:?} details_ready={}",
                     repo.history_state.selected_commit,
                     matches!(repo.history_state.commit_details, Loadable::Ready(_))
+                ),
+                WitnessKind::RepoOpen { path } => format!(
+                    "wanted={} active={} open={:?}",
+                    path.display(),
+                    repo.spec.workdir.display(),
+                    matches!(repo.open, Loadable::Ready(()))
                 ),
                 WitnessKind::DiffLoaded => format!(
                     "target={:?} reload_in_flight={}",
@@ -1026,12 +1055,13 @@ mod tests {
                 {"do": "write_files", "paths": ["target/churn-1.txt"], "contents": "x\n",
                  "rounds": 60, "interval_ms": 500, "expect_status": false},
                 {"do": "command", "id": "toggle-terminal"},
+                {"do": "open_repo", "path": "/tmp"},
                 {"do": "minimize"},
                 {"do": "expect", "witness": {"kind": "search_settled", "matches": 100}}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 16);
+        assert_eq!(scenario.steps.len(), 17);
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {
@@ -1041,7 +1071,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            scenario.steps[15],
+            scenario.steps[16],
             Step::Expect {
                 witness: WitnessKind::SearchSettled { matches: Some(100) }
             }

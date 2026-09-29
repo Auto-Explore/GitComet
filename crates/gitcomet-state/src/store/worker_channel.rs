@@ -199,7 +199,7 @@ impl StoreWorkerSender {
             StoreWorkerSenderInner::Command(tx) => {
                 let command = match op_trace::Stamp::capture() {
                     Some(stamp) => {
-                        let name = repo_load_trace::msg_name(&msg);
+                        let name = repo_load_trace::stage_label(&msg);
                         op_trace::record(op_trace::Stage::Dispatch, stamp.op, name, 0, 0);
                         StoreWorkerCommand::Traced(Box::new(msg), stamp)
                     }

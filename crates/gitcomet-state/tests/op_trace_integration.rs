@@ -60,7 +60,7 @@ fn a_traced_dispatch_is_followed_through_the_store_worker_and_its_tasks() {
             .iter()
             .filter(|(stage, _)| *stage == Stage::Received)
             .count();
-        if received >= 2 && seen.contains(&(Stage::TaskFinished, "gitcomet-repo-load")) {
+        if received >= 2 && seen.contains(&(Stage::TaskFinished, "OpenRepo")) {
             break;
         }
         assert!(Instant::now() < deadline, "incomplete trace: {seen:?}");
@@ -73,18 +73,20 @@ fn a_traced_dispatch_is_followed_through_the_store_worker_and_its_tasks() {
         (Stage::Received, "OpenRepo"),
         (Stage::Reduced, "reduce"),
         (Stage::EffectQueued, "OpenRepo"),
-        (Stage::TaskStarted, "gitcomet-repo-load"),
-        (Stage::TaskFinished, "gitcomet-repo-load"),
+        // Tasks are named after the effect that spawned them.
+        (Stage::TaskStarted, "OpenRepo"),
+        (Stage::TaskFinished, "OpenRepo"),
     ] {
         assert!(seen.contains(&expected), "missing {expected:?} in {seen:?}");
     }
-    // The failed open reports back as a message of the same operation.
+    // The failed open reports back as a message of the same operation,
+    // labelled by its result rather than the load envelope it travels in.
     let follow_up = records
         .iter()
         .filter(|record| record.op == op && record.stage == Stage::Received)
         .nth(1)
         .expect("the load task's result message");
-    assert_ne!(follow_up.label, "OpenRepo");
+    assert_eq!(follow_up.label, "RepoOpenedErr");
 
     let reduced: Vec<u64> = records
         .iter()

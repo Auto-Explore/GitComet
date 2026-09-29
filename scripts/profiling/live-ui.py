@@ -61,6 +61,11 @@ SEARCH_FILE = "search-target.txt"
 IGNORED_DIR = "build"
 WINDOW_SIZE = (1400, 900)
 REFRESH_HZ = 60
+# GPU drivers compile the renderer's pipelines at window creation and keep the
+# result in a disk cache. A fresh sandbox per run would make every launch a
+# first launch (~570 ms of shader compilation on the NVIDIA driver here), so
+# runs share one cache unless --cold-gpu-cache asks for that first launch.
+GPU_SHADER_CACHE = ROOT / "target/profiling/gpu-shader-cache"
 
 
 # ---------------------------------------------------------------- fixtures
@@ -154,9 +159,29 @@ def tracked_files(repository, count):
     return listed[::step][:count]
 
 
-def scenario(name, repository, save_file=SAVE_FILE):
+def lifecycle_cycle(secondary):
+    """Open a second repository, select through its history, close it."""
+    return [{"do": "open_repo", "path": str(secondary)},
+            {"do": "focus", "target": "history"},
+            {"do": "keys", "key": "down", "repeat": 3, "interval_ms": 60,
+             "witness": {"kind": "commit_details"}},
+            {"do": "command", "id": "close-repo-tab"},
+            {"do": "wait_ready", "timeout_ms": 60_000}]
+
+
+def scenario(name, repository, save_file=SAVE_FILE, secondary=None):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
     ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
+    if name == "lifecycle":
+        if secondary is None:
+            raise ValueError("lifecycle needs --secondary-repository")
+        # Warm caches first; resources should then plateau across cycles.
+        return {"name": name, "quit": True, "steps": ready
+                + [{"do": "phase", "name": "warmup_cycles"}]
+                + [step for _ in range(10) for step in lifecycle_cycle(secondary)]
+                + [{"do": "phase", "name": "cycles"}]
+                + [step for _ in range(100) for step in lifecycle_cycle(secondary)]
+                + [{"do": "phase", "name": "after_cycles"}, {"do": "settle", "ms": 10_000}]}
     if name == "status-burst":
         # A 50-file save burst (formatter, branch switch), restored each round.
         return {"name": name, "quit": True, "steps": ready + [
@@ -191,6 +216,13 @@ def scenario(name, repository, save_file=SAVE_FILE):
         "idle": ready + [{"do": "phase", "name": "idle"}, {"do": "settle", "ms": 60_000}],
         "idle-minimized": ready + [{"do": "minimize"}, {"do": "settle", "ms": 2000},
                                    {"do": "phase", "name": "idle_minimized"}, {"do": "settle", "ms": 60_000}],
+        # Selections faster than details load: latest wins, obsolete loads
+        # should be dropped or cancelled.
+        "history-select-burst": ready + [
+            {"do": "focus", "target": "history"},
+            {"do": "phase", "name": "select_burst"},
+            {"do": "keys", "key": "down", "repeat": 600, "interval_ms": 16,
+             "witness": {"kind": "commit_details"}}],
         "history-select": ready + [
             {"do": "focus", "target": "history"},
             {"do": "phase", "name": "select"},
@@ -227,8 +259,9 @@ def scenario(name, repository, save_file=SAVE_FILE):
     return {"name": name, "steps": steps[name], "quit": True}
 
 
-SCENARIOS = ("startup", "idle", "idle-minimized", "two-windows-idle", "history-select", "history-scroll",
-             "status-save", "status-burst", "ignored-churn", "diff-search", "terminal-output")
+SCENARIOS = ("startup", "idle", "idle-minimized", "two-windows-idle", "history-select",
+             "history-select-burst", "history-scroll", "status-save", "status-burst", "ignored-churn",
+             "diff-search", "terminal-output", "lifecycle")
 
 
 # ---------------------------------------------------------------- one run
@@ -236,6 +269,47 @@ SCENARIOS = ("startup", "idle", "idle-minimized", "two-windows-idle", "history-s
 def survey_id():
     match = re.search(r'SURVEY_ID: &str = "([^"]+)"', SURVEY_SOURCE.read_text(encoding="utf-8"))
     return match.group(1) if match else "unknown"
+
+
+def gpu_cache_environment(output, cold):
+    cache = (output / "gpu-shader-cache") if cold else GPU_SHADER_CACHE
+    cache.mkdir(parents=True, exist_ok=True)
+    return {"__GL_SHADER_DISK_CACHE": "1", "__GL_SHADER_DISK_CACHE_PATH": str(cache),
+            "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP": "1", "MESA_SHADER_CACHE_DIR": str(cache)}
+
+
+def smaps_breakdown(pid):
+    """Proportional set size by mapping kind: separates the allocator heap
+    from memory-mapped pack files and GPU driver mappings."""
+    kinds = collections.Counter()
+    kind = "other"
+    try:
+        with open(f"/proc/{pid}/smaps") as stream:
+            for line in stream:
+                if line[0] in "0123456789abcdef" and "-" in line.split(" ", 1)[0]:
+                    parts = line.split(None, 5)
+                    name = parts[5].strip() if len(parts) > 5 else ""
+                    if name == "[anon:mimalloc]":
+                        kind = "heap_mimalloc"
+                    elif name in ("[heap]", "") or name.startswith("[anon"):
+                        kind = "heap_other"
+                    elif "/objects/pack/" in name:
+                        kind = "git_packs_mapped"
+                    elif "nvidia" in name or name.startswith("/dev/dri") or "libdrm" in name or "/dev/nvidia" in name:
+                        kind = "gpu_driver"
+                    elif ".so" in name:
+                        kind = "shared_libraries"
+                    elif name.startswith("["):
+                        kind = "kernel_special"
+                    elif os.path.basename(name).startswith("gitcomet"):
+                        kind = "binary"
+                    else:
+                        kind = "files_mapped"
+                elif line.startswith("Pss:"):
+                    kinds[kind] += int(line.split()[1])
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return None
+    return dict(kinds)
 
 
 def seed_profile(output, repository):
@@ -393,14 +467,16 @@ class HeadlessCompositor:
 
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
-             ping_ms=None, save_file=SAVE_FILE, wrap=None):
+             ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
     env = seed_profile(output, repository)
     scenario_file = output / "scenario.json"
-    scenario_file.write_text(json.dumps(scenario(name, repository, save_file), indent=2), encoding="utf-8")
+    secondary = secondary.resolve() if secondary else None
+    scenario_file.write_text(json.dumps(scenario(name, repository, save_file, secondary), indent=2),
+                             encoding="utf-8")
     frames = output / "frames.jsonl"
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
@@ -413,12 +489,14 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         ping_ms = 1000
     if ping_ms:
         env["GITCOMET_UI_PROBE_PING_MS"] = str(ping_ms)
+    env.update(gpu_cache_environment(output, cold_gpu_cache))
     capture = {"version": 1, "run_id": run_id, "scenario": name, "binary": str(binary),
                "binary_sha256": perf_metadata.sha256_file(binary), "repository": str(repository),
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
                "window_size": WINDOW_SIZE, "display": display,
                "refresh_hz": REFRESH_HZ if display == "headless" else None,
-               "ping_ms": ping_ms, "wrap": wrap, "load_before": load_average(), "outcome": "failed"}
+               "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
+               "load_before": load_average(), "outcome": "failed"}
     if metadata:
         (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
@@ -445,6 +523,9 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                     app_pid = find_app_pid(process.pid, binary) or app_pid
                 sample = read_proc(app_pid)
                 if sample:
+                    # A mapping breakdown every ~5 s; smaps is costlier than status.
+                    if len(samples) % 20 == 0:
+                        sample["pss_breakdown_kib"] = smaps_breakdown(app_pid)
                     samples.append(sample)
                 time.sleep(0.25)
         except BaseException:
@@ -661,6 +742,8 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "wakeups_per_second": delta("voluntary_switches") / seconds if delta("voluntary_switches") is not None and seconds else None,
         "rss_kib": distribution(s["rss_kib"] for s in phase_process),
         "pss_kib": distribution(s["pss_kib"] for s in phase_process),
+        "pss_breakdown_kib": next((s["pss_breakdown_kib"] for s in reversed(phase_process)
+                                   if s.get("pss_breakdown_kib")), None),
         "threads": max((s["threads"] for s in phase_process), default=None),
         "fds": max((s["fds"] for s in phase_process), default=None),
         "background_work": dict(background.most_common()),
@@ -673,6 +756,9 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
             "count": len(inputs), "expected_witnesses": sum(r["expects_witness"] for r in inputs),
             "witnessed": sum(r["complete"] for r in inputs),
             "superseded": sum(r["superseded"] for r in inputs),
+            # Worker time spent for inputs whose result never showed.
+            "superseded_task_ms": sum(sum(r["task_ms"]) for r in inputs if r["superseded"]),
+            "superseded_tasks": sum(len(r["task_ms"]) for r in inputs if r["superseded"]),
             "dispatch_delay_ms": distribution(r["dispatch_delay_ms"] for r in inputs),
             "handler_ms": distribution(r["handler_ms"] for r in inputs),
             "input_to_witness_ms": distribution(r.get("witness_ms") for r in inputs),
@@ -782,7 +868,8 @@ def measure(args):
                     verify_repository()
                     output = args.output / f"pair-{pair + 1}-{name}-{variant}"
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
-                                       metadata=False, display=args.display, save_file=args.save_file)
+                                       metadata=False, display=args.display, save_file=args.save_file,
+                                       secondary=args.secondary_repository)
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -843,6 +930,9 @@ def main():
     single.add_argument("--ping-ms", type=int)
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
+    single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    single.add_argument("--cold-gpu-cache", action="store_true",
+                        help="a private, empty GPU shader cache: measures a first launch")
     paired = commands.add_parser("measure")
     for name in ("baseline", "candidate", "repository", "output"):
         paired.add_argument("--" + name, type=Path, required=True)
@@ -853,6 +943,7 @@ def main():
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
+    paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     summary = commands.add_parser("summarize")
     summary.add_argument("directory", type=Path)
     combined = commands.add_parser("report")
@@ -865,7 +956,8 @@ def main():
     elif args.command == "run":
         result = run_once(args.binary, args.repository, args.scenario, args.output, args.timeout,
                           display=args.display, ping_ms=args.ping_ms, save_file=args.save_file,
-                          wrap=args.wrap)
+                          wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
+                          secondary=args.secondary_repository)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)

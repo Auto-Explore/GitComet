@@ -335,6 +335,8 @@ impl WorkerLoopContext<'_> {
                         .unwrap_or("<non-utf8>"))
                 );
             }
+            let _label =
+                gitcomet_core::op_trace::label_scope(repo_load_trace::effect_name(&effect));
             schedule_effect(
                 EffectExecutors {
                     executor: self.executor,
@@ -468,7 +470,7 @@ impl AppStore {
                     gitcomet_core::op_trace::record(
                         gitcomet_core::op_trace::Stage::Received,
                         stamp.op,
-                        repo_load_trace::msg_name(&msg),
+                        repo_load_trace::stage_label(&msg),
                         stamp.waited_ns(),
                         0,
                     );

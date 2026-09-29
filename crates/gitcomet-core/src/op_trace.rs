@@ -29,6 +29,7 @@ static THREADS: Mutex<Vec<ThreadInfo>> = Mutex::new(Vec::new());
 
 thread_local! {
     static CURRENT_OP: Cell<u64> = const { Cell::new(0) };
+    static CURRENT_LABEL: Cell<&'static str> = const { Cell::new("") };
     static THREAD_TAG: Cell<u32> = const { Cell::new(0) };
 }
 
@@ -48,9 +49,11 @@ pub enum Stage {
     Reduced,
     /// The reducer scheduled an effect. `label`: effect kind.
     EffectQueued,
-    /// A worker started a task. `label`: pool, `a`: queue delay (ns).
+    /// A worker started a task. `label`: the effect that spawned it (or the
+    /// pool), `a`: queue delay (ns).
     TaskStarted,
-    /// A worker finished a task. `label`: pool, `a`: run time (ns).
+    /// A worker finished a task. `label` as for `TaskStarted`, `a`: run time
+    /// (ns).
     TaskFinished,
     /// The UI applied a published state. `a`: publication sequence number,
     /// `b`: time spent applying it on the UI thread (ns).
@@ -152,6 +155,24 @@ impl Drop for ScopeGuard {
     }
 }
 
+/// Names the tasks spawned on this thread until the guard drops, e.g. with
+/// the effect being scheduled, so worker records say what they ran.
+pub fn label_scope(label: &'static str) -> LabelGuard {
+    let previous = CURRENT_LABEL.with(|current| current.replace(label));
+    LabelGuard { previous }
+}
+
+#[must_use = "the label scope ends when the guard drops"]
+pub struct LabelGuard {
+    previous: &'static str,
+}
+
+impl Drop for LabelGuard {
+    fn drop(&mut self) {
+        CURRENT_LABEL.with(|current| current.set(self.previous));
+    }
+}
+
 pub fn record(stage: Stage, op: u64, label: &'static str, a: u64, b: u64) {
     if !enabled() {
         return;
@@ -231,6 +252,8 @@ pub fn drain() -> Drained {
 pub struct Stamp {
     pub op: u64,
     pub queued_ns: u64,
+    /// The spawning thread's [`label_scope`], or empty.
+    pub label: &'static str,
 }
 
 impl Stamp {
@@ -239,6 +262,7 @@ impl Stamp {
         enabled().then(|| Self {
             op: current(),
             queued_ns: now_ns(),
+            label: CURRENT_LABEL.with(Cell::get),
         })
     }
 
@@ -255,14 +279,19 @@ pub fn wrap_task<F: FnOnce()>(pool: &'static str, task: F) -> impl FnOnce() {
     move || match stamp {
         None => task(),
         Some(stamp) => {
-            record(Stage::TaskStarted, stamp.op, pool, stamp.waited_ns(), 0);
+            let label = if stamp.label.is_empty() {
+                pool
+            } else {
+                stamp.label
+            };
+            record(Stage::TaskStarted, stamp.op, label, stamp.waited_ns(), 0);
             let _scope = scope(stamp.op);
             let started = Instant::now();
             task();
             record(
                 Stage::TaskFinished,
                 stamp.op,
-                pool,
+                label,
                 u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
                 0,
             );
@@ -283,6 +312,11 @@ mod tests {
         let _ = drain();
 
         let op = next_op();
+        let labelled = {
+            let _scope = scope(op);
+            let _label = label_scope("LoadLog");
+            wrap_task("pool", || {})
+        };
         let task = {
             let _scope = scope(op);
             record_current(Stage::Dispatch, "Msg", 0, 0);
@@ -302,8 +336,20 @@ mod tests {
             .join()
             .unwrap();
 
+        labelled();
         let drained = drain();
-        let ours: Vec<_> = drained.records.iter().filter(|r| r.op == op).collect();
+        let ours: Vec<_> = drained
+            .records
+            .iter()
+            .filter(|r| r.op == op && r.label != "LoadLog")
+            .collect();
+        assert!(
+            drained
+                .records
+                .iter()
+                .any(|r| r.op == op && r.stage == Stage::TaskStarted && r.label == "LoadLog"),
+            "a labelled spawn names the task after the effect"
+        );
         let stages: Vec<_> = ours.iter().map(|r| (r.stage, r.label)).collect();
         assert_eq!(
             stages,

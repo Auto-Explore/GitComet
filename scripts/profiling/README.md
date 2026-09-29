@@ -71,9 +71,19 @@ python3 scripts/profiling/live-ui.py measure ... --session second --reverse --ou
 python3 scripts/profiling/live-ui.py report target/profiling/live/s1 target/profiling/live/s2
 ```
 
-Scenarios: `idle`, `idle-minimized`, `history-select`, `history-scroll`,
-`status-save` (real file writes through the native watcher), `diff-search`
-(first and repeated search). Each run gets a private headless mutter with a
+Scenarios: `startup`, `idle`, `idle-minimized`, `two-windows-idle`,
+`history-select`, `history-select-burst` (selections faster than details load:
+superseded inputs and their worker time are reported), `history-scroll`,
+`status-save` and `status-burst` (real file writes through the native
+watcher), `ignored-churn` (build output in an ignored directory),
+`diff-search` (first and repeated search), `terminal-output` (sustained output
+while scrolling) and `lifecycle` (110 open/select/close cycles of a
+`--secondary-repository`, then a plateau phase for retained memory, threads
+and descriptors). Runs share a warm GPU shader cache under
+`target/profiling/gpu-shader-cache`; `--cold-gpu-cache` measures a first
+launch, where the NVIDIA driver here spends ~570 ms compiling pipelines.
+Memory is reported with a PSS breakdown (allocator heap, memory-mapped Git
+packs, GPU driver, binary), since mapped packs can double the resident size. Each run gets a private headless mutter with a
 virtual monitor, so the window is focused and paced by a real compositor
 without touching the desktop; `--display desktop` uses the session instead,
 where GNOME denies a background launch focus and an occluded window receives
