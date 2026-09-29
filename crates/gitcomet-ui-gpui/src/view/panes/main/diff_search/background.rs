@@ -369,6 +369,74 @@ mod tests {
         assert!(RowDocument::matches_text(&matcher, &text));
     }
 
+    /// A split file diff reads both sides from disk. Searching once opened,
+    /// seeked and read the file per row per chunk, twice with the tab check:
+    /// ~400k system calls and ~1.3 s for the first query on 100k rows.
+    #[test]
+    fn searching_source_backed_rows_opens_each_side_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sides = ["old.txt", "new.txt"].map(|name| {
+            let path = Arc::new(dir.path().join(name));
+            let text: String = (0..2_000)
+                .map(|row| {
+                    let tab = if row % 7 == 0 { "\t" } else { "" };
+                    let needle = if row % 100 == 0 { "needle" } else { "plain" };
+                    format!("row {row:04}:{tab} {needle} {name}\n")
+                })
+                .collect();
+            std::fs::write(&*path, &text).expect("write side");
+            let mut start = 0;
+            let lines: Vec<_> = text
+                .split_inclusive('\n')
+                .map(|line| {
+                    let range = start..start + line.len() - 1;
+                    start += line.len();
+                    (range, line.contains('\t'))
+                })
+                .collect();
+            (path, lines)
+        });
+        let rows = RowDocument {
+            len: 2_000,
+            columns: 2,
+            text: Box::new(move |ix, column| {
+                let (path, lines) = &sides[column];
+                let (range, has_tabs) = lines.get(ix)?.clone();
+                Some(FileDiffLineText::file_slice(
+                    Arc::clone(path),
+                    range,
+                    true,
+                    has_tabs,
+                ))
+            }),
+            wrapped: Arc::from([]),
+            streamed: false,
+            previous: Mutex::new(VecDeque::new()),
+        };
+        let document = SearchDocument(DocumentSource::Rows(rows));
+
+        let _ = gitcomet_core::file_diff::take_file_slice_opens_for_tests();
+        let found = document.search(
+            "needle",
+            DiffSearchOptions::default(),
+            CancellationToken::new(),
+        );
+        assert_eq!(found.matches, (0..2_000).step_by(100).collect::<Vec<_>>());
+        assert_eq!(
+            gitcomet_core::file_diff::take_file_slice_opens_for_tests(),
+            2
+        );
+
+        // Refining reuses the cached candidates and still reads each side once.
+        let refined = document.search(
+            "needle old",
+            DiffSearchOptions::default(),
+            CancellationToken::new(),
+        );
+        assert_eq!(refined.matches, found.matches);
+        assert!(gitcomet_core::file_diff::take_file_slice_opens_for_tests() <= 2);
+    }
+
     #[test]
     fn background_search_cancellation_does_not_cache_partial_results() {
         let token = CancellationToken::new();
@@ -442,6 +510,9 @@ impl SearchDocument {
     ) -> SearchResult {
         let mut matcher = DiffSearchMatcher::new(query, options);
         matcher.set_cancellation(cancellation);
+        // Every row of a source-backed side is read: one read per file, not
+        // an open/seek/read per row (and per chunk).
+        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
         let mut result = SearchResult {
             regex_error: matcher.regex_error().map(str::to_owned),
             ..Default::default()
@@ -873,8 +944,10 @@ impl MainPaneView {
                             }
                         }
                     }?;
+                    // The stored flag: reading a source-backed line only to
+                    // look for tabs would load every row once more.
                     if (wrapped || view == DiffViewMode::Split || !file_view)
-                        && raw.as_ref().contains('\t')
+                        && raw.has_tabs_without_loading()
                     {
                         Some(
                             crate::view::tab_width::expand_tabs(tab_width, raw.as_ref())
