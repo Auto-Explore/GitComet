@@ -26,16 +26,47 @@ const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
 const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
-const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
 
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
-const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
-const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
-const SIGNATURE_GUIDE_URL: &str =
-    "https://github.com/Auto-Explore/GitComet/blob/main/docs/commit-signatures.md";
-const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
-const LICENSE_NAME: &str = "AGPL-3.0";
+
+fn settings_window_title() -> String {
+    format!("Settings: {}", crate::view::product_name())
+}
+
+fn repository_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .repository
+        .as_deref()
+}
+
+fn themes_guide_url() -> Option<String> {
+    gitcomet_core::identity::current()
+        .links()
+        .documentation_page("themes")
+}
+
+fn signature_guide_url() -> Option<String> {
+    gitcomet_core::identity::current()
+        .links()
+        .documentation_page("commit-signatures")
+}
+
+fn license_link() -> Option<&'static gitcomet_core::identity::NamedLink> {
+    gitcomet_core::identity::current().links().license.as_ref()
+}
+
+/// A link's address without its scheme, e.g. `github.com/owner/repo`.
+fn url_label(url: &str) -> SharedString {
+    let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    without_scheme
+        .strip_prefix("github.com/")
+        .unwrap_or(without_scheme)
+        .trim_end_matches('/')
+        .to_string()
+        .into()
+}
 
 #[derive(Clone, Default)]
 struct ExternalEditorPreferencePersistQueue {
@@ -725,7 +756,10 @@ fn settings_window_options_for_scale(
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
         titlebar: Some(settings_window_titlebar_options()),
-        app_id: Some("gitcomet-settings".into()),
+        app_id: Some(
+            gitcomet_core::identity::current()
+                .window_app_id(gitcomet_core::identity::WindowKind::Settings),
+        ),
         window_decorations: Some(WindowDecorations::Client),
         window_background: crate::app::main_window_background_appearance(),
         is_movable: true,
@@ -736,7 +770,7 @@ fn settings_window_options_for_scale(
 
 fn settings_window_titlebar_options() -> TitlebarOptions {
     TitlebarOptions {
-        title: Some(SETTINGS_WINDOW_TITLE.into()),
+        title: Some(settings_window_title().into()),
         // Windows needs a transparent native titlebar to avoid rendering its own
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
@@ -953,8 +987,11 @@ fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
     }
 }
 
-fn git_executable_scope_note() -> &'static str {
-    "Applies to the main GitComet browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git."
+fn git_executable_scope_note() -> String {
+    format!(
+        "Applies to the main {} browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git.",
+        crate::view::product_name()
+    )
 }
 
 fn initial_external_editor_setting(
@@ -966,7 +1003,7 @@ fn initial_external_editor_setting(
 
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
-        window.set_window_title(SETTINGS_WINDOW_TITLE);
+        window.set_window_title(&settings_window_title());
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);

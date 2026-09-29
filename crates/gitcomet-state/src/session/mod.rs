@@ -1,5 +1,6 @@
 use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::{HistoryMode, LogScope};
+use gitcomet_core::platform::dirs;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -536,7 +537,7 @@ fn default_session_file_path() -> Option<PathBuf> {
         return None;
     }
 
-    Some(app_state_dir()?.join("session.json"))
+    Some(dirs::state_dir()?.join("session.json"))
 }
 
 /// Per-user rendezvous file used by the browser-process broker. Test binaries
@@ -546,7 +547,7 @@ pub fn browser_instance_file_path() -> Option<PathBuf> {
     if cfg!(test) || running_under_test_harness() {
         return None;
     }
-    Some(app_state_dir()?.join("browser-instance.json"))
+    Some(dirs::state_dir()?.join("browser-instance.json"))
 }
 
 pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
@@ -588,81 +589,7 @@ pub fn user_themes_dir() -> Option<PathBuf> {
         return None;
     }
 
-    Some(app_data_dir()?.join("themes"))
-}
-
-fn non_empty_path(value: Option<&OsStr>) -> Option<PathBuf> {
-    let value = value?;
-    if value.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(value))
-}
-
-fn app_data_dir() -> Option<PathBuf> {
-    // Follow XDG on linux; otherwise fall back to platform conventions.
-    #[cfg(target_os = "linux")]
-    {
-        app_data_dir_linux(
-            env::var_os("XDG_DATA_HOME").as_deref(),
-            env::var_os("HOME").as_deref(),
-        )
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let home = non_empty_path(env::var_os("HOME").as_deref())?;
-        Some(home.join("Library/Application Support/gitcomet"))
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"));
-        Some(non_empty_path(appdata.as_deref())?.join("gitcomet"))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        non_empty_path(env::var_os("HOME").as_deref()).map(|home| home.join(".gitcomet"))
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn app_data_dir_linux(xdg_data_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
-    if let Some(data_home) = non_empty_path(xdg_data_home) {
-        return Some(data_home.join("gitcomet"));
-    }
-    let home = non_empty_path(home)?;
-    Some(home.join(".local/share/gitcomet"))
-}
-
-fn app_state_dir() -> Option<PathBuf> {
-    // Follow XDG on linux; otherwise fall back to platform conventions.
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(state_home) = non_empty_path(env::var_os("XDG_STATE_HOME").as_deref()) {
-            return Some(state_home.join("gitcomet"));
-        }
-        let home = non_empty_path(env::var_os("HOME").as_deref())?;
-        Some(home.join(".local/state/gitcomet"))
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let home = non_empty_path(env::var_os("HOME").as_deref())?;
-        Some(home.join("Library/Application Support/gitcomet"))
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"));
-        Some(non_empty_path(appdata.as_deref())?.join("gitcomet"))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        non_empty_path(env::var_os("HOME").as_deref()).map(|home| home.join(".gitcomet"))
-    }
+    Some(dirs::data_dir()?.join("themes"))
 }
 
 use history_mode::{HistoryModeSetting, HistoryScopeSetting};

@@ -244,10 +244,15 @@ pub(super) fn spawn_alacritty_terminal(
     let env: Vec<(String, String)> = vec![
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
-        ("TERM_PROGRAM".to_string(), "GitComet".to_string()),
+        (
+            "TERM_PROGRAM".to_string(),
+            gitcomet_core::identity::current()
+                .display_name()
+                .to_string(),
+        ),
         (
             "TERM_PROGRAM_VERSION".to_string(),
-            env!("CARGO_PKG_VERSION").to_string(),
+            gitcomet_core::identity::current().version().to_string(),
         ),
     ];
 

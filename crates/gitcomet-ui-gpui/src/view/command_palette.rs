@@ -17,6 +17,7 @@ use gitcomet_core::tag_push::TagPushMode;
 
 pub(crate) struct CommandEntry {
     pub(crate) id: &'static str,
+    /// Read through [`CommandEntry::label`], which names the product for `{app}`.
     pub(crate) label: &'static str,
     pub(crate) shortcut: Shortcut,
     pub(crate) category: &'static str,
@@ -27,6 +28,17 @@ pub(crate) struct CommandEntry {
     /// What the command needs beyond a repository. Unlike `requires_repo`,
     /// which hides the command, an unmet need leaves it listed but disabled.
     pub(crate) needs: Needs,
+}
+
+impl CommandEntry {
+    /// The label as shown and matched, naming the product for `{app}`.
+    pub(crate) fn label(&self) -> std::borrow::Cow<'static, str> {
+        if self.label.contains("{app}") {
+            std::borrow::Cow::Owned(self.label.replace("{app}", crate::view::product_name()))
+        } else {
+            std::borrow::Cow::Borrowed(self.label)
+        }
+    }
 }
 
 /// A precondition a command can be listed without. The palette shows such a
@@ -568,7 +580,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "quit",
-        label: "Quit GitComet",
+        label: "Quit {app}",
         shortcut: Shortcut::Secondary("Q"),
         category: "Window",
         keywords: "",
@@ -586,7 +598,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "hide",
-        label: "Hide GitComet",
+        label: "Hide {app}",
         shortcut: Shortcut::MacOs("Cmd+H"),
         category: "Window",
         keywords: "hide application",
@@ -794,7 +806,7 @@ pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<Comma
     let mut out: Vec<(i32, usize, CommandMatch)> = available
         .enumerate()
         .filter_map(|(order, entry)| {
-            fuzzy_subsequence_match(entry.label, query)
+            fuzzy_subsequence_match(&entry.label(), query)
                 .map(|(score, positions)| (score, order, CommandMatch { entry, positions }))
                 .or_else(|| {
                     // Keyword hits carry no highlight positions and sort behind
@@ -815,7 +827,7 @@ pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<Comma
 
     out.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| a.2.label.len().cmp(&b.2.label.len()))
+            .then_with(|| a.2.label().len().cmp(&b.2.label().len()))
             .then_with(|| a.1.cmp(&b.1))
     });
     out.into_iter().map(|(_, _, m)| m).collect()
@@ -1257,7 +1269,7 @@ impl CommandPaletteView {
                             .flex_1()
                             .min_w(px(0.0))
                             .child(self.render_label(
-                                command.label,
+                                &command.label(),
                                 &command.positions,
                                 label_color,
                                 cx,

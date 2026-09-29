@@ -319,76 +319,84 @@ impl Render for BottomStatusBarView {
 
         // Branding strip: the edition badge moved down here from the title bar,
         // where it crowded the repository tabs.
-        let discord_badge = status_bar_chip(
-            "bottom_status_bar_discord",
-            theme.colors.accent.foreground,
-            ui_scale_percent,
-            theme,
-        )
-        .child(
-            gpui::svg()
-                .path("icons/discord.svg")
-                .w(scaled_px(12.0))
-                .h(scaled_px(12.0))
-                .flex_shrink_0()
-                .text_color(theme.colors.foreground.secondary)
-                .group_hover("bottom_status_bar_discord", move |s| {
-                    s.text_color(theme.colors.accent.foreground)
+        let name = crate::view::product_name();
+        let discord_badge = crate::view::community_url().map(|url| {
+            status_bar_chip(
+                "bottom_status_bar_discord",
+                theme.colors.accent.foreground,
+                ui_scale_percent,
+                theme,
+            )
+            .child(
+                gpui::svg()
+                    .path("icons/discord.svg")
+                    .w(scaled_px(12.0))
+                    .h(scaled_px(12.0))
+                    .flex_shrink_0()
+                    .text_color(theme.colors.foreground.secondary)
+                    .group_hover("bottom_status_bar_discord", move |s| {
+                        s.text_color(theme.colors.accent.foreground)
+                    }),
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(url);
                 }),
-        )
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(DISCORD_URL);
-            }),
-        )
-        .gitcomet_tooltip(theme, "Join the GitComet Discord".into());
+            )
+            .gitcomet_tooltip(theme, format!("Join the {name} Discord").into())
+        });
 
-        let free_badge = status_bar_chip(
-            "bottom_status_bar_free_badge",
-            theme.colors.accent.foreground,
-            ui_scale_percent,
-            theme,
-        )
-        .text_size(theme.ui_text(11.0))
-        .line_height(scaled_px(theme.metrics.ui_text(12.0)))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(with_alpha(
-            theme.colors.foreground.primary,
-            if theme.is_dark { 0.72 } else { 0.62 },
-        ))
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(EDITIONS_URL);
-            }),
-        )
-        .gitcomet_tooltip(theme, "See GitComet editions".into())
-        .child("FREE");
+        let editions = crate::view::editions_url();
+        let free_badge = editions.map(|url| {
+            status_bar_chip(
+                "bottom_status_bar_free_badge",
+                theme.colors.accent.foreground,
+                ui_scale_percent,
+                theme,
+            )
+            .text_size(theme.ui_text(11.0))
+            .line_height(scaled_px(theme.metrics.ui_text(12.0)))
+            .font_weight(FontWeight::NORMAL)
+            .text_color(with_alpha(
+                theme.colors.foreground.primary,
+                if theme.is_dark { 0.72 } else { 0.62 },
+            ))
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(url);
+                }),
+            )
+            .gitcomet_tooltip(theme, format!("See {name} editions").into())
+            .child("FREE")
+        });
 
-        let pro_link = status_bar_chip(
-            "bottom_status_bar_pro_link",
-            theme.colors.accent.foreground,
-            ui_scale_percent,
-            theme,
-        )
-        .text_size(theme.ui_text(11.0))
-        .line_height(scaled_px(theme.metrics.ui_text(12.0)))
-        .text_color(theme.colors.foreground.secondary)
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(EDITIONS_URL);
-            }),
-        )
-        .gitcomet_tooltip(theme, "See GitComet Pro".into())
-        .child(self.pro_launch_label.clone());
+        let pro_link = editions.map(|url| {
+            status_bar_chip(
+                "bottom_status_bar_pro_link",
+                theme.colors.accent.foreground,
+                ui_scale_percent,
+                theme,
+            )
+            .text_size(theme.ui_text(11.0))
+            .line_height(scaled_px(theme.metrics.ui_text(12.0)))
+            .text_color(theme.colors.foreground.secondary)
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(url);
+                }),
+            )
+            .gitcomet_tooltip(theme, format!("See {name} Pro").into())
+            .child(self.pro_launch_label.clone())
+        });
 
         // GPUI paints an SVG as a mask tinted by the text color, so the mark's
         // own brand blue never reaches the screen. Apply that blue explicitly
@@ -419,19 +427,26 @@ impl Render for BottomStatusBarView {
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
                     .text_size(theme.ui_text(11.0))
                     .line_height(scaled_px(theme.metrics.ui_text(12.0)))
-                    .child("GitComet"),
+                    .child(name),
             )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                    cx.stop_propagation();
-                    cx.open_url(WEBSITE_URL);
-                }),
-            )
-            .gitcomet_tooltip(theme, "Open gitcomet.dev".into());
+            .when_some(crate::view::website_url(), |brand, url| {
+                brand
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                            cx.open_url(url);
+                        }),
+                    )
+                    .gitcomet_tooltip(
+                        theme,
+                        format!("Open {}", url.trim_start_matches("https://")).into(),
+                    )
+            });
 
-        let version_label: SharedString = format!("v{}", env!("CARGO_PKG_VERSION")).into();
+        let version_label: SharedString =
+            format!("v{}", gitcomet_core::identity::current().version()).into();
         let version_link = div()
             .id("bottom_status_bar_version")
             .debug_selector(|| "bottom_status_bar_version".to_string())
@@ -443,15 +458,17 @@ impl Render for BottomStatusBarView {
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                    cx.stop_propagation();
-                    cx.open_url(RELEASES_URL);
-                }),
-            )
-            .gitcomet_tooltip(theme, "View GitComet releases".into())
+            .when_some(crate::view::releases_url(), |link, url| {
+                link.on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        cx.open_url(url);
+                    }),
+                )
+                .gitcomet_tooltip(theme, format!("View {name} releases").into())
+            })
             .child(version_label);
 
         div()
@@ -496,9 +513,9 @@ impl Render for BottomStatusBarView {
                             .items_center()
                             .gap(scaled_px(6.0))
                             .pl(scaled_px(6.0))
-                            .child(discord_badge)
-                            .child(free_badge)
-                            .child(pro_link)
+                            .children(discord_badge)
+                            .children(free_badge)
+                            .children(pro_link)
                             .child(brand)
                             .child(version_link),
                     ),

@@ -263,12 +263,14 @@ impl Render for GitCometView {
         {
             let summary = report.summary.clone();
 
-            let report_button =
+            // A product without an issue tracker offers only Ignore.
+            let report_button = (!report.issue_url.is_empty()).then(|| {
                 components::Button::new("startup_crash_report_open", "Report Issue")
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.report_startup_crash_report(cx);
-                    });
+                    })
+            });
 
             let ignore_button =
                 components::Button::new("startup_crash_report_ignore", "Ignore Crash")
@@ -316,15 +318,19 @@ impl Render for GitCometView {
                                 div()
                                     .text_size(theme.ui_text(14.0))
                                     .font_weight(FontWeight::BOLD)
-                                    .child("GitComet recovered from program crash"),
+                                    .child(format!(
+                                        "{} recovered from program crash",
+                                        crate::view::product_name()
+                                    )),
                             )
                             .child(
                                 div()
                                     .text_size(theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.secondary)
-                                    .child(
-                                        "Would you like to contribute by reporting issue to GitComet GitHub repository?",
-                                    ),
+                                    .child(format!(
+                                        "Would you like to contribute by reporting the issue to the {} developers?",
+                                        crate::view::product_name()
+                                    )),
                             )
                             .child(
                                 div()
@@ -338,7 +344,7 @@ impl Render for GitCometView {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .child(report_button)
+                                    .children(report_button)
                                     .child(ignore_button),
                             ),
                     ),

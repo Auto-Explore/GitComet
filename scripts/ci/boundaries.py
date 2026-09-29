@@ -21,6 +21,8 @@ RULES = (
     ("gitcomet-state", (), (*GPUI, "gitcomet-ui-kit", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-ui-kit", (), ("gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-extension-api", (), (*UI_HOST, *APPLICATION)),
+    # A downstream product library reaches the host only through the API.
+    ("gitcomet-extension-example", (), (*UI_HOST, *APPLICATION)),
     # The headless application: no windowing stack at all.
     ("gitcomet", ("--no-default-features", "--features", "gix"), (*GPUI, "gitcomet-ui-kit", *UI_HOST)),
     ("gitcomet-app", ("--no-default-features",), (*GPUI, "gitcomet-ui-kit", *UI_HOST)),

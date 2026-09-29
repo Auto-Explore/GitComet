@@ -803,7 +803,7 @@ impl GitCometView {
                                             .text_size(theme.ui_text(22.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(colors.text)
-                                            .child("GitComet"),
+                                            .child(crate::view::product_name()),
                                     ),
                             )
                             .child(

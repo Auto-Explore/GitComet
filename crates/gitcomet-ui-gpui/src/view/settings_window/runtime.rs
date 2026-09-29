@@ -171,7 +171,12 @@ impl SettingsRuntimeInfo {
         Self {
             git: git_runtime_info_from_state(runtime),
             signing_tools: Some(SigningToolsState::default()),
-            app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
+            app_version_display: format!(
+                "{} v{}",
+                crate::view::product_name(),
+                gitcomet_core::identity::current().version()
+            )
+            .into(),
             operating_system: format!(
                 "{} ({})",
                 os_display_name(std::env::consts::OS),
@@ -195,8 +200,10 @@ pub(super) fn os_display_name(os: &str) -> &str {
 }
 
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
-    let compatibility_message =
-        format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
+    let compatibility_message = format!(
+        "{} has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.",
+        crate::view::product_name()
+    );
     let compatibility = if matches!(
         runtime.availability,
         gitcomet_core::process::GitExecutableAvailability::Checking

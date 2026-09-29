@@ -33,13 +33,20 @@ NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first")
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
 PURE_BATCHES = {"gitcomet-core": ("conflict_session::",)}
+# The example product builds alone, so it never relies on (or leaks) the
+# workspace's feature unification: it enables the application's GUI, which the
+# headless workspace context must not inherit.
+EXAMPLE_PACKAGES = ("gitcomet-extension-example", "gitcomet-extension-example-app")
 CONTEXTS = {
-    "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
+    "workspace": ["--workspace", *(arg for package in EXAMPLE_PACKAGES for arg in ("--exclude", package)),
+                  "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
     "state": ["-p", "gitcomet-state"],
     "backend": ["-p", "gitcomet-git-gix"],
-    "app": ["-p", "gitcomet", "--no-default-features", "--features", "gix"],
+    # The executable's integration tests and the launch library's unit tests.
+    "app": ["-p", "gitcomet", "-p", "gitcomet-app", "--no-default-features", "--features", "gix"],
     "ui": ["-p", UI],
+    "example": [arg for package in EXAMPLE_PACKAGES for arg in ("-p", package)],
 }
 DISPLAY_PROFILES = {
     "x11-gnome": (":99", "", "x11", "GNOME"),
@@ -403,12 +410,25 @@ def prepare_runtime_binaries(context):
     }, indent=2) + "\n", encoding="utf-8")
 
 
+def feature_args(selection):
+    """The selection without its package choice (`--workspace`, `-p`, `--exclude`)."""
+    args, skip = [], False
+    for arg in selection:
+        if skip:
+            skip = False
+        elif arg in ("-p", "--exclude"):
+            skip = True
+        elif arg != "--workspace":
+            args.append(arg)
+    return args
+
+
 def compile_tests(context, profile, test_targets=()):
     directory = paths(context)
     selection = CONTEXTS[context]
     targets = [arg for target in test_targets for arg in ("--test", target)]
     # Metadata cannot select packages, but must use the same feature switches.
-    features = selection[1:] if selection[0] == "--workspace" else selection[2:]
+    features = feature_args(selection)
     run(f"{context}-metadata", ["cargo", "metadata", "--format-version", "1", "--locked", *features],
         output=directory / "cargo.json")
     run(f"{context}-features", ["cargo", "tree", "--locked", *selection,

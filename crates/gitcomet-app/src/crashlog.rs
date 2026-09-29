@@ -1,3 +1,4 @@
+use gitcomet_core::identity;
 use std::backtrace::Backtrace;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -18,7 +19,6 @@ static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
 static RUNTIME_ERRORS_SEEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 const MAX_RUNTIME_ERRORS_SEEN: usize = 1_024;
 static CRASH_LOGGER: CrashLogger = CrashLogger;
-const CRASH_ISSUE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new");
 const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
 const PENDING_REPORT_FILE: &str = "pending-report-path.txt";
 const STARTUP_REPORT_FILE: &str = "pending-startup-report.log";
@@ -45,18 +45,19 @@ struct AbnormalExitLog {
 }
 
 pub fn install() {
+    let product = identity::current().display_name();
     if log::set_logger(&CRASH_LOGGER).is_ok() {
         log::set_max_level(log::LevelFilter::Error);
     }
 
     #[cfg(unix)]
     if let Err(err) = install_terminal_interrupt_handler() {
-        eprintln!("Failed to install GitComet terminal interrupt handler: {err}");
+        eprintln!("Failed to install {product} terminal interrupt handler: {err}");
     }
 
     #[cfg(windows)]
     if !install_terminal_interrupt_handler() {
-        eprintln!("Failed to install GitComet terminal interrupt handler");
+        eprintln!("Failed to install {product} terminal interrupt handler");
     }
 
     let previous = std::panic::take_hook();
@@ -294,8 +295,8 @@ fn write_runtime_error_log_in_dir(
     writeln!(
         file,
         "crate={} version={}",
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION")
+        identity::current().executable_name(),
+        identity::current().version()
     )?;
     writeln!(
         file,
@@ -331,6 +332,7 @@ pub fn begin_session() -> std::io::Result<()> {
 }
 
 fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
+    let product = identity::current().display_name();
     remove_file_if_exists(&last_operation_path(dir))?;
     remove_file_if_exists(&runtime_error_path(dir))?;
 
@@ -343,15 +345,15 @@ fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
     writeln!(
         contents,
         "crate={} version={}",
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION")
+        identity::current().executable_name(),
+        identity::current().version()
     )?;
     writeln!(
         contents,
         "thread={}",
         std::thread::current().name().unwrap_or("<unnamed>")
     )?;
-    writeln!(contents, "message=GitComet did not exit cleanly")?;
+    writeln!(contents, "message={product} did not exit cleanly")?;
     writeln!(
         contents,
         "info=The previous UI process ended before it completed its shutdown sequence."
@@ -410,6 +412,7 @@ fn record_session_failure_in_dir_with_diagnostics(
     location: Option<&str>,
     backtrace: Option<&str>,
 ) -> std::io::Result<()> {
+    let product = identity::current().display_name();
     let mut file = open_private_append(&session_marker_path(dir))?;
     writeln!(file, "failure_kind=returned-error")?;
     writeln!(file, "failure_context={}", single_line_text(context))?;
@@ -420,7 +423,7 @@ fn record_session_failure_in_dir_with_diagnostics(
     writeln!(file, "message={}", single_line_text(message))?;
     writeln!(
         file,
-        "info=GitComet could not complete its GPUI launch or event loop."
+        "info={product} could not complete its GPUI launch or event loop."
     )?;
     if let Some(backtrace) = backtrace {
         writeln!(file, "backtrace:")?;
@@ -444,13 +447,14 @@ fn take_startup_report_from_crash_dir_with_process_check(
     dir: &Path,
     process_is_running: impl FnMut(u32) -> bool,
 ) -> Option<StartupCrashReport> {
+    let product = identity::current().display_name();
     let report_path = startup_report_path(dir);
     let mut report_log = match std::fs::read_to_string(&report_path) {
         Ok(report_log) => report_log,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(err) => {
             eprintln!(
-                "Failed to read pending GitComet crash report {}: {err}",
+                "Failed to read pending {product} crash report {}: {err}",
                 report_path.display()
             );
             return None;
@@ -462,7 +466,7 @@ fn take_startup_report_from_crash_dir_with_process_check(
         Ok(panic_log) => (panic_log, false),
         Err(err) => {
             eprintln!(
-                "Failed to read GitComet pending panic report {}: {err}",
+                "Failed to read {product} pending panic report {}: {err}",
                 pending_path.display()
             );
             (None, true)
@@ -489,26 +493,26 @@ fn take_startup_report_from_crash_dir_with_process_check(
     let report_path = match write_startup_report_snapshot(dir, &report_log) {
         Ok(report_path) => report_path,
         Err(err) => {
-            eprintln!("Failed to persist GitComet startup crash report: {err}");
+            eprintln!("Failed to persist {product} startup crash report: {err}");
             return None;
         }
     };
     for session_log in &session_logs {
         if let Err(err) = remove_file_if_exists(&session_log.marker_path) {
             eprintln!(
-                "Failed to clear recovered GitComet session marker {}: {err}",
+                "Failed to clear recovered {product} session marker {}: {err}",
                 session_log.marker_path.display()
             );
         } else {
             if let Err(err) = remove_file_if_exists(&session_log.last_operation_path) {
                 eprintln!(
-                    "Failed to clear recovered GitComet last-operation diagnostics {}: {err}",
+                    "Failed to clear recovered {product} last-operation diagnostics {}: {err}",
                     session_log.last_operation_path.display()
                 );
             }
             if let Err(err) = remove_file_if_exists(&session_log.runtime_error_path) {
                 eprintln!(
-                    "Failed to clear recovered GitComet runtime-error diagnostics {}: {err}",
+                    "Failed to clear recovered {product} runtime-error diagnostics {}: {err}",
                     session_log.runtime_error_path.display()
                 );
             }
@@ -518,7 +522,7 @@ fn take_startup_report_from_crash_dir_with_process_check(
         let _ = std::fs::remove_file(&pending_path);
         if let Err(err) = remove_file_if_exists(&panic_log.path) {
             eprintln!(
-                "Failed to clear snapshotted GitComet panic log {}: {err}",
+                "Failed to clear snapshotted {product} panic log {}: {err}",
                 panic_log.path.display()
             );
         }
@@ -530,12 +534,13 @@ fn stale_abnormal_exit_logs(
     dir: &Path,
     mut process_is_running: impl FnMut(u32) -> bool,
 ) -> Vec<AbnormalExitLog> {
+    let product = identity::current().display_name();
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(err) => {
             eprintln!(
-                "Failed to enumerate GitComet session markers in {}: {err}",
+                "Failed to enumerate {product} session markers in {}: {err}",
                 dir.display()
             );
             return Vec::new();
@@ -584,12 +589,13 @@ fn read_abnormal_exit_log(
     last_operation_path: &Path,
     runtime_error_path: &Path,
 ) -> Option<String> {
+    let product = identity::current().display_name();
     let mut session_log = match std::fs::read_to_string(marker) {
         Ok(session_log) => session_log,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
         Err(err) => {
             eprintln!(
-                "Failed to read GitComet session marker {}: {err}",
+                "Failed to read {product} session marker {}: {err}",
                 marker.display()
             );
             return None;
@@ -606,7 +612,7 @@ fn read_abnormal_exit_log(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
             eprintln!(
-                "Failed to read GitComet last-operation diagnostics {}: {err}",
+                "Failed to read {product} last-operation diagnostics {}: {err}",
                 last_operation_path.display()
             );
         }
@@ -616,7 +622,7 @@ fn read_abnormal_exit_log(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
             eprintln!(
-                "Failed to read GitComet runtime-error diagnostics {}: {err}",
+                "Failed to read {product} runtime-error diagnostics {}: {err}",
                 runtime_error_path.display()
             );
         }
@@ -690,8 +696,8 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
     let _ = writeln!(
         file,
         "crate={} version={}",
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION")
+        identity::current().executable_name(),
+        identity::current().version()
     );
     let _ = writeln!(
         file,
@@ -722,13 +728,16 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
 }
 
 fn crash_dir() -> Option<PathBuf> {
-    crash_dir_base().map(|base| base.join("gitcomet").join("crashes"))
+    gitcomet_core::platform::dirs::crash_dir()
 }
 
 fn crash_directory_unavailable_error() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        "GitComet crash state directory is unavailable because XDG_STATE_HOME and HOME are unset",
+        format!(
+            "{} crash state directory is unavailable: no per-user state directory is configured",
+            identity::current().display_name()
+        ),
     )
 }
 
@@ -738,61 +747,6 @@ fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
-}
-
-fn non_empty_path(value: Option<&str>) -> Option<PathBuf> {
-    let value = value?.trim();
-    if value.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(value))
-}
-
-#[cfg(target_os = "linux")]
-fn crash_dir_base() -> Option<PathBuf> {
-    crash_dir_base_linux(
-        std::env::var("XDG_STATE_HOME").ok().as_deref(),
-        std::env::var("HOME").ok().as_deref(),
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn crash_dir_base_linux(xdg_state_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
-    non_empty_path(xdg_state_home)
-        .or_else(|| non_empty_path(home).map(|home| home.join(".local").join("state")))
-}
-
-#[cfg(target_os = "macos")]
-fn crash_dir_base() -> Option<PathBuf> {
-    crash_dir_base_macos(std::env::var("HOME").ok().as_deref())
-}
-
-#[cfg(target_os = "macos")]
-fn crash_dir_base_macos(home: Option<&str>) -> Option<PathBuf> {
-    non_empty_path(home).map(|home| home.join("Library").join("Logs"))
-}
-
-#[cfg(target_os = "windows")]
-fn crash_dir_base() -> Option<PathBuf> {
-    crash_dir_base_windows(
-        std::env::var("LOCALAPPDATA").ok().as_deref(),
-        std::env::var("APPDATA").ok().as_deref(),
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn crash_dir_base_windows(local_app_data: Option<&str>, app_data: Option<&str>) -> Option<PathBuf> {
-    non_empty_path(local_app_data).or_else(|| non_empty_path(app_data))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn crash_dir_base() -> Option<PathBuf> {
-    crash_dir_base_other(std::env::var("HOME").ok().as_deref())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn crash_dir_base_other(home: Option<&str>) -> Option<PathBuf> {
-    non_empty_path(home)
 }
 
 fn crash_log_path(dir: &Path) -> Option<PathBuf> {
@@ -1122,9 +1076,13 @@ fn reset_parsed_failure(parsed: &mut ParsedCrashLog) {
     parsed.backtrace.clear();
 }
 
+/// The prefilled new-issue page, or empty when the product has no tracker.
 fn build_issue_url(title: &str, body: &str) -> String {
+    let Some(new_issue) = identity::current().links().new_issue.as_deref() else {
+        return String::new();
+    };
     format!(
-        "{CRASH_ISSUE_URL}?template={}&title={}&body={}",
+        "{new_issue}?template={}&title={}&body={}",
         percent_encode(CRASH_ISSUE_TEMPLATE),
         percent_encode(title),
         percent_encode(body)
@@ -1145,16 +1103,17 @@ fn build_issue_title(parsed: &ParsedCrashLog) -> String {
 }
 
 fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
+    let product = identity::current().display_name();
     let crate_name = parsed
         .crate_name
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or(env!("CARGO_PKG_NAME"));
+        .unwrap_or(identity::current().executable_name());
     let crate_version = parsed
         .crate_version
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or(env!("CARGO_PKG_VERSION"));
+        .unwrap_or(identity::current().version());
     let timestamp = parsed
         .timestamp_unix_ms
         .as_deref()
@@ -1212,13 +1171,13 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
         body,
         "<!-- Please describe what you were doing right before the crash. -->"
     );
-    let _ = writeln!(body, "GitComet ended unexpectedly.");
+    let _ = writeln!(body, "{product} ended unexpectedly.");
     let _ = writeln!(body);
 
     let _ = writeln!(body, "## Environment");
     let _ = writeln!(body);
-    let _ = writeln!(body, "- GitComet crate: `{crate_name}`");
-    let _ = writeln!(body, "- GitComet version: `{crate_version}`");
+    let _ = writeln!(body, "- {product} crate: `{crate_name}`");
+    let _ = writeln!(body, "- {product} version: `{crate_version}`");
     let _ = writeln!(body, "- OS: `{}`", std::env::consts::OS);
     let _ = writeln!(body, "- Arch: `{}`", std::env::consts::ARCH);
     let _ = writeln!(body, "- Crash timestamp (unix ms): `{timestamp}`");
@@ -2136,84 +2095,5 @@ new frame
 
         assert_eq!(backtrace_text.chars().count(), MAX_BACKTRACE_CHARS);
         assert!(backtrace_text.ends_with("..."));
-    }
-
-    #[test]
-    fn non_empty_path_trims_and_rejects_empty_values() {
-        assert_eq!(non_empty_path(None), None);
-        assert_eq!(non_empty_path(Some("   ")), None);
-        assert_eq!(non_empty_path(Some(" /tmp ")), Some(PathBuf::from("/tmp")));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn crash_dir_base_linux_prefers_xdg_state_home() {
-        let base = crash_dir_base_linux(Some("/state"), Some("/home/alice"));
-        assert_eq!(base, Some(PathBuf::from("/state")));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn crash_dir_base_linux_falls_back_to_home_state_dir() {
-        let base = crash_dir_base_linux(Some("   "), Some("/home/alice"));
-        assert_eq!(
-            base,
-            Some(PathBuf::from("/home/alice").join(".local").join("state"))
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn crash_dir_base_linux_returns_none_when_no_usable_env() {
-        assert_eq!(crash_dir_base_linux(None, Some("  ")), None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn crash_dir_base_macos_uses_home_logs_dir() {
-        let base = crash_dir_base_macos(Some("/Users/alice"));
-        assert_eq!(
-            base,
-            Some(PathBuf::from("/Users/alice").join("Library").join("Logs"))
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn crash_dir_base_macos_returns_none_without_home() {
-        assert_eq!(crash_dir_base_macos(Some("   ")), None);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn crash_dir_base_windows_prefers_local_app_data() {
-        let base = crash_dir_base_windows(Some(r"C:\Users\alice\AppData\Local"), Some("unused"));
-        assert_eq!(base, Some(PathBuf::from(r"C:\Users\alice\AppData\Local")));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn crash_dir_base_windows_falls_back_to_app_data() {
-        let base = crash_dir_base_windows(Some("   "), Some(r"C:\Users\alice\AppData\Roaming"));
-        assert_eq!(base, Some(PathBuf::from(r"C:\Users\alice\AppData\Roaming")));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn crash_dir_base_windows_returns_none_when_no_usable_env() {
-        assert_eq!(crash_dir_base_windows(None, Some("   ")), None);
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    #[test]
-    fn crash_dir_base_other_uses_home() {
-        let base = crash_dir_base_other(Some("/home/alice"));
-        assert_eq!(base, Some(PathBuf::from("/home/alice")));
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    #[test]
-    fn crash_dir_base_other_returns_none_without_home() {
-        assert_eq!(crash_dir_base_other(Some("   ")), None);
     }
 }

@@ -32,7 +32,13 @@ KINDS = {
 }
 PACKAGE_METADATA = re.compile(r'env!\(\s*"CARGO_PKG_(?:NAME|VERSION|REPOSITORY|HOMEPAGE|DESCRIPTION)"\s*\)')
 STRING = re.compile(r'(?:b|c)?r(#*)"(.*?)"\1|(?:b|c)?"((?:\\.|[^"\\])*)"', re.S)
-TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# Code that never ships: `#[cfg(test)]`, `#[cfg(all(test, ...))]`, or the
+# benchmark feature; never `#[cfg(not(test))]`.
+TEST_CFG = (r"#\[cfg\((?![^\]]*not\(\s*(?:test\b|feature))"
+            r"[^\]]*(?:\btest\b|feature\s*=\s*\"benchmarks\")[^\]]*\)\]\s*")
+TEST_MODULE = re.compile(TEST_CFG + r"(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+TEST_MODULE_FILE = re.compile(
+    TEST_CFG + r"(?:#\[path\s*=\s*\"([^\"]+)\"\]\s*)?(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;")
 
 
 def is_test_path(path):
@@ -100,25 +106,65 @@ def strip_comments_and_test_modules(text):
     return "".join(result)
 
 
-def scan_text(text):
+def occurrences(text):
+    """(line, kind, excerpt) for every product literal in production code."""
     code = strip_comments_and_test_modules(text)
-    counts = Counter()
+    found = []
     for match in STRING.finditer(code):
         literal = match.group(2) if match.group(2) is not None else match.group(3)
+        line = code.count("\n", 0, match.start()) + 1
         for kind, pattern in KINDS.items():
-            counts[kind] += len(pattern.findall(literal))
-    counts["package-metadata"] += len(PACKAGE_METADATA.findall(code))
-    return +counts
+            found.extend((line, kind, literal[:80]) for _ in pattern.findall(literal))
+    for match in PACKAGE_METADATA.finditer(code):
+        found.append((code.count("\n", 0, match.start()) + 1, "package-metadata", match.group(0)))
+    return found
+
+
+def scan_text(text):
+    return +Counter(kind for _, kind, _ in occurrences(text))
+
+
+def test_module_files(path, text):
+    """Files that `path` declares as `#[cfg(test)] mod name;`."""
+    source = Path(path)
+    own_dir = source.parent
+    child_dir = own_dir if source.name in ("mod.rs", "lib.rs", "main.rs") else own_dir / source.stem
+    found = set()
+    for match in TEST_MODULE_FILE.finditer(strip_comments_and_test_modules(text)):
+        explicit, name = match.groups()
+        if explicit:
+            found.add((own_dir / explicit).as_posix())
+        else:
+            found.update({(child_dir / f"{name}.rs").as_posix(), (child_dir / name / "mod.rs").as_posix()})
+    return found
 
 
 def scan():
     files = subprocess.run(["git", "ls-files", "-z", "--", "crates/**/*.rs"], cwd=ROOT,
                            stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
+    files = [path for path in files if path]
+    texts = {path: (ROOT / path).read_text(encoding="utf-8") for path in files}
+    test_files = set()
+    for path, text in texts.items():
+        test_files |= test_module_files(path, text)
+    # A test module's descendants are test code too.
+    def parent_module(path):
+        # `a/b/c.rs` and `a/b/c/mod.rs` are children of `a/b.rs` or `a/b/mod.rs`.
+        own = Path(path)
+        container = own.parent.parent if own.name == "mod.rs" else own.parent
+        candidates = (container.with_suffix(".rs"), container / "mod.rs", container / "lib.rs")
+        return next((c.as_posix() for c in candidates if c.as_posix() in texts and c != own), None)
+
+    def in_test_module(path, seen=()):
+        if path in test_files:
+            return True
+        parent = parent_module(path)
+        return parent is not None and parent not in seen and in_test_module(parent, (*seen, path))
     found = {}
-    for path in filter(None, files):
-        if is_test_path(path):
+    for path in files:
+        if is_test_path(path) or in_test_module(path):
             continue
-        counts = scan_text((ROOT / path).read_text(encoding="utf-8"))
+        counts = scan_text(texts[path])
         for kind, count in counts.items():
             found[(path, kind)] = count
     return found
@@ -161,7 +207,13 @@ def write(found, allowed, path=ALLOWLIST):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--write", action="store_true", help="rewrite the allowlist counts")
+    parser.add_argument("--list", nargs="*", metavar="PATH", help="print each literal in PATHs")
     args = parser.parse_args()
+    if args.list is not None:
+        for path in args.list:
+            for line, kind, excerpt in occurrences((ROOT / path).read_text(encoding="utf-8")):
+                print(f"{path}:{line}: {kind}: {excerpt}")
+        return 0
     found = scan()
     allowed = read_allowlist() if ALLOWLIST.exists() else {}
     if args.write:

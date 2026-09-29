@@ -130,7 +130,8 @@ impl std::fmt::Display for WaylandPreflightError {
                 advertised_version,
             } => write!(
                 f,
-                "Wayland global `{interface}` was advertised at version {advertised_version}, but GitComet requires version {required_version}+"
+                "Wayland global `{interface}` was advertised at version {advertised_version}, but {} requires version {required_version}+",
+                gitcomet_core::identity::current().display_name()
             ),
         }
     }
@@ -152,7 +153,10 @@ pub(crate) fn maybe_relaunch_with_linux_x11_fallback(mode: &AppMode) -> Option<i
         Err(err) => err,
     };
 
-    eprintln!("Wayland session detected, but it is not usable for GitComet: {err}");
+    eprintln!(
+        "Wayland session detected, but it is not usable for {}: {err}",
+        gitcomet_core::identity::current().display_name()
+    );
 
     match env.fallback_action_after_failed_wayland_preflight() {
         LinuxWaylandFallbackAction::ExitWithError => Some(exit_code::ERROR),
@@ -179,7 +183,10 @@ fn relaunch_under_x11_fallback() -> Option<i32> {
         return Some(exit_code::ERROR);
     };
 
-    eprintln!("Relaunching GitComet under X11 fallback.");
+    eprintln!(
+        "Relaunching {} under X11 fallback.",
+        gitcomet_core::identity::current().display_name()
+    );
 
     let mut relaunch = std::process::Command::new(current_exe);
     relaunch.args(std::env::args_os().skip(1));

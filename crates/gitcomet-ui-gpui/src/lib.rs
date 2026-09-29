@@ -33,9 +33,12 @@ mod window_root_hook;
 mod workspaces;
 
 pub use app::{
-    BrowserOpenRequest, BrowserOpenTarget, FocusedMergetoolConfig, UiRunOutcome, run,
-    run_focused_mergetool, run_with_startup_crash_report,
-    run_with_startup_crash_report_and_shutdown_callback,
+    BrowserOpenRequest, BrowserOpenTarget, FocusedMergetoolConfig, UiLaunch, UiRunOutcome,
+    run_focused_mergetool,
+};
+#[allow(deprecated)]
+pub use app::{
+    run, run_with_startup_crash_report, run_with_startup_crash_report_and_shutdown_callback,
     run_with_startup_crash_report_shutdown_callback_and_browser_requests,
     run_with_startup_crash_report_shutdown_callback_and_initial_browser_request,
 };

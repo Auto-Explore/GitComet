@@ -190,9 +190,15 @@ impl GitCometView {
         let title = crate::workspaces::with_workspace_for_window(
             cx,
             self.window_handle.window_id(),
-            |workspace| format!("{} — GitComet", workspace.display_name()),
+            |workspace| {
+                format!(
+                    "{} — {}",
+                    workspace.display_name(),
+                    crate::view::product_name()
+                )
+            },
         )
-        .unwrap_or_else(|| "GitComet".to_string());
+        .unwrap_or_else(|| crate::view::product_name().to_string());
         if self.native_window_title != title {
             self.native_window_title.clone_from(&title);
             let window_handle = self.window_handle;

@@ -669,13 +669,22 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         window_min_size: Some(focused_diff_min_size_for_percent(ui_scale_percent)),
                         titlebar: Some(TitlebarOptions {
-                            title: Some("GitComet — Diff".into()),
+                            title: Some(
+                                format!(
+                                    "{} — Diff",
+                                    gitcomet_core::identity::current().display_name()
+                                )
+                                .into(),
+                            ),
                             appears_transparent: false,
                             traffic_light_position: Some(
                                 crate::view::chrome::macos_traffic_light_position(),
                             ),
                         }),
-                        app_id: Some("gitcomet-diff".to_string()),
+                        app_id: Some(
+                            gitcomet_core::identity::current()
+                                .window_app_id(gitcomet_core::identity::WindowKind::FocusedDiff),
+                        ),
                         window_decorations: Some(WindowDecorations::Server),
                         is_movable: true,
                         is_resizable: true,

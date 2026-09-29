@@ -13,6 +13,7 @@ pub mod gitattributes;
 pub mod gitignore;
 pub mod hex;
 pub mod history_index;
+pub mod identity;
 pub mod merge;
 pub mod merge_extraction;
 pub mod mergetool_trace;

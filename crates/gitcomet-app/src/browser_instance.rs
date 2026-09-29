@@ -27,6 +27,20 @@ struct InstanceDescriptor {
     port: u16,
     token: String,
     pid: u32,
+    /// App id of the product that owns the broker. Descriptors written before
+    /// the field existed belong to GitComet.
+    #[serde(default = "gitcomet_product")]
+    product: String,
+}
+
+fn gitcomet_product() -> String {
+    gitcomet_core::identity::ProductIdentity::gitcomet()
+        .app_id()
+        .to_string()
+}
+
+fn this_product() -> String {
+    gitcomet_core::identity::current().app_id().to_string()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -115,6 +129,8 @@ impl WirePath {
 struct WireRequest {
     version: u32,
     token: String,
+    #[serde(default = "gitcomet_product")]
+    product: String,
     path: Option<WirePath>,
     target: WireTarget,
 }
@@ -271,7 +287,7 @@ fn acquire_browser_instance_claim(
                 if Instant::now() >= deadline {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "the running GitComet instance did not accept the request",
+                        "the running instance did not accept the request",
                     ));
                 }
                 thread::sleep(Duration::from_millis(10));
@@ -292,6 +308,7 @@ fn start_primary(
         port,
         token: Uuid::new_v4().simple().to_string(),
         pid: std::process::id(),
+        product: this_product(),
     };
     write_descriptor(descriptor_path, &descriptor)?;
 
@@ -300,7 +317,7 @@ fn start_primary(
     let server_stop = Arc::clone(&stop);
     let server_descriptor = descriptor.clone();
     let server_thread = thread::Builder::new()
-        .name("gitcomet-browser-instance".to_string())
+        .name("browser-instance-broker".to_string())
         .spawn(move || server_loop(listener, server_descriptor, requests_tx, server_stop))?;
 
     Ok(StartResult::Primary(PrimaryBrowserInstance {
@@ -370,6 +387,7 @@ fn handle_connection(
     if request.version != PROTOCOL_VERSION
         || descriptor.version != PROTOCOL_VERSION
         || request.token != descriptor.token
+        || request.product != descriptor.product
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -412,6 +430,13 @@ fn forward_request(
             "unsupported browser broker protocol",
         ));
     }
+    // Another product's broker at this path must never receive our requests.
+    if descriptor.product != this_product() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the browser broker belongs to another product",
+        ));
+    }
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, descriptor.port);
     let mut stream = TcpStream::connect_timeout(&address.into(), CONNECT_TIMEOUT)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -419,6 +444,7 @@ fn forward_request(
     let wire = WireRequest {
         version: PROTOCOL_VERSION,
         token: descriptor.token.clone(),
+        product: descriptor.product.clone(),
         path: request.path.as_deref().map(WirePath::from_path),
         target: request.target.into(),
     };
@@ -694,6 +720,52 @@ mod tests {
     }
 
     #[test]
+    fn a_descriptor_of_another_product_is_never_forwarded_to() {
+        let (requests, _receiver) = smol::channel::unbounded();
+        let listener =
+            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("bind listener");
+        let port = listener.local_addr().expect("address").port();
+        let foreign = InstanceDescriptor {
+            version: PROTOCOL_VERSION,
+            port,
+            token: "token".to_string(),
+            pid: std::process::id(),
+            product: "comet-pro".to_string(),
+        };
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            handle_connection(stream, &foreign, &requests)
+        });
+        let ours = InstanceDescriptor {
+            version: PROTOCOL_VERSION,
+            port,
+            token: "token".to_string(),
+            pid: std::process::id(),
+            product: this_product(),
+        };
+        // The client refuses a foreign descriptor before connecting...
+        let foreign_view = InstanceDescriptor {
+            product: "comet-pro".to_string(),
+            ..ours.clone()
+        };
+        let request = BrowserOpenRequest {
+            path: None,
+            target: BrowserOpenTarget::NewWindow,
+        };
+        assert!(forward_request(&foreign_view, &request).is_err());
+        // ...and the foreign server rejects a request that names our product.
+        assert!(forward_request(&ours, &request).is_err());
+        assert!(server.join().expect("server thread").is_err());
+    }
+
+    #[test]
+    fn descriptors_without_a_product_belong_to_gitcomet() {
+        let descriptor: InstanceDescriptor =
+            serde_json::from_str(r#"{"version":1,"port":1,"token":"t","pid":1}"#).unwrap();
+        assert_eq!(descriptor.product, gitcomet_product());
+    }
+
+    #[test]
     fn stale_descriptor_is_replaced_by_a_new_primary() {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor_path = dir.path().join("instance.json");
@@ -704,6 +776,7 @@ mod tests {
                 port: 1,
                 token: "stale".to_string(),
                 pid: u32::MAX,
+                product: this_product(),
             },
         )
         .expect("stale descriptor");
@@ -892,10 +965,12 @@ mod tests {
             port: address.port(),
             token: "token".to_string(),
             pid: std::process::id(),
+            product: this_product(),
         };
         let mut wire = serde_json::to_vec(&WireRequest {
             version: PROTOCOL_VERSION,
             token: descriptor.token.clone(),
+            product: descriptor.product.clone(),
             path: None,
             target: WireTarget::NewWindow,
         })

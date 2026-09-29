@@ -2,7 +2,10 @@
 resolver = "3"
 members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
   "crates/gitcomet-core",
+  "crates/gitcomet-extension-example",
+  "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
@@ -52,6 +55,7 @@ exclude = [
 
 default-members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
@@ -68,6 +72,7 @@ rust-version = "1.98.1"
 
 [workspace.dependencies]
 # Internal crates
+gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-core = { path = "crates/gitcomet-core" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
@@ -77,7 +82,8 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
-clap = { version = "4.6.7", features = ["derive"] }
+# `string`: the command's name and version come from the product identity.
+clap = { version = "4.6.7", features = ["derive", "string"] }
 criterion = "0.8.2"
 # Charset guess for files that are not UTF-8 (the detector Firefox uses).
 chardetng = { version = "1.0.0", default-features = false }

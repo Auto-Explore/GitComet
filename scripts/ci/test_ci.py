@@ -442,6 +442,19 @@ class RunnerTests(unittest.TestCase):
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_relative_to(directory))
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_dir())
 
+    def test_metadata_keeps_feature_switches_but_not_package_selection(self):
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["app"]), ["--no-default-features", "--features", "gix"])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["workspace"]),
+                         ["--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["core"]), [])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["example"]), [])
+
+    def test_the_example_product_builds_outside_the_workspace_context(self):
+        workspace = runner.CONTEXTS["workspace"]
+        for package in runner.EXAMPLE_PACKAGES:
+            self.assertIn(package, workspace[workspace.index("--exclude"):])
+            self.assertIn(package, runner.CONTEXTS["example"])
+
     def test_every_gpui_harness_runs_in_libtest_with_isolated_settings(self):
         packages = {"core": "gitcomet-core", "ui": runner.UI, "kit": "gitcomet-ui-kit",
                     "example": "gitcomet-extension-example"}
@@ -1161,6 +1174,8 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(mapping["ui:lib:ui"], {"view::tests::a": "view::tests::group::a",
                                                 "view::tests::b": "view::tests::other::b", "other::c": "other::c"})
+        code, mapping, _ = self.compare({"exe:bin:exe": {"tests::a": False}}, {"exe:bin:exe": {"launch::tests::a": False}})
+        self.assertEqual((code, mapping["exe:bin:exe"]), (0, {"tests::a": "launch::tests::a"}))
 
     def test_dropped_renamed_reignored_or_moved_up_tests_fail(self):
         cases = [
@@ -1168,12 +1183,27 @@ class InventoryTests(unittest.TestCase):
             ({"view::tests::a": False}, {"view::tests::renamed": False}),
             ({"view::tests::a": False}, {"view::tests::group::a": True}),
             ({"view::tests::group::a": False}, {"view::a": False}),
+            ({"view::tests::a": False}, {"tests::view::a": False}),
             ({"view::tests::a": False}, {"view::tests::x::a": False, "view::tests::y::a": False}),
         ]
         for old, new in cases:
             with self.subTest(old=old, new=new):
                 code, _, errors = self.compare({"ui:lib:ui": old}, {"ui:lib:ui": new} if new else {"ui:lib:ui": {"z": False}})
                 self.assertEqual(code, 1, errors)
+
+    def test_declared_harness_moves_and_replacements_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old, new, replaced = (Path(directory) / name for name in ("old.json", "new.json", "replaced.json"))
+            old.write_text(json.dumps({"exe:bin:exe": {"cli::tests::a": False, "dirs::b": False},
+                                       "core:lib:core": {"x": False}}))
+            new.write_text(json.dumps({"app:lib:app": {"cli::tests::a": False},
+                                       "core:lib:core": {"x": False, "platform::dirs::tests::b": False}}))
+            replaced.write_text(json.dumps({
+                "removed": {"app:lib:app dirs::b": "covered by platform::dirs::tests::b"},
+                "added": {"core:lib:core platform::dirs::tests::b": "replaces dirs::b"}}))
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(inventory.compare(old, new, None, ["exe:bin:exe=app:lib:app"], replaced), 0)
+                self.assertEqual(inventory.compare(old, new, None, ["exe:bin:exe=app:lib:app"]), 1)
 
     def test_a_test_cannot_change_harness(self):
         code, _, errors = self.compare({"a:lib:a": {"t": False}, "b:lib:b": {"u": False}},

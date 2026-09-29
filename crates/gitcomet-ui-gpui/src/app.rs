@@ -13,6 +13,7 @@ use crate::view::{
     TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette,
     WorkspaceBootstrap, is_diff_shortcut_candidate,
 };
+use gitcomet_core::identity::{self, WindowKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
 use gitcomet_state::session;
@@ -168,10 +169,13 @@ impl BrowserOpenTarget {
         }
     }
 
-    pub const fn detail(self) -> &'static str {
+    pub fn detail(self) -> String {
         match self {
-            Self::ExistingWindow => "Add the repository to the active GitComet window.",
-            Self::NewWindow => "Create a separate window for the repository.",
+            Self::ExistingWindow => format!(
+                "Add the repository to the active {} window.",
+                identity::current().display_name()
+            ),
+            Self::NewWindow => "Create a separate window for the repository.".to_string(),
         }
     }
 }
@@ -219,32 +223,116 @@ pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Siz
     }
 }
 
-pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
-    run_with_startup_crash_report(backend, None, None).map(|_| ())
+/// A browser-window launch: configure it, then [`run`](Self::run) it.
+pub struct UiLaunch {
+    backend: Arc<dyn GitBackend>,
+    initial_request: BrowserOpenRequest,
+    startup_crash_report: Option<StartupCrashReport>,
+    on_shutdown: Option<ShutdownCallback>,
+    browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
 }
 
+impl UiLaunch {
+    pub fn new(backend: Arc<dyn GitBackend>) -> Self {
+        Self {
+            backend,
+            initial_request: BrowserOpenRequest {
+                path: None,
+                target: BrowserOpenTarget::ExistingWindow,
+            },
+            startup_crash_report: None,
+            on_shutdown: None,
+            browser_requests: None,
+        }
+    }
+
+    /// The process's own open request. Its routing preference matters on a
+    /// cold start: saved workspaces are restored before the path is routed,
+    /// just like a forwarded request.
+    pub fn initial_request(mut self, request: BrowserOpenRequest) -> Self {
+        self.initial_request = request;
+        self
+    }
+
+    pub fn startup_crash_report(mut self, report: Option<StartupCrashReport>) -> Self {
+        self.startup_crash_report = report;
+        self
+    }
+
+    /// Invoked from GPUI's graceful-shutdown callback. On Windows GPUI
+    /// terminates with `ExitProcess`, so cleanup cannot wait for [`run`](Self::run)
+    /// to return.
+    pub fn on_shutdown(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_shutdown = Some(Arc::new(callback));
+        self
+    }
+
+    /// Repository-open requests forwarded by another process. The caller owns
+    /// the single-instance transport, which keeps the wire protocol outside
+    /// this crate and independently testable.
+    pub fn browser_requests(
+        mut self,
+        requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
+    ) -> Self {
+        self.browser_requests = requests;
+        self
+    }
+
+    pub fn run(self) -> Result<UiRunOutcome, UiLaunchError> {
+        let Self {
+            backend,
+            initial_request,
+            startup_crash_report,
+            on_shutdown,
+            browser_requests,
+        } = self;
+        let mut launch = normal_launch_config(initial_request.path, startup_crash_report);
+        launch.browser_open_target = initial_request.target;
+        ensure_graphics_device_available("main GPUI window launch")?;
+        run_with_panic_guard("main GPUI window launch", move || {
+            run_windowed_app(
+                backend,
+                launch,
+                CleanShutdownTracker::default(),
+                on_shutdown,
+                browser_requests,
+            )
+        })?;
+        // A native abort or forced process termination cannot return from the
+        // GPUI event loop. Reaching this point is therefore a clean shutdown even
+        // when a platform-specific close path did not set CleanShutdownTracker.
+        Ok(UiRunOutcome::CleanShutdown)
+    }
+}
+
+#[deprecated(note = "use `UiLaunch`")]
+pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
+    UiLaunch::new(backend).run().map(|_| ())
+}
+
+#[deprecated(note = "use `UiLaunch`")]
 pub fn run_with_startup_crash_report(
     backend: Arc<dyn GitBackend>,
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
-    run_with_startup_crash_report_and_shutdown_callback(
-        backend,
-        initial_path,
-        startup_crash_report,
-        None::<fn()>,
-    )
+    UiLaunch::new(backend)
+        .initial_request(BrowserOpenRequest {
+            path: initial_path,
+            target: BrowserOpenTarget::ExistingWindow,
+        })
+        .startup_crash_report(startup_crash_report)
+        .run()
 }
 
-/// Runs the main window and invokes `on_shutdown` from GPUI's graceful-shutdown
-/// callback. On Windows GPUI terminates with `ExitProcess`, so callers cannot
-/// rely on [`run_with_startup_crash_report`] returning to perform cleanup.
+#[deprecated(note = "use `UiLaunch`")]
 pub fn run_with_startup_crash_report_and_shutdown_callback(
     backend: Arc<dyn GitBackend>,
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
     on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
+    #[allow(deprecated)]
     run_with_startup_crash_report_shutdown_callback_and_browser_requests(
         backend,
         initial_path,
@@ -254,9 +342,7 @@ pub fn run_with_startup_crash_report_and_shutdown_callback(
     )
 }
 
-/// Runs the browser and accepts repository-open requests forwarded by another
-/// GitComet process. The caller owns the single-instance transport; keeping the
-/// wire protocol outside the UI crate makes it independently testable.
+#[deprecated(note = "use `UiLaunch`")]
 pub fn run_with_startup_crash_report_shutdown_callback_and_browser_requests(
     backend: Arc<dyn GitBackend>,
     initial_path: Option<PathBuf>,
@@ -264,6 +350,7 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_browser_requests(
     on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
     browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
+    #[allow(deprecated)]
     run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
         backend,
         BrowserOpenRequest {
@@ -276,9 +363,7 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_browser_requests(
     )
 }
 
-/// Runs the browser while retaining the routing preference attached to the
-/// process's own initial request. This matters on a cold start: saved workspaces
-/// are restored before the path is routed, just like a forwarded request.
+#[deprecated(note = "use `UiLaunch`")]
 pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
     backend: Arc<dyn GitBackend>,
     initial_request: BrowserOpenRequest,
@@ -286,23 +371,12 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_reque
     on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
     browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
-    let mut launch = normal_launch_config(initial_request.path, startup_crash_report);
-    launch.browser_open_target = initial_request.target;
-    ensure_graphics_device_available("main GPUI window launch")?;
-    let on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
-    run_with_panic_guard("main GPUI window launch", move || {
-        run_windowed_app(
-            backend,
-            launch,
-            CleanShutdownTracker::default(),
-            on_shutdown,
-            browser_requests,
-        )
-    })?;
-    // A native abort or forced process termination cannot return from the GPUI
-    // event loop. Reaching this point is therefore a clean shutdown even when a
-    // platform-specific close path did not set CleanShutdownTracker.
-    Ok(UiRunOutcome::CleanShutdown)
+    let mut launch = UiLaunch::new(backend)
+        .initial_request(initial_request)
+        .startup_crash_report(startup_crash_report)
+        .browser_requests(browser_requests);
+    launch.on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
+    launch.run()
 }
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
@@ -330,8 +404,8 @@ fn normal_launch_config(
     let mut view_config = GitCometViewConfig::normal(startup_crash_report);
     view_config.initial_path = initial_path;
     WindowLaunchConfig {
-        title: "GitComet".to_string(),
-        app_id: "gitcomet".to_string(),
+        title: identity::current().display_name().to_string(),
+        app_id: identity::current().window_app_id(WindowKind::Main),
         view_config,
         browser_open_target: BrowserOpenTarget::ExistingWindow,
     }
@@ -342,8 +416,8 @@ fn normal_launch_config_with_initial_repository(
     startup_crash_report: Option<StartupCrashReport>,
 ) -> WindowLaunchConfig {
     WindowLaunchConfig {
-        title: "GitComet".to_string(),
-        app_id: "gitcomet".to_string(),
+        title: identity::current().display_name().to_string(),
+        app_id: identity::current().window_app_id(WindowKind::Main),
         view_config: GitCometViewConfig::normal_with_initial_repository(
             initial_path,
             startup_crash_report,
@@ -366,7 +440,11 @@ fn launch_config_for_workspace(
     startup_crash_report: Option<StartupCrashReport>,
 ) -> WindowLaunchConfig {
     let mut launch = base.clone();
-    launch.title = format!("{} — GitComet", workspace.display_name());
+    launch.title = format!(
+        "{} — {}",
+        workspace.display_name(),
+        identity::current().display_name()
+    );
     launch.view_config.initial_path = None;
     launch.view_config.initial_repository_launch_mode = InitialRepositoryLaunchMode::RestoreSession;
     launch.view_config.startup_crash_report = startup_crash_report;
@@ -380,7 +458,7 @@ fn focused_mergetool_launch_config(
 ) -> WindowLaunchConfig {
     WindowLaunchConfig {
         title: focused_mergetool_window_title(&config.conflicted_file_path),
-        app_id: "gitcomet-mergetool".to_string(),
+        app_id: identity::current().window_app_id(WindowKind::FocusedMergetool),
         view_config: GitCometViewConfig {
             initial_path: Some(config.repo_path.clone()),
             initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
@@ -407,7 +485,10 @@ fn focused_mergetool_window_title(conflicted_file_path: &Path) -> String {
         .file_name()
         .and_then(|name| name.to_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| format!("{conflicted_file_path:?}"));
-    format!("GitComet - Mergetool ({display})")
+    format!(
+        "{} - Mergetool ({display})",
+        identity::current().display_name()
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1042,9 +1123,10 @@ fn open_gitcomet_window(
         )
     })
     .unwrap_or_else(|err| {
+        let name = identity::current().display_name();
         panic!(
-            "failed to open main GitComet window: {err}\n\
-             This is usually a GPU/display problem, not a GitComet bug. \
+            "failed to open main {name} window: {err}\n\
+             This is usually a GPU/display problem, not a {name} bug. \
              If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
              For per-adapter details, relaunch with RUST_LOG=info."
         )
@@ -1510,7 +1592,8 @@ fn macos_app_menus_with_options(
         MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch),
         MenuItem::action(crate::menu_labels::CHECK_FOR_UPDATES, CheckForUpdates).disabled(
             manual_update_check_menu_disabled(
-                crate::view::update_checks_disabled_by_environment(),
+                crate::view::update_checks_disabled_by_environment()
+                    || !crate::view::update_checks_available(),
                 normal_window_available,
             ),
         ),
@@ -1519,20 +1602,21 @@ fn macos_app_menus_with_options(
         MenuItem::action("Close Window", CloseWindow),
     ]);
 
+    let name = identity::current().display_name();
     vec![
         Menu {
-            name: "GitComet".into(),
+            name: name.to_string().into(),
             items: vec![
                 MenuItem::action(crate::menu_labels::COMMAND_PALETTE, ToggleCommandPalette),
                 MenuItem::action(crate::menu_labels::SETTINGS, OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
-                MenuItem::action("Hide GitComet", Hide),
+                MenuItem::action(format!("Hide {name}"), Hide),
                 MenuItem::action("Hide Others", HideOthers),
                 MenuItem::action("Show All", ShowAll),
                 MenuItem::separator(),
-                MenuItem::action("Quit GitComet", Quit),
+                MenuItem::action(format!("Quit {name}"), Quit),
             ],
             disabled: false,
         },

@@ -12,13 +12,13 @@ pub(super) fn panel(
         format!("{} terminals", prompt.summary.terminal_count)
     };
     let title = match prompt.action {
-        TerminalShutdownAction::QuitApp => "Quit GitComet?",
-        TerminalShutdownAction::CloseWindow => "Close window?",
-        TerminalShutdownAction::DeleteWorkspace { .. } => "Delete workspace?",
-        TerminalShutdownAction::MoveRepo { .. } => "Move repository?",
+        TerminalShutdownAction::QuitApp => format!("Quit {}?", crate::view::product_name()),
+        TerminalShutdownAction::CloseWindow => "Close window?".to_string(),
+        TerminalShutdownAction::DeleteWorkspace { .. } => "Delete workspace?".to_string(),
+        TerminalShutdownAction::MoveRepo { .. } => "Move repository?".to_string(),
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
-        | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?",
+        | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?".to_string(),
     };
     let confirm_label = match prompt.action {
         TerminalShutdownAction::QuitApp => "Terminate and quit",

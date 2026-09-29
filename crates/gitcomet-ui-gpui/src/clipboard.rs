@@ -100,7 +100,10 @@ fn clipboard_backend() -> ClipboardBackend {
 #[cfg(all(target_os = "linux", not(test)))]
 fn write_copy_diagnostic(source: CopySource, text_len: usize, backend: ClipboardBackend) {
     if let Err(err) = write_copy_diagnostic_inner(source, text_len, backend) {
-        eprintln!("Failed to write GitComet copy crash diagnostics: {err}");
+        eprintln!(
+            "Failed to write {} copy crash diagnostics: {err}",
+            gitcomet_core::identity::current().display_name()
+        );
     }
 }
 
@@ -110,22 +113,12 @@ fn write_copy_diagnostic_inner(
     text_len: usize,
     backend: ClipboardBackend,
 ) -> std::io::Result<()> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .map(|home| home.join(".local/state").into_os_string())
-        })
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "XDG_STATE_HOME and HOME are unset",
-            )
-        })?;
-    let dir = std::path::PathBuf::from(base)
-        .join("gitcomet")
-        .join("crashes");
+    let dir = gitcomet_core::platform::dirs::crash_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no per-user state directory is configured",
+        )
+    })?;
 
     let text = format!(
         "copy_source={}\ncopy_text_bytes={text_len}\ndisplay={}\nwayland_display={}\n\

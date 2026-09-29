@@ -1653,7 +1653,7 @@ impl GitCometView {
                 cx,
                 initial_window_placement.as_ref(),
             )),
-            native_window_title: "GitComet".to_string(),
+            native_window_title: crate::view::product_name().to_string(),
             theme_mode,
             workspace_theme_mode,
             window_appearance,
@@ -2758,6 +2758,7 @@ impl GitCometView {
         self.startup_crash_report
             .as_ref()
             .map(|report| report.issue_url.clone())
+            .filter(|url| !url.is_empty())
     }
 
     /// The "Report Issue" button's whole body, so the button stays a one-liner

@@ -703,27 +703,6 @@ fn detects_test_harness_executable_paths() {
     )));
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn app_data_dir_prefers_xdg_data_home() {
-    assert_eq!(
-        app_data_dir_linux(
-            Some(OsStr::new("/tmp/gitcomet-data")),
-            Some(OsStr::new("/home/alice"))
-        ),
-        Some(PathBuf::from("/tmp/gitcomet-data/gitcomet"))
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn app_data_dir_falls_back_to_local_share() {
-    assert_eq!(
-        app_data_dir_linux(None, Some(OsStr::new("/home/alice"))),
-        Some(PathBuf::from("/home/alice/.local/share/gitcomet"))
-    );
-}
-
 #[test]
 fn persist_from_state_and_load_from_path_round_trip() {
     let dir = env::temp_dir().join(format!(

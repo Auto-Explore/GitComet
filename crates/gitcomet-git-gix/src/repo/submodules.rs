@@ -1499,7 +1499,10 @@ fn cleanup_failed_submodule_add_error(
         Err(probe_err) => {
             return append_failed_submodule_add_note(
                 err,
-                &format!("GitComet could not inspect failed submodule add state: {probe_err}"),
+                &format!(
+                    "{} could not inspect failed submodule add state: {probe_err}",
+                    gitcomet_core::identity::current().display_name()
+                ),
             );
         }
     };

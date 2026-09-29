@@ -582,9 +582,10 @@ fn add_git_failure_hint(mut detail: String) -> String {
     if git_failure_looks_like_missing_gpg(&detail)
         && !detail.contains("git config --global gpg.program")
     {
-        detail.push_str(
-            "\n\nHint: Git could not complete GPG signing. GitComet may be running with a GUI app PATH that differs from your shell PATH. If Git cannot find gpg, configure an absolute GPG path with `git config --global gpg.program /path/to/gpg`, or make gpg available on GitComet's PATH.",
-        );
+        let name = gitcomet_core::identity::current().display_name();
+        detail.push_str(&format!(
+            "\n\nHint: Git could not complete GPG signing. {name} may be running with a GUI app PATH that differs from your shell PATH. If Git cannot find gpg, configure an absolute GPG path with `git config --global gpg.program /path/to/gpg`, or make gpg available on {name}'s PATH.",
+        ));
     }
     detail
 }

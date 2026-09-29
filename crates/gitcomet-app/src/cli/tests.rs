@@ -39,7 +39,10 @@ fn parse_mode_for_test_with_config(
     env: &dyn EnvLookup,
     git_config: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AppMode, String> {
-    parse_app_mode_from_args_env_and_config(args, env, git_config)
+    match parse_app_mode_from_args_env_and_config(args, env, git_config, DEFAULT_ABOUT)? {
+        CliOutcome::Run(mode) => Ok(mode),
+        CliOutcome::Inform(info) => panic!("unexpected help or version output: {}", info.text()),
+    }
 }
 
 fn parse_mode_for_test(args: Vec<OsString>, env: &dyn EnvLookup) -> Result<AppMode, String> {

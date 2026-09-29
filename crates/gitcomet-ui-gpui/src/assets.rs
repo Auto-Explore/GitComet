@@ -10,6 +10,17 @@ pub struct GitCometAssets;
 
 impl GitCometAssets {
     fn load_static(path: &str) -> Option<Cow<'static, [u8]>> {
+        // A product's own artwork replaces GitComet's under the same names.
+        let branding = gitcomet_core::identity::current().branding();
+        let branded = match path {
+            "gitcomet-window-icon.png" => branding.window_icon_png,
+            "gitcomet-512.png" => branding.app_icon_png,
+            "gitcomet_logo.svg" => branding.logo_svg,
+            _ => None,
+        };
+        if let Some(bytes) = branded {
+            return Some(Cow::Borrowed(bytes));
+        }
         match path {
             "gitcomet-window-icon.png" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/gitcomet-window-icon.png"

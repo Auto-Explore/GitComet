@@ -242,7 +242,7 @@ fn settings_window_titlebar_options_match_platform_chrome_strategy() {
     );
     assert_eq!(
         options.title.as_ref().map(ToString::to_string),
-        Some(SETTINGS_WINDOW_TITLE.to_string()),
+        Some("Settings: GitComet".to_string()),
         "settings window titlebar should keep the OS-visible title"
     );
     assert_eq!(
@@ -402,7 +402,7 @@ fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
 
     assert_eq!(
         settings_cx.window_title().as_deref(),
-        Some(SETTINGS_WINDOW_TITLE),
+        Some("Settings: GitComet"),
         "expected settings window to expose the native OS title"
     );
 }
@@ -657,7 +657,7 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
     settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
-    assert_eq!(cx.opened_url(), Some(THEMES_GUIDE_URL.to_string()));
+    assert_eq!(cx.opened_url(), themes_guide_url());
 }
 
 #[gpui::test]
@@ -1356,7 +1356,7 @@ fn settings_window_open_source_licenses_row_switches_content(cx: &mut gpui::Test
 
     assert_eq!(
         settings_cx.window_title().as_deref(),
-        Some(SETTINGS_WINDOW_TITLE),
+        Some("Settings: GitComet"),
         "expected the settings window to keep its OS title"
     );
     assert!(
@@ -1448,7 +1448,10 @@ fn settings_window_professional_edition_waitlist_row_opens_editions_page(
     settings_cx.simulate_click(row_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
-    assert_eq!(cx.opened_url(), Some(EDITIONS_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::editions_url().unwrap().to_string())
+    );
 }
 
 #[gpui::test]
@@ -3568,7 +3571,7 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
     settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
-    assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
+    assert_eq!(cx.opened_url(), signature_guide_url());
 }
 
 #[test]

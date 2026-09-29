@@ -44,8 +44,9 @@ impl GitCometHttpClient {
         Self {
             agent: config.into(),
             user_agent: format!(
-                "GitComet/{} ({}; {})",
-                env!("CARGO_PKG_VERSION"),
+                "{}/{} ({}; {})",
+                gitcomet_core::identity::current().display_name(),
+                gitcomet_core::identity::current().version(),
                 std::env::consts::OS,
                 std::env::consts::ARCH
             ),

@@ -2,11 +2,16 @@
 
 ### Workspace layout
 
-- `crates/gitcomet-core`: domain types, Git service contracts, merge algorithm, conflict session, text utils.
+- `crates/gitcomet-core`: domain types, Git service contracts, product identity (`identity`), per-user directories (`platform::dirs`), merge algorithm, conflict session, text utils.
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
-- `crates/gitcomet-ui-gpui`: GPUI views/components (focused diff/merge windows, conflict resolver, word diff).
-- `crates/gitcomet`: binary entrypoint, CLI (clap), difftool/mergetool/setup/uninstall modes.
+- `crates/gitcomet-ui-gpui`: GPUI views/components (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window.
+- `crates/gitcomet-app`: process launch (`AppLaunch`): identity install, crash reporting, CLI (clap), browser-instance broker, difftool/mergetool/setup/uninstall modes. GUI dependencies are optional (`ui-gpui` feature).
+- `crates/gitcomet`: the executable: allocator, platform resources, packaging, and instrumentation binaries.
+- `crates/gitcomet-extension-example` and `-app`: a neutral example product built only on public upstream interfaces; CI builds it in its own context.
+
+Product names, identifiers, and links come from `gitcomet_core::identity`, never
+from string literals: `scripts/ci/identity_literals.py` fails on new ones.
 
 ### Getting started
 

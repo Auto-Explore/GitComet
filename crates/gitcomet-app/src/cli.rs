@@ -8,7 +8,7 @@
 //! - `uninstall`: remove gitcomet difftool/mergetool integration
 //! - `extract-merge-fixtures`: generate Phase 3C real-world merge fixtures
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use gitcomet_core::merge::{ConfigValueSource, ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -28,8 +28,9 @@ pub mod exit_code {
 
 // ── Raw CLI argument structs (clap) ──────────────────────────────────
 
+// Name, version, and about text come from the product identity at runtime;
+// see `cli_command`.
 #[derive(Parser, Debug)]
-#[command(name = "gitcomet", about = "Git GUI built with GPUI", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -45,9 +46,9 @@ pub enum Command {
     Difftool(DifftoolArgs),
     /// Open a focused merge view (for use as git mergetool).
     Mergetool(MergetoolArgs),
-    /// Configure git to use gitcomet as the global diff/merge tool.
+    /// Configure git to use this application as the global diff/merge tool.
     Setup(SetupArgs),
-    /// Remove gitcomet diff/merge tool config entries.
+    /// Remove this application's diff/merge tool config entries.
     Uninstall(UninstallArgs),
     /// Extract non-trivial merge cases from git history as fixture files.
     ExtractMergeFixtures(ExtractMergeFixturesArgs),
@@ -223,11 +224,60 @@ pub enum AppMode {
     Mergetool(MergetoolConfig),
     /// Write git config for difftool/mergetool integration.
     Setup { dry_run: bool, local: bool },
-    /// Remove gitcomet-specific difftool/mergetool integration.
+    /// Remove this application's difftool/mergetool integration.
     Uninstall { dry_run: bool, local: bool },
     /// Generate merge fixtures from repository history.
     ExtractMergeFixtures(ExtractMergeFixturesConfig),
 }
+
+/// What the command line asked for.
+#[derive(Debug)]
+pub enum CliOutcome {
+    /// Run a mode.
+    Run(AppMode),
+    /// `--help`, `--version`, or `help`: print and exit without running a mode.
+    Inform(Informational),
+}
+
+/// Help or version text, printed the way clap would print it.
+#[derive(Debug)]
+pub struct Informational(clap::Error);
+
+impl Informational {
+    pub fn text(&self) -> String {
+        self.0.render().to_string()
+    }
+
+    /// Prints to stdout, styled when stdout is a terminal.
+    pub fn print(&self) -> std::io::Result<()> {
+        self.0.print()
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        self.0.exit_code()
+    }
+}
+
+/// The clap command, named and versioned after the running product.
+pub(crate) fn cli_command(about: &str) -> clap::Command {
+    let identity = gitcomet_core::identity::current();
+    let name = identity.executable_name().to_owned();
+    Cli::command()
+        .name(name.clone())
+        .version(identity.version().to_owned())
+        .about(about.to_owned())
+        .mut_subcommand("setup", |command| {
+            command.about(format!(
+                "Configure git to use {name} as the global diff/merge tool."
+            ))
+        })
+        .mut_subcommand("uninstall", |command| {
+            command.about(format!("Remove {name} diff/merge tool config entries."))
+        })
+}
+
+/// About text for GitComet's command line.
+pub const DEFAULT_ABOUT: &str = "Git GUI built with GPUI";
 
 // ── Environment lookup trait for testability ─────────────────────────
 
@@ -655,10 +705,14 @@ fn parse_app_mode_from_args_env_and_config(
     args: Vec<OsString>,
     env: &dyn EnvLookup,
     git_config: &dyn Fn(&str) -> Option<String>,
-) -> Result<AppMode, String> {
+    about: &str,
+) -> Result<CliOutcome, String> {
     let normalized_args = normalize_empty_mergetool_base_arg(&args);
 
-    match Cli::try_parse_from(normalized_args.iter()) {
+    let parsed = cli_command(about)
+        .try_get_matches_from(normalized_args.iter())
+        .and_then(|matches| Cli::from_arg_matches(&matches));
+    match parsed {
         Ok(cli) => match cli.command {
             None => Ok(AppMode::Browser { path: cli.path }),
             Some(Command::Difftool(args)) => {
@@ -678,17 +732,17 @@ fn parse_app_mode_from_args_env_and_config(
             Some(Command::ExtractMergeFixtures(args)) => {
                 resolve_extract_merge_fixtures(args).map(AppMode::ExtractMergeFixtures)
             }
-        },
+        }
+        .map(CliOutcome::Run),
         Err(clap_err) => {
-            // --help and --version produce informational clap errors that
-            // should print to stdout and exit 0, not fall through to the
-            // compat parser and be treated as real errors (exit 2).
+            // --help and --version are informational, not errors: they must
+            // not fall through to the compat parser and exit 2.
             use clap::error::ErrorKind;
-            match clap_err.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                    clap_err.exit();
-                }
-                _ => {}
+            if matches!(
+                clap_err.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) {
+                return Ok(CliOutcome::Inform(Informational(clap_err)));
             }
 
             let compat_args = if normalized_args.len() > 1 {
@@ -699,7 +753,7 @@ fn parse_app_mode_from_args_env_and_config(
             if let Some(mode) =
                 parse_compat_external_mode_with_config(compat_args, env, git_config)?
             {
-                return Ok(mode);
+                return Ok(CliOutcome::Run(mode));
             }
             Err(clap_err.to_string())
         }
@@ -709,14 +763,15 @@ fn parse_app_mode_from_args_env_and_config(
 fn parse_app_mode_from_args_and_env(
     args: Vec<OsString>,
     env: &dyn EnvLookup,
-) -> Result<AppMode, String> {
+    about: &str,
+) -> Result<CliOutcome, String> {
     // Use only repo-scoped lookups resolved from mergetool file paths.
-    parse_app_mode_from_args_env_and_config(args, env, &|_| None)
+    parse_app_mode_from_args_env_and_config(args, env, &|_| None, about)
 }
 
-/// Parse CLI arguments and resolve into a validated `AppMode`.
-pub fn parse_app_mode() -> Result<AppMode, String> {
-    parse_app_mode_from_args_and_env(std::env::args_os().collect(), &ProcessEnv)
+/// Parses `args` (including the program name) into a mode or help/version text.
+pub fn parse_cli(args: Vec<OsString>, about: &str) -> Result<CliOutcome, String> {
+    parse_app_mode_from_args_and_env(args, &ProcessEnv, about)
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
-//! `gitcomet setup` / `gitcomet uninstall` support.
+//! `setup` / `uninstall` support.
 //!
 //! Setup writes the recommended global (or local) git config entries so that
-//! `git difftool` and `git mergetool` invoke gitcomet automatically.
-//! Uninstall removes those entries while preserving unrelated tool settings.
+//! `git difftool` and `git mergetool` invoke this product automatically; tool
+//! names come from its identity. Uninstall removes only this product's entries
+//! and preserves unrelated tool settings, including another product's.
 
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::process::git_command as process_git_command;
@@ -92,20 +93,31 @@ fn shell_single_quote(value: &str) -> String {
 /// Resolve the absolute path to the current executable.
 fn current_exe_path() -> Result<PathBuf, String> {
     std::env::current_exe()
-        .map_err(|e| format!("Cannot determine gitcomet binary path: {e}"))
+        .map_err(|e| {
+            format!(
+                "Cannot determine {} binary path: {e}",
+                gitcomet_core::identity::current().executable_name()
+            )
+        })
         .and_then(canonicalize_setup_path)
 }
 
 fn canonicalize_setup_path(path: PathBuf) -> Result<PathBuf, String> {
     path.canonicalize()
         .map(strip_windows_verbatim_prefix)
-        .map_err(|e| format!("Cannot determine gitcomet binary path: {e}"))
+        .map_err(|e| {
+            format!(
+                "Cannot determine {} binary path: {e}",
+                gitcomet_core::identity::current().executable_name()
+            )
+        })
 }
 
 fn executable_path_for_shell(bin_path: &Path) -> Result<String, String> {
     let Some(path_text) = bin_path.to_str() else {
         return Err(format!(
-            "Cannot configure gitcomet setup for non-Unicode executable path: {bin_path:?}"
+            "Cannot configure {} setup for non-Unicode executable path: {bin_path:?}",
+            gitcomet_core::identity::current().executable_name()
         ));
     };
     Ok(path_text.to_string())
@@ -119,8 +131,74 @@ fn git_command() -> std::process::Command {
     process_git_command()
 }
 
+/// This product's Git tool and config names, derived once from the identity.
+///
+/// Keys stay `&'static str` because the setup tables are plain data; the
+/// strings live for the process, like the identity they come from.
+struct ToolNames {
+    tool: &'static str,
+    gui_tool: &'static str,
+    mergetool_cmd: &'static str,
+    mergetool_trust: &'static str,
+    difftool_cmd: &'static str,
+    difftool_trust: &'static str,
+    gui_mergetool_cmd: &'static str,
+    gui_mergetool_trust: &'static str,
+    gui_difftool_cmd: &'static str,
+    gui_difftool_trust: &'static str,
+    /// `<tool>.backup.<name>` for each of [`BACKUP_NAMES`]: values setup replaced.
+    backup_keys: [&'static str; BACKUP_NAMES.len()],
+}
+
+/// Backed-up selector and behavior keys, in the order of `build_backup_entries_for`.
+const BACKUP_NAMES: [&str; 10] = [
+    "merge-tool",
+    "diff-tool",
+    "merge-guitool",
+    "diff-guitool",
+    "mergetool-trust-exit-code",
+    "mergetool-prompt",
+    "difftool-trust-exit-code",
+    "difftool-prompt",
+    "mergetool-guidefault",
+    "difftool-guidefault",
+];
+
+fn leak(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
+}
+
+impl ToolNames {
+    fn for_identity(identity: &gitcomet_core::identity::ProductIdentity) -> Self {
+        let tool = identity.git_tool_name();
+        let gui_tool = identity.git_gui_tool_name();
+        Self {
+            tool: leak(tool.to_string()),
+            mergetool_cmd: leak(format!("mergetool.{tool}.cmd")),
+            mergetool_trust: leak(format!("mergetool.{tool}.trustExitCode")),
+            difftool_cmd: leak(format!("difftool.{tool}.cmd")),
+            difftool_trust: leak(format!("difftool.{tool}.trustExitCode")),
+            gui_mergetool_cmd: leak(format!("mergetool.{gui_tool}.cmd")),
+            gui_mergetool_trust: leak(format!("mergetool.{gui_tool}.trustExitCode")),
+            gui_difftool_cmd: leak(format!("difftool.{gui_tool}.cmd")),
+            gui_difftool_trust: leak(format!("difftool.{gui_tool}.trustExitCode")),
+            backup_keys: BACKUP_NAMES.map(|name| leak(format!("{tool}.backup.{name}"))),
+            gui_tool: leak(gui_tool),
+        }
+    }
+}
+
+fn tool_names() -> &'static ToolNames {
+    static NAMES: std::sync::OnceLock<ToolNames> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| ToolNames::for_identity(gitcomet_core::identity::current()))
+}
+
 /// Build the list of git config entries for difftool/mergetool setup.
 fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
+    build_config_entries_for(tool_names(), bin_path)
+}
+
+fn build_config_entries_for(names: &ToolNames, bin_path: &str) -> Vec<ConfigEntry> {
     let quoted_bin_path = shell_single_quote(bin_path);
     let base = quoted_env_var("BASE");
     let local = quoted_env_var("LOCAL");
@@ -131,10 +209,10 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         // Mergetool (headless — for CI, scripts, and no-display environments)
         ConfigEntry {
             key: "merge.tool",
-            value: "gitcomet".into(),
+            value: names.tool.into(),
         },
         ConfigEntry {
-            key: "mergetool.gitcomet.cmd",
+            key: names.mergetool_cmd,
             value: format!(
                 "{quoted_bin_path} mergetool --base {base} --local {local} --remote {remote} --merged {merged}"
             ),
@@ -142,14 +220,14 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         // Keep both generic and tool-specific trust keys:
         // - `mergetool.trustExitCode` matches documented setup guidance and
         //   Git's default trust behavior for the selected mergetool.
-        // - `mergetool.gitcomet.trustExitCode` preserves explicit per-tool
+        // - `mergetool.<tool>.trustExitCode` preserves explicit per-tool
         //   behavior even if users override global defaults later.
         ConfigEntry {
             key: "mergetool.trustExitCode",
             value: "true".into(),
         },
         ConfigEntry {
-            key: "mergetool.gitcomet.trustExitCode",
+            key: names.mergetool_trust,
             value: "true".into(),
         },
         ConfigEntry {
@@ -159,10 +237,10 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         // Difftool (headless)
         ConfigEntry {
             key: "diff.tool",
-            value: "gitcomet".into(),
+            value: names.tool.into(),
         },
         ConfigEntry {
-            key: "difftool.gitcomet.cmd",
+            key: names.difftool_cmd,
             value: format!(
                 "{quoted_bin_path} difftool --local {local} --remote {remote} --path {merged}"
             ),
@@ -170,14 +248,14 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         // Keep both generic and tool-specific trust keys:
         // - `difftool.trustExitCode` matches documented setup guidance and
         //   Git's default trust behavior for the selected difftool.
-        // - `difftool.gitcomet.trustExitCode` preserves explicit per-tool
+        // - `difftool.<tool>.trustExitCode` preserves explicit per-tool
         //   behavior even if users override global defaults later.
         ConfigEntry {
             key: "difftool.trustExitCode",
             value: "true".into(),
         },
         ConfigEntry {
-            key: "difftool.gitcomet.trustExitCode",
+            key: names.difftool_trust,
             value: "true".into(),
         },
         ConfigEntry {
@@ -190,30 +268,30 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         // when it is not.
         ConfigEntry {
             key: "merge.guitool",
-            value: "gitcomet-gui".into(),
+            value: names.gui_tool.into(),
         },
         ConfigEntry {
-            key: "mergetool.gitcomet-gui.cmd",
+            key: names.gui_mergetool_cmd,
             value: format!(
                 "{quoted_bin_path} mergetool --gui --base {base} --local {local} --remote {remote} --merged {merged}"
             ),
         },
         ConfigEntry {
-            key: "mergetool.gitcomet-gui.trustExitCode",
+            key: names.gui_mergetool_trust,
             value: "true".into(),
         },
         ConfigEntry {
             key: "diff.guitool",
-            value: "gitcomet-gui".into(),
+            value: names.gui_tool.into(),
         },
         ConfigEntry {
-            key: "difftool.gitcomet-gui.cmd",
+            key: names.gui_difftool_cmd,
             value: format!(
                 "{quoted_bin_path} difftool --gui --local {local} --remote {remote} --path {merged}"
             ),
         },
         ConfigEntry {
-            key: "difftool.gitcomet-gui.trustExitCode",
+            key: names.gui_difftool_trust,
             value: "true".into(),
         },
         ConfigEntry {
@@ -228,175 +306,91 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
 }
 
 fn build_backup_entries() -> Vec<BackupEntry> {
-    vec![
-        BackupEntry {
-            key: "merge.tool",
-            expected_setup_value: "gitcomet",
-            backup_key: "gitcomet.backup.merge-tool",
-        },
-        BackupEntry {
-            key: "diff.tool",
-            expected_setup_value: "gitcomet",
-            backup_key: "gitcomet.backup.diff-tool",
-        },
-        BackupEntry {
-            key: "merge.guitool",
-            expected_setup_value: "gitcomet-gui",
-            backup_key: "gitcomet.backup.merge-guitool",
-        },
-        BackupEntry {
-            key: "diff.guitool",
-            expected_setup_value: "gitcomet-gui",
-            backup_key: "gitcomet.backup.diff-guitool",
-        },
-        BackupEntry {
-            key: "mergetool.trustExitCode",
-            expected_setup_value: "true",
-            backup_key: "gitcomet.backup.mergetool-trust-exit-code",
-        },
-        BackupEntry {
-            key: "mergetool.prompt",
-            expected_setup_value: "false",
-            backup_key: "gitcomet.backup.mergetool-prompt",
-        },
-        BackupEntry {
-            key: "difftool.trustExitCode",
-            expected_setup_value: "true",
-            backup_key: "gitcomet.backup.difftool-trust-exit-code",
-        },
-        BackupEntry {
-            key: "difftool.prompt",
-            expected_setup_value: "false",
-            backup_key: "gitcomet.backup.difftool-prompt",
-        },
-        BackupEntry {
-            key: "mergetool.guiDefault",
-            expected_setup_value: "auto",
-            backup_key: "gitcomet.backup.mergetool-guidefault",
-        },
-        BackupEntry {
-            key: "difftool.guiDefault",
-            expected_setup_value: "auto",
-            backup_key: "gitcomet.backup.difftool-guidefault",
-        },
+    build_backup_entries_for(tool_names())
+}
+
+fn build_backup_entries_for(names: &ToolNames) -> Vec<BackupEntry> {
+    [
+        ("merge.tool", names.tool),
+        ("diff.tool", names.tool),
+        ("merge.guitool", names.gui_tool),
+        ("diff.guitool", names.gui_tool),
+        ("mergetool.trustExitCode", "true"),
+        ("mergetool.prompt", "false"),
+        ("difftool.trustExitCode", "true"),
+        ("difftool.prompt", "false"),
+        ("mergetool.guiDefault", "auto"),
+        ("difftool.guiDefault", "auto"),
     ]
+    .into_iter()
+    .zip(names.backup_keys)
+    .map(|((key, expected_setup_value), backup_key)| BackupEntry {
+        key,
+        expected_setup_value,
+        backup_key,
+    })
+    .collect()
 }
 
 fn build_uninstall_entries() -> Vec<UninstallEntry> {
+    build_uninstall_entries_for(tool_names())
+}
+
+/// Only this product's registrations: its own tool sections always, the
+/// shared selectors and behavior keys only while they still select its tools.
+fn build_uninstall_entries_for(names: &ToolNames) -> Vec<UninstallEntry> {
+    let owned = |key| UninstallEntry {
+        key,
+        expected_value: None,
+        guard: None,
+    };
+    let selector = |key, tool| UninstallEntry {
+        key,
+        expected_value: Some(tool),
+        guard: None,
+    };
+    let guarded = |key, value, guard_key, tool| UninstallEntry {
+        key,
+        expected_value: Some(value),
+        guard: Some(UninstallGuard {
+            key: guard_key,
+            expected_value: tool,
+        }),
+    };
     vec![
         // Tool-scoped keys are always safe to remove.
-        UninstallEntry {
-            key: "mergetool.gitcomet.cmd",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "mergetool.gitcomet.trustExitCode",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "difftool.gitcomet.cmd",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "difftool.gitcomet.trustExitCode",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "mergetool.gitcomet-gui.cmd",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "mergetool.gitcomet-gui.trustExitCode",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "difftool.gitcomet-gui.cmd",
-            expected_value: None,
-            guard: None,
-        },
-        UninstallEntry {
-            key: "difftool.gitcomet-gui.trustExitCode",
-            expected_value: None,
-            guard: None,
-        },
+        owned(names.mergetool_cmd),
+        owned(names.mergetool_trust),
+        owned(names.difftool_cmd),
+        owned(names.difftool_trust),
+        owned(names.gui_mergetool_cmd),
+        owned(names.gui_mergetool_trust),
+        owned(names.gui_difftool_cmd),
+        owned(names.gui_difftool_trust),
         // Generic selector keys are only removed when they still point at
-        // GitComet defaults, so other tools are not disrupted.
-        UninstallEntry {
-            key: "merge.tool",
-            expected_value: Some("gitcomet"),
-            guard: None,
-        },
-        UninstallEntry {
-            key: "diff.tool",
-            expected_value: Some("gitcomet"),
-            guard: None,
-        },
-        UninstallEntry {
-            key: "merge.guitool",
-            expected_value: Some("gitcomet-gui"),
-            guard: None,
-        },
-        UninstallEntry {
-            key: "diff.guitool",
-            expected_value: Some("gitcomet-gui"),
-            guard: None,
-        },
+        // this product's tools, so other tools are not disrupted.
+        selector("merge.tool", names.tool),
+        selector("diff.tool", names.tool),
+        selector("merge.guitool", names.gui_tool),
+        selector("diff.guitool", names.gui_tool),
         // Shared behavior keys are removed only while their selector still
-        // targets GitComet.
-        UninstallEntry {
-            key: "mergetool.trustExitCode",
-            expected_value: Some("true"),
-            guard: Some(UninstallGuard {
-                key: "merge.tool",
-                expected_value: "gitcomet",
-            }),
-        },
-        UninstallEntry {
-            key: "mergetool.prompt",
-            expected_value: Some("false"),
-            guard: Some(UninstallGuard {
-                key: "merge.tool",
-                expected_value: "gitcomet",
-            }),
-        },
-        UninstallEntry {
-            key: "difftool.trustExitCode",
-            expected_value: Some("true"),
-            guard: Some(UninstallGuard {
-                key: "diff.tool",
-                expected_value: "gitcomet",
-            }),
-        },
-        UninstallEntry {
-            key: "difftool.prompt",
-            expected_value: Some("false"),
-            guard: Some(UninstallGuard {
-                key: "diff.tool",
-                expected_value: "gitcomet",
-            }),
-        },
-        UninstallEntry {
-            key: "mergetool.guiDefault",
-            expected_value: Some("auto"),
-            guard: Some(UninstallGuard {
-                key: "merge.guitool",
-                expected_value: "gitcomet-gui",
-            }),
-        },
-        UninstallEntry {
-            key: "difftool.guiDefault",
-            expected_value: Some("auto"),
-            guard: Some(UninstallGuard {
-                key: "diff.guitool",
-                expected_value: "gitcomet-gui",
-            }),
-        },
+        // targets this product.
+        guarded("mergetool.trustExitCode", "true", "merge.tool", names.tool),
+        guarded("mergetool.prompt", "false", "merge.tool", names.tool),
+        guarded("difftool.trustExitCode", "true", "diff.tool", names.tool),
+        guarded("difftool.prompt", "false", "diff.tool", names.tool),
+        guarded(
+            "mergetool.guiDefault",
+            "auto",
+            "merge.guitool",
+            names.gui_tool,
+        ),
+        guarded(
+            "difftool.guiDefault",
+            "auto",
+            "diff.guitool",
+            names.gui_tool,
+        ),
     ]
 }
 
@@ -901,8 +895,9 @@ pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
         let commands = format_commands(&entries, scope);
         let stdout = format!(
             "# Dry run: the following git config commands would be executed:\n{commands}\n\
-             # Setup also stores backup values for {} key(s) under gitcomet.backup.* when needed.\n",
-            backup_entries.len()
+             # Setup also stores backup values for {} key(s) under {}.backup.* when needed.\n",
+            backup_entries.len(),
+            tool_names().tool
         );
         return Ok(SetupResult {
             stdout,
@@ -920,9 +915,10 @@ pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
     apply_config(&entries, scope, &mut snapshot)?;
 
     let stdout = format!(
-        "Configured gitcomet as {scope_label} diff/merge tool.\n\
+        "Configured {} as {scope_label} diff/merge tool.\n\
          Binary: {bin_str}\n\
-         Run `git difftool` or `git mergetool` to use it.\n"
+         Run `git difftool` or `git mergetool` to use it.\n",
+        tool_names().tool
     );
 
     Ok(SetupResult {
@@ -942,7 +938,8 @@ pub fn run_uninstall(dry_run: bool, local: bool) -> Result<UninstallResult, Stri
         let commands = format_uninstall_dry_run(&entries, scope);
         let stdout = format!(
             "# Dry run: the following git config commands may be executed safely:\n{commands}\n\
-             # Uninstall also restores backup values from gitcomet.backup.* when present.\n"
+             # Uninstall also restores backup values from {}.backup.* when present.\n",
+            tool_names().tool
         );
         return Ok(UninstallResult {
             stdout,
@@ -971,9 +968,11 @@ pub fn run_uninstall(dry_run: bool, local: bool) -> Result<UninstallResult, Stri
     let skip_details = format_uninstall_skip_details(&plan);
 
     let mut stdout = format!(
-        "Unconfigured gitcomet from {scope_label} diff/merge tool.\n\
+        "Unconfigured {} from {scope_label} diff/merge tool.\n\
          Restored {} key(s) from backups; preserved {} user-edited key(s); removed {removed_count} key(s); skipped {skipped_count}.\n",
-        restore_summary.restored_count, restore_summary.preserved_user_edits_count
+        tool_names().tool,
+        restore_summary.restored_count,
+        restore_summary.preserved_user_edits_count
     );
     if !skip_details.is_empty() {
         stdout.push_str("Safety skips:\n");
@@ -990,6 +989,53 @@ pub fn run_uninstall(dry_run: bool, local: bool) -> Result<UninstallResult, Stri
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn another_product_registers_and_removes_only_its_own_tools() {
+        let pro = gitcomet_core::identity::ProductIdentity::builder("Comet Pro", "comet-pro")
+            .build()
+            .unwrap();
+        let names = ToolNames::for_identity(&pro);
+        let setup: Vec<_> = build_config_entries_for(&names, "/opt/pro")
+            .into_iter()
+            .map(|entry| (entry.key, entry.value))
+            .collect();
+        assert!(setup.contains(&("merge.tool", "comet-pro".to_string())));
+        assert!(setup.contains(&("diff.guitool", "comet-pro-gui".to_string())));
+        assert!(
+            setup
+                .iter()
+                .any(|(key, _)| *key == "mergetool.comet-pro.cmd")
+        );
+        assert!(
+            setup
+                .iter()
+                .all(|(key, value)| !key.contains("gitcomet") && !value.contains("gitcomet"))
+        );
+        assert!(
+            build_backup_entries_for(&names)
+                .iter()
+                .all(|entry| entry.backup_key.starts_with("comet-pro.backup."))
+        );
+
+        let uninstall = build_uninstall_entries_for(&names);
+        assert!(
+            uninstall
+                .iter()
+                .all(|entry| !entry.key.contains("gitcomet"))
+        );
+        // Shared selectors are removed only while they still select this product.
+        let selector = uninstall
+            .iter()
+            .find(|entry| entry.key == "merge.tool")
+            .unwrap();
+        assert_eq!(selector.expected_value, Some("comet-pro"));
+        let behavior = uninstall
+            .iter()
+            .find(|entry| entry.key == "mergetool.prompt")
+            .unwrap();
+        assert_eq!(behavior.guard.unwrap().expected_value, "comet-pro");
+    }
 
     fn count_occurrences(haystack: &str, needle: &str) -> usize {
         haystack.match_indices(needle).count()

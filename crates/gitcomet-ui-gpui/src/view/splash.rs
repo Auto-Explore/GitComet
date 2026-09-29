@@ -193,8 +193,13 @@ impl GitCometView {
         self.state
             .git_runtime
             .unavailable_detail()
-            .unwrap_or("GitComet could not find a usable Git executable.")
-            .to_string()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "{} could not find a usable Git executable.",
+                    crate::view::product_name()
+                )
+            })
     }
 
     fn git_unavailable_status_icon(theme: AppTheme, ui_scale_percent: u32) -> AnyElement {
@@ -504,9 +509,10 @@ impl GitCometView {
                     .text_size(self.theme.ui_text(14.0))
                     .line_height(self.theme.ui_text(22.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .child(
-                        "GitComet cannot open, refresh, or run repository actions until a Git executable is configured.",
-                    ),
+                    .child(format!(
+                        "{} cannot open, refresh, or run repository actions until a Git executable is configured.",
+                        crate::view::product_name()
+                    )),
             )
             .child(
                 div()
@@ -624,7 +630,10 @@ impl GitCometView {
                     div()
                         .text_size(self.theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
-                        .child("GitComet is opening your workspace."),
+                        .child(format!(
+                            "{} is opening your workspace.",
+                            crate::view::product_name()
+                        )),
                 )
                 .child(
                     div()

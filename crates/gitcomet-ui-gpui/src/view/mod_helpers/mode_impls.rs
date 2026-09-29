@@ -644,6 +644,7 @@ impl GitCometViewConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartupCrashReport {
+    /// Prefilled issue page; empty when the product has no issue tracker.
     pub issue_url: String,
     pub summary: String,
     pub crash_log_path: std::path::PathBuf,

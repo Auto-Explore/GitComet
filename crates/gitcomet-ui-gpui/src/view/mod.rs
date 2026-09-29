@@ -272,7 +272,7 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
-pub(crate) use update_check::update_checks_disabled_by_environment;
+pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
 mod user_survey;
 mod word_diff;
 
@@ -440,10 +440,40 @@ const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
 const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
-pub(crate) const WEBSITE_URL: &str = "https://gitcomet.dev";
-pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
-pub(crate) const RELEASES_URL: &str = "https://github.com/Auto-Explore/GitComet/releases";
-pub(crate) const DISCORD_URL: &str = "https://discord.com/invite/2ufDGP8RnA";
+
+/// Product links from the installed identity; `None` hides the entry point.
+pub(crate) fn website_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .website
+        .as_deref()
+}
+
+pub(crate) fn editions_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .editions
+        .as_deref()
+}
+
+pub(crate) fn releases_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .releases
+        .as_deref()
+}
+
+pub(crate) fn community_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .community
+        .as_deref()
+}
+
+/// The product name in window titles, menus, and messages.
+pub(crate) fn product_name() -> &'static str {
+    gitcomet_core::identity::current().display_name()
+}
 
 pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
     element.style().restrict_scroll_to_axis = Some(true);

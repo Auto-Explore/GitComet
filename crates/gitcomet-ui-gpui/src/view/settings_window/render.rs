@@ -325,7 +325,7 @@ impl SettingsWindowView {
                     .line_height(px(16.0))
                     .font_weight(FontWeight::BOLD)
                     .whitespace_nowrap()
-                    .child(SETTINGS_WINDOW_TITLE),
+                    .child(settings_window_title()),
             );
 
         let is_maximized = window.is_maximized();

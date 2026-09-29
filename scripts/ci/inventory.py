@@ -4,11 +4,14 @@
 snapshot OUT [cargo test selection...]
     Build the selected test harnesses and record each harness's tests with
     their ignored flag: {"<target kind>:<target name>": {"<test path>": ignored}}.
-compare OLD NEW [--mapping OUT]
+compare OLD NEW [--mapping OUT] [--harness OLD=NEW ...] [--replaced FILE]
     Map every OLD test to exactly one NEW test in the same harness. A test may
     move into a child module (its old module path is a prefix of the new one and
     its leaf name is unchanged) but may not change harness, name, or ignored
-    state. Fails on dropped, added, re-ignored, or ambiguous tests.
+    state. `--harness` declares that one harness's tests moved to another (a
+    crate split); `--replaced` names tests deliberately removed or added, as a
+    JSON object {"removed": {"harness test": "why"}, "added": {...}}. Fails on
+    any other dropped, added, re-ignored, or ambiguous test.
 """
 
 import argparse
@@ -63,14 +66,37 @@ def moved_to(old, new):
     old_parts, new_parts = old.split("::"), new.split("::")
     if old_parts[-1] != new_parts[-1] or len(new_parts) < len(old_parts):
         return False
-    # The old module path must survive as a prefix; the move may only insert
-    # child modules between it and the leaf.
-    return new_parts[:len(old_parts) - 1] == old_parts[:-1]
+    # Every old module must survive in order; a move may only insert modules
+    # (a child group, or a parent when a crate root becomes a module).
+    remaining = iter(new_parts[:-1])
+    return all(part in remaining for part in old_parts[:-1])
 
 
-def compare(old_path, new_path, mapping_out=None):
+def compare(old_path, new_path, mapping_out=None, harness_moves=(), replaced_path=None):
     old = json.loads(Path(old_path).read_text(encoding="utf-8"))
     new = json.loads(Path(new_path).read_text(encoding="utf-8"))
+    replaced = json.loads(Path(replaced_path).read_text(encoding="utf-8")) if replaced_path else {}
+    removed = {tuple(key.split(" ", 1)) for key in replaced.get("removed", {})}
+    added = {tuple(key.split(" ", 1)) for key in replaced.get("added", {})}
+    # Fold a moved harness into its destination under the destination's name;
+    # an emptied source harness may disappear.
+    for move in harness_moves:
+        source, destination = move.split("=", 1)
+        if source not in old:
+            raise SystemExit(f"--harness {move}: {source} is not in the old inventory")
+        moved = old.pop(source)
+        overlap = set(moved) & set(old.get(destination, {}))
+        if overlap:
+            raise SystemExit(f"--harness {move}: {len(overlap)} names already in {destination}")
+        old.setdefault(destination, {}).update(moved)
+        new.setdefault(source, {})
+        old.setdefault(source, {})
+    for harness, name in removed:
+        if old.get(harness, {}).pop(name, None) is None:
+            raise SystemExit(f"--replaced: {harness} {name} is not in the old inventory")
+    for harness, name in added:
+        if new.get(harness, {}).pop(name, None) is None:
+            raise SystemExit(f"--replaced: {harness} {name} is not in the new inventory")
     errors = []
     mapping = {}
     for harness in sorted(set(old) | set(new)):
@@ -114,12 +140,14 @@ def main():
     cmp.add_argument("old")
     cmp.add_argument("new")
     cmp.add_argument("--mapping")
+    cmp.add_argument("--harness", action="append", default=[], metavar="OLD=NEW")
+    cmp.add_argument("--replaced")
     args = parser.parse_args()
     if args.command == "snapshot":
         selection = args.selection[1:] if args.selection[:1] == ["--"] else args.selection
         snapshot(args.out, selection)
         return 0
-    return compare(args.old, args.new, args.mapping)
+    return compare(args.old, args.new, args.mapping, args.harness, args.replaced)
 
 
 if __name__ == "__main__":

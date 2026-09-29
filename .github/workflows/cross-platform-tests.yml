@@ -178,6 +178,14 @@ jobs:
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
         run: python3 scripts/ci/run.py doc --context workspace
+      # The example product is an external consumer: it compiles and runs
+      # its tests with only its own features, never the workspace's.
+      - name: Example product
+        if: success()
+        shell: bash
+        run: |
+          python3 scripts/ci/run.py compile --context example
+          python3 scripts/ci/run.py test --context example --schedule "$CI_TEST_SCHEDULE"
       # The workspace enables the UI's default features and runs its complete
       # suite. Only the headless app needs a separate feature context for smoke.
       - name: Compile Linux display-selection app context
