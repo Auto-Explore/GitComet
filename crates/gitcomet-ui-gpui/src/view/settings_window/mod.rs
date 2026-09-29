@@ -1478,6 +1478,7 @@ impl SettingsWindowView {
     }
 }
 
+mod cards;
 mod prefs;
 mod render;
 mod rows;

@@ -3903,3 +3903,38 @@ fn new_workspace_button_opens_an_empty_window(cx: &mut gpui::TestAppContext) {
 
     assert_eq!(count_views(&mut settings_cx), before + 1);
 }
+
+/// Unoptimized CI builds give every builder temporary its own stack slot, so
+/// the old single-function render needed ~2 MiB and overflowed the 2 MiB
+/// Windows test thread. Now ~670 KiB; an overflow here aborts the binary.
+#[test]
+fn settings_window_renders_every_category_within_a_bounded_stack() {
+    std::thread::Builder::new()
+        .name("settings_render_stack_budget".into())
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let _visual_guard = lock_visual_test();
+            let mut app = gpui::TestAppContext::single();
+            app.update(open_settings_window);
+            let window = app.update(|app| {
+                app.windows()
+                    .into_iter()
+                    .find_map(|window| window.downcast::<SettingsWindowView>())
+                    .expect("settings window should be open")
+            });
+            let view = window.root(&mut app).unwrap();
+            let cx = &mut gpui::VisualTestContext::from_window(*window.deref(), &mut app);
+            for &category in SettingsCategory::ALL {
+                view.update(cx, |view, cx| {
+                    view.expanded_section = None;
+                    view.select_category(category, cx);
+                });
+                crate::test_support::refresh_and_draw(cx);
+            }
+            view.update(cx, |view, cx| view.show_open_source_licenses(cx));
+            crate::test_support::refresh_and_draw(cx);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
