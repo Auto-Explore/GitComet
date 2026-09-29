@@ -49,7 +49,7 @@ impl MainPaneView {
         &self,
         visible_ix: usize,
         kind: DiffLineKind,
-    ) -> Option<String> {
+    ) -> Option<gitcomet_state::msg::ContentBytes> {
         let area = self.diff_stage_gutter_area()?;
         let src_ix = self.diff_stage_gutter_src_ix(visible_ix, kind)?;
         let rows = self.patch_diff_rows_slice(0, self.patch_diff_row_len());
@@ -67,6 +67,7 @@ impl MainPaneView {
                 )
             }
         }
+        .map(Into::into)
     }
 
     /// Apply the gutter button: stage the line in an unstaged diff, unstage it in

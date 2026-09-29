@@ -932,6 +932,7 @@ pub(super) struct ConflictTextHitbox {
 /// The wrapped layout a row painted, plus what it takes to read offsets back
 /// in row coordinates.
 pub(super) struct DiffTextWrappedHit {
+    pub(super) tab_width: usize,
     pub(super) layout: gpui::TextLayout,
     /// The row's raw text, when tabs were expanded for painting.
     pub(super) untabbed: Option<SharedString>,
@@ -940,8 +941,12 @@ pub(super) struct DiffTextWrappedHit {
 impl DiffTextWrappedHit {
     /// Offset in row coordinates for an offset in the painted text.
     pub(super) fn row_offset(&self, painted_offset: usize) -> usize {
+        let tab_width = self.tab_width;
+
         match &self.untabbed {
-            Some(raw) => crate::view::rows::markdown_flow_row_offset(raw, painted_offset),
+            Some(raw) => {
+                crate::view::rows::markdown_flow_row_offset(tab_width, raw, painted_offset)
+            }
             None => painted_offset,
         }
     }
@@ -949,8 +954,12 @@ impl DiffTextWrappedHit {
     /// Offset in the painted text for an offset in row coordinates — the
     /// inverse of [`Self::row_offset`].
     pub(super) fn painted_offset(&self, row_offset: usize) -> usize {
+        let tab_width = self.tab_width;
+
         match &self.untabbed {
-            Some(raw) => crate::view::rows::markdown_flow_painted_offset(raw, row_offset),
+            Some(raw) => {
+                crate::view::rows::markdown_flow_painted_offset(tab_width, raw, row_offset)
+            }
             None => row_offset,
         }
     }
@@ -998,6 +1007,7 @@ pub struct GitCometView {
     pub(super) _terminal_keystroke_interceptor: gpui::Subscription,
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
+    pub(super) _toast_errors_subscription: gpui::Subscription,
     pub(super) _open_repo_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
     pub(super) theme_mode: ThemeMode,
@@ -1073,6 +1083,7 @@ pub struct GitCometView {
     pub(super) annotate_enabled: bool,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
+    pub(super) diff_tab_size: u8,
     pub(super) diff_show_line_numbers: bool,
     pub(super) auto_save_file_edits: bool,
     pub(super) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
@@ -1149,7 +1160,6 @@ pub struct GitCometView {
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,
 
-    pub(super) error_banner_input: Entity<components::TextInput>,
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
     pub(super) auth_prompt_key: Option<String>,

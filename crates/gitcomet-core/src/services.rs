@@ -2,6 +2,7 @@ use crate::conflict_session::ConflictSession;
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
 use crate::remote_url::RemoteUrlPolicy;
+use crate::text_format::{TextAttributes, TextEncoding};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -923,6 +924,30 @@ pub trait GitRepository: Send + Sync {
         cancellation.check_cancelled()?;
         Ok(result)
     }
+    /// [`Self::diff_parsed_cancellable`], reading the file in `encoding` when
+    /// the user chose one.
+    fn diff_parsed_with_encoding_cancellable(
+        &self,
+        target: &DiffTarget,
+        _encoding: Option<TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        self.diff_parsed_cancellable(target, cancellation)
+    }
+    /// [`Self::diff_file_text_cancellable`] with both sides pointed at UTF-8
+    /// content, reading the file in `encoding` when the user chose one.
+    fn diff_file_text_with_encoding_cancellable(
+        &self,
+        target: &DiffTarget,
+        _encoding: Option<TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        self.diff_file_text_cancellable(target, cancellation)
+    }
+    /// `.gitattributes` and git config deciding how `path`'s content reads.
+    fn text_attributes(&self, _path: &Path) -> Result<TextAttributes> {
+        Ok(TextAttributes::default())
+    }
     fn diff_preview_text_file(
         &self,
         _target: &DiffTarget,
@@ -973,6 +998,16 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "conflict session loading is not implemented for this backend",
         )))
+    }
+
+    /// [`Self::conflict_session`], reading the file in `encoding` when the
+    /// user chose one.
+    fn conflict_session_with_encoding(
+        &self,
+        path: &Path,
+        _encoding: Option<TextEncoding>,
+    ) -> Result<Option<ConflictSession>> {
+        self.conflict_session(path)
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
@@ -1537,7 +1572,7 @@ pub trait GitRepository: Send + Sync {
 
     fn apply_unified_patch_to_index_with_output(
         &self,
-        _patch: &str,
+        _patch: &[u8],
         _reverse: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -1547,7 +1582,7 @@ pub trait GitRepository: Send + Sync {
 
     fn apply_unified_patch_to_worktree_with_output(
         &self,
-        _patch: &str,
+        _patch: &[u8],
         _reverse: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -2027,8 +2062,8 @@ mod tests {
         assert_unsupported(repo.launch_mergetool(path));
         assert_unsupported(repo.export_patch_with_output(&commit, path));
         assert_unsupported(repo.apply_patch_with_output(path));
-        assert_unsupported(repo.apply_unified_patch_to_index_with_output("@@ -1 +1 @@", false));
-        assert_unsupported(repo.apply_unified_patch_to_worktree_with_output("@@ -1 +1 @@", true));
+        assert_unsupported(repo.apply_unified_patch_to_index_with_output(b"@@ -1 +1 @@", false));
+        assert_unsupported(repo.apply_unified_patch_to_worktree_with_output(b"@@ -1 +1 @@", true));
         assert_unsupported(repo.list_worktrees());
         assert_unsupported(repo.add_worktree_with_output(path, Some("main")));
         assert_unsupported(repo.remove_worktree_with_output(path));

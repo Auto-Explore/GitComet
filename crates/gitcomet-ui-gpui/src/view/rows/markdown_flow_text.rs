@@ -16,6 +16,7 @@ type MarkdownFlowHighlightLayers = (MarkdownFlowHighlights, MarkdownFlowBackgrou
 /// One markdown row's text, painted with wrapping and wired to the shared
 /// selection machinery.
 pub(in crate::view) struct MarkdownFlowText {
+    tab_width: usize,
     view: Entity<MainPaneView>,
     row_ix: usize,
     region: DiffTextRegion,
@@ -53,6 +54,7 @@ pub(in crate::view) enum MarkdownFlowPaintPhase {
 
 impl MarkdownFlowText {
     pub(in crate::view) fn new(
+        tab_width: usize,
         view: Entity<MainPaneView>,
         row_ix: usize,
         region: DiffTextRegion,
@@ -64,6 +66,7 @@ impl MarkdownFlowText {
         MARKDOWN_FLOW_TEXTS_BUILT.with(|built| built.set(built.get() + 1));
         let (highlights, run_backgrounds) = split_markdown_flow_highlight_layers(highlights);
         Self {
+            tab_width,
             view,
             row_ix,
             region,
@@ -176,8 +179,10 @@ impl MarkdownFlowText {
 
     /// Offset in the painted text for an offset in row coordinates.
     fn painted_offset(&self, row_offset: usize) -> usize {
+        let tab_width = self.tab_width;
+
         match &self.untabbed {
-            Some(raw) => markdown_flow_painted_offset(raw, row_offset),
+            Some(raw) => markdown_flow_painted_offset(tab_width, raw, row_offset),
             None => row_offset.min(self.text.len()),
         }
     }
@@ -266,37 +271,24 @@ pub(in crate::view) fn markdown_flow_range_rects(
 }
 
 /// Offset in tab-expanded text for an offset in the raw text.
-pub(in crate::view) fn markdown_flow_painted_offset(raw: &str, row_offset: usize) -> usize {
-    let row_offset = row_offset.min(raw.len());
-    let tabs = raw.as_bytes()[..row_offset]
-        .iter()
-        .filter(|byte| **byte == b'\t')
-        .count();
-    row_offset + tabs * (MARKDOWN_FLOW_TAB_COLUMNS - 1)
+pub(in crate::view) fn markdown_flow_painted_offset(
+    tab_width: usize,
+    raw: &str,
+    row_offset: usize,
+) -> usize {
+    crate::view::tab_width::display_offset_for_raw_offset(tab_width, raw, row_offset)
 }
 
-/// Offset in the raw text for an offset in the tab-expanded text.
-pub(in crate::view) fn markdown_flow_row_offset(raw: &str, painted_offset: usize) -> usize {
-    let mut painted = 0usize;
-    for (ix, byte) in raw.bytes().enumerate() {
-        let width = if byte == b'\t' {
-            MARKDOWN_FLOW_TAB_COLUMNS
-        } else {
-            1
-        };
-        // A column that falls within this character's own columns belongs to
-        // it rather than to the next one, so a click inside an expanded tab
-        // resolves to the tab and a selection started there keeps the indent.
-        if painted + width > painted_offset {
-            return ix;
-        }
-        painted += width;
-    }
-    raw.len()
+/// Offset in the raw text for an offset in the tab-expanded text. A column
+/// inside an expanded tab belongs to the tab, so a click there resolves to it
+/// and a selection started there keeps the indent.
+pub(in crate::view) fn markdown_flow_row_offset(
+    tab_width: usize,
+    raw: &str,
+    painted_offset: usize,
+) -> usize {
+    crate::view::tab_width::raw_offset_for_display_offset(tab_width, raw, painted_offset)
 }
-
-/// Tabs are painted as this many spaces; `maybe_expand_tabs` is the producer.
-const MARKDOWN_FLOW_TAB_COLUMNS: usize = 4;
 
 /// How far past the window a row still counts as reachable, so a drag that
 /// runs off the edge and the rows a flick is about to bring in keep their
@@ -581,6 +573,7 @@ impl gpui::Element for MarkdownFlowText {
                         painted_text: text,
                         streamed_ascii_monospace_cell_width: None,
                         wrapped: Some(DiffTextWrappedHit {
+                            tab_width: self.tab_width,
                             layout,
                             untabbed: None,
                         }),
@@ -608,7 +601,11 @@ impl gpui::Element for MarkdownFlowText {
                     offset_map: None,
                     painted_text: self.text.clone(),
                     streamed_ascii_monospace_cell_width: None,
-                    wrapped: Some(DiffTextWrappedHit { layout, untabbed }),
+                    wrapped: Some(DiffTextWrappedHit {
+                        tab_width: self.tab_width,
+                        layout,
+                        untabbed,
+                    }),
                     cells: Vec::new(),
                 },
             );
@@ -658,29 +655,50 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_hits_keep_the_tab_width_of_their_layout() {
+        let hits = [2, 8].map(|tab_width| DiffTextWrappedHit {
+            tab_width,
+            layout: gpui::TextLayout::default(),
+            untabbed: Some("\tlet x = 1;".into()),
+        });
+        for hit in hits {
+            assert_eq!(hit.painted_offset(1), hit.tab_width);
+            assert_eq!(hit.row_offset(hit.tab_width), 1);
+            assert_eq!(hit.row_offset(hit.tab_width - 1), 0);
+        }
+    }
+
+    #[test]
     fn tab_offsets_round_trip_between_row_and_painted_text() {
+        let tab_width = 4;
+
         let raw = "\tlet x = 1;";
 
-        assert_eq!(markdown_flow_painted_offset(raw, 0), 0);
+        assert_eq!(markdown_flow_painted_offset(tab_width, raw, 0), 0);
         // The tab itself paints as four columns, so everything after it shifts.
-        assert_eq!(markdown_flow_painted_offset(raw, 1), 4);
-        assert_eq!(markdown_flow_painted_offset(raw, 5), 8);
-        assert_eq!(markdown_flow_painted_offset(raw, raw.len()), raw.len() + 3);
+        assert_eq!(markdown_flow_painted_offset(tab_width, raw, 1), 4);
+        assert_eq!(markdown_flow_painted_offset(tab_width, raw, 5), 8);
+        assert_eq!(
+            markdown_flow_painted_offset(tab_width, raw, raw.len()),
+            raw.len() + 3
+        );
 
-        assert_eq!(markdown_flow_row_offset(raw, 0), 0);
+        assert_eq!(markdown_flow_row_offset(tab_width, raw, 0), 0);
         // Any column inside the expanded tab resolves to the tab itself.
-        assert_eq!(markdown_flow_row_offset(raw, 2), 0);
-        assert_eq!(markdown_flow_row_offset(raw, 4), 1);
-        assert_eq!(markdown_flow_row_offset(raw, 8), 5);
-        assert_eq!(markdown_flow_row_offset(raw, 1_000), raw.len());
+        assert_eq!(markdown_flow_row_offset(tab_width, raw, 2), 0);
+        assert_eq!(markdown_flow_row_offset(tab_width, raw, 4), 1);
+        assert_eq!(markdown_flow_row_offset(tab_width, raw, 8), 5);
+        assert_eq!(markdown_flow_row_offset(tab_width, raw, 1_000), raw.len());
     }
 
     #[test]
     fn text_without_tabs_maps_offsets_unchanged() {
+        let tab_width = 4;
+
         let raw = "plain text";
         for offset in 0..=raw.len() {
-            assert_eq!(markdown_flow_painted_offset(raw, offset), offset);
-            assert_eq!(markdown_flow_row_offset(raw, offset), offset);
+            assert_eq!(markdown_flow_painted_offset(tab_width, raw, offset), offset);
+            assert_eq!(markdown_flow_row_offset(tab_width, raw, offset), offset);
         }
     }
 }

@@ -24,6 +24,7 @@ pub(super) struct SelectedDiffSlots {
     pub(super) submodule_summary: LatestTaskSlot,
     pub(super) file_image: LatestTaskSlot,
     pub(super) preview_text: LatestTaskSlot,
+    pub(super) text_attributes: LatestTaskSlot,
 }
 
 static WORKER_TASK_PANICS: AtomicU64 = AtomicU64::new(0);

@@ -98,38 +98,23 @@ fn text_for_range<'a>(text: &'a str, range: &Range<usize>) -> &'a str {
 }
 
 struct LineCursor<'a> {
-    text: &'a str,
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> LineCursor<'a> {
-    fn new(text: &'a str) -> Self {
-        Self {
-            text,
-            bytes: text.as_bytes(),
-            offset: 0,
-        }
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
     }
 
-    fn next(&mut self) -> Option<(Range<usize>, &'a str)> {
+    fn next(&mut self) -> Option<(Range<usize>, &'a [u8])> {
         if self.offset >= self.bytes.len() {
             return None;
         }
-
         let start = self.offset;
-        self.offset = self.text[start..]
-            .find('\n')
-            .map(|rel| start.saturating_add(rel).saturating_add(1))
-            .unwrap_or(self.bytes.len());
-
-        let end = self.offset;
-        Some((
-            start..end,
-            self.text
-                .get(start..end)
-                .expect("line cursor produced invalid byte range"),
-        ))
+        self.offset = memchr::memchr(b'\n', &self.bytes[start..])
+            .map_or(self.bytes.len(), |relative| start + relative + 1);
+        Some((start..self.offset, &self.bytes[start..self.offset]))
     }
 }
 
@@ -139,12 +124,17 @@ impl<'a> LineCursor<'a> {
 /// Parsing is intentionally conservative. If a marker block is malformed, all
 /// consumed marker text is preserved as context and parsing continues.
 pub fn parse_conflict_marker_ranges(text: &str) -> Vec<ParsedConflictSegmentRanges> {
+    parse_conflict_marker_ranges_bytes(text.as_bytes())
+}
+
+/// The same ASCII marker grammar over original bytes, before text decoding.
+pub fn parse_conflict_marker_ranges_bytes(text: &[u8]) -> Vec<ParsedConflictSegmentRanges> {
     let mut segments = Vec::new();
     let mut context_start = 0usize;
     let mut it = LineCursor::new(text);
 
     while let Some((line_range, line)) = it.next() {
-        if !line.as_bytes().starts_with(b"<<<<<<<") {
+        if !line.starts_with(b"<<<<<<<") {
             continue;
         }
 
@@ -161,19 +151,19 @@ pub fn parse_conflict_marker_ranges(text: &str) -> Vec<ParsedConflictSegmentRang
         let mut base_range: Option<Range<usize>> = None;
 
         while let Some((next_range, next_line)) = it.next() {
-            if next_line.as_bytes().starts_with(b"=======") {
+            if next_line.starts_with(b"=======") {
                 separator_range = Some(next_range.clone());
                 ours_end = next_range.start;
                 break;
             }
 
-            if next_line.as_bytes().starts_with(b"|||||||") {
+            if next_line.starts_with(b"|||||||") {
                 ours_end = next_range.start;
                 let base_start = next_range.end;
                 let mut base_end = base_start;
 
                 while let Some((base_line_range, base_line)) = it.next() {
-                    if base_line.as_bytes().starts_with(b"=======") {
+                    if base_line.starts_with(b"=======") {
                         separator_range = Some(base_line_range.clone());
                         base_end = base_line_range.start;
                         break;
@@ -198,7 +188,7 @@ pub fn parse_conflict_marker_ranges(text: &str) -> Vec<ParsedConflictSegmentRang
         let mut marker_end: Option<usize> = None;
 
         while let Some((theirs_line_range, theirs_line)) = it.next() {
-            if theirs_line.as_bytes().starts_with(b">>>>>>>") {
+            if theirs_line.starts_with(b">>>>>>>") {
                 marker_end = Some(theirs_line_range.end);
                 theirs_end = theirs_line_range.start;
                 break;

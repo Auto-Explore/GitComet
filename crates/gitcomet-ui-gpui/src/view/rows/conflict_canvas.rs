@@ -107,6 +107,7 @@ pub(super) struct AlignmentMarkContext {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_conflict_row_canvas(
+    tab_width: usize,
     theme: AppTheme,
     view: Entity<MainPaneView>,
     visible_row_ix: usize,
@@ -129,10 +130,18 @@ pub(super) fn split_conflict_row_canvas(
     chunk_context: Option<ConflictChunkContext>,
     ui_scale_percent: u32,
 ) -> AnyElement {
-    let left_prepared =
-        prepare_conflict_text_for_canvas(left_text, left_styled, reveal_whitespace_chars);
-    let right_prepared =
-        prepare_conflict_text_for_canvas(right_text, right_styled, reveal_whitespace_chars);
+    let left_prepared = prepare_conflict_text_for_canvas(
+        tab_width,
+        left_text,
+        left_styled,
+        reveal_whitespace_chars,
+    );
+    let right_prepared = prepare_conflict_text_for_canvas(
+        tab_width,
+        right_text,
+        right_styled,
+        reveal_whitespace_chars,
+    );
 
     keyed_canvas(
         ("conflict_resolver_split_row_canvas", visible_row_ix),
@@ -334,6 +343,7 @@ pub(super) fn split_conflict_row_canvas(
 /// Canvas renderer for a single conflict column (used when per-column lists are active).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn single_column_conflict_canvas(
+    tab_width: usize,
     theme: AppTheme,
     view: Entity<MainPaneView>,
     id_prefix: &'static str,
@@ -363,7 +373,8 @@ pub(super) fn single_column_conflict_canvas(
     hitbox_column: Option<ThreeWayColumn>,
     ui_scale_percent: u32,
 ) -> AnyElement {
-    let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
+    let prepared =
+        prepare_conflict_text_for_canvas(tab_width, text, styled, reveal_whitespace_chars);
     let row_selected = row_selection == Some(true);
     let alignment_marked = alignment_mark.is_some_and(|mark| mark.marked);
 
@@ -610,6 +621,7 @@ struct PreparedConflictText {
 }
 
 fn prepare_conflict_text_for_canvas(
+    tab_width: usize,
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
     reveal_whitespace_chars: bool,
@@ -649,7 +661,7 @@ fn prepare_conflict_text_for_canvas(
     }
 
     if reveal_whitespace_chars {
-        let visible = whitespace_visible_line_styled_text_for_raw(styled, text.as_ref());
+        let visible = whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref());
         return PreparedConflictText {
             text: visible.text,
             highlights: visible.highlights,
@@ -942,7 +954,9 @@ mod tests {
 
     #[test]
     fn prepare_text_cell_applies_whitespace_when_no_styled_text() {
-        let prepared = prepare_conflict_text_for_canvas("a b\t".into(), None, true);
+        let tab_width = 4;
+
+        let prepared = prepare_conflict_text_for_canvas(tab_width, "a b\t".into(), None, true);
         assert_eq!(prepared.text.as_ref(), "a·b→↵");
         assert!(prepared.highlights.is_empty());
     }
@@ -1014,6 +1028,8 @@ mod tests {
 
     #[test]
     fn prepare_text_cell_remaps_highlighted_styled_text_for_whitespace() {
+        let tab_width = 4;
+
         let style = gpui::HighlightStyle::default();
         let styled = CachedDiffStyledText {
             text: "a b".into(),
@@ -1022,7 +1038,8 @@ mod tests {
             text_hash: 7,
         };
 
-        let prepared = prepare_conflict_text_for_canvas("a b".into(), Some(&styled), true);
+        let prepared =
+            prepare_conflict_text_for_canvas(tab_width, "a b".into(), Some(&styled), true);
         assert_eq!(prepared.text.as_ref(), "a·b↵");
         assert_eq!(prepared.highlights.len(), 1);
         assert_eq!(prepared.highlights[0].0, 1..4);
@@ -1032,6 +1049,8 @@ mod tests {
 
     #[test]
     fn prepare_text_cell_applies_whitespace_for_unhighlighted_styled_text() {
+        let tab_width = 4;
+
         let styled = CachedDiffStyledText {
             text: "a b\t".into(),
             highlights: empty_highlights(),
@@ -1039,7 +1058,8 @@ mod tests {
             text_hash: 1,
         };
 
-        let prepared = prepare_conflict_text_for_canvas("a b\t".into(), Some(&styled), true);
+        let prepared =
+            prepare_conflict_text_for_canvas(tab_width, "a b\t".into(), Some(&styled), true);
         assert_eq!(prepared.text.as_ref(), "a·b→↵");
         assert!(prepared.highlights.is_empty());
         assert_eq!(prepared.highlights_hash, 0);

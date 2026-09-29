@@ -80,18 +80,19 @@ impl GitCometView {
         let git_runtime_changed = self.state.git_runtime != next.git_runtime;
         let prev_git_runtime_available = self.state.git_runtime.is_available();
         let prev_had_repos = !self.state.repos.is_empty();
-        let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
-        let next_banner_error = next.banner_error.clone();
         let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
         let mut follow_up_msgs = Vec::new();
         let hook_activity_workflow_repo = self
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
 
+        // Reported once each after the diff: some failures are recorded both
+        // as a notification and as a diagnostic, and one event is one error.
+        let mut error_reports: Vec<ErrorReport> = Vec::new();
         let old_notification_len = self.state.notifications.len();
         let new_notifications = next
             .notifications
@@ -106,7 +107,7 @@ impl GitCometView {
                     components::ToastKind::Success
                 }
                 AppNotificationKind::Error => {
-                    self.show_error_banner(None, notification.message);
+                    error_reports.push(ErrorReport::message(None, notification.message));
                     continue;
                 }
             };
@@ -114,19 +115,34 @@ impl GitCometView {
         }
 
         for next_repo in &next.repos {
-            let (old_diag_len, old_cmd_len) = self
+            let (old_diag_len, old_diag_seq, old_cmd_len) = self
                 .state
                 .repos
                 .iter()
                 .find(|r| r.id == next_repo.id)
-                .map(|r| (r.feedback.diagnostics.len(), r.feedback.command_log.len()))
-                .unwrap_or((0, 0));
+                .map(|r| {
+                    (
+                        r.feedback.diagnostics.len(),
+                        r.feedback.diagnostics_seq,
+                        r.feedback.command_log.len(),
+                    )
+                })
+                .unwrap_or((0, 0, 0));
+            let diagnostics = &next_repo.feedback.diagnostics;
+            let appended = usize::try_from(
+                next_repo
+                    .feedback
+                    .diagnostics_seq
+                    .wrapping_sub(old_diag_seq),
+            )
+            .unwrap_or(usize::MAX)
+            .max(diagnostics.len().saturating_sub(old_diag_len));
 
             let new_diag_messages = next_repo
                 .feedback
                 .diagnostics
                 .iter()
-                .skip(old_diag_len.min(next_repo.feedback.diagnostics.len()))
+                .skip(diagnostics.len().saturating_sub(appended))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
@@ -136,7 +152,7 @@ impl GitCometView {
                 {
                     self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
                 }
-                self.show_error_banner(Some(next_repo.id), msg);
+                error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
             let new_command_entries = next_repo
@@ -189,7 +205,10 @@ impl GitCometView {
                             .find(|operation| operation.id == operation_id)
                             .is_some_and(outer_failure_after_hooks);
                     if outer_failure_after_hooks {
-                        self.show_error_banner(Some(next_repo.id), entry.summary.clone());
+                        error_reports.push(ErrorReport::message(
+                            Some(next_repo.id),
+                            entry.summary.clone(),
+                        ));
                     }
                     continue;
                 }
@@ -199,7 +218,10 @@ impl GitCometView {
                         self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
                     }
                 } else {
-                    self.show_error_banner(Some(next_repo.id), entry.summary.clone());
+                    error_reports.push(ErrorReport::message(
+                        Some(next_repo.id),
+                        entry.summary.clone(),
+                    ));
                 }
             }
 
@@ -224,7 +246,7 @@ impl GitCometView {
                 if outer_failure_after_hooks(operation) {
                     // Git can fail after every hook passed (for example while
                     // signing the commit). The ordinary command log owns that
-                    // banner because it retains the real Git error detail.
+                    // error because it retains the real Git error detail.
                     continue;
                 }
                 if hook_activity_workflow_repo == Some(next_repo.id) {
@@ -258,6 +280,12 @@ impl GitCometView {
                 })
             {
                 self.pending_pull_reconcile_prompt = Some(next_repo.id);
+            }
+        }
+        let mut reported = FxHashSet::default();
+        for report in error_reports {
+            if reported.insert(report.message.clone()) {
+                self.report_error(report, cx);
             }
         }
 
@@ -334,6 +362,7 @@ impl GitCometView {
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
         self.toast_host.update(cx, |host, cx| {
+            host.set_errors_hidden(next.auth_prompt.is_some(), cx);
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
             host.sync_hook_progress(next_hook_progress, cx);
@@ -352,7 +381,22 @@ impl GitCometView {
             }
         }
 
+        let repos_closed = self
+            .state
+            .repos
+            .iter()
+            .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
         self.state = next;
+        if repos_closed {
+            // A closed repo's errors name what no longer exists.
+            let repos = Arc::clone(&self.state);
+            self.toast_host.update(cx, |host, cx| {
+                host.retain_errors_of_open_repos(
+                    |repo_id| repos.repos.iter().any(|repo| repo.id == repo_id),
+                    cx,
+                )
+            });
+        }
         if self.state.git_log_settings.verify_commit_signatures
             && matches!(
                 self.state.signing_tools.gpg.availability,
@@ -445,7 +489,6 @@ impl GitCometView {
         );
 
         git_runtime_changed
-            || prev_banner_error != next_banner_error
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
     }

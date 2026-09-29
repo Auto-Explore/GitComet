@@ -8834,6 +8834,8 @@ fn inline_code_keeps_the_surrounding_prose_in_the_body_font(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn switching_between_dark_themes_restyles_an_open_markdown_preview(cx: &mut gpui::TestAppContext) {
+    let tab_width = 4;
+
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -8869,6 +8871,7 @@ fn switching_between_dark_themes_restyles_an_open_markdown_preview(cx: &mut gpui
             panic!("expected a ready preview");
         };
         let shown = crate::view::rows::markdown_preview_styled_row_with_query(
+            tab_width,
             pane.theme,
             &document.rows[0],
             0,
@@ -8880,6 +8883,7 @@ fn switching_between_dark_themes_restyles_an_open_markdown_preview(cx: &mut gpui
         let fresh_document =
             crate::view::markdown_preview::parse_markdown(source).expect("fixture parses");
         let fresh = crate::view::rows::markdown_preview_styled_row_with_query(
+            tab_width,
             amber,
             &fresh_document.rows[0],
             0,

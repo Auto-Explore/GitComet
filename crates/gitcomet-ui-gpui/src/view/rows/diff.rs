@@ -428,6 +428,7 @@ fn prepared_streamed_diff_text_spec(
 }
 
 fn build_file_diff_cached_styled_text(
+    tab_width: usize,
     theme: AppTheme,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     word_ranges: &[Range<usize>],
@@ -437,8 +438,9 @@ fn build_file_diff_cached_styled_text(
     word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     if should_truncate_file_diff_display(raw_text) {
-        let display = file_diff_display_text(raw_text);
+        let display = file_diff_display_text(tab_width, raw_text);
         return build_cached_diff_styled_text(
+            tab_width,
             theme,
             display.as_ref(),
             &[],
@@ -450,6 +452,7 @@ fn build_file_diff_cached_styled_text(
     }
 
     build_cached_diff_styled_text(
+        tab_width,
         theme,
         raw_text.as_ref(),
         word_ranges,
@@ -462,6 +465,7 @@ fn build_file_diff_cached_styled_text(
 
 #[allow(clippy::too_many_arguments)]
 fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+    tab_width: usize,
     theme: AppTheme,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     word_ranges: &[Range<usize>],
@@ -471,9 +475,10 @@ fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
     projected: rows::PreparedDiffSyntaxLine,
 ) -> (CachedDiffStyledText, bool) {
     if should_truncate_file_diff_display(raw_text) {
-        let display = file_diff_display_text(raw_text);
+        let display = file_diff_display_text(tab_width, raw_text);
         return (
             build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 display.as_ref(),
                 &[],
@@ -487,6 +492,7 @@ fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
     }
 
     build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+        tab_width,
         theme,
         raw_text.as_ref(),
         word_ranges,
@@ -1003,6 +1009,8 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let tab_width = this.display_tab_width;
+
         let annot_hover = this.blame_annot_hover;
         let stage_area = this.diff_stage_gutter_area();
         let stage_hover = this.diff_stage_gutter_hover;
@@ -1195,7 +1203,7 @@ impl MainPaneView {
                                     let projected = this.file_diff_inline_projected_syntax(&line);
                                     let syntax_mode = DiffSyntaxMode::Auto;
                                     let (styled, is_pending) =
-                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(tab_width,
                                             theme,
                                             &row.text,
                                             &row_word_ranges,
@@ -1220,7 +1228,7 @@ impl MainPaneView {
                                 )
                             };
 
-                            diff_row(
+                            diff_row(tab_width,
                                 theme,
                                 ui_scale_percent,
                                 visible_ix,
@@ -1330,6 +1338,7 @@ impl MainPaneView {
                         .collect::<Vec<_>>();
                     let batched_styles =
                         build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+                            tab_width,
                             theme,
                             Some(language),
                             PreparedDiffSyntaxTextSource {
@@ -1455,7 +1464,7 @@ impl MainPaneView {
                                 let projected = this.file_diff_inline_projected_syntax(&line);
                                 let syntax_mode = DiffSyntaxMode::Auto;
                                 let (styled, is_pending) =
-                                    build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+                                    build_file_diff_cached_styled_text_for_prepared_line_nonblocking(tab_width,
                                         theme,
                                         &row.text,
                                         &row_word_ranges,
@@ -1509,7 +1518,7 @@ impl MainPaneView {
                             let projected = this.file_diff_inline_projected_syntax(&line);
                             let syntax_mode = DiffSyntaxMode::Auto;
                             let (styled, is_pending) =
-                                build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                build_cached_diff_styled_text_for_prepared_document_line_nonblocking(tab_width,
                                     theme,
                                     diff_content_text(&line),
                                     &row_word_ranges,
@@ -1541,7 +1550,7 @@ impl MainPaneView {
                     };
                     let _ = cache_epoch;
 
-                    diff_row(
+                    diff_row(tab_width,
                         theme,
                         ui_scale_percent,
                         visible_ix,
@@ -1644,6 +1653,7 @@ impl MainPaneView {
                         let content_text = diff_content_text(&line);
 
                         build_cached_diff_styled_text_with_source_identity(
+                            tab_width,
                             theme,
                             content_text,
                             Some(DiffTextSourceIdentity::from_str(content_text)),
@@ -1657,6 +1667,7 @@ impl MainPaneView {
                         let display =
                             this.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
                         build_cached_diff_styled_text(
+                            tab_width,
                             theme,
                             display.as_ref(),
                             &[] as &[Range<usize>],
@@ -1692,6 +1703,7 @@ impl MainPaneView {
                     None
                 };
                 diff_row(
+                    tab_width,
                     theme,
                     ui_scale_percent,
                     visible_ix,
@@ -1762,6 +1774,8 @@ impl MainPaneView {
         annot_hover: Option<(usize, AnnotArea)>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let tab_width = this.display_tab_width;
+
         let stage_area = this.diff_stage_gutter_area();
         let stage_hover = this.diff_stage_gutter_hover;
         let min_width =
@@ -1941,7 +1955,7 @@ impl MainPaneView {
                                 let raw_text = file_diff_split_side_text(&row, is_left);
                                 if let Some(raw_text) = raw_text {
                                     let (styled, is_pending) =
-                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(tab_width,
                                             theme,
                                             raw_text,
                                             &row_word_ranges,
@@ -1979,7 +1993,7 @@ impl MainPaneView {
                                 None
                             };
 
-                            patch_split_column_row(
+                            patch_split_column_row(tab_width,
                                 theme,
                                 ui_scale_percent,
                                 column,
@@ -2076,7 +2090,7 @@ impl MainPaneView {
                     {
                         let raw_text = file_diff_split_side_text(&row, is_left);
                         if let Some(raw_text) = raw_text {
-                            let (styled, is_pending) = build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+                            let (styled, is_pending) = build_file_diff_cached_styled_text_for_prepared_line_nonblocking(tab_width,
                                 theme,
                                 raw_text,
                                 &row_word_ranges,
@@ -2121,7 +2135,7 @@ impl MainPaneView {
                         "diff text segment cache missing for split-{column:?} row {row_ix} after populate"
                     );
 
-                    patch_split_column_row(
+                    patch_split_column_row(tab_width,
                         theme,
                         ui_scale_percent,
                         column,
@@ -2223,6 +2237,7 @@ impl MainPaneView {
                                     file_diff_split_side_text(&row, is_left)
                                 {
                                     build_file_diff_cached_styled_text(
+                                        tab_width,
                                         theme,
                                         raw_text,
                                         word_ranges.as_slice(),
@@ -2233,6 +2248,7 @@ impl MainPaneView {
                                     )
                                 } else {
                                     build_cached_diff_styled_text(
+                                        tab_width,
                                         theme,
                                         "",
                                         word_ranges.as_slice(),
@@ -2261,6 +2277,7 @@ impl MainPaneView {
                         };
 
                         patch_split_column_row(
+                            tab_width,
                             theme,
                             ui_scale_percent,
                             column,
@@ -2313,6 +2330,7 @@ impl MainPaneView {
                         {
                             let display = this.diff_text_line_for_region(visible_ix, region);
                             let computed = build_cached_diff_styled_text(
+                                tab_width,
                                 theme,
                                 display.as_ref(),
                                 &[],
@@ -2377,6 +2395,7 @@ impl MainPaneView {
 
 #[allow(clippy::too_many_arguments)]
 fn diff_row(
+    tab_width: usize,
     theme: AppTheme,
     ui_scale_percent: u32,
     visible_ix: usize,
@@ -2545,6 +2564,7 @@ fn diff_row(
             let stage = stage_area
                 .and_then(|area| stage_gutter_spec(area, DiffStageSlot::Inline, visual_kind));
             diff_canvas::inline_diff_line_row_canvas(
+                tab_width,
                 theme,
                 cx.entity(),
                 ui_scale_percent,
@@ -2621,6 +2641,7 @@ fn diff_row(
                 .filter(|spec| spec.kind == DiffLineKind::Add);
 
             diff_canvas::split_diff_line_row_canvas(
+                tab_width,
                 theme,
                 cx.entity(),
                 ui_scale_percent,
@@ -2945,6 +2966,7 @@ pub(super) enum PatchSplitColumn {
 
 #[allow(clippy::too_many_arguments)]
 fn patch_split_column_row(
+    tab_width: usize,
     theme: AppTheme,
     ui_scale_percent: u32,
     column: PatchSplitColumn,
@@ -3003,6 +3025,7 @@ fn patch_split_column_row(
     });
 
     diff_canvas::patch_split_column_row_canvas(
+        tab_width,
         theme,
         cx.entity(),
         ui_scale_percent,

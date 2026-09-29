@@ -581,6 +581,7 @@ impl Element for TextElement {
                         wrap_width,
                         precomputed_runs,
                         &line_style,
+                        input.tab_size,
                         window,
                     );
                     rows_changed |= input.set_measured_wrap_rows(

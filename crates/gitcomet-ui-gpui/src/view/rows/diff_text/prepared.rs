@@ -53,20 +53,32 @@ pub(in crate::view) fn prepared_diff_syntax_line_for_inline_diff_row(
 /// Takes and returns the row canvases' own coordinates: a document line index
 /// and a tab-expanded display offset within that line.
 pub(in crate::view) fn prepared_diff_syntax_pair_at_display_offset(
+    tab_width: usize,
     document: PreparedDiffSyntaxDocument,
     line_ix: usize,
     display_offset: usize,
 ) -> Option<syntax::PreparedSyntaxPairHit> {
-    syntax::prepared_document_syntax_pair_at_display_offset(document.inner, line_ix, display_offset)
+    syntax::prepared_document_syntax_pair_at_display_offset(
+        tab_width,
+        document.inner,
+        line_ix,
+        display_offset,
+    )
 }
 
 /// Every place the clicked name appears, in the row canvases' coordinates.
 pub(in crate::view) fn prepared_diff_syntax_occurrences_at_display_offset(
+    tab_width: usize,
     document: PreparedDiffSyntaxDocument,
     line_ix: usize,
     display_offset: usize,
 ) -> Vec<syntax::PreparedSyntaxPairSpan> {
-    syntax::prepared_document_occurrences_at_display_offset(document.inner, line_ix, display_offset)
+    syntax::prepared_document_occurrences_at_display_offset(
+        tab_width,
+        document.inner,
+        line_ix,
+        display_offset,
+    )
 }
 
 fn map_prepare_result(
@@ -290,6 +302,7 @@ impl PreparedDocumentLineStyledText {
 }
 
 pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+    tab_width: usize,
     theme: AppTheme,
     text: &str,
     word_ranges: &[Range<usize>],
@@ -299,6 +312,7 @@ pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line
     prepared_line: PreparedDiffSyntaxLine,
 ) -> PreparedDocumentLineStyledText {
     build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
+        tab_width,
         theme,
         None,
         PreparedDiffTextBuildRequest {
@@ -315,11 +329,13 @@ pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line
 }
 
 pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+    tab_width: usize,
     theme: AppTheme,
     highlight_palette: &SyntaxHighlightPalette,
     request: PreparedDiffTextBuildRequest<'_>,
 ) -> PreparedDocumentLineStyledText {
     build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
+        tab_width,
         theme,
         Some(highlight_palette),
         request,
@@ -327,6 +343,7 @@ pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line
 }
 
 fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
+    tab_width: usize,
     theme: AppTheme,
     highlight_palette: Option<&SyntaxHighlightPalette>,
     request: PreparedDiffTextBuildRequest<'_>,
@@ -341,7 +358,16 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
         mode: syntax_mode,
     } = request.build.syntax;
     let fallback = |mode| {
-        build_cached_diff_styled_text(theme, text, word_ranges, query, language, mode, word_kind)
+        build_cached_diff_styled_text(
+            tab_width,
+            theme,
+            text,
+            word_ranges,
+            query,
+            language,
+            mode,
+            word_kind,
+        )
     };
 
     if language.is_none() {
@@ -379,14 +405,14 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
                                 );
                             }
                         }
-                        styled_text_to_cached_from_buf(text, buf)
+                        styled_text_to_cached_from_buf(tab_width, text, buf)
                     })
                 };
 
                 if should_cache_single_line_styled_text(text) {
                     let (key, cached) = SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
                         let mut cache = cache.borrow_mut();
-                        let key = cache.prepared_key_for(theme, text, &tokens);
+                        let key = cache.prepared_key_for(tab_width, theme, text, &tokens);
                         let styled = cache.get_prepared(key, text, &tokens);
                         (key, styled)
                     });
@@ -409,6 +435,7 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
                 PreparedDocumentLineStyledText::Cacheable(build_syntax_only())
             } else {
                 PreparedDocumentLineStyledText::Cacheable(build_styled_text_fused(
+                    tab_width,
                     theme,
                     FusedDiffTextBuildRequest {
                         build: DiffTextBuildRequest {
@@ -536,6 +563,7 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
 }
 
 pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+    tab_width: usize,
     theme: AppTheme,
     language: Option<DiffSyntaxLanguage>,
     old_source: PreparedDiffSyntaxTextSource,
@@ -548,6 +576,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
             .iter()
             .map(|row| {
                 PreparedDocumentLineStyledText::Cacheable(build_cached_diff_styled_text(
+                    tab_width,
                     theme,
                     row.text,
                     &[],
@@ -568,6 +597,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
     }
 
     fn styled_text_from_prepared_line_token_request(
+        tab_width: usize,
         theme: AppTheme,
         language: DiffSyntaxLanguage,
         text: &str,
@@ -583,7 +613,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                             tokens.as_ref(),
                             buf,
                         );
-                        styled_text_to_cached_from_buf(text, buf)
+                        styled_text_to_cached_from_buf(tab_width, text, buf)
                     },
                 ))
             }
@@ -598,7 +628,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                             tokens,
                             highlights,
                         );
-                        styled_text_to_cached_from_buf(text, highlights)
+                        styled_text_to_cached_from_buf(tab_width, text, highlights)
                     })
                 });
                 PreparedDocumentLineStyledText::Pending(styled)
@@ -607,12 +637,14 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
     }
 
     fn fallback_syntax_only_row(
+        tab_width: usize,
         theme: AppTheme,
         language: DiffSyntaxLanguage,
         text: &str,
         fallback_syntax_mode: DiffSyntaxMode,
     ) -> PreparedDocumentLineStyledText {
         PreparedDocumentLineStyledText::Cacheable(build_cached_diff_styled_text(
+            tab_width,
             theme,
             text,
             &[],
@@ -624,6 +656,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
     }
 
     fn fill_side_results(
+        tab_width: usize,
         theme: AppTheme,
         language: DiffSyntaxLanguage,
         source: PreparedDiffSyntaxTextSource,
@@ -638,6 +671,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         let Some(document) = source.document else {
             for row in rows {
                 results[row.result_ix] = Some(fallback_syntax_only_row(
+                    tab_width,
                     theme,
                     language,
                     row.text,
@@ -670,6 +704,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                     for (row, token_request) in group.iter().zip(token_requests.iter()) {
                         results[row.result_ix] =
                             Some(styled_text_from_prepared_line_token_request(
+                                tab_width,
                                 theme,
                                 language,
                                 row.text,
@@ -679,6 +714,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                 } else {
                     for row in group {
                         results[row.result_ix] = Some(fallback_syntax_only_row(
+                            tab_width,
                             theme,
                             language,
                             row.text,
@@ -714,6 +750,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                     });
                 } else {
                     results[result_ix] = Some(fallback_syntax_only_row(
+                        tab_width,
                         theme,
                         language,
                         row.text,
@@ -735,6 +772,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                     });
                 } else {
                     results[result_ix] = Some(fallback_syntax_only_row(
+                        tab_width,
                         theme,
                         language,
                         row.text,
@@ -745,6 +783,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
             DiffLineKind::Header | DiffLineKind::Hunk => {
                 results[result_ix] = Some(PreparedDocumentLineStyledText::Cacheable(
                     build_cached_diff_styled_text(
+                        tab_width,
                         theme,
                         row.text,
                         &[],
@@ -759,6 +798,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
     }
 
     fill_side_results(
+        tab_width,
         theme,
         language,
         old_source,
@@ -767,6 +807,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         fallback_syntax_mode,
     );
     fill_side_results(
+        tab_width,
         theme,
         language,
         new_source,
@@ -780,7 +821,13 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         .enumerate()
         .map(|(ix, styled)| {
             styled.unwrap_or_else(|| {
-                fallback_syntax_only_row(theme, language, rows[ix].text, fallback_syntax_mode)
+                fallback_syntax_only_row(
+                    tab_width,
+                    theme,
+                    language,
+                    rows[ix].text,
+                    fallback_syntax_mode,
+                )
             })
         })
         .collect()

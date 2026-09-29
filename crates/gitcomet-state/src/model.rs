@@ -13,6 +13,7 @@ use gitcomet_core::services::{
     SubmoduleTrustTarget,
 };
 use gitcomet_core::signing_tools::SigningToolsState;
+use gitcomet_core::text_format::{TextAttributes, TextEncoding, TextOverride};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -434,11 +435,7 @@ impl ConflictFile {
 fn conflict_file_side_from_payload(
     payload: &ConflictPayload,
 ) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
-    match payload {
-        ConflictPayload::Text(text) => (None, Some(text.clone())),
-        ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
-        ConflictPayload::Absent => (None, None),
-    }
+    payload.clone().into_stage_parts()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -710,7 +707,6 @@ pub struct AppState {
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
-    pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub branch_exists_prompt: Option<BranchExistsPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
@@ -769,12 +765,6 @@ pub struct BranchExistsPromptState {
     pub name: String,
     pub target: String,
     pub operation: BranchExistsPromptOperation,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BannerErrorState {
-    pub repo_id: Option<RepoId>,
-    pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1336,6 +1326,36 @@ pub struct DiffState {
     pub inline_submodule_diff_rev: u64,
     pub inline_submodule_diff: Option<InlineSubmoduleDiffState>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
+    pub text_attributes_rev: u64,
+    /// `.gitattributes` and config for the selected file.
+    pub text_attributes: Loadable<Arc<TextAttributes>>,
+    pub text_override_rev: u64,
+    /// The user's encoding / line-ending / tab-size choice for the open file.
+    /// Dropped when another path is selected.
+    pub text_override: Option<OpenFileTextOverride>,
+}
+
+/// A [`TextOverride`] and the file it belongs to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenFileTextOverride {
+    pub path: PathBuf,
+    pub value: TextOverride,
+}
+
+impl DiffState {
+    /// The override for `path` when it is the open file.
+    pub fn text_override_for(&self, path: &std::path::Path) -> Option<TextOverride> {
+        self.text_override
+            .as_ref()
+            .filter(|open| open.path == path)
+            .map(|open| open.value)
+    }
+
+    /// The user's encoding choice for the selected file.
+    pub fn selected_encoding_override(&self) -> Option<TextEncoding> {
+        let path = self.diff_target.as_ref()?.file_path()?;
+        self.text_override_for(path)?.encoding
+    }
 }
 
 impl Default for DiffState {
@@ -1359,6 +1379,10 @@ impl Default for DiffState {
             inline_submodule_diff_rev: 0,
             inline_submodule_diff: None,
             diff_file_image: Loadable::NotLoaded,
+            text_attributes_rev: 0,
+            text_attributes: Loadable::NotLoaded,
+            text_override_rev: 0,
+            text_override: None,
         }
     }
 }
@@ -1646,6 +1670,8 @@ pub struct RepoFeedbackState {
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
+    /// Number appended, including entries evicted from the bounded history.
+    pub diagnostics_seq: u64,
     pub command_log: Vec<CommandLogEntry>,
     pub hook_activity: Vec<GitHookOperation>,
     pub hook_activity_rev: u64,
@@ -2865,7 +2891,33 @@ impl RepoState {
         if self.diff_state.diff_target != target {
             self.diff_state.diff_target_rev = self.diff_state.diff_target_rev.wrapping_add(1);
         }
+        // The override lasts while its file stays open, across views of it.
+        let keeps_override = self.diff_state.text_override.as_ref().is_none_or(|open| {
+            target.as_ref().and_then(DiffTarget::file_path) == Some(open.path.as_path())
+        });
+        if !keeps_override {
+            self.diff_state.text_override = None;
+            self.bump_text_override_rev();
+        }
+        // Attributes belong to one path; another file must not be read under
+        // them while its own are loading.
+        let old_path = self
+            .diff_state
+            .diff_target
+            .as_ref()
+            .and_then(DiffTarget::file_path);
+        if old_path != target.as_ref().and_then(DiffTarget::file_path)
+            && !matches!(self.diff_state.text_attributes, Loadable::NotLoaded)
+        {
+            self.diff_state.text_attributes = Loadable::NotLoaded;
+            self.diff_state.text_attributes_rev =
+                self.diff_state.text_attributes_rev.wrapping_add(1);
+        }
         self.diff_state.diff_target = target;
+    }
+
+    pub(crate) fn bump_text_override_rev(&mut self) {
+        self.diff_state.text_override_rev = self.diff_state.text_override_rev.wrapping_add(1);
     }
 
     pub(crate) fn bump_diff_state_rev(&mut self) {

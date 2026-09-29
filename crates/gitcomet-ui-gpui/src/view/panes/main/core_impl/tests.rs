@@ -259,15 +259,18 @@ fn explicit_wheel_master_at_top_pulls_stale_follower_to_top() {
 
 #[test]
 fn revealed_whitespace_wrap_ranges_follow_rendered_tab_markers() {
-    let hidden = diff_wrap_byte_ranges_for_text("a    b", Some("a\tb"), 4, false)
-        .into_iter()
-        .map(rows::DiffWrapByteRange::range)
-        .collect::<Vec<_>>();
-    assert_eq!(hidden, vec![0..4, 4..6]);
+    let tab_width = 4;
 
-    let revealed = diff_wrap_byte_ranges_for_text("a    b", Some("a\tb"), 4, true)
+    // The tab after "a" runs to the stop at column 4.
+    let hidden = diff_wrap_byte_ranges_for_text(tab_width, "a   b", Some("a\tb"), 4, false)
         .into_iter()
         .map(rows::DiffWrapByteRange::range)
         .collect::<Vec<_>>();
-    assert_eq!(revealed, vec![0..6]);
+    assert_eq!(hidden, vec![0..4, 4..5]);
+
+    let revealed = diff_wrap_byte_ranges_for_text(tab_width, "a   b", Some("a\tb"), 4, true)
+        .into_iter()
+        .map(rows::DiffWrapByteRange::range)
+        .collect::<Vec<_>>();
+    assert_eq!(revealed, vec![0..5]);
 }
