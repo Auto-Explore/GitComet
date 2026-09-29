@@ -1376,7 +1376,7 @@ mod tests {
         text: &str,
         mask: Vec<Range<usize>>,
     ) -> LiveSyntaxDocument {
-        LiveSyntaxDocument::new(language, Rope::from_str(text), mask.into(), None)
+        LiveSyntaxDocument::new(language, Rope::from_text(text), mask.into(), None)
             .unwrap_or_else(|| panic!("{language:?} live document should build"))
     }
 
@@ -1550,7 +1550,7 @@ mod tests {
         assert_eq!(&after[at..at + inserted_text.len()], inserted_text);
 
         let outcome = doc.sync(
-            Rope::from_str(after),
+            Rope::from_text(after),
             Vec::new().into(),
             Some((at..at, at..at + inserted_text.len())),
             None,
@@ -1592,7 +1592,7 @@ mod tests {
         assert!(
             LiveSyntaxDocument::new(
                 DiffSyntaxLanguage::Rust,
-                Rope::from_str(after.as_str()),
+                Rope::from_text(after.as_str()),
                 Vec::new().into(),
                 None,
             )
@@ -1601,7 +1601,7 @@ mod tests {
         );
 
         let outcome = doc.sync(
-            Rope::from_str(after.as_str()),
+            Rope::from_text(after.as_str()),
             Vec::new().into(),
             Some((at..at, at..at + padding.len())),
             None,
@@ -1630,7 +1630,7 @@ mod tests {
         after.insert_str(at, inserted);
 
         let outcome = doc.sync(
-            Rope::from_str(after.as_str()),
+            Rope::from_text(after.as_str()),
             Vec::new().into(),
             Some((at..at, at..at + inserted.len())),
             Some(Duration::ZERO),
@@ -1695,7 +1695,7 @@ mod tests {
 
         let landed = "fn main() {\n    let value = 1;\n}\n".repeat(400);
         let outcome = doc.sync(
-            Rope::from_str(landed.as_str()),
+            Rope::from_text(landed.as_str()),
             Vec::new().into(),
             // `None` -- the text was replaced, not edited.
             None,
@@ -1723,7 +1723,7 @@ mod tests {
 
         assert_eq!(
             doc.sync(
-                Rope::from_str(after.as_str()),
+                Rope::from_text(after.as_str()),
                 Vec::new().into(),
                 Some((at..at, at..at + inserted.len())),
                 Some(Duration::ZERO),
@@ -1740,7 +1740,7 @@ mod tests {
         let tree = doc.snapshot(AppTheme::gitcomet_dark()).0.tree.clone();
 
         let after = "fn main() { let x = 1; }\n";
-        doc.sync(Rope::from_str(after), Vec::new().into(), None, None);
+        doc.sync(Rope::from_text(after), Vec::new().into(), None, None);
 
         assert!(
             !doc.adopt_background_tree(stale_version, tree, Vec::new()),
@@ -1753,7 +1753,7 @@ mod tests {
         let mut doc = document("fn main() {}\n", Vec::new());
         let after = "struct Point { x: u32, y: u32 }\n";
 
-        let outcome = doc.sync(Rope::from_str(after), Vec::new().into(), None, None);
+        let outcome = doc.sync(Rope::from_text(after), Vec::new().into(), None, None);
         assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
 
         let replaced = doc.snapshot(AppTheme::gitcomet_dark());
@@ -1766,7 +1766,7 @@ mod tests {
 
     #[test]
     fn masked_read_serves_blanks_then_real_text() {
-        let rope = Rope::from_str("abcdefghij");
+        let rope = Rope::from_text("abcdefghij");
         let mask = [2..5usize; 1];
         let mut read = masked_read(&rope, &mask);
 
@@ -1778,7 +1778,7 @@ mod tests {
 
     #[test]
     fn masked_read_spans_longer_than_the_blank_buffer_are_served_in_pieces() {
-        let rope = Rope::from_str(&"x".repeat(200));
+        let rope = Rope::from_text(&"x".repeat(200));
         let mask = [0..200usize; 1];
         let mut read = masked_read(&rope, &mask);
 
@@ -1799,7 +1799,7 @@ mod tests {
         assert!(
             LiveSyntaxDocument::new(
                 DiffSyntaxLanguage::Rust,
-                Rope::from_str(&huge),
+                Rope::from_text(&huge),
                 Vec::new().into(),
                 None,
             )
@@ -1814,7 +1814,7 @@ mod tests {
         assert!(
             LiveSyntaxDocument::new(
                 DiffSyntaxLanguage::VisualBasic,
-                Rope::from_str(&text),
+                Rope::from_text(&text),
                 Vec::new().into(),
                 None,
             )
@@ -2217,7 +2217,7 @@ mod tests {
             &before[insert_at..]
         );
         let outcome = document.sync(
-            Rope::from_str(&after),
+            Rope::from_text(&after),
             Arc::default(),
             Some((insert_at..insert_at, insert_at..insert_at + inserted.len())),
             None,
@@ -2600,7 +2600,7 @@ mod injection_tests {
                     document.injections.remove(unrelated);
                     with_parse_slots(1, || {
                         document.sync(
-                            Rope::from_str(&text),
+                            Rope::from_text(&text),
                             Arc::default(),
                             Some((edit_at..edit_at, edit_at..edit_at + typed.len())),
                             None,
@@ -2693,7 +2693,7 @@ mod injection_tests {
             edited.insert_str(start, insertion);
             with_parse_slots(0, || {
                 document.sync(
-                    Rope::from_str(&edited),
+                    Rope::from_text(&edited),
                     Arc::default(),
                     Some((start..start, start..start + insertion.len())),
                     Some(Duration::ZERO),
@@ -2762,7 +2762,7 @@ mod injection_tests {
             edited.replace_range(old.clone(), replacement);
             with_parse_slots(0, || {
                 document.sync(
-                    Rope::from_str(&edited),
+                    Rope::from_text(&edited),
                     Arc::default(),
                     Some((old.clone(), old.start..old.start + replacement.len())),
                     None,
@@ -2794,7 +2794,7 @@ mod injection_tests {
         edited.insert_str(at, inserted);
         with_parse_slots(0, || {
             document.sync(
-                Rope::from_str(&edited),
+                Rope::from_text(&edited),
                 Arc::default(),
                 Some((at..at, at..at + inserted.len())),
                 None,
@@ -2822,7 +2822,7 @@ mod injection_tests {
         let at = text.rfind("existing").unwrap() + 2;
         text.insert(at, 'a');
         document.sync(
-            Rope::from_str(&text),
+            Rope::from_text(&text),
             Arc::default(),
             Some((at..at, at..at + 1)),
             Some(Duration::ZERO),
@@ -2855,7 +2855,7 @@ mod injection_tests {
     fn html_document(text: &str) -> LiveSyntaxDocument {
         LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Html,
-            Rope::from_str(text),
+            Rope::from_text(text),
             Vec::new().into(),
             None,
         )
@@ -2882,7 +2882,7 @@ mod injection_tests {
     fn fsharp_document(text: &str) -> LiveSyntaxDocument {
         LiveSyntaxDocument::new(
             DiffSyntaxLanguage::FSharp,
-            Rope::from_str(text),
+            Rope::from_text(text),
             Vec::new().into(),
             None,
         )
@@ -3130,7 +3130,7 @@ mod injection_tests {
     fn jinja_document(text: &str) -> LiveSyntaxDocument {
         LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Jinja,
-            Rope::from_str(text),
+            Rope::from_text(text),
             Vec::new().into(),
             None,
         )
@@ -3228,7 +3228,7 @@ mod injection_tests {
             .join("\n");
         let text = format!("{{% block body %}}\n<script>\n{body}\n</script>\n{{% endblock %}}\n");
         let document = jinja_document(&text);
-        let rope = Rope::from_str(&text);
+        let rope = Rope::from_text(&text);
 
         let (complete, dropped) = parse_injection_layers(
             &rope,
@@ -3377,14 +3377,14 @@ mod injection_tests {
     #[test]
     fn an_included_range_parse_leaves_the_pooled_parser_unclipped() {
         let html = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
-        let rope = Rope::from_str("<div class=\"a\">text</div>\n");
+        let rope = Rope::from_text("<div class=\"a\">text</div>\n");
         let head: Range<usize> = 0..5;
         let _ = parse_included_range(html, &rope, &[], std::slice::from_ref(&head), None, None);
 
         let text = "fn main() { let value = 1; }\n";
         let document = LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Rust,
-            Rope::from_str(text),
+            Rope::from_text(text),
             Vec::new().into(),
             None,
         )
@@ -3403,7 +3403,7 @@ mod injection_tests {
     #[test]
     fn the_included_ranges_guard_clears_them_on_unwind() {
         let html = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
-        let rope = Rope::from_str("<div class=\"a\">text</div>\n");
+        let rope = Rope::from_text("<div class=\"a\">text</div>\n");
 
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             with_ts_parser_parse_result(&html.ts_language, |parser| {
@@ -3424,7 +3424,7 @@ mod injection_tests {
         let text = "fn main() { let value = 1; }\n";
         let document = LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Rust,
-            Rope::from_str(text),
+            Rope::from_text(text),
             Vec::new().into(),
             None,
         )
@@ -3439,7 +3439,7 @@ mod injection_tests {
     fn vue_document(text: &str) -> LiveSyntaxDocument {
         LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Vue,
-            Rope::from_str(text),
+            Rope::from_text(text),
             Vec::new().into(),
             None,
         )
@@ -3495,7 +3495,7 @@ mod injection_tests {
     fn languages_without_injections_build_no_layers() {
         let document = LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Json,
-            Rope::from_str("{\"a\": 1}\n"),
+            Rope::from_text("{\"a\": 1}\n"),
             Vec::new().into(),
             None,
         )
@@ -3515,7 +3515,7 @@ mod injection_tests {
         let after = format!("<html>\n{inserted}<script>\nconst answer = 42;\n</script>\n</html>\n");
         let at = "<html>\n".len();
         document.sync(
-            Rope::from_str(&after),
+            Rope::from_text(&after),
             Vec::new().into(),
             Some((at..at, at..at + inserted.len())),
             None,
@@ -3569,7 +3569,7 @@ mod injection_tests {
         text.push_str("</html>\n");
 
         let document = html_document(&text);
-        let rope = Rope::from_str(&text);
+        let rope = Rope::from_text(&text);
 
         let (complete, dropped) = parse_injection_layers(
             &rope,
@@ -3655,7 +3655,7 @@ mod injection_tests {
             for step in 0..20 {
                 text.insert(at, 'a');
                 document.sync(
-                    Rope::from_str(&text),
+                    Rope::from_text(&text),
                     Arc::default(),
                     Some((at..at, at..at + 1)),
                     Some(Duration::ZERO),
@@ -3721,7 +3721,7 @@ mod injection_tests {
             let closing = text.find("code`").unwrap() + 4;
             text.remove(closing);
             document.sync(
-                Rope::from_str(&text),
+                Rope::from_text(&text),
                 Arc::default(),
                 Some((closing..closing + 1, closing..closing)),
                 Some(Duration::ZERO),
@@ -3774,7 +3774,7 @@ mod injection_tests {
                 (text, 0..prefix.len(), 0..0),
             ] {
                 document.sync(
-                    Rope::from_str(current),
+                    Rope::from_text(current),
                     Arc::default(),
                     Some((old, new)),
                     Some(Duration::ZERO),

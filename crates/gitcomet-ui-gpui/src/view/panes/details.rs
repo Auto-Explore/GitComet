@@ -380,13 +380,7 @@ impl DetailsPaneView {
 
         let commit_details_message_input = cx.new(|cx| {
             components::TextInput::new(
-                components::TextInputOptions {
-                    multiline: true,
-                    read_only: true,
-                    chromeless: true,
-                    soft_wrap: true,
-                    ..Default::default()
-                },
+                components::TextInputOptions::selectable_multiline(),
                 window,
                 cx,
             )
@@ -402,41 +396,19 @@ impl DetailsPaneView {
         });
 
         let commit_details_sha_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    read_only: true,
-                    chromeless: true,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
+            let mut input =
+                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
             input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
             input
         });
 
         let commit_details_date_input = cx.new(|cx| {
-            components::TextInput::new(
-                components::TextInputOptions {
-                    read_only: true,
-                    chromeless: true,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
+            components::TextInput::new(components::TextInputOptions::selectable(), window, cx)
         });
 
         let commit_details_parent_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    read_only: true,
-                    chromeless: true,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
+            let mut input =
+                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
             input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
             input
         });

@@ -1,0 +1,3708 @@
+use super::highlight::*;
+use super::shaping::*;
+use super::state::*;
+use super::wrap::*;
+use super::*;
+use crate::interaction::ControlInteractionExt as _;
+
+/// The single replaced span between two texts, as `(old_range, new_range)`.
+///
+/// Both ranges share a start and land on character boundaries, so the pair is
+/// directly usable as a `replace_utf8_range` edit. `None` means the texts are
+/// identical. Shared with callers that need to describe a wholesale rewrite as
+/// one minimal edit rather than a full-buffer replacement.
+pub fn utf8_edit_delta_between_texts(
+    old_text: &str,
+    new_text: &str,
+) -> Option<(Range<usize>, Range<usize>)> {
+    if old_text == new_text {
+        return None;
+    }
+
+    let old = old_text.as_bytes();
+    let new = new_text.as_bytes();
+    let mut prefix = 0usize;
+    while prefix < old.len().min(new.len()) && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+    while prefix > 0 && (!old_text.is_char_boundary(prefix) || !new_text.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+
+    let mut suffix = 0usize;
+    while suffix < old.len().saturating_sub(prefix)
+        && suffix < new.len().saturating_sub(prefix)
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    while suffix > 0
+        && (!old_text.is_char_boundary(old.len().saturating_sub(suffix))
+            || !new_text.is_char_boundary(new.len().saturating_sub(suffix)))
+    {
+        suffix -= 1;
+    }
+
+    Some((
+        prefix..old.len().saturating_sub(suffix),
+        prefix..new.len().saturating_sub(suffix),
+    ))
+}
+
+/// The span of a highlight source that covers a live window.
+///
+/// A deletion since the source was installed makes it longer than the buffer
+/// over the edited span, so reach that much further or the bottom of the window
+/// comes back short.
+fn interpolated_source_window(
+    interpolation: &HighlightInterpolation,
+    byte_range: &Range<usize>,
+) -> Range<usize> {
+    let mut source_range = interpolation.to_source_range(byte_range);
+    source_range.end = source_range
+        .end
+        .saturating_add(interpolation.source_lookahead());
+    source_range
+}
+
+impl TextInput {
+    fn emit_content_changed(&self, cx: &mut Context<Self>) {
+        let snapshot = self.content.snapshot();
+        crate::ui_probe::action_phase(self.probe_action, "applied", || {
+            serde_json::json!({
+                "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()
+            })
+        });
+        cx.emit(TextInputChanged {
+            model_id: snapshot.model_id(),
+            revision: snapshot.revision(),
+        });
+    }
+    pub fn new(options: TextInputOptions, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::from_options(options, cx)
+    }
+
+    pub fn new_inert(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
+        Self::from_options(options, cx)
+    }
+
+    pub(super) fn from_options(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
+            this.clear_selection_on_ownership_loss(cx);
+        });
+        Self {
+            focus_handle,
+            probe_action: 0,
+            content: TextModel::new(),
+            placeholder: options.placeholder,
+            leading_icon: options.leading_icon,
+            multiline: options.multiline,
+            read_only: options.read_only,
+            chromeless: options.chromeless,
+            display_text: false,
+            soft_wrap: options.soft_wrap,
+            min_lines: options.min_lines,
+            display_truncation: None,
+            masked: false,
+            line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
+            tab_size: TEXT_INPUT_WRAP_TAB_STOP_COLUMNS,
+            style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
+            line_height_override: None,
+            appearance_metrics: crate::appearance::current(cx),
+            editor_font: false,
+            editor_line_height: px(20.0),
+            vertical_padding_override: None,
+            highlight: HighlightState::new(),
+            layout: LayoutState::new(),
+            wrap: WrapState::new(),
+            content_width_cache: None,
+            selection: SelectionState::new(),
+            interaction: InteractionState::new(),
+            protected_ranges: Arc::from([]),
+            selection_owner: Default::default(),
+            _selection_owner_observer: selection_owner_observer,
+        }
+    }
+
+    /// Collapses the selection once another surface has taken the window's.
+    /// Caret, focus, scroll, content and undo stacks are left alone.
+    fn clear_selection_on_ownership_loss(&mut self, cx: &mut Context<Self>) {
+        if !self.selection_owner.is_stale(cx) || self.selection.range.is_empty() {
+            return;
+        }
+        // Mid-composition the marked range *is* the highlight.
+        if self.selection.marked_range.is_some() {
+            return;
+        }
+        // Not `move_to`: it forces the caret visible, blinking a background input.
+        let cursor = self.cursor_offset();
+        self.selection.range = cursor..cursor;
+        self.selection.reversed = false;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        cx.notify();
+    }
+
+    pub fn text(&self) -> &str {
+        self.content.as_ref()
+    }
+
+    pub fn text_snapshot(&self) -> TextModelSnapshot {
+        self.content.snapshot()
+    }
+
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+
+    pub(super) fn clear_shaped_row_caches(&mut self) {
+        self.layout.plain_line_cache.clear();
+        self.highlight.prepaint_runs_cache = None;
+    }
+
+    pub(super) fn clear_wrap_recompute_state(&mut self) {
+        self.wrap.pending_job = None;
+        self.wrap.dirty_ranges.clear();
+        self.wrap.recompute_requested = false;
+    }
+
+    pub(super) fn invalidate_layout_caches_full(&mut self) {
+        self.wrap.cache = None;
+        self.layout.last = None;
+        self.layout.line_starts = None;
+        self.wrap.row_counts.clear();
+        self.wrap.row_counts_current.clear();
+        self.wrap.row_counts_width = None;
+        self.wrap.row_counts_font = None;
+        self.clear_wrap_recompute_state();
+        self.wrap.last_rows = None;
+        self.clear_shaped_row_caches();
+    }
+
+    pub(super) fn invalidate_layout_caches_preserving_wrap_rows(&mut self) {
+        self.wrap.cache = None;
+        self.layout.last = None;
+        self.layout.line_starts = None;
+        self.clear_shaped_row_caches();
+    }
+
+    pub(super) fn invalidate_layout_caches(&mut self) {
+        self.invalidate_layout_caches_full();
+    }
+
+    pub(super) fn request_wrap_recompute(&mut self) {
+        self.wrap.recompute_requested = true;
+    }
+
+    pub(super) fn bump_shape_style_epoch(&mut self) {
+        self.layout.shape_style_epoch = self.layout.shape_style_epoch.wrapping_add(1).max(1);
+        self.invalidate_layout_caches();
+    }
+
+    pub(super) fn bump_shape_style_epoch_preserving_wrap_rows(&mut self) {
+        self.layout.shape_style_epoch = self.layout.shape_style_epoch.wrapping_add(1).max(1);
+        self.invalidate_layout_caches_preserving_wrap_rows();
+    }
+
+    pub(super) fn invalidate_highlights(&mut self) {
+        self.highlight.provider_cache = None;
+        self.highlight.epoch = self.highlight.epoch.wrapping_add(1).max(1);
+        // Highlight providers are rebound on keystrokes and caret movement.
+        // Dropping the document height here clamps the outer scroll handle to
+        // the unwrapped height before the next shaping pass can restore it.
+        self.bump_shape_style_epoch_preserving_wrap_rows();
+    }
+
+    /// Background syntax chunks landed for the text the provider already
+    /// describes. Its tokens improved; the text it was built over did not, so
+    /// the interpolation anchor must survive — resetting it here would snap
+    /// every highlight to coordinates the buffer left behind.
+    pub(super) fn note_provider_highlights_changed(&mut self) {
+        self.highlight.interpolated_cache = None;
+        self.invalidate_highlights();
+    }
+
+    /// Record a text edit against the highlights currently on screen.
+    ///
+    /// The highlight source is not recomputed here — that is debounced by the
+    /// owner. Instead the edit is folded into the interpolation so the stale
+    /// highlights keep pointing at the tokens they describe.
+    pub(super) fn note_text_edit_for_highlights(
+        &mut self,
+        replaced: &Range<usize>,
+        inserted: &Range<usize>,
+    ) {
+        if self.highlight.provider.is_none()
+            && self.highlight.highlights.is_empty()
+            && self.highlight.superseded.is_none()
+        {
+            return;
+        }
+
+        self.highlight.interpolation.record_edit(replaced, inserted);
+        // A source held in reserve has to keep tracking the buffer too, or it
+        // would answer in coordinates that stopped being true the moment it
+        // was set aside.
+        if let Some(superseded) = self.highlight.superseded.as_mut() {
+            superseded.interpolation.record_edit(replaced, inserted);
+        }
+        self.highlight.interpolated_cache = None;
+        self.highlight.prepaint_runs_cache = None;
+    }
+
+    /// Drop the accumulated edits because the highlight source was replaced by
+    /// one built over the buffer's current text.
+    fn reset_highlight_interpolation(&mut self) {
+        self.highlight.interpolation.reset();
+        self.highlight.interpolated_cache = None;
+    }
+
+    /// Set the outgoing highlight source aside so it can cover for its
+    /// replacement until that replacement has tokens to show. See
+    /// `SupersededHighlights`.
+    fn supersede_current_highlight_source(&mut self) {
+        if !self.highlight.answered {
+            // This source never settled either, so it is no better a fallback
+            // than the incoming one. Keep whatever reserve is already held.
+            return;
+        }
+        if self.highlight.provider.is_none() && self.highlight.highlights.is_empty() {
+            self.highlight.superseded = None;
+            return;
+        }
+
+        self.highlight.superseded = Some(SupersededHighlights {
+            provider: self.highlight.provider.clone(),
+            highlights: Arc::clone(&self.highlight.highlights),
+            interpolation: std::mem::take(&mut self.highlight.interpolation),
+        });
+    }
+
+    /// The highlights covering `byte_range`, in the buffer's live coordinates.
+    ///
+    /// Collapses the provider and static-vector paths so both interpolate: a
+    /// text edit moves highlights published through `set_highlights` exactly as
+    /// it moves a provider's.
+    pub(super) fn effective_highlights_for_window(
+        &mut self,
+        byte_range: Range<usize>,
+    ) -> ResolvedProviderHighlights {
+        let resolved = self.resolve_current_highlight_source(&byte_range);
+        if !resolved.pending {
+            // The source has settled, so it is now the truth and is fit to
+            // stand in for its own replacement later.
+            self.highlight.answered = true;
+            self.highlight.superseded = None;
+            return resolved;
+        }
+
+        // Still waiting on tokens. Rather than paint the viewport in the base
+        // color for a frame or two, answer from the source this one replaced,
+        // carried across the edits since by its own interpolation.
+        let Some(superseded) = self.highlight.superseded.take() else {
+            return resolved;
+        };
+        let stale = self.resolve_superseded_highlight_source(&superseded, &byte_range);
+        self.highlight.superseded = Some(superseded);
+        ResolvedProviderHighlights {
+            // Keep the caller polling: this is a stopgap, not the answer.
+            pending: true,
+            highlights: stale,
+        }
+    }
+
+    fn resolve_current_highlight_source(
+        &mut self,
+        byte_range: &Range<usize>,
+    ) -> ResolvedProviderHighlights {
+        if self.highlight.interpolation.is_exact() {
+            return if self.highlight.provider.is_some() {
+                self.resolve_provider_highlights(byte_range.start, byte_range.end)
+            } else {
+                ResolvedProviderHighlights {
+                    pending: false,
+                    highlights: Arc::clone(&self.highlight.highlights),
+                }
+            };
+        }
+
+        if let Some(cache) = self.highlight.interpolated_cache.as_ref()
+            && cache.highlight_epoch == self.highlight.epoch
+            && cache.interpolation_generation == self.highlight.interpolation.generation()
+            && cache.byte_start <= byte_range.start
+            && cache.byte_end >= byte_range.end
+        {
+            return ResolvedProviderHighlights {
+                pending: cache.pending,
+                highlights: Arc::clone(&cache.highlights),
+            };
+        }
+
+        let source_range = interpolated_source_window(&self.highlight.interpolation, byte_range);
+        let source = if self.highlight.provider.is_some() {
+            self.resolve_provider_highlights(source_range.start, source_range.end)
+        } else {
+            ResolvedProviderHighlights {
+                pending: false,
+                highlights: Arc::clone(&self.highlight.highlights),
+            }
+        };
+        let highlights = Arc::new(
+            self.highlight
+                .interpolation
+                .map_highlights(source.highlights.as_slice(), self.content.len()),
+        );
+        self.debug_assert_highlights_on_char_boundaries(&highlights);
+
+        self.highlight.interpolated_cache = Some(InterpolatedHighlightCache {
+            highlight_epoch: self.highlight.epoch,
+            interpolation_generation: self.highlight.interpolation.generation(),
+            byte_start: byte_range.start,
+            byte_end: byte_range.end,
+            pending: source.pending,
+            highlights: Arc::clone(&highlights),
+        });
+        ResolvedProviderHighlights {
+            pending: source.pending,
+            highlights,
+        }
+    }
+
+    /// Answer a window from the source that is being replaced.
+    ///
+    /// Deliberately uncached: `provider_cache` belongs to the source that
+    /// replaced this one, and mixing two providers' answers under one key would
+    /// outlive the handoff. This runs for the frame or two the replacement
+    /// needs to build its tokens.
+    fn resolve_superseded_highlight_source(
+        &self,
+        superseded: &SupersededHighlights,
+        byte_range: &Range<usize>,
+    ) -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
+        let source_range = interpolated_source_window(&superseded.interpolation, byte_range);
+        let highlights = match superseded.provider.as_ref() {
+            Some(provider) => {
+                let mut resolved = provider.resolve(source_range).highlights;
+                resolved.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+                superseded
+                    .interpolation
+                    .map_highlights(&resolved, self.content.len())
+            }
+            None => superseded
+                .interpolation
+                .map_highlights(superseded.highlights.as_slice(), self.content.len()),
+        };
+        let highlights = Arc::new(highlights);
+        self.debug_assert_highlights_on_char_boundaries(&highlights);
+        highlights
+    }
+
+    /// A bound landing mid-character would corrupt the byte-length runs
+    /// `text_run_for_style` builds from these ranges.
+    #[inline]
+    fn debug_assert_highlights_on_char_boundaries(
+        &self,
+        highlights: &[(Range<usize>, gpui::HighlightStyle)],
+    ) {
+        #[cfg(debug_assertions)]
+        {
+            let text = self.content.as_ref();
+            for (range, _) in highlights {
+                debug_assert!(
+                    text.is_char_boundary(range.start) && text.is_char_boundary(range.end),
+                    "interpolated highlight {range:?} must land on character boundaries"
+                );
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = highlights;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_effective_highlights_for_range(
+        &mut self,
+        byte_range: Range<usize>,
+    ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+        self.effective_highlights_for_window(byte_range)
+            .highlights
+            .as_ref()
+            .clone()
+    }
+
+    pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
+        let style = TextInputStyle::from_theme(theme);
+        if self.style == style {
+            return;
+        }
+        self.style = style;
+        self.bump_shape_style_epoch();
+        cx.notify();
+    }
+
+    pub fn set_chromeless(&mut self, chromeless: bool, cx: &mut Context<Self>) {
+        if self.chromeless == chromeless {
+            return;
+        }
+        self.chromeless = chromeless;
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
+    pub fn set_leading_icon(&mut self, leading_icon: Option<&'static str>, cx: &mut Context<Self>) {
+        if self.leading_icon == leading_icon {
+            return;
+        }
+        self.leading_icon = leading_icon;
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_text_color(&self) -> gpui::Hsla {
+        self.style.text
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_displayed_single_line(&self) -> Option<&str> {
+        match self.layout.last.as_ref()? {
+            TextInputLayout::TruncatedSingleLine(line) => Some(line.display_text.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Opt into label typography without changing the defaults for form inputs.
+    pub fn set_display_text(&mut self, cx: &mut Context<Self>) {
+        assert!(self.read_only && self.chromeless);
+        self.display_text = true;
+        cx.notify();
+    }
+
+    pub fn has_selection_or_drag(&self) -> bool {
+        !self.selection.range.is_empty() || self.interaction.is_selecting
+    }
+
+    /// A live read-only log may append while a user is selecting earlier text.
+    /// Replacements (including front truncation) deliberately reset selection.
+    pub fn set_text_preserving_selection_on_append(
+        &mut self,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        assert!(self.read_only);
+        self.update_text(text.into(), true, cx);
+    }
+
+    pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.update_text(text.into(), false, cx);
+    }
+
+    fn update_text(&mut self, text: SharedString, preserve_append: bool, cx: &mut Context<Self>) {
+        if self.content.as_ref() == text.as_ref() {
+            return;
+        }
+        let preserve_selection = preserve_append && text.starts_with(self.content.as_ref());
+        self.probe_action = 0;
+        // Computed before the overwrite so highlights already on screen can ride
+        // along; the equality check above keeps this O(n) scan off the hot path.
+        let text_edit_delta = utf8_edit_delta_between_texts(self.content.as_ref(), text.as_ref());
+        self.content.set_text(text.as_ref());
+        self.emit_content_changed(cx);
+        self.protected_ranges = Arc::from([]);
+        self.rebuild_content_width_cache_if_present();
+        if !preserve_selection {
+            self.selection.range = self.content.len()..self.content.len();
+            self.selection.reversed = false;
+            self.interaction.is_selecting = false;
+            self.interaction.mouse_selection_anchor = None;
+            self.interaction.pending_mouse_selection_anchor = None;
+            self.layout.scroll_x = px(0.0);
+        }
+        self.selection.undo_stack.clear();
+        self.selection.redo_stack.clear();
+        self.interaction.cursor_blink_visible = true;
+        self.invalidate_layout_caches();
+        if self.multiline && self.soft_wrap {
+            self.request_wrap_recompute();
+        }
+        self.selection.pending_text_edit_deltas.clear();
+        if let Some((replaced, inserted)) = text_edit_delta {
+            self.note_text_edit_for_highlights(&replaced, &inserted);
+        }
+        cx.notify();
+    }
+
+    pub fn set_highlights(
+        &mut self,
+        mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+        cx: &mut Context<Self>,
+    ) {
+        highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        if self.highlight.provider.is_none()
+            && self.highlight.highlights.as_slice() == highlights.as_slice()
+        {
+            // Republishing the same vector still describes the buffer as it
+            // stands now. A caller that rewrote the text first (a SHA field
+            // swapping one 40-char id for another, say) left an edit patch
+            // behind, and mapping these highlights through it would drop the
+            // rewritten span back to the base color — so drop the patch even
+            // though the vector itself is unchanged.
+            if !self.highlight.interpolation.is_exact() {
+                self.reset_highlight_interpolation();
+                self.invalidate_highlights();
+                cx.notify();
+            }
+            return;
+        }
+        self.supersede_current_highlight_source();
+        self.highlight.highlights = Arc::new(highlights);
+        self.highlight.provider = None;
+        self.highlight.provider_binding_key = None;
+        self.highlight.provider_poll_task.take();
+        // A materialized vector answers the moment it is published.
+        self.highlight.answered = true;
+        self.highlight.superseded = None;
+        // A fresh highlight source describes the buffer as it stands now.
+        self.reset_highlight_interpolation();
+        self.invalidate_highlights();
+        cx.notify();
+    }
+
+    /// Collapses the selection to a caret at `offset`.
+    ///
+    /// Needs no window, unlike [`Self::set_selected_range`]: a caret paints no
+    /// highlight, so it never takes the window's selection.
+    pub fn set_caret(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_to(offset, cx);
+    }
+
+    /// Installs a selection programmatically. Takes the window because a
+    /// non-empty range is a real highlight and must own the window's selection.
+    pub fn set_selected_range(
+        &mut self,
+        range: Range<usize>,
+        autoscroll: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let start = self.clamp_to_char_boundary(range.start.min(range.end));
+        let end = self.clamp_to_char_boundary(range.start.max(range.end));
+        let next = start..end;
+        if self.selection.range == next && !self.selection.reversed {
+            if autoscroll {
+                self.queue_cursor_autoscroll();
+            }
+            return;
+        }
+        // A programmatic highlight is still a highlight.
+        if !next.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
+
+        self.selection.range = next;
+        self.selection.reversed = false;
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        if autoscroll {
+            self.queue_cursor_autoscroll();
+        }
+        cx.notify();
+    }
+
+    /// `source_len` is the byte length of the text the provider answers in.
+    /// Highlight interpolation anchors edits to that text, so a provider built
+    /// over a snapshot the buffer has since moved past would be mapped with the
+    /// wrong origin — callers must read the buffer immediately before building.
+    pub(super) fn install_highlight_provider(
+        &mut self,
+        provider: HighlightProvider,
+        binding_key: Option<u64>,
+        source_len: usize,
+        cx: &mut Context<Self>,
+    ) {
+        debug_assert_eq!(
+            source_len,
+            self.content.len(),
+            "a highlight provider must describe the buffer's current text"
+        );
+
+        if !should_reset_highlight_provider_binding(
+            self.highlight.provider.is_some(),
+            self.highlight.provider_binding_key,
+            binding_key,
+        ) {
+            return;
+        }
+
+        // A provider over a freshly prepared document cannot answer until its
+        // token chunks are built, so hold the outgoing source to cover the gap.
+        self.supersede_current_highlight_source();
+        self.highlight.provider = Some(provider);
+        self.highlight.provider_binding_key = binding_key;
+        self.highlight.provider_poll_task.take();
+        self.highlight.highlights = Arc::new(Vec::new());
+        self.highlight.answered = false;
+        // Only past the early return: an unchanged binding key means the same
+        // closure over the same text, so its anchor must survive.
+        self.reset_highlight_interpolation();
+        self.invalidate_highlights();
+        cx.notify();
+    }
+
+    /// Replace the full highlight vector with a lazy provider that generates
+    /// highlights on demand for only the visible byte range. Use this for large
+    /// documents where materializing all highlights is wasteful.
+    ///
+    /// `binding_key` identifies the source the provider speaks for. Reinstalling
+    /// under the same key keeps the existing highlight cache; a new key resets
+    /// it, along with the edit interpolation that was tracking the old source.
+    ///
+    /// `source_len` is the byte length of the text the provider was built over;
+    /// see `install_highlight_provider`.
+    pub fn set_highlight_provider_with_key(
+        &mut self,
+        binding_key: u64,
+        provider: HighlightProvider,
+        source_len: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_highlight_provider(provider, Some(binding_key), source_len, cx);
+    }
+
+    pub fn set_line_height(&mut self, line_height: Option<Pixels>, cx: &mut Context<Self>) {
+        if self.line_height_override == line_height {
+            return;
+        }
+        self.line_height_override = line_height;
+        cx.notify();
+    }
+
+    /// `padding` is in design px, so it follows the UI zoom.
+    pub fn set_vertical_padding(&mut self, padding: Option<f32>, cx: &mut Context<Self>) {
+        if self.vertical_padding_override == padding {
+            return;
+        }
+        self.vertical_padding_override = padding;
+        cx.notify();
+    }
+
+    pub fn set_editor_font(&mut self, cx: &mut Context<Self>) {
+        self.editor_font = true;
+        cx.notify();
+    }
+
+    pub(super) fn effective_line_height(&self, window: &Window) -> Pixels {
+        if self.display_text {
+            return window.line_height();
+        }
+        if self.editor_font {
+            return self.editor_line_height;
+        }
+        let line_height = self
+            .line_height_override
+            .unwrap_or_else(|| window.line_height());
+        line_height.max(crate::ui_scale::design_px_from_window(
+            self.appearance_metrics.ui_text(20.0),
+            window,
+        ))
+    }
+
+    /// The explicit line height set by `set_line_height`, if any. Tests use it to
+    /// assert a separate line-number gutter advances at the same rate as the buffer.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn line_height_override(&self) -> Option<Pixels> {
+        self.line_height_override
+    }
+
+    pub fn take_enter_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.enter_pressed)
+    }
+
+    pub fn take_escape_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.escape_pressed)
+    }
+
+    pub fn clear_transient_key_presses(&mut self) {
+        self.interaction.enter_pressed = false;
+        self.interaction.escape_pressed = false;
+        self.interaction.arrow_up_pressed = false;
+        self.interaction.arrow_left_at_start_pressed = false;
+        self.interaction.arrow_right_at_end_pressed = false;
+        self.interaction.document_home_pressed = false;
+        self.interaction.document_end_pressed = false;
+        self.interaction.page_up_pressed = false;
+        self.interaction.page_down_pressed = false;
+
+        self.interaction.arrow_down_pressed = false;
+        self.interaction.tab_pressed = false;
+        self.interaction.shift_tab_pressed = false;
+    }
+
+    pub fn take_document_home_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.document_home_pressed)
+    }
+
+    pub fn take_document_end_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.document_end_pressed)
+    }
+
+    pub fn take_page_up_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.page_up_pressed)
+    }
+
+    pub fn take_page_down_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.page_down_pressed)
+    }
+
+    pub fn take_arrow_up_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_up_pressed)
+    }
+
+    pub fn take_arrow_left_at_start_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_left_at_start_pressed)
+    }
+
+    pub fn take_arrow_right_at_end_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_right_at_end_pressed)
+    }
+
+    pub fn take_arrow_down_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_down_pressed)
+    }
+
+    pub fn take_tab_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.tab_pressed)
+    }
+
+    pub fn take_shift_tab_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.shift_tab_pressed)
+    }
+
+    pub fn set_submit_on_enter(&mut self, submit_on_enter: bool) {
+        self.interaction.submit_on_enter = submit_on_enter;
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        if self.read_only == read_only {
+            return;
+        }
+        self.read_only = read_only;
+        if !self.read_only && self.display_truncation.is_some() {
+            self.display_truncation = None;
+            self.invalidate_layout_caches();
+        }
+        cx.notify();
+    }
+
+    /// Refuse edits to these byte spans, each covering a whole line including
+    /// its terminator. Spans must be sorted and disjoint. Cleared by
+    /// [`Self::set_text`], since the offsets describe the buffer that was
+    /// replaced; the owner re-publishes them for the new one.
+    pub fn set_protected_ranges(&mut self, ranges: Arc<[Range<usize>]>) {
+        self.protected_ranges = ranges;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn protected_ranges(&self) -> &[Range<usize>] {
+        &self.protected_ranges
+    }
+
+    /// Whether replacing `range` with `new_text` would alter a protected line.
+    ///
+    /// Anything overlapping a span is out, and so are the two ways to reach one
+    /// from outside: inserting at its first offset lands inside the protected
+    /// line, and an edit that stops there eats the newline that made the line
+    /// stand on its own unless it puts a line boundary back.
+    pub fn edit_alters_protected_range(&self, range: &Range<usize>, new_text: &str) -> bool {
+        if self.protected_ranges.is_empty() {
+            return false;
+        }
+
+        let content = self.content.as_ref();
+        self.protected_ranges.iter().any(|protected| {
+            if range.start >= protected.end || range.end < protected.start {
+                return false;
+            }
+            if range.end > protected.start || range.start == protected.start {
+                return true;
+            }
+            // Ends exactly where the span begins: safe only while whatever now
+            // precedes the span still ends a line.
+            match new_text.as_bytes().last() {
+                Some(last) => *last != b'\n',
+                None => {
+                    range.start != 0
+                        && content
+                            .as_bytes()
+                            .get(range.start.saturating_sub(1))
+                            .is_some_and(|byte| *byte != b'\n')
+                }
+            }
+        })
+    }
+
+    /// Carry the protected spans across an edit that was allowed through.
+    ///
+    /// Typed edits never overlap a span, but a programmatic rewrite does when
+    /// the owner resolves that conflict — the spans it published describe a
+    /// buffer that no longer exists, so drop them and let it republish.
+    fn shift_protected_ranges_for_edit(&mut self, old: &Range<usize>, new: &Range<usize>) {
+        if self.protected_ranges.is_empty() {
+            return;
+        }
+        if self
+            .protected_ranges
+            .iter()
+            .any(|range| old.start < range.end && old.end > range.start)
+        {
+            self.protected_ranges = Arc::from([]);
+            return;
+        }
+        let shift = new.len() as isize - old.len() as isize;
+        if shift == 0 {
+            return;
+        }
+        let shifted = |offset: usize| {
+            if shift >= 0 {
+                offset.saturating_add(shift as usize)
+            } else {
+                offset.saturating_sub(shift.unsigned_abs())
+            }
+        };
+        self.protected_ranges = self
+            .protected_ranges
+            .iter()
+            .map(|range| {
+                if range.end <= old.start {
+                    range.clone()
+                } else {
+                    shifted(range.start)..shifted(range.end)
+                }
+            })
+            .collect();
+    }
+
+    pub fn set_display_truncation(
+        &mut self,
+        display_truncation: Option<TextTruncationProfile>,
+        cx: &mut Context<Self>,
+    ) {
+        debug_assert!(
+            display_truncation.is_none() || (self.read_only && !self.multiline),
+            "display truncation is only supported for single-line read-only text inputs"
+        );
+        let next = display_truncation.filter(|_| self.read_only && !self.multiline);
+        if self.display_truncation == next {
+            return;
+        }
+        self.display_truncation = next;
+        self.layout.scroll_x = px(0.0);
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
+    pub fn set_suppress_right_click(&mut self, suppress: bool) {
+        self.interaction.suppress_right_click = suppress;
+    }
+
+    pub fn set_vertical_scroll_handle(&mut self, handle: Option<ScrollHandle>) {
+        self.interaction.vertical_scroll_handle = handle;
+    }
+
+    /// Enable content-width layout: a multiline input lays out at its widest-line
+    /// width so an outer `overflow_scroll` container can scroll it horizontally
+    /// and drive a real horizontal `max_offset` on the shared scroll handle.
+    pub fn set_content_width_layout(&mut self, enabled: bool) {
+        if enabled && self.content_width_cache.is_none() {
+            self.rebuild_content_width_cache();
+        }
+        self.interaction.content_width_layout = enabled;
+    }
+
+    /// Width of one row, in the max of byte length and display columns.
+    ///
+    /// Reads just that row out of the rope, so maintaining the cache after an
+    /// edit costs O(log n) per touched row rather than a whole-document scan.
+    fn content_width_line_units(
+        content: &TextModelSnapshot,
+        line_ix: usize,
+        tab_size: usize,
+    ) -> usize {
+        let line = content.slice(content.line_range_with_terminator(line_ix));
+        line.len().max(line_display_columns(&line, tab_size))
+    }
+
+    fn affected_lines(content: &TextModelSnapshot, byte_range: Range<usize>) -> Range<usize> {
+        let line_count = content.line_count().max(1);
+        let start = content.row_for_offset(byte_range.start);
+        let end = content.row_for_offset(byte_range.end);
+        start.min(line_count.saturating_sub(1))..end.saturating_add(1).min(line_count)
+    }
+
+    fn rebuild_content_width_cache(&mut self) {
+        let content = self.content.snapshot();
+        let tab_size = self.tab_size;
+        let line_count = content.line_count().max(1);
+        let mut cache = ContentWidthCache::default();
+        cache.line_units.reserve(line_count);
+        for line_ix in 0..line_count {
+            let units = Self::content_width_line_units(&content, line_ix, tab_size);
+            cache.line_units.push(units);
+            *cache.unit_counts.entry(units).or_default() += 1;
+        }
+        self.content_width_cache = Some(cache);
+    }
+
+    fn rebuild_content_width_cache_if_present(&mut self) {
+        if self.content_width_cache.is_some() {
+            self.rebuild_content_width_cache();
+        }
+    }
+
+    fn replace_content_range(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        if range.start <= range.end
+            && range.end <= self.content.len()
+            && self.content.clamp_to_char_boundary(range.start) == range.start
+            && self.content.clamp_to_char_boundary(range.end) == range.end
+            // Before `slice`, which copies a range spanning rope chunks.
+            && range.len() == new_text.len()
+            && self.content.snapshot().slice(range.clone()).as_ref() == new_text
+        {
+            return range;
+        }
+        self.probe_action = crate::ui_probe::begin_action("typing");
+        // Snapshotting is an `Arc` bump, and it is the only way to read the
+        // pre-edit row layout after `replace_range` has already moved on.
+        let track_lines = self.content_width_cache.is_some() || (self.multiline && self.soft_wrap);
+        let old_affected =
+            track_lines.then(|| Self::affected_lines(&self.content.snapshot(), range.clone()));
+        let inserted = self.content.replace_range(range, new_text);
+        self.emit_content_changed(cx);
+        let Some(old_affected) = old_affected else {
+            return inserted;
+        };
+
+        let content = self.content.snapshot();
+        let tab_size = self.tab_size;
+        let new_affected = Self::affected_lines(&content, inserted.clone());
+        self.mark_wrap_dirty_from_edit(old_affected.clone(), new_affected.clone());
+        if self.content_width_cache.is_none() {
+            return inserted;
+        }
+        let replacement_units = new_affected
+            .clone()
+            .map(|line_ix| Self::content_width_line_units(&content, line_ix, tab_size))
+            .collect::<Vec<_>>();
+        let cache = self
+            .content_width_cache
+            .as_mut()
+            .expect("content-width cache was present before edit");
+        for &units in cache
+            .line_units
+            .get(old_affected.clone())
+            .unwrap_or_default()
+        {
+            if let Some(count) = cache.unit_counts.get_mut(&units) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    cache.unit_counts.remove(&units);
+                }
+            }
+        }
+        cache
+            .line_units
+            .splice(old_affected, replacement_units.iter().copied());
+        for units in replacement_units {
+            *cache.unit_counts.entry(units).or_default() += 1;
+        }
+        debug_assert_eq!(cache.line_units.len(), content.line_count().max(1));
+        inserted
+    }
+
+    pub(super) fn content_width_max_units(&self) -> usize {
+        self.content_width_cache
+            .as_ref()
+            .map(ContentWidthCache::max_units)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn queue_cursor_autoscroll(&mut self) {
+        self.interaction.pending_cursor_autoscroll = true;
+        self.interaction.cursor_autoscroll_retries_remaining = TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
+        self.interaction.cursor_autoscroll_layout_waits_remaining =
+            TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
+    }
+
+    pub(super) fn resolve_provider_highlights(
+        &mut self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> ResolvedProviderHighlights {
+        let requested_range = byte_start..byte_end;
+        if let Some(cache) = self.highlight.provider_cache.as_mut()
+            && let Some(resolved) = cache.resolve(self.highlight.epoch, &requested_range)
+        {
+            return resolved;
+        }
+        let Some(ref provider) = self.highlight.provider else {
+            return ResolvedProviderHighlights {
+                pending: false,
+                highlights: Arc::new(Vec::new()),
+            };
+        };
+        let mut result = provider.resolve(requested_range.clone());
+        result
+            .highlights
+            .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let pending = result.pending;
+        let highlights = Arc::new(result.highlights);
+        self.highlight
+            .provider_cache
+            .get_or_insert_with(|| ProviderHighlightCache::new(self.highlight.epoch))
+            .insert(
+                self.highlight.epoch,
+                requested_range,
+                pending,
+                Arc::clone(&highlights),
+            );
+        ResolvedProviderHighlights {
+            pending,
+            highlights,
+        }
+    }
+
+    pub(super) fn ensure_highlight_provider_poll(&mut self, cx: &mut Context<Self>) {
+        if self.highlight.provider_poll_task.is_some() {
+            return;
+        }
+
+        let task = cx.spawn(
+            async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| loop {
+                // Route the poll delay through gpui's executor rather than
+                // `smol::Timer`: the smol timer drives on the global async-io
+                // reactor thread, which breaks the deterministic test scheduler
+                // (it asserts against cross-thread activity at teardown).
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+
+                let should_continue = input
+                    .update(cx, |input, cx| {
+                        let Some(provider) = input.highlight.provider.clone() else {
+                            input.highlight.provider_poll_task = None;
+                            return false;
+                        };
+
+                        let applied = provider.drain_pending();
+                        if applied > 0 {
+                            input.note_provider_highlights_changed();
+                            cx.notify();
+                        }
+
+                        let pending = provider.has_pending();
+                        if !pending {
+                            input.highlight.provider_poll_task = None;
+                        }
+                        pending
+                    })
+                    .unwrap_or(false);
+
+                if !should_continue {
+                    break;
+                }
+            },
+        );
+        self.highlight.provider_poll_task = Some(task);
+    }
+
+    pub(super) fn trim_shape_caches(&mut self) {
+        if self.layout.plain_line_cache.len() > TEXT_INPUT_SHAPE_CACHE_LIMIT {
+            self.layout.plain_line_cache.clear();
+        }
+    }
+
+    pub(super) fn streamed_highlight_runs_for_visible_window(
+        &mut self,
+        display_text: &LineTextSource<'_>,
+        line_starts: &[usize],
+        visible_line_range: Range<usize>,
+        shape_style: &TextShapeStyle<'_>,
+    ) -> Option<Arc<VisibleWindowTextRuns>> {
+        let Some(highlights) = shape_style.highlights else {
+            self.highlight.prepaint_runs_cache = None;
+            return None;
+        };
+        let line_count = line_starts.len().max(1);
+        if highlights.is_empty()
+            || line_count <= TEXT_INPUT_STREAMED_HIGHLIGHT_LEGACY_LINE_THRESHOLD
+            || visible_line_range.is_empty()
+        {
+            self.highlight.prepaint_runs_cache = None;
+            return None;
+        }
+
+        if let Some(cache) = self.highlight.prepaint_runs_cache.as_ref()
+            && cache.highlight_epoch == self.highlight.epoch
+            && cache.interpolation_generation == self.highlight.interpolation.generation()
+            && cache.shape_style_epoch == self.layout.shape_style_epoch
+            && cache.visible_start == visible_line_range.start
+            && cache.visible_end == visible_line_range.end
+        {
+            return Some(Arc::clone(&cache.line_runs));
+        }
+
+        let line_runs = Arc::new(build_streamed_highlight_runs_for_visible_window(
+            shape_style.base_font,
+            shape_style.text_color,
+            display_text,
+            line_starts,
+            visible_line_range.clone(),
+            highlights,
+        ));
+        self.highlight.prepaint_runs_cache = Some(PrepaintHighlightRunsCache {
+            highlight_epoch: self.highlight.epoch,
+            interpolation_generation: self.highlight.interpolation.generation(),
+            shape_style_epoch: self.layout.shape_style_epoch,
+            visible_start: visible_line_range.start,
+            visible_end: visible_line_range.end,
+            line_runs: Arc::clone(&line_runs),
+        });
+        Some(line_runs)
+    }
+
+    pub(super) fn shape_plain_line_cached(
+        &mut self,
+        line: LineShapeInput<'_>,
+        precomputed_runs: Option<&[TextRun]>,
+        shape_style: &TextShapeStyle<'_>,
+        window: &mut Window,
+    ) -> ShapedLine {
+        let key = ShapedRowCacheKey {
+            line_ix: line.line_ix,
+            font_size_key: f32::from(shape_style.font_size).round() as i32,
+        };
+        if let Some(cached) = self.layout.plain_line_cache.get(&key) {
+            return cached.clone();
+        }
+
+        let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
+        let owned_runs;
+        let runs = if let Some(precomputed_runs) = precomputed_runs {
+            precomputed_runs
+        } else {
+            owned_runs = runs_for_line(
+                shape_style.base_font,
+                shape_style.text_color,
+                line.line_start,
+                capped_text.as_ref(),
+                shape_style.highlights,
+            );
+            owned_runs.as_slice()
+        };
+        let with_tabs = capped_text.clone();
+        let mut shaped = window.text_system().shape_line(
+            shaping_text_without_tabs(capped_text),
+            shape_style.font_size,
+            runs,
+            None,
+        );
+        if let Some(layout) = apply_tab_stops(&shaped, &with_tabs, self.tab_size) {
+            *shaped = Arc::new(layout);
+        }
+        self.layout.plain_line_cache.insert(key, shaped.clone());
+        self.trim_shape_caches();
+        shaped
+    }
+
+    pub(super) fn mark_wrap_dirty_from_edit(
+        &mut self,
+        old_lines: Range<usize>,
+        new_lines: Range<usize>,
+    ) {
+        if !(self.multiline && self.soft_wrap) || self.wrap.row_counts.is_empty() {
+            return;
+        }
+        debug_assert_eq!(old_lines.start, new_lines.start);
+        // Keep the previous height provisionally for the edited lines, and
+        // splice at the edit so all unchanged lines retain their measurements.
+        let previous = &self.wrap.row_counts[old_lines.clone()];
+        let replacement = (0..new_lines.len())
+            .map(|ix| previous.get(ix).copied().unwrap_or(1))
+            .collect::<Vec<_>>();
+        self.wrap.row_counts.splice(old_lines.clone(), replacement);
+        self.wrap.row_counts_current.splice(
+            old_lines.clone(),
+            std::iter::repeat_n(true, new_lines.len()),
+        );
+        if old_lines.len() != new_lines.len() {
+            // A background snapshot still addresses the old line indices.
+            if self.wrap.pending_job.take().is_some() {
+                self.request_wrap_recompute();
+            }
+            for dirty in &mut self.wrap.dirty_ranges {
+                dirty.start = if dirty.start >= old_lines.end {
+                    dirty.start - old_lines.end + new_lines.end
+                } else {
+                    dirty.start.min(old_lines.start)
+                };
+                dirty.end = if dirty.end >= old_lines.end {
+                    dirty.end - old_lines.end + new_lines.end
+                } else if dirty.end > old_lines.start {
+                    new_lines.end
+                } else {
+                    dirty.end
+                };
+            }
+        }
+        self.wrap.dirty_ranges.push(new_lines);
+        self.wrap.last_rows = Some(total_wrap_rows(&self.wrap.row_counts));
+    }
+
+    pub(super) fn take_normalized_wrap_dirty_ranges(
+        &mut self,
+        line_count: usize,
+    ) -> Vec<Range<usize>> {
+        let mut ranges = std::mem::take(&mut self.wrap.dirty_ranges);
+        ranges.retain_mut(|range| {
+            range.start = range.start.min(line_count);
+            range.end = range.end.min(line_count);
+            range.start < range.end
+        });
+        if ranges.is_empty() {
+            return ranges;
+        }
+
+        ranges.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            if let Some(last) = merged.last_mut()
+                && range.start <= last.end
+            {
+                last.end = last.end.max(range.end);
+                continue;
+            }
+            merged.push(range);
+        }
+        merged
+    }
+
+    pub(super) fn set_measured_wrap_rows(&mut self, line_ix: usize, rows: usize) -> bool {
+        let rows = rows.max(1);
+        let changed = self.wrap.row_counts[line_ix] != rows;
+        self.wrap.row_counts[line_ix] = rows;
+        // Protect even an unchanged count: a late estimator may disagree with
+        // shaping, including on the very frame that launched its job.
+        self.wrap.row_counts_current[line_ix] = true;
+        changed
+    }
+
+    pub(super) fn maybe_recompute_wrap_rows(
+        &mut self,
+        display_text: &str,
+        line_starts: &[usize],
+        rounded_wrap_width: Pixels,
+        font_size: Pixels,
+        line_count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.wrap.recompute_requested {
+            return;
+        }
+        let width_key = wrap_width_cache_key(rounded_wrap_width);
+        let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
+        let synchronous = line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD;
+        let tab_size = self.tab_size;
+        estimate_wrap_rows_budgeted(
+            display_text,
+            line_starts,
+            wrap_columns,
+            tab_size,
+            &mut self.wrap.row_counts,
+            &self.wrap.row_counts_current,
+            if synchronous {
+                Duration::MAX
+            } else {
+                Duration::from_millis(TEXT_INPUT_WRAP_FOREGROUND_BUDGET_MS)
+            },
+        );
+        self.wrap.row_counts_width = Some(rounded_wrap_width);
+        self.wrap.recompute_requested = false;
+        self.wrap.pending_job = None;
+        if synchronous {
+            return;
+        }
+
+        let sequence = self.wrap.recompute_sequence.wrapping_add(1).max(1);
+        self.wrap.recompute_sequence = sequence;
+        self.wrap.pending_job = Some(PendingWrapJob {
+            sequence,
+            width_key,
+            line_count,
+            wrap_columns,
+        });
+
+        let snapshot = display_text.to_string();
+        let estimate = cx
+            .background_executor()
+            .spawn(async move { estimate_wrap_rows_for_text(&snapshot, wrap_columns, tab_size) });
+        cx.spawn(
+            async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
+                let rows = estimate.await;
+                let _ = input.update(cx, |input, cx| {
+                    input.complete_wrap_recompute_job(sequence, width_key, line_count, rows, cx);
+                });
+            },
+        )
+        .detach();
+    }
+
+    pub(super) fn complete_wrap_recompute_job(
+        &mut self,
+        sequence: u64,
+        width_key: i32,
+        line_count: usize,
+        mut rows: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(job) = self.wrap.pending_job else {
+            return;
+        };
+        if job.sequence != sequence || job.width_key != width_key || job.line_count != line_count {
+            return;
+        }
+
+        rows.resize(line_count, 1);
+        for rows_per_line in &mut rows {
+            *rows_per_line = (*rows_per_line).max(1);
+        }
+        for (ix, rows) in rows.into_iter().enumerate() {
+            if !self.wrap.row_counts_current[ix] {
+                self.wrap.row_counts[ix] = rows;
+            }
+        }
+        self.wrap.pending_job = None;
+        self.wrap.last_rows = Some(total_wrap_rows(self.wrap.row_counts.as_slice()));
+        self.wrap.cache = None;
+        cx.notify();
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        if self.selection.range.is_empty() {
+            None
+        } else {
+            Some(self.content[self.selection.range.clone()].to_string())
+        }
+    }
+
+    pub fn selected_range(&self) -> Range<usize> {
+        self.selection.range.clone()
+    }
+
+    pub fn select_all_text(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+        self.select_to(self.content.len(), window, cx);
+    }
+
+    /// Whether the buffer is currently wrapping long lines.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn soft_wrap(&self) -> bool {
+        self.soft_wrap
+    }
+
+    /// How many visual rows each logical line occupies under the current wrap
+    /// width, or an empty slice when the counts are not yet in step with the
+    /// text (before the first prepaint, or between an edit and the wrap pass).
+    ///
+    /// This is the very array the element lays the buffer out from — it builds
+    /// its y-offsets by scanning it — so a gutter that projects through it lands
+    /// on the same rows as the text, whatever the wrap estimate got right or
+    /// wrong. Deriving the gutter independently is what would drift.
+    pub fn wrap_row_counts(&self) -> &[usize] {
+        if !(self.multiline && self.soft_wrap) {
+            return &[];
+        }
+        &self.wrap.row_counts
+    }
+
+    pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
+        if soft_wrap {
+            self.layout.scroll_x = px(0.0);
+            if let Some(handle) = &self.interaction.vertical_scroll_handle {
+                let offset = handle.offset();
+                if offset.x != px(0.0) {
+                    handle.set_offset(point(px(0.0), offset.y));
+                }
+            }
+        }
+        if self.soft_wrap == soft_wrap {
+            return;
+        }
+        self.soft_wrap = soft_wrap;
+        self.invalidate_layout_caches();
+        if soft_wrap {
+            self.request_wrap_recompute();
+        }
+        if !soft_wrap {
+            self.wrap.last_rows = None;
+        }
+        cx.notify();
+    }
+
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.masked == masked {
+            return;
+        }
+        self.masked = masked;
+        self.invalidate_layout_caches();
+        if self.multiline && self.soft_wrap {
+            self.request_wrap_recompute();
+        }
+        cx.notify();
+    }
+
+    /// Columns a tab advances to. Tabs stay tab characters in the text.
+    pub fn set_tab_size(&mut self, tab_size: usize, cx: &mut Context<Self>) {
+        let tab_size = tab_size.max(1);
+        if self.tab_size == tab_size {
+            return;
+        }
+        self.tab_size = tab_size;
+        self.bump_shape_style_epoch();
+        self.rebuild_content_width_cache_if_present();
+        cx.notify();
+    }
+
+    pub fn set_line_ending(&mut self, line_ending: &'static str) {
+        self.line_ending = line_ending;
+    }
+
+    /// Detect line ending from file content. Returns `\r\n` if CRLF is found,
+    /// otherwise falls back to the OS default (`\n` on Unix, `\r\n` on Windows).
+    pub fn detect_line_ending(content: &str) -> &'static str {
+        if content.contains("\r\n") || cfg!(windows) {
+            "\r\n"
+        } else {
+            "\n"
+        }
+    }
+
+    pub(super) fn sanitize_insert_text(&self, text: &str) -> Option<String> {
+        if self.multiline {
+            return Some(text.to_string());
+        }
+
+        if text == "\n" || text == "\r" || text == "\r\n" {
+            return None;
+        }
+
+        Some(
+            text.replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .replace('\n', " "),
+        )
+    }
+
+    pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.range.is_empty() && self.cursor_offset() == 0 {
+            self.interaction.arrow_left_at_start_pressed = true;
+        }
+        if self.selection.range.is_empty() {
+            self.move_to(self.previous_boundary(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selection.range.start, cx)
+        }
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.range.is_empty() && self.cursor_offset() >= self.content.len() {
+            self.interaction.arrow_right_at_end_pressed = true;
+        }
+        if self.selection.range.is_empty() {
+            self.move_to(self.next_boundary(self.selection.range.end), cx);
+        } else {
+            self.move_to(self.selection.range.end, cx)
+        }
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.range.is_empty() {
+            self.move_to(self.previous_word_start(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selection.range.start, cx)
+        }
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.range.is_empty() {
+            self.move_to(self.next_word_end(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selection.range.end, cx)
+        }
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_left(
+        &mut self,
+        _: &SelectLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.previous_boundary(self.cursor_offset()), window, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_right(
+        &mut self,
+        _: &SelectRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.next_boundary(self.cursor_offset()), window, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_word_left(
+        &mut self,
+        _: &SelectWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.previous_word_start(self.cursor_offset()), window, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.next_word_end(self.cursor_offset()), window, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.arrow_up_pressed = true;
+        if let Some((target, preferred_x)) = self.vertical_move_target(
+            self.cursor_offset(),
+            -1.0,
+            self.interaction.vertical_motion_x,
+        ) {
+            self.move_to(target, cx);
+            self.interaction.vertical_motion_x = Some(preferred_x);
+            self.queue_cursor_autoscroll();
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.arrow_down_pressed = true;
+        if let Some((target, preferred_x)) = self.vertical_move_target(
+            self.cursor_offset(),
+            1.0,
+            self.interaction.vertical_motion_x,
+        ) {
+            self.move_to(target, cx);
+            self.interaction.vertical_motion_x = Some(preferred_x);
+            self.queue_cursor_autoscroll();
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((target, preferred_x)) = self.vertical_move_target(
+            self.cursor_offset(),
+            -1.0,
+            self.interaction.vertical_motion_x,
+        ) else {
+            return;
+        };
+        self.select_to(target, window, cx);
+        self.interaction.vertical_motion_x = Some(preferred_x);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_down(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((target, preferred_x)) = self.vertical_move_target(
+            self.cursor_offset(),
+            1.0,
+            self.interaction.vertical_motion_x,
+        ) else {
+            return;
+        };
+        self.select_to(target, window, cx);
+        self.interaction.vertical_motion_x = Some(preferred_x);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_all(
+        &mut self,
+        _: &SelectAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_all_text(window, cx);
+    }
+
+    pub(super) fn row_start(&self, offset: usize) -> usize {
+        self.row_boundaries(offset).0
+    }
+
+    pub(super) fn row_end(&self, offset: usize) -> usize {
+        self.row_boundaries(offset).1
+    }
+
+    pub(super) fn logical_row_boundaries(&self, offset: usize) -> (usize, usize) {
+        let s = self.content.as_ref();
+        let offset = offset.min(s.len());
+        let start = s[..offset].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
+        let rel_end = s[offset..].find('\n').unwrap_or(s.len() - offset);
+        let end = offset + rel_end;
+        (start, end)
+    }
+
+    pub(super) fn row_boundaries(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.content.len());
+        if self.content.is_empty() {
+            return (0, 0);
+        }
+        if !(self.multiline && self.soft_wrap) {
+            return self.logical_row_boundaries(offset);
+        }
+
+        let Some(TextInputLayout::Wrapped { lines, .. }) = self.layout.last.as_ref() else {
+            return self.logical_row_boundaries(offset);
+        };
+        let Some(starts) = self.layout.line_starts.as_ref() else {
+            return self.logical_row_boundaries(offset);
+        };
+        let Some(line) = lines
+            .get(starts.partition_point(|&s| s <= offset).saturating_sub(1))
+            .or_else(|| lines.first())
+        else {
+            return self.logical_row_boundaries(offset);
+        };
+
+        let mut ix = starts.partition_point(|&s| s <= offset);
+        if ix == 0 {
+            ix = 1;
+        }
+        let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+        let line_start = starts.get(line_ix).copied().unwrap_or(0);
+        let line = lines.get(line_ix).unwrap_or(line);
+        let next_start = starts
+            .get(line_ix.saturating_add(1))
+            .copied()
+            .unwrap_or(self.content.len());
+        if line.len() == 0 && next_start > line_start {
+            return self.logical_row_boundaries(offset);
+        }
+        let local = offset.saturating_sub(line_start).min(line.len());
+
+        let mut row_end_indices: Vec<usize> = Vec::with_capacity(line.wrap_boundaries().len() + 1);
+        for boundary in line.wrap_boundaries() {
+            let Some(run) = line.unwrapped_layout.runs.get(boundary.run_ix) else {
+                continue;
+            };
+            let Some(glyph) = run.glyphs.get(boundary.glyph_ix) else {
+                continue;
+            };
+            row_end_indices.push(glyph.index);
+        }
+        row_end_indices.sort_unstable();
+        row_end_indices.dedup();
+        row_end_indices.push(line.len());
+
+        let row_ix = row_end_indices
+            .iter()
+            .position(|&end| local <= end)
+            .unwrap_or_else(|| row_end_indices.len().saturating_sub(1));
+        let row_start_local = if row_ix == 0 {
+            0
+        } else {
+            row_end_indices[row_ix - 1]
+        };
+        let row_end_local = row_end_indices[row_ix];
+        (
+            (line_start + row_start_local).min(self.content.len()),
+            (line_start + row_end_local).min(self.content.len()),
+        )
+    }
+
+    pub(super) fn document_home(
+        &mut self,
+        _: &DocumentHome,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.interaction.document_home_pressed = true;
+        self.move_to(0, cx);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    pub(super) fn document_end(&mut self, _: &DocumentEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.document_end_pressed = true;
+        self.move_to(self.content.len(), cx);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.row_start(self.cursor_offset()), cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_home(
+        &mut self,
+        _: &SelectHome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.row_start(self.cursor_offset()), window, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.row_end(self.cursor_offset()), cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_end(
+        &mut self,
+        _: &SelectEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.row_end(self.cursor_offset()), window, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn caret_point_for_hit_testing(&self, cursor: usize) -> Option<Point<Pixels>> {
+        let bounds = self.layout.bounds?;
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts, lines, cursor);
+                let line = lines.get(line_ix)?;
+                let x = line.x_for_index(local_ix) - self.layout.scroll_x;
+                let y = line_height * line_ix as f32 + line_height / 2.0;
+                Some(point(bounds.left() + x, bounds.top() + y))
+            }
+            TextInputLayout::TruncatedSingleLine(line) => Some(point(
+                bounds.left() + truncated_line_x_for_source_offset(line, cursor),
+                bounds.top() + line_height / 2.0,
+            )),
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let mut ix = starts.partition_point(|&s| s <= cursor);
+                if ix == 0 {
+                    ix = 1;
+                }
+                let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+                let line = lines.get(line_ix)?;
+                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let local = cursor.saturating_sub(start).min(line.len());
+                let pos = line
+                    .position_for_index(local, line_height)
+                    .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                let y = y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO)
+                    + pos.y
+                    + line_height / 2.0;
+                Some(point(bounds.left() + pos.x, bounds.top() + y))
+            }
+        }
+    }
+
+    pub(super) fn vertical_move_target(
+        &self,
+        cursor: usize,
+        direction: f32,
+        preferred_x: Option<Pixels>,
+    ) -> Option<(usize, Pixels)> {
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+        let caret_point = self.caret_point_for_hit_testing(cursor)?;
+        let preferred_x = preferred_x.unwrap_or(caret_point.x);
+        let target = point(preferred_x, caret_point.y + line_height * direction);
+        Some((self.index_for_position(target), preferred_x))
+    }
+
+    pub(super) fn page_move_target(
+        &self,
+        cursor: usize,
+        direction: f32,
+        preferred_x: Option<Pixels>,
+    ) -> Option<(usize, Pixels)> {
+        let bounds = self.layout.bounds?;
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+        let page_height = bounds.size.height.max(line_height);
+        let caret_point = self.caret_point_for_hit_testing(cursor)?;
+        let preferred_x = preferred_x.unwrap_or(caret_point.x);
+        let target = point(preferred_x, caret_point.y + page_height * direction);
+        Some((self.index_for_position(target), preferred_x))
+    }
+
+    /// The caret's x inside the input's own content, from the layout of the
+    /// frame that last painted it.
+    ///
+    /// A multiline input does not scroll itself sideways — the container it sits
+    /// in does — so the caret's place along its line is the only thing that
+    /// container can steer by. `None` while soft wrap is on, where there is no
+    /// horizontal overflow to reveal into, and before the first layout.
+    pub fn cursor_content_x(&self, cursor: usize) -> Option<Pixels> {
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts, lines, cursor);
+                lines.get(line_ix).map(|line| line.x_for_index(local_ix))
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                Some(truncated_line_x_for_source_offset(line, cursor))
+            }
+            TextInputLayout::Wrapped { .. } => None,
+        }
+    }
+
+    pub(super) fn cursor_vertical_span(&self, cursor: usize) -> Option<(Pixels, Pixels)> {
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, _) = line_for_offset(starts, lines, cursor);
+                let top = line_height * line_ix as f32;
+                let bottom = top + line_height;
+                Some((top, bottom))
+            }
+            TextInputLayout::TruncatedSingleLine(_) => Some((Pixels::ZERO, line_height)),
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let mut ix = starts.partition_point(|&s| s <= cursor);
+                if ix == 0 {
+                    ix = 1;
+                }
+                let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+                let line = lines.get(line_ix)?;
+                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let local = cursor.saturating_sub(start).min(line.len());
+                let pos = line
+                    .position_for_index(local, line_height)
+                    .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                let top = y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO) + pos.y;
+                let bottom = top + line_height;
+                Some((top, bottom))
+            }
+        }
+    }
+
+    pub(super) fn ensure_cursor_visible_in_vertical_scroll(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.interaction.vertical_scroll_handle.clone() else {
+            self.interaction.pending_cursor_autoscroll = false;
+            return;
+        };
+        let Some(text_bounds) = self.layout.bounds else {
+            return;
+        };
+        let viewport_height = handle.bounds().size.height.max(px(0.0));
+        if viewport_height <= px(0.0) {
+            return;
+        }
+        // Wrapping is measured during prepaint, after the parent's scroll
+        // extent was laid out. Wait for that height instead of scrolling
+        // against a temporary, shorter document and correcting it next frame.
+        let waiting_for_layout = self.multiline
+            && self.soft_wrap
+            && self.wrap.cache.is_some_and(|cache| {
+                (self.layout.line_height * cache.rows as f32 - text_bounds.size.height).abs()
+                    > px(1.0)
+            })
+            && self.interaction.cursor_autoscroll_layout_waits_remaining > 0;
+        let caret_margin =
+            px(10.0).min(((viewport_height - self.layout.line_height) / 2.0).max(px(0.0)));
+
+        let Some((cursor_top, cursor_bottom)) = self.cursor_vertical_span(self.cursor_offset())
+        else {
+            return;
+        };
+
+        let current = handle.offset();
+        let viewport_top = handle.bounds().top();
+        let child_top = viewport_top + current.y;
+        let text_origin_in_child = text_bounds.top() - child_top;
+        let cursor_top = text_origin_in_child + cursor_top;
+        let cursor_bottom = text_origin_in_child + cursor_bottom;
+        let max_offset = handle.max_offset().y.max(px(0.0));
+        let scroll_y = (-current.y).clamp(px(0.0), max_offset);
+        let target_scroll = if waiting_for_layout {
+            scroll_y
+        } else if cursor_top < scroll_y + caret_margin {
+            cursor_top - caret_margin
+        } else if cursor_bottom > scroll_y + viewport_height - caret_margin {
+            cursor_bottom - viewport_height + caret_margin
+        } else {
+            scroll_y
+        }
+        .max(px(0.0))
+        .min(max_offset);
+
+        let moved = current.y != -target_scroll;
+        if moved {
+            handle.set_offset(point(current.x, -target_scroll));
+            self.interaction.cursor_autoscroll_layout_waits_remaining =
+                TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
+        }
+        // Scrolling reveals lines that may still have estimated wrap counts.
+        // Keep the reveal alive through their shaping and the following layout,
+        // even if the estimated caret position fits now (notably Ctrl+End).
+        // A fixed retry budget prevents notifications from continuing forever.
+        let cursor_will_be_visible =
+            cursor_top >= target_scroll && cursor_bottom <= target_scroll + viewport_height;
+        if waiting_for_layout {
+            // Waiting for the parent consumes a separate allowance: otherwise
+            // a slow layout can use every attempt before we reach the target.
+            self.interaction.cursor_autoscroll_layout_waits_remaining -= 1;
+            self.interaction.pending_cursor_autoscroll = true;
+        } else if ((self.soft_wrap && moved) || !cursor_will_be_visible)
+            && self.interaction.cursor_autoscroll_retries_remaining > 0
+        {
+            self.interaction.pending_cursor_autoscroll = true;
+            self.interaction.cursor_autoscroll_retries_remaining -= 1;
+        } else {
+            self.interaction.pending_cursor_autoscroll = false;
+        }
+        if moved || self.interaction.pending_cursor_autoscroll {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.page_up_pressed = true;
+        cx.notify();
+        let Some((target, preferred_x)) = self.page_move_target(
+            self.cursor_offset(),
+            -1.0,
+            self.interaction.vertical_motion_x,
+        ) else {
+            return;
+        };
+        self.move_to(target, cx);
+        self.interaction.vertical_motion_x = Some(preferred_x);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((target, preferred_x)) = self.page_move_target(
+            self.cursor_offset(),
+            -1.0,
+            self.interaction.vertical_motion_x,
+        ) else {
+            return;
+        };
+        self.select_to(target, window, cx);
+        self.interaction.vertical_motion_x = Some(preferred_x);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.page_down_pressed = true;
+        cx.notify();
+        let Some((target, preferred_x)) = self.page_move_target(
+            self.cursor_offset(),
+            1.0,
+            self.interaction.vertical_motion_x,
+        ) else {
+            return;
+        };
+        self.move_to(target, cx);
+        self.interaction.vertical_motion_x = Some(preferred_x);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((target, preferred_x)) = self.page_move_target(
+            self.cursor_offset(),
+            1.0,
+            self.interaction.vertical_motion_x,
+        ) else {
+            return;
+        };
+        self.select_to(target, window, cx);
+        self.interaction.vertical_motion_x = Some(preferred_x);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            self.extend_selection_to(self.previous_boundary(self.cursor_offset()), cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            self.extend_selection_to(self.next_boundary(self.cursor_offset()), cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    pub(super) fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            self.extend_selection_to(self.previous_word_start(self.cursor_offset()), cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    pub(super) fn delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            self.extend_selection_to(self.next_word_end(self.cursor_offset()), cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    /// Cmd-Backspace (Ctrl-Shift-Backspace on Windows/Linux): delete back to
+    /// where Home would move the caret.
+    /// At the start of a row it deletes the line break instead, joining the
+    /// row to the one above, as native text fields do.
+    pub(super) fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToLineStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            let cursor = self.cursor_offset();
+            let start = self.row_start(cursor);
+            let target = if start < cursor {
+                start
+            } else {
+                self.previous_boundary(cursor)
+            };
+            self.extend_selection_to(target, cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    /// Cmd-Delete (Ctrl-Shift-Delete on Windows/Linux): delete forward to
+    /// where End would move the caret, or the line break when already at the
+    /// end of a row.
+    pub(super) fn delete_to_line_end(
+        &mut self,
+        _: &DeleteToLineEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        if self.selection.range.is_empty() {
+            let cursor = self.cursor_offset();
+            let end = self.row_end(cursor);
+            let target = if end > cursor {
+                end
+            } else {
+                self.next_boundary(cursor)
+            };
+            self.extend_selection_to(target, cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    pub(super) fn insert_line_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.queue_cursor_autoscroll();
+        self.replace_text_in_range(None, self.line_ending, window, cx);
+    }
+
+    pub(super) fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || !self.multiline || self.interaction.submit_on_enter {
+            self.interaction.enter_pressed = true;
+            cx.notify();
+            return;
+        }
+        self.insert_line_break(window, cx);
+    }
+
+    pub(super) fn shift_enter(
+        &mut self,
+        _: &ShiftEnter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only || !self.multiline {
+            return;
+        }
+        self.insert_line_break(window, cx);
+    }
+
+    pub(super) fn show_character_palette(
+        &mut self,
+        _: &ShowCharacterPalette,
+        window: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        window.show_character_palette();
+    }
+
+    pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        if let Some(text) = crate::clipboard::read_text(cx) {
+            self.replace_text_in_range(None, &text, window, cx);
+        }
+    }
+
+    pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_with_source(crate::clipboard::CopySource::TextInputShortcut, cx);
+    }
+
+    fn copy_with_source(&self, source: crate::clipboard::CopySource, cx: &mut Context<Self>) {
+        if !self.selection.range.is_empty() {
+            crate::clipboard::write_text(
+                cx,
+                self.content[self.selection.range.clone()].to_string(),
+                source,
+            );
+        }
+    }
+
+    pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        self.cut_with_source(crate::clipboard::CopySource::TextInputShortcut, window, cx);
+    }
+
+    fn cut_with_source(
+        &mut self,
+        source: crate::clipboard::CopySource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.selection.range.is_empty() {
+            self.copy_with_source(source, cx);
+            if !self.read_only {
+                self.replace_text_in_range(None, "", window, cx)
+            }
+        }
+    }
+
+    pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        let Some(snapshot) = self.selection.undo_stack.pop() else {
+            return;
+        };
+        self.push_redo_snapshot(self.current_undo_snapshot());
+        self.restore_undo_snapshot(snapshot, window, cx);
+    }
+
+    pub(super) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        let Some(snapshot) = self.selection.redo_stack.pop() else {
+            return;
+        };
+        self.push_undo_snapshot(self.current_undo_snapshot());
+        self.restore_undo_snapshot(snapshot, window, cx);
+    }
+
+    pub fn cursor_offset(&self) -> usize {
+        if self.selection.reversed {
+            self.selection.range.start
+        } else {
+            self.selection.range.end
+        }
+    }
+
+    pub fn set_cursor_offset(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_to(offset, cx);
+        self.queue_cursor_autoscroll();
+    }
+
+    pub(super) fn normalized_utf8_range(&self, range: Range<usize>) -> Range<usize> {
+        let start = self.clamp_to_char_boundary(range.start.min(self.content.len()));
+        let end = self.clamp_to_char_boundary(range.end.min(self.content.len()));
+        if end < start { end..start } else { start..end }
+    }
+
+    pub(super) fn replace_utf8_range_internal(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        self.replace_utf8_range_internal_with_view(range, new_text, false, cx)
+    }
+
+    /// Shift one caret/selection endpoint across an edit that replaced
+    /// `range` with `inserted`, so it keeps pointing at the same text.
+    fn shift_offset_across_edit(
+        offset: usize,
+        range: &Range<usize>,
+        inserted: &Range<usize>,
+    ) -> usize {
+        if offset <= range.start {
+            offset
+        } else if offset >= range.end {
+            // Past the edit: move by the length delta, computed without
+            // signed arithmetic so a shrinking edit cannot underflow.
+            offset
+                .saturating_sub(range.end)
+                .saturating_add(inserted.end)
+        } else {
+            // Inside the replaced span, which no longer exists: the end of the
+            // replacement is the closest surviving position.
+            inserted.end
+        }
+    }
+
+    fn replace_utf8_range_internal_with_view(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        preserve_view: bool,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        let undo_snapshot = self.current_undo_snapshot();
+        let range = self.normalized_utf8_range(range);
+        let previous_selection = self.selection.range.clone();
+        let previous_reversed = self.selection.reversed;
+        let inserted = self.replace_content_range(range.clone(), new_text, cx);
+        self.shift_protected_ranges_for_edit(&range, &inserted);
+        self.push_undo_snapshot(undo_snapshot);
+        self.selection.redo_stack.clear();
+        self.selection
+            .pending_text_edit_deltas
+            .push((range.clone(), inserted.clone()));
+        let cursor = inserted.end;
+        if preserve_view {
+            let start = self.clamp_to_char_boundary(
+                Self::shift_offset_across_edit(previous_selection.start, &range, &inserted)
+                    .min(self.content.len()),
+            );
+            let end = self.clamp_to_char_boundary(
+                Self::shift_offset_across_edit(previous_selection.end, &range, &inserted)
+                    .min(self.content.len()),
+            );
+            self.selection.range = start.min(end)..start.max(end);
+            self.selection.reversed = previous_reversed;
+        } else {
+            self.selection.range = cursor..cursor;
+            self.selection.reversed = false;
+        }
+        self.selection.marked_range.take();
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        self.invalidate_layout_caches_preserving_wrap_rows();
+        self.note_text_edit_for_highlights(&range, &inserted);
+        if !preserve_view {
+            self.queue_cursor_autoscroll();
+        }
+        cx.notify();
+        inserted
+    }
+
+    /// Replace a UTF-8 byte range in content.
+    ///
+    /// Returns the inserted byte range after replacement.
+    pub fn replace_utf8_range(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        if self.read_only {
+            let cursor = self.cursor_offset();
+            return cursor..cursor;
+        }
+        let Some(new_text) = self.sanitize_insert_text(new_text) else {
+            let cursor = self.cursor_offset();
+            return cursor..cursor;
+        };
+        self.replace_utf8_range_internal(range, &new_text, cx)
+    }
+
+    /// Replace a UTF-8 byte range without moving the caret or scrolling to the
+    /// edit, for rewrites the user did not type.
+    ///
+    /// [`replace_utf8_range`](Self::replace_utf8_range) parks the caret at the
+    /// end of the replacement and queues a cursor autoscroll, which is right
+    /// for an edit the user just made at that spot. It is wrong when the
+    /// document is regenerated from state the user changed elsewhere — the
+    /// merge tool rebuilds its whole resolved output on every pick — because
+    /// the autoscroll runs during paint and therefore overrides whatever the
+    /// caller scrolled to itself. Callers that do want the view to follow the
+    /// edit scroll explicitly after calling this.
+    ///
+    /// The caret and selection are shifted across the edit so they keep
+    /// pointing at the same text. Returns the inserted byte range.
+    pub fn replace_utf8_range_preserving_view(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        if self.read_only {
+            let cursor = self.cursor_offset();
+            return cursor..cursor;
+        }
+        let Some(new_text) = self.sanitize_insert_text(new_text) else {
+            let cursor = self.cursor_offset();
+            return cursor..cursor;
+        };
+        self.replace_utf8_range_internal_with_view(range, &new_text, true, cx)
+    }
+
+    /// Replace the current selection range with `new_text`.
+    ///
+    /// Returns the inserted byte range after replacement.
+    pub fn replace_selection_utf8(
+        &mut self,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        self.replace_utf8_range(self.selection.range.clone(), new_text, cx)
+    }
+
+    /// Drain queued UTF-8 edit deltas in application order.
+    ///
+    /// Each `old_range` references bytes before its corresponding edit and
+    /// each `new_range` references bytes after it. Retaining the whole queue is
+    /// important when GPUI coalesces multiple notifications.
+    pub fn drain_recent_utf8_edit_deltas(&mut self) -> Vec<(Range<usize>, Range<usize>)> {
+        std::mem::take(&mut self.selection.pending_text_edit_deltas)
+    }
+
+    pub fn offset_for_position(&self, position: Point<Pixels>) -> usize {
+        self.index_for_position(position)
+    }
+
+    pub fn hotspot_range_index_at_position(
+        &self,
+        position: Point<Pixels>,
+        hotspot_ranges: &[Range<usize>],
+    ) -> Option<usize> {
+        let offset = self.index_for_mouse_position(position);
+        hotspot_ranges.iter().enumerate().find_map(|(ix, range)| {
+            (self.valid_hotspot_range(range)
+                && self.position_inside_hotspot(range, position, offset))
+            .then_some(ix)
+        })
+    }
+
+    /// The box a hotspot occupies, in window coordinates, for anchoring a menu
+    /// to the run of text it acts on.
+    ///
+    /// A hotspot that wraps has its end on a later visual line, where the end x
+    /// says nothing about the run's extent and can even sit left of its start.
+    /// Those report the first visual line only, running to the right edge of the
+    /// input, so the box always describes where the hotspot begins.
+    pub fn hotspot_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
+        if !self.valid_hotspot_range(range) {
+            return None;
+        }
+
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+        let start = self.hotspot_position(range.start)?;
+        let end = self.hotspot_position(range.end)?;
+        let end = if end.y > start.y {
+            point(self.layout.bounds?.right(), start.y)
+        } else {
+            end
+        };
+        Some(Bounds::from_corners(
+            start,
+            point(end.x, end.y + line_height),
+        ))
+    }
+
+    pub(super) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = self.clamp_to_char_boundary(offset);
+        self.selection.range = offset..offset;
+        self.selection.reversed = false;
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        cx.notify();
+    }
+
+    /// Extends the selection and takes the window's, for gestures that leave a
+    /// highlight behind. See [`Self::extend_selection_to`] for the bare move.
+    pub(super) fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
+        self.extend_selection_to(offset, cx);
+        // Only a real highlight takes the window's selection: Ctrl+F select-alls
+        // an empty search box, and that must not wipe a diff-text selection.
+        if !self.selection.range.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
+    }
+
+    /// Moves the selection head without taking the window's selection. What the
+    /// delete helpers want: they build a range only to feed
+    /// `replace_text_in_range`, and paint no highlight.
+    pub(super) fn extend_selection_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = self.clamp_to_char_boundary(offset);
+        if self.selection.reversed {
+            self.selection.range.start = offset;
+        } else {
+            self.selection.range.end = offset;
+        }
+        if self.selection.range.end < self.selection.range.start {
+            self.selection.reversed = !self.selection.reversed;
+            self.selection.range = self.selection.range.end..self.selection.range.start;
+        }
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        cx.notify();
+    }
+
+    pub(super) fn clamp_to_char_boundary(&self, offset: usize) -> usize {
+        let mut offset = offset.min(self.content.len());
+        while offset > 0 && !self.content.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
+    }
+
+    pub(super) fn previous_boundary(&self, offset: usize) -> usize {
+        self.content
+            .grapheme_indices(true)
+            .rev()
+            .find_map(|(idx, _)| (idx < offset).then_some(idx))
+            .unwrap_or(0)
+    }
+
+    pub(super) fn next_boundary(&self, offset: usize) -> usize {
+        self.content
+            .grapheme_indices(true)
+            .find_map(|(idx, _)| (idx > offset).then_some(idx))
+            .unwrap_or(self.content.len())
+    }
+
+    pub(super) fn is_word_char(ch: char) -> bool {
+        crate::text_selection::is_word_char(ch)
+    }
+
+    pub(super) fn current_undo_snapshot(&self) -> UndoSnapshot {
+        UndoSnapshot {
+            content: self.content.snapshot(),
+            selected_range: self.selection.range.clone(),
+            selection_reversed: self.selection.reversed,
+        }
+    }
+
+    pub(super) fn push_undo_snapshot(&mut self, snapshot: UndoSnapshot) {
+        Self::push_history_snapshot(&mut self.selection.undo_stack, snapshot);
+    }
+
+    pub(super) fn push_redo_snapshot(&mut self, snapshot: UndoSnapshot) {
+        Self::push_history_snapshot(&mut self.selection.redo_stack, snapshot);
+    }
+
+    pub(super) fn push_history_snapshot(stack: &mut Vec<UndoSnapshot>, snapshot: UndoSnapshot) {
+        if stack.last() == Some(&snapshot) {
+            return;
+        }
+        if stack.len() >= MAX_UNDO_STEPS {
+            let _ = stack.remove(0);
+        }
+        stack.push(snapshot);
+    }
+
+    pub(super) fn restore_undo_snapshot(
+        &mut self,
+        snapshot: UndoSnapshot,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.probe_action = crate::ui_probe::begin_action("typing");
+        let text_edit_delta =
+            utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
+        let old_lines = text_edit_delta
+            .as_ref()
+            .map(|(old, _)| Self::affected_lines(&self.content.snapshot(), old.clone()));
+        self.content = snapshot.content.into();
+        if text_edit_delta.is_some() {
+            self.emit_content_changed(cx);
+        }
+        if let Some(old_lines) = old_lines
+            && let Some((_, new)) = &text_edit_delta
+        {
+            let new_lines = Self::affected_lines(&self.content.snapshot(), new.clone());
+            self.mark_wrap_dirty_from_edit(old_lines, new_lines);
+        }
+        // The spans described the buffer this snapshot just replaced; the owner
+        // republishes them for the restored one.
+        self.protected_ranges = Arc::from([]);
+        self.rebuild_content_width_cache_if_present();
+        self.selection.range = snapshot.selected_range;
+        self.selection.reversed = snapshot.selection_reversed;
+        self.selection.marked_range = None;
+        if !self.selection.range.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        self.invalidate_layout_caches_preserving_wrap_rows();
+        if let Some(delta) = text_edit_delta {
+            self.note_text_edit_for_highlights(&delta.0, &delta.1);
+            self.selection.pending_text_edit_deltas.push(delta);
+        }
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    pub(super) fn skip_left_while(
+        s: &str,
+        mut offset: usize,
+        mut predicate: impl FnMut(char) -> bool,
+    ) -> usize {
+        offset = offset.min(s.len());
+        while offset > 0 {
+            let Some((idx, ch)) = s[..offset].char_indices().next_back() else {
+                return 0;
+            };
+            if !predicate(ch) {
+                break;
+            }
+            offset = idx;
+        }
+        offset
+    }
+
+    pub(super) fn skip_right_while(
+        s: &str,
+        mut offset: usize,
+        mut predicate: impl FnMut(char) -> bool,
+    ) -> usize {
+        offset = offset.min(s.len());
+        while offset < s.len() {
+            let Some(ch) = s[offset..].chars().next() else {
+                break;
+            };
+            if !predicate(ch) {
+                break;
+            }
+            offset += ch.len_utf8();
+        }
+        offset
+    }
+
+    pub(super) fn previous_word_start(&self, offset: usize) -> usize {
+        let s = self.content.as_ref();
+        let mut offset = offset.min(s.len());
+
+        // Skip any whitespace to the left of the cursor.
+        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
+
+        // Skip punctuation/symbols (e.g. '.' '/' '-') so word navigation doesn't get stuck on them.
+        offset = Self::skip_left_while(s, offset, |ch| {
+            !ch.is_whitespace() && !Self::is_word_char(ch)
+        });
+
+        // Skip any whitespace again, then skip the word itself.
+        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
+        Self::skip_left_while(s, offset, Self::is_word_char)
+    }
+
+    pub(super) fn next_word_end(&self, offset: usize) -> usize {
+        let s = self.content.as_ref();
+        let offset = offset.min(s.len());
+        if offset >= s.len() {
+            return s.len();
+        }
+
+        let Some(ch) = s[offset..].chars().next() else {
+            return s.len();
+        };
+
+        if ch.is_whitespace() {
+            return Self::skip_right_while(s, offset, |ch| ch.is_whitespace());
+        }
+        if Self::is_word_char(ch) {
+            return Self::skip_right_while(s, offset, Self::is_word_char);
+        }
+
+        Self::skip_right_while(s, offset, |ch| {
+            !ch.is_whitespace() && !Self::is_word_char(ch)
+        })
+    }
+
+    pub(super) fn token_range_for_offset(&self, offset: usize) -> Range<usize> {
+        crate::text_selection::token_range_for_offset(self.content.as_ref(), offset)
+    }
+
+    fn valid_hotspot_range(&self, range: &Range<usize>) -> bool {
+        range.start < range.end && range.end <= self.content.len()
+    }
+
+    fn offset_inside_hotspot(range: &Range<usize>, offset: usize) -> bool {
+        offset >= range.start && offset < range.end
+    }
+
+    fn wrapped_line_for_offset(
+        starts: &[usize],
+        lines: &[WrappedLine],
+        offset: usize,
+    ) -> (usize, usize) {
+        let mut ix = starts.partition_point(|&s| s <= offset);
+        if ix == 0 {
+            ix = 1;
+        }
+        let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+        let start = starts.get(line_ix).copied().unwrap_or(0);
+        let local = offset.saturating_sub(start).min(lines[line_ix].len());
+        (line_ix, local)
+    }
+
+    fn position_inside_hotspot(
+        &self,
+        range: &Range<usize>,
+        position: Point<Pixels>,
+        offset: usize,
+    ) -> bool {
+        if !self
+            .layout
+            .bounds
+            .as_ref()
+            .is_some_and(|bounds| bounds.contains(&position))
+        {
+            return false;
+        }
+
+        if Self::offset_inside_hotspot(range, offset) {
+            return true;
+        }
+
+        offset == range.end && self.position_inside_hotspot_final_glyph(range, position)
+    }
+
+    fn position_inside_hotspot_final_glyph(
+        &self,
+        range: &Range<usize>,
+        position: Point<Pixels>,
+    ) -> bool {
+        let (Some(bounds), Some(layout), Some(starts)) = (
+            self.layout.bounds.as_ref(),
+            self.layout.last.as_ref(),
+            self.layout.line_starts.as_ref(),
+        ) else {
+            return false;
+        };
+        if !bounds.contains(&position) {
+            return false;
+        }
+
+        let final_glyph_start = self.previous_boundary(range.end);
+        if final_glyph_start < range.start {
+            return false;
+        }
+
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (start_line_ix, start_local_ix) =
+                    line_for_offset(starts.as_ref(), lines, final_glyph_start);
+                let (end_line_ix, end_local_ix) =
+                    line_for_offset(starts.as_ref(), lines, range.end);
+                if start_line_ix != end_line_ix {
+                    return false;
+                }
+
+                let row_top = bounds.top() + line_height * end_line_ix as f32;
+                if position.y < row_top || position.y > row_top + line_height {
+                    return false;
+                }
+
+                let Some(line) = lines.get(end_line_ix) else {
+                    return false;
+                };
+                let x0 = bounds.left() + line.x_for_index(start_local_ix) - self.layout.scroll_x;
+                let x1 = bounds.left() + line.x_for_index(end_local_ix) - self.layout.scroll_x;
+                position.x >= x0.min(x1) && position.x <= x0.max(x1)
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                let row_bottom = bounds.top() + line_height;
+                if position.y < bounds.top() || position.y > row_bottom {
+                    return false;
+                }
+
+                let x0 =
+                    bounds.left() + truncated_line_x_for_source_offset(line, final_glyph_start);
+                let x1 = bounds.left() + truncated_line_x_for_source_offset(line, range.end);
+                position.x >= x0.min(x1) && position.x <= x0.max(x1)
+            }
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let (start_line_ix, start_local_ix) =
+                    Self::wrapped_line_for_offset(starts.as_ref(), lines, final_glyph_start);
+                let (end_line_ix, end_local_ix) =
+                    Self::wrapped_line_for_offset(starts.as_ref(), lines, range.end);
+                if start_line_ix != end_line_ix {
+                    return false;
+                }
+
+                let Some(line) = lines.get(end_line_ix) else {
+                    return false;
+                };
+                let Some(start_pos) = line.position_for_index(start_local_ix, line_height) else {
+                    return false;
+                };
+                let Some(end_pos) = line.position_for_index(end_local_ix, line_height) else {
+                    return false;
+                };
+                if start_pos.y != end_pos.y {
+                    return false;
+                }
+
+                let row_top = bounds.top()
+                    + y_offsets.get(end_line_ix).copied().unwrap_or(Pixels::ZERO)
+                    + end_pos.y;
+                if position.y < row_top || position.y > row_top + line_height {
+                    return false;
+                }
+
+                let x0 = bounds.left() + start_pos.x;
+                let x1 = bounds.left() + end_pos.x;
+                position.x >= x0.min(x1) && position.x <= x0.max(x1)
+            }
+        }
+    }
+
+    fn hotspot_position(&self, offset: usize) -> Option<Point<Pixels>> {
+        let bounds = self.layout.bounds?;
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        let offset = self.clamp_to_char_boundary(offset.min(self.content.len()));
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts.as_ref(), lines, offset);
+                let line = lines.get(line_ix)?;
+                Some(point(
+                    bounds.left() + line.x_for_index(local_ix) - self.layout.scroll_x,
+                    bounds.top() + line_height * line_ix as f32,
+                ))
+            }
+            TextInputLayout::TruncatedSingleLine(line) => Some(point(
+                bounds.left() + truncated_line_x_for_source_offset(line, offset),
+                bounds.top(),
+            )),
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let (line_ix, local_ix) =
+                    Self::wrapped_line_for_offset(starts.as_ref(), lines, offset);
+                let line = lines.get(line_ix)?;
+                let pos = line.position_for_index(local_ix, line_height)?;
+                Some(point(
+                    bounds.left() + pos.x,
+                    bounds.top() + y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO) + pos.y,
+                ))
+            }
+        }
+    }
+
+    pub(super) fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.interaction.context_menu.take().is_some() {
+            cx.notify();
+        }
+        // The press belongs to this input for as long as the button is held,
+        // even once the pointer leaves it — nobody else may read its release
+        // as a click. Claimed unconditionally, because a double-click that
+        // turns into a drag never sets `is_selecting`.
+        crate::press_gesture::claim_press(cx);
+        // Unconditional, for the same reason as the claim above.
+        self.selection_owner.adopt(window, cx);
+        self.interaction.took_press = true;
+        cx.stop_propagation();
+        window.focus(&self.focus_handle, cx);
+        self.interaction.cursor_blink_visible = true;
+        let index = self.try_index_for_mouse_position(event.position);
+        self.interaction.vertical_motion_x = None;
+
+        if event.modifiers.shift {
+            self.interaction.is_selecting = true;
+            self.interaction.mouse_selection_anchor = Some(if self.selection.reversed {
+                self.selection.range.end
+            } else {
+                self.selection.range.start
+            });
+            self.interaction.pending_mouse_selection_anchor = None;
+            if let Some(index) = index {
+                self.select_mouse_to_index(index, cx);
+            }
+            return;
+        }
+
+        if event.click_count >= 2 {
+            self.interaction.is_selecting = false;
+            self.interaction.mouse_selection_anchor = None;
+            self.interaction.pending_mouse_selection_anchor = None;
+            let index = index.unwrap_or_else(|| self.cursor_offset());
+            let range = self.token_range_for_offset(index);
+            if range.is_empty() {
+                self.move_to(index, cx);
+            } else {
+                self.selection.range = range;
+                self.selection.reversed = false;
+                cx.notify();
+            }
+        } else {
+            self.interaction.is_selecting = true;
+            self.interaction.mouse_selection_anchor = index;
+            self.interaction.pending_mouse_selection_anchor =
+                index.is_none().then_some(event.position);
+            match index {
+                Some(index) => self.move_to(index, cx),
+                // Clear any old highlight without inventing byte zero as the
+                // new anchor. The initiating pointer position is resolved by
+                // the first move after the next layout has painted.
+                None => self.move_to(self.cursor_offset(), cx),
+            }
+        }
+    }
+
+    pub(super) fn on_mouse_up(
+        &mut self,
+        _event: &MouseUpEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+    }
+
+    pub(super) fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.interaction.is_selecting {
+            self.update_mouse_selection(event.position, cx);
+        }
+    }
+
+    pub(super) fn on_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+
+        if key == "escape" {
+            self.interaction.escape_pressed = true;
+            cx.notify();
+            return;
+        }
+
+        let shift = event.keystroke.modifiers.shift;
+
+        if key == "up" {
+            // Intentionally duplicated with the Up action handler (up()).
+            // This key_down path is a fallback: on some platforms (e.g.
+            // IME composition on Wayland) action dispatch may be suppressed.
+            self.interaction.arrow_up_pressed = true;
+            cx.notify();
+            return;
+        }
+
+        if key == "down" {
+            // Intentionally duplicated with the Down action handler (down()).
+            self.interaction.arrow_down_pressed = true;
+            cx.notify();
+            return;
+        }
+
+        if key == "tab" {
+            if shift {
+                self.interaction.shift_tab_pressed = true;
+            } else {
+                self.interaction.tab_pressed = true;
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn on_mouse_down_right(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Before the suppression guard: when an ancestor renders this input's
+        // menu (the conflict resolver's output pane) the press is still ours.
+        // Adopt rather than preserve -- the menu belongs to this input.
+        self.selection_owner.adopt(window, cx);
+        self.interaction.took_press = true;
+        if self.interaction.suppress_right_click {
+            return;
+        }
+
+        crate::press_gesture::claim_press(cx);
+        cx.stop_propagation();
+        window.focus(&self.focus_handle, cx);
+        self.interaction.cursor_blink_visible = true;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        self.interaction.vertical_motion_x = None;
+
+        let index = self.index_for_mouse_position(event.position);
+        let click_inside_selection = !self.selection.range.is_empty()
+            && index >= self.selection.range.start
+            && index <= self.selection.range.end;
+        if !click_inside_selection {
+            self.move_to(index, cx);
+        }
+
+        cx.notify();
+    }
+
+    pub(super) fn on_right_click(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.interaction.suppress_right_click {
+            return;
+        }
+        self.interaction.context_menu = Some(TextInputContextMenuState {
+            can_paste: crate::clipboard::read_text(cx).is_some(),
+            anchor: event.position,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn context_menu_entry_row(
+        &self,
+        label: &'static str,
+        shortcut: SharedString,
+        disabled: bool,
+        cx: &mut App,
+    ) -> gpui::Stateful<Div> {
+        let mut menu_theme = self.style.menu_theme;
+        menu_theme.metrics = self.appearance_metrics;
+        crate::menu::menu_item(
+            label,
+            menu_theme,
+            crate::ui_scale::UiScale::current(cx),
+            false,
+            disabled,
+        )
+        .w_full()
+        .child(label)
+        .child(
+            div()
+                .text_size(gpui::rems(self.appearance_metrics.ui_text(12.0) / 16.0))
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_color(self.style.menu_theme.colors.foreground.secondary)
+                .child(shortcut),
+        )
+    }
+
+    pub(super) fn render_context_menu(
+        &mut self,
+        state: TextInputContextMenuState,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let menu_ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let primary = primary_modifier_label();
+        let undo_disabled = self.read_only || self.selection.undo_stack.is_empty();
+        let redo_disabled = self.read_only || self.selection.redo_stack.is_empty();
+        let cut_disabled = self.read_only || self.selection.range.is_empty();
+        let copy_disabled = self.selection.range.is_empty();
+        let paste_disabled = self.read_only || !state.can_paste;
+        let delete_disabled = self.read_only || self.selection.range.is_empty();
+        let select_all_disabled = self.content.is_empty();
+
+        // Closing, focus preservation and release activation are common to
+        // every entry. Each action supplies only its operation.
+        let item = |label: &'static str,
+                    shortcut: SharedString,
+                    disabled: bool,
+                    action: fn(&mut Self, &mut Window, &mut Context<Self>),
+                    cx: &mut Context<Self>| {
+            self.context_menu_entry_row(label, shortcut, disabled, cx)
+                .on_menu_activate(
+                    disabled,
+                    cx.listener(move |this, _, window, cx| {
+                        this.interaction.context_menu = None;
+                        action(this, window, cx);
+                        cx.notify();
+                    }),
+                )
+        };
+        let undo_row = item(
+            "Undo",
+            format!("{primary}+Z").into(),
+            undo_disabled,
+            |this, window, cx| this.undo(&Undo, window, cx),
+            cx,
+        );
+        let redo_row = item(
+            "Redo",
+            format!("{primary}+Shift+Z").into(),
+            redo_disabled,
+            |this, window, cx| this.redo(&Redo, window, cx),
+            cx,
+        );
+        let cut_row = item(
+            "Cut",
+            format!("{primary}+X").into(),
+            cut_disabled,
+            |this, window, cx| {
+                this.cut_with_source(
+                    crate::clipboard::CopySource::TextInputContextMenu,
+                    window,
+                    cx,
+                )
+            },
+            cx,
+        )
+        .debug_selector(|| "text_input_context_cut".to_string());
+        let copy_row = item(
+            "Copy",
+            format!("{primary}+C").into(),
+            copy_disabled,
+            |this, _, cx| {
+                this.copy_with_source(crate::clipboard::CopySource::TextInputContextMenu, cx)
+            },
+            cx,
+        )
+        .debug_selector(|| "text_input_context_copy".to_string());
+        let paste_row = item(
+            "Paste",
+            format!("{primary}+V").into(),
+            paste_disabled,
+            |this, window, cx| this.paste(&Paste, window, cx),
+            cx,
+        )
+        .debug_selector(|| "text_input_context_paste".to_string());
+        let delete_row = item(
+            "Delete",
+            "Del".into(),
+            delete_disabled,
+            |this, window, cx| {
+                if !this.selection.range.is_empty() && !this.read_only {
+                    this.replace_text_in_range(None, "", window, cx);
+                }
+            },
+            cx,
+        );
+        let select_all_row = item(
+            "Select all",
+            format!("{primary}+A").into(),
+            select_all_disabled,
+            |this, window, cx| this.select_all(&SelectAll, window, cx),
+            cx,
+        )
+        .debug_selector(|| "text_input_context_select_all".to_string());
+
+        div()
+            .w(crate::ui_scale::design_px_from_percent(
+                188.0,
+                menu_ui_scale_percent,
+            ))
+            .p_1()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .bg(self.style.menu_theme.colors.surface.raised)
+            .border_1()
+            .border_color(self.style.menu_theme.colors.stroke.default)
+            .rounded(px(self.style.menu_theme.radii.popover))
+            .shadow_lg()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
+                }),
+            )
+            .child(undo_row)
+            .child(redo_row)
+            .child(
+                div()
+                    .h(px(1.0))
+                    .w_full()
+                    .bg(with_alpha(self.style.border, 0.6)),
+            )
+            .child(cut_row)
+            .child(copy_row)
+            .child(paste_row)
+            .child(delete_row)
+            .child(
+                div()
+                    .h(px(1.0))
+                    .w_full()
+                    .bg(with_alpha(self.style.border, 0.6)),
+            )
+            .child(select_all_row)
+    }
+
+    fn try_index_for_mouse_position(&self, position: Point<Pixels>) -> Option<usize> {
+        if self.content.is_empty() {
+            return Some(0);
+        }
+
+        let (Some(bounds), Some(layout), Some(starts)) = (
+            self.layout.bounds.as_ref(),
+            self.layout.last.as_ref(),
+            self.layout.line_starts.as_ref(),
+        ) else {
+            return None;
+        };
+
+        if position.y < bounds.top() {
+            return Some(0);
+        }
+        if position.y > bounds.bottom() {
+            return Some(self.content.len());
+        }
+
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        Some(match layout {
+            TextInputLayout::Plain(lines) => {
+                let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
+                let mut line_ix = ratio.floor() as isize;
+                line_ix = line_ix.clamp(0, lines.line_count().saturating_sub(1) as isize);
+                let line_ix = line_ix as usize;
+                let local_x = position.x - bounds.left() + self.layout.scroll_x;
+                // A row that was never shaped was never on screen to be hit;
+                // fall back to its start offset.
+                let local_ix = lines
+                    .get(line_ix)
+                    .map(|line| line.closest_index_for_x(local_x))
+                    .unwrap_or(0);
+                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
+                doc_ix.min(self.content.len())
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                let local_x = position.x - bounds.left();
+                truncated_line_source_offset_for_x(line, local_x).min(self.content.len())
+            }
+            TextInputLayout::Wrapped {
+                lines,
+                y_offsets,
+                row_counts,
+            } => {
+                let local_y = position.y - bounds.top();
+                let line_ix = wrapped_line_index_for_y(y_offsets, row_counts, line_height, local_y);
+                let line_ix = line_ix.min(lines.len().saturating_sub(1));
+                let local_x = position.x - bounds.left();
+                let local_y_in_line =
+                    local_y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
+                let line = &lines[line_ix];
+                let local = line
+                    .closest_index_for_position(point(local_x, local_y_in_line), line_height)
+                    .unwrap_or_else(|ix| ix);
+                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local;
+                doc_ix.min(self.content.len())
+            }
+        })
+    }
+
+    pub(super) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        // Public hit-test callers need a total answer. Mouse drag initiation
+        // uses the optional form above so a briefly invalid layout never turns
+        // into a bogus byte-zero anchor.
+        self.try_index_for_mouse_position(position)
+            .unwrap_or_else(|| self.cursor_offset())
+    }
+
+    pub(super) fn update_mouse_selection(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.try_index_for_mouse_position(position) else {
+            return;
+        };
+        if self.interaction.mouse_selection_anchor.is_none() {
+            let Some(anchor_position) = self.interaction.pending_mouse_selection_anchor else {
+                return;
+            };
+            let Some(anchor) = self.try_index_for_mouse_position(anchor_position) else {
+                return;
+            };
+            self.interaction.mouse_selection_anchor = Some(anchor);
+            self.interaction.pending_mouse_selection_anchor = None;
+        }
+        self.select_mouse_to_index(index, cx);
+    }
+
+    fn select_mouse_to_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(anchor) = self.interaction.mouse_selection_anchor else {
+            return;
+        };
+        let anchor = self.clamp_to_char_boundary(anchor);
+        let index = self.clamp_to_char_boundary(index);
+        let next = anchor.min(index)..anchor.max(index);
+        let reversed = index < anchor;
+        if self.selection.range == next && self.selection.reversed == reversed {
+            return;
+        }
+        self.selection.range = next;
+        self.selection.reversed = reversed;
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        cx.notify();
+    }
+
+    pub(super) fn index_for_position(&self, position: Point<Pixels>) -> usize {
+        if self.content.is_empty() {
+            return 0;
+        }
+
+        let (Some(bounds), Some(layout), Some(starts)) = (
+            self.layout.bounds.as_ref(),
+            self.layout.last.as_ref(),
+            self.layout.line_starts.as_ref(),
+        ) else {
+            return 0;
+        };
+
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
+                let mut line_ix = ratio.floor() as isize;
+                line_ix = line_ix.clamp(0, lines.line_count().saturating_sub(1) as isize);
+                let line_ix = line_ix as usize;
+                let local_x = position.x - bounds.left() + self.layout.scroll_x;
+                // A row that was never shaped was never on screen to be hit;
+                // fall back to its start offset.
+                let local_ix = lines
+                    .get(line_ix)
+                    .map(|line| line.closest_index_for_x(local_x))
+                    .unwrap_or(0);
+                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
+                doc_ix.min(self.content.len())
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                let local_x = position.x - bounds.left();
+                truncated_line_source_offset_for_x(line, local_x).min(self.content.len())
+            }
+            TextInputLayout::Wrapped {
+                lines,
+                y_offsets,
+                row_counts,
+            } => {
+                let local_y = position.y - bounds.top();
+                let line_ix = wrapped_line_index_for_y(y_offsets, row_counts, line_height, local_y);
+                let line_ix = line_ix.min(lines.len().saturating_sub(1));
+                let local_x = position.x - bounds.left();
+                let local_y_in_line =
+                    local_y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
+                let line = &lines[line_ix];
+                let local = line
+                    .closest_index_for_position(point(local_x, local_y_in_line), line_height)
+                    .unwrap_or_else(|ix| ix);
+                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local;
+                doc_ix.min(self.content.len())
+            }
+        }
+    }
+
+    /// The platform input handler addresses the buffer in UTF-16, so these two
+    /// run on essentially every caret query. They used to walk the document
+    /// char by char from offset zero — and reading `self.content` as a `&str`
+    /// materialized the whole buffer to do it, so a single arrow key in a large
+    /// document cost two full passes over it. The model answers from its own
+    /// structure instead.
+    pub(super) fn offset_from_utf16(&self, offset: usize) -> usize {
+        self.content.snapshot().offset_from_utf16(offset)
+    }
+
+    pub(super) fn offset_to_utf16(&self, offset: usize) -> usize {
+        self.content.snapshot().offset_to_utf16(offset)
+    }
+
+    pub(super) fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
+    }
+
+    pub(super) fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        // Normalize at the platform boundary, before row caches, highlight
+        // deltas and the text model can interpret the same IME edit differently.
+        self.normalized_utf8_range(
+            self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end),
+        )
+    }
+}
+
+impl EntityInputHandler for TextInput {
+    fn accepts_text_input(&self, window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        crate::window_focus::is_active(&self.focus_handle, window) && !self.read_only
+    }
+
+    fn text_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        actual_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let range = self.range_from_utf16(&range_utf16);
+        actual_range.replace(self.range_to_utf16(&range));
+        Some(self.content[range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.range_to_utf16(&self.selection.range),
+            reversed: self.selection.reversed,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.selection
+            .marked_range
+            .as_ref()
+            .map(|range| self.range_to_utf16(range))
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selection.marked_range = None;
+        // The observer skips composing inputs and only re-runs on the next
+        // global write, so a selection that went stale mid-IME would stay lit.
+        self.clear_selection_on_ownership_loss(cx);
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.accepts_text_input(window, cx) {
+            return;
+        }
+        let Some(new_text) = self.sanitize_insert_text(new_text) else {
+            return;
+        };
+        let undo_snapshot = self.current_undo_snapshot();
+
+        let range = range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .or(self.selection.marked_range.clone())
+            .unwrap_or(self.selection.range.clone());
+        if self.edit_alters_protected_range(&range, new_text.as_str()) {
+            return;
+        }
+
+        let inserted = self.replace_content_range(range.clone(), new_text.as_str(), cx);
+        self.shift_protected_ranges_for_edit(&range, &inserted);
+        self.selection
+            .pending_text_edit_deltas
+            .push((range.clone(), inserted.clone()));
+        self.push_undo_snapshot(undo_snapshot);
+        self.selection.range = inserted.end..inserted.end;
+        self.selection.reversed = false;
+        self.selection.marked_range.take();
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        self.invalidate_layout_caches_preserving_wrap_rows();
+        self.note_text_edit_for_highlights(&range, &inserted);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.accepts_text_input(window, cx) {
+            return;
+        }
+        let Some(new_text) = self.sanitize_insert_text(new_text) else {
+            return;
+        };
+        let undo_snapshot = self.current_undo_snapshot();
+
+        let range = range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .or(self.selection.marked_range.clone())
+            .unwrap_or(self.selection.range.clone());
+        if self.edit_alters_protected_range(&range, new_text.as_str()) {
+            return;
+        }
+
+        let inserted = self.replace_content_range(range.clone(), new_text.as_str(), cx);
+        self.shift_protected_ranges_for_edit(&range, &inserted);
+        self.selection
+            .pending_text_edit_deltas
+            .push((range.clone(), inserted.clone()));
+        self.push_undo_snapshot(undo_snapshot);
+        if !new_text.is_empty() {
+            self.selection.marked_range = Some(inserted.clone());
+        } else {
+            self.selection.marked_range = None;
+        }
+        self.selection.range = new_selected_range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.selection.reversed = false;
+
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        // Like `unmark_text`: this can end the composition leaving a highlight.
+        // Self-guards on `marked_range`, so a composing input is left alone.
+        self.clear_selection_on_ownership_loss(cx);
+        self.invalidate_layout_caches_preserving_wrap_rows();
+        self.note_text_edit_for_highlights(&range, &inserted);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        let range = self.range_from_utf16(&range_utf16);
+        let offset = range.start.min(self.content.len());
+        let line_height = self.effective_line_height(window);
+
+        let (line_ix, local_ix, y_offset) = match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts, lines, offset);
+                (line_ix, local_ix, line_height * line_ix as f32)
+            }
+            TextInputLayout::TruncatedSingleLine(_) => (0, 0, Pixels::ZERO),
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let mut ix = starts.partition_point(|&s| s <= offset);
+                if ix == 0 {
+                    ix = 1;
+                }
+                let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let local = offset.saturating_sub(start).min(lines[line_ix].len());
+                (
+                    line_ix,
+                    local,
+                    y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO),
+                )
+            }
+        };
+
+        let (x, y) = match layout {
+            TextInputLayout::Plain(lines) => {
+                let line = lines.get(line_ix)?;
+                (line.x_for_index(local_ix) - self.layout.scroll_x, y_offset)
+            }
+            TextInputLayout::TruncatedSingleLine(line) => (
+                truncated_line_x_for_source_offset(line, offset),
+                Pixels::ZERO,
+            ),
+            TextInputLayout::Wrapped { lines, .. } => {
+                let line = lines.get(line_ix)?;
+                let p = line
+                    .position_for_index(local_ix, line_height)
+                    .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                (p.x, y_offset + p.y)
+            }
+        };
+
+        let top = bounds.top() + y;
+        Some(Bounds::from_corners(
+            point(bounds.left() + x, top),
+            point(bounds.left() + x + px(2.0), top + px(16.0)),
+        ))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        p: Point<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let local = self.layout.bounds?.localize(&p)?;
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        let line_height = self.effective_line_height(window);
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let mut line_ix = (local.y / line_height).floor() as isize;
+                line_ix = line_ix.clamp(0, lines.line_count().saturating_sub(1) as isize);
+                let line_ix = line_ix as usize;
+                let line = lines.get(line_ix)?;
+                let local_x = local.x + self.layout.scroll_x;
+                let idx = line.index_for_x(local_x).unwrap_or(line.len());
+                let doc_offset = starts.get(line_ix).copied().unwrap_or(0) + idx;
+                Some(self.offset_to_utf16(doc_offset))
+            }
+            TextInputLayout::TruncatedSingleLine(line) => Some(self.offset_to_utf16(
+                truncated_line_source_offset_for_x(line, local.x).min(self.content.len()),
+            )),
+            TextInputLayout::Wrapped {
+                lines,
+                y_offsets,
+                row_counts,
+            } => {
+                let line_ix = wrapped_line_index_for_y(y_offsets, row_counts, line_height, local.y);
+                let line_ix = line_ix.min(lines.len().saturating_sub(1));
+                let line = lines.get(line_ix)?;
+                let local_y = local.y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
+                let idx = line
+                    .closest_index_for_position(point(local.x, local_y), line_height)
+                    .unwrap_or_else(|ix| ix);
+                let doc_offset = starts.get(line_ix).copied().unwrap_or(0) + idx;
+                Some(self.offset_to_utf16(doc_offset))
+            }
+        }
+    }
+}
+
+impl Focusable for TextInput {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}

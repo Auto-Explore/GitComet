@@ -223,6 +223,14 @@ pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Siz
     }
 }
 
+/// What a real launch tells the UI kit before its first window: run live, and
+/// read custom themes from the user's theme folder. Tests skip this and stay
+/// deterministic without touching the user's files.
+pub(crate) fn install_live_kit_policy() {
+    crate::ui_runtime::install(crate::ui_runtime::UiRuntime::live());
+    crate::theme::set_user_themes_dir(session::user_themes_dir());
+}
+
 /// A browser-window launch: configure it, then [`run`](Self::run) it.
 pub struct UiLaunch {
     backend: Arc<dyn GitBackend>,
@@ -279,6 +287,7 @@ impl UiLaunch {
     }
 
     pub fn run(self) -> Result<UiRunOutcome, UiLaunchError> {
+        install_live_kit_policy();
         let Self {
             backend,
             initial_request,
@@ -381,6 +390,7 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_reque
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
 pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMergetoolConfig) -> i32 {
+    install_live_kit_policy();
     if let Err(err) = ensure_graphics_device_available("focused mergetool GPUI launch") {
         eprintln!("Failed to launch focused mergetool window: {err}");
         return FOCUSED_MERGETOOL_EXIT_ERROR;

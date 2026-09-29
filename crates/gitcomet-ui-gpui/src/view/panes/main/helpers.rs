@@ -1577,7 +1577,7 @@ pub(super) fn resolved_output_unresolved_byte_ranges(
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
     active_conflict: Option<usize>,
 ) -> ResolvedOutputUnresolvedSpans {
-    let rope = crate::kit::rope::Rope::from_str(output_text);
+    let rope = crate::kit::rope::Rope::from_text(output_text);
     let rows = resolved_output_unresolved_rows(marker_segments, &rope, block_map);
     resolved_output_unresolved_spans_for_active(rows.as_ref(), active_conflict)
 }

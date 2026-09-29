@@ -228,13 +228,11 @@ mod diff_utils;
 pub(crate) mod error_notices;
 mod external_drag;
 mod file_diff_display;
-mod file_icons;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
 mod home;
-mod icons;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;
@@ -269,9 +267,8 @@ mod terminal_preferences;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod toast_host;
-mod tooltip;
-mod tooltip_host;
 mod ui_persistence;
+pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
 mod update_check;
 mod workspace_picker;
 pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
@@ -477,10 +474,7 @@ pub(crate) fn product_name() -> &'static str {
     gitcomet_core::identity::current().display_name()
 }
 
-pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
-    element.style().restrict_scroll_to_axis = Some(true);
-    element
-}
+pub(in crate::view) use gitcomet_ui_kit::restrict_scroll_to_vertical_axis;
 
 // A cached view reuses its previous frame's layout and paint whenever the frame
 // was requested through `notify` on some other view (spinner ticks, store
@@ -796,7 +790,7 @@ pub(in crate::view) fn diff_split_column_widths(
     diff_split_column_widths_from_available(available, min_col_w, ratio)
 }
 
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
+pub(crate) use crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY;
 
 mod gitcomet_view;
 mod gitcomet_view_render;

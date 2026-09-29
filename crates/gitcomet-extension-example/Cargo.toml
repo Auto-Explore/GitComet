@@ -17,3 +17,9 @@ workspace = true
 # `gitcomet-extension-example-app`. scripts/ci/boundaries.py enforces this.
 [dependencies]
 gitcomet-core = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
+
+[dev-dependencies]
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+# `#[gpui::test]` names the crate; the version is the kit's re-export.
+gpui = { workspace = true, features = ["test-support"] }

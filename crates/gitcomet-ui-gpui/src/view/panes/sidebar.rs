@@ -1341,22 +1341,11 @@ impl SidebarPaneView {
                 theme.colors.interaction.selected_background
             };
             let store = Arc::clone(&self.store);
-            components::Button::new(id, label)
-                .borderless()
-                .truncate_label()
-                .selected(selected)
-                .selected_bg(selected_bg)
-                .text_color(if selected {
-                    theme.colors.interaction.selected_foreground
-                } else {
-                    theme.colors.foreground.secondary
-                })
+            let tab = components::navigation_tab(id, label, selected, Some(selected_bg), theme)
                 .on_click(theme, cx, move |_, _, _, _| {
                     store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
-                })
-                .px(scaled_px(theme.metrics.ramp(8.0, 12.0)))
-                .h(components::control_height(ui_scale))
-                .text_size(theme.ui_text(12.0))
+                });
+            components::navigation_tab_metrics(tab, theme, ui_scale)
         };
         let branches_tab = make_tab(
             "sidebar_tab_branches",
@@ -1381,15 +1370,7 @@ impl SidebarPaneView {
             .and_then(|repo| repo.open_file_path())
             .is_some();
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(scaled_px(2.0))
-            .w_full()
-            .h(components::content_header_height(ui_scale))
-            .px(scaled_px(4.0))
-            .bg(bg)
+        components::navigation_tab_strip(bg, ui_scale)
             .child(branches_tab)
             .child(files_tab)
             .child(div().ml_auto().child(self.render_search_toggle(

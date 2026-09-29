@@ -14,6 +14,7 @@ workspace = true
 [features]
 default = []
 benchmarks = [
+    "gitcomet-ui-kit/benchmarks",
     "gitcomet-core/benchmarks",
     "gitcomet-state/benchmarks",
     "gitcomet-state/test-support",
@@ -31,6 +32,7 @@ gitcomet-core = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
@@ -159,6 +161,7 @@ gitcomet-git-gix = { workspace = true }
 # restatement is dead weight, since tests already see every regular dependency.
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 gitcomet-state = { workspace = true, features = ["test-support"] }
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 

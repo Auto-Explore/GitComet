@@ -1,5 +1,4 @@
 use super::*;
-use crate::kit::interaction::ControlInteractionExt as _;
 
 mod branch;
 mod branch_group;

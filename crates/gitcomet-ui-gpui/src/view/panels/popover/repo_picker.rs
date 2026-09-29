@@ -1,6 +1,6 @@
 use super::super::super::path_display;
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 use std::collections::BTreeSet;
 
 /// Height this picker caps its row list at. Taller than the badge pickers'

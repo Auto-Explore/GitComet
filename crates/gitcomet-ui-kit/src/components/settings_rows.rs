@@ -1,0 +1,405 @@
+//! Settings page building blocks: cards, headings, and the label/value rows a
+//! settings page is made of, plus the navigation item that selects a page.
+//!
+//! Rows are plain elements; callers attach activation (`on_activate`) where a
+//! row does something.
+
+use crate::icons::svg_icon;
+use crate::interaction::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::theme::{AppTheme, with_alpha};
+use crate::ui_scale::UiScale;
+use gpui::prelude::*;
+use gpui::{CursorStyle, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
+
+const TOGGLE_TRACK_WIDTH_PX: f32 = 28.0;
+const TOGGLE_TRACK_COMFORTABLE_WIDTH_PX: f32 = 36.0;
+const TOGGLE_TRACK_HEIGHT_PX: f32 = 16.0;
+const TOGGLE_TRACK_COMFORTABLE_HEIGHT_PX: f32 = 20.0;
+const TOGGLE_TRACK_INSET_PX: f32 = 2.0;
+const TOGGLE_KNOB_SIZE_PX: f32 = 12.0;
+const TOGGLE_KNOB_COMFORTABLE_SIZE_PX: f32 = 16.0;
+/// Width of the navigation column that lists settings pages.
+pub const SETTINGS_NAV_COLUMN_WIDTH_PX: f32 = 200.0;
+
+fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba::new(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+        a.alpha + (b.alpha - a.alpha) * t,
+    )
+}
+
+pub fn settings_row_separator_color(theme: AppTheme) -> Rgba {
+    mix(
+        theme.colors.surface.canvas,
+        theme.colors.stroke.subtle,
+        if theme.is_dark { 0.14 } else { 0.10 },
+    )
+}
+
+pub fn settings_dropdown_background(theme: AppTheme) -> Rgba {
+    if theme.is_dark {
+        mix(
+            theme.colors.surface.raised,
+            theme.colors.surface.canvas,
+            0.58,
+        )
+    } else {
+        mix(
+            theme.colors.surface.raised,
+            theme.colors.stroke.default,
+            0.55,
+        )
+    }
+}
+
+pub fn settings_dropdown_border_color(theme: AppTheme) -> Rgba {
+    if theme.is_dark {
+        with_alpha(theme.colors.stroke.default, 0.98)
+    } else {
+        theme.colors.stroke.default
+    }
+}
+
+fn selector(id: &SharedString, part: &str) -> impl Fn() -> String + 'static {
+    let selector = format!("{id}_{part}");
+    move || selector.clone()
+}
+
+/// The shell every label/value row shares: padding, separator, and overflow.
+fn row_shell(id: &SharedString, theme: AppTheme) -> Stateful<Div> {
+    let debug = id.to_string();
+    div()
+        .id(id.clone())
+        .debug_selector(move || debug.clone())
+        .w_full()
+        .px_2()
+        .pt_1()
+        .pb_3()
+        .flex()
+        .items_center()
+        .gap_2()
+        .border_b_1()
+        .border_color(settings_row_separator_color(theme))
+        .overflow_hidden()
+}
+
+fn row_label(id: &SharedString, label: SharedString, theme: AppTheme) -> Div {
+    div()
+        .debug_selector(selector(id, "label"))
+        .flex_1()
+        .min_w(px(0.0))
+        .overflow_hidden()
+        .child(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .line_clamp(1)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(label),
+        )
+}
+
+/// A titled group of rows.
+pub fn settings_card(
+    id: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+    theme: AppTheme,
+) -> Stateful<Div> {
+    let id = id.into();
+    let debug = id.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || debug.clone())
+        .w_full()
+        .min_w(px(0.0))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .px_2()
+                .pb_2()
+                .text_size(theme.ui_text(18.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.colors.foreground.primary)
+                .child(title.into()),
+        )
+}
+
+pub fn settings_subsection_heading(
+    id: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    let id = id.into();
+    let debug = id.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || debug.clone())
+        .w_full()
+        .px_2()
+        .pt(ui_scale.px(24.0))
+        .pb_2()
+        .text_size(theme.ui_text(14.0))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.colors.foreground.primary)
+        .child(title.into())
+}
+
+/// A bordered container for option lists and details below a row.
+pub fn settings_detail_container(id: impl Into<SharedString>, theme: AppTheme) -> Stateful<Div> {
+    let id = id.into();
+    let debug = id.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || debug.clone())
+        .w_full()
+        .min_w(px(0.0))
+        .flex()
+        .flex_col()
+        .rounded(px(theme.radii.row))
+        .border_1()
+        .border_color(settings_dropdown_border_color(theme))
+        .bg(settings_dropdown_background(theme))
+        .overflow_hidden()
+}
+
+/// A row that opens a list of choices; `value` is the current choice.
+pub fn settings_summary_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+    expanded: bool,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    let id = id.into();
+    row_shell(&id, theme)
+        .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
+        .control_interaction(InteractionStyle::new(theme), InteractionState::default())
+        .child(row_label(&id, label.into(), theme))
+        .child(
+            div()
+                .debug_selector(selector(&id, "value"))
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap_2()
+                .text_size(theme.ui_text(14.0))
+                .text_color(theme.colors.foreground.secondary)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .line_clamp(1)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child(value.into()),
+                )
+                .child(div().flex_shrink_0().child(svg_icon(
+                    if expanded {
+                        "icons/chevron_down.svg"
+                    } else {
+                        "icons/arrow_right.svg"
+                    },
+                    theme.colors.foreground.secondary,
+                    ui_scale.px(12.0),
+                ))),
+        )
+}
+
+/// A row with an on/off switch; the whole row is the click target.
+pub fn settings_toggle_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    let id = id.into();
+    row_shell(&id, theme)
+        .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
+        .control_interaction(InteractionStyle::new(theme), InteractionState::default())
+        .child(row_label(&id, label.into(), theme))
+        .child(
+            div()
+                .debug_selector(selector(&id, "value"))
+                .flex_none()
+                .flex()
+                .items_center()
+                .child(
+                    // Toggle-switch visual; the whole row stays the click
+                    // target, so this carries no handlers of its own.
+                    div()
+                        .w(ui_scale
+                            .row_height(TOGGLE_TRACK_WIDTH_PX, TOGGLE_TRACK_COMFORTABLE_WIDTH_PX))
+                        .h(ui_scale
+                            .row_height(TOGGLE_TRACK_HEIGHT_PX, TOGGLE_TRACK_COMFORTABLE_HEIGHT_PX))
+                        .rounded(px(theme.radii.pill))
+                        .flex()
+                        .items_center()
+                        .p(ui_scale.px(TOGGLE_TRACK_INSET_PX))
+                        .when(enabled, |track| {
+                            track.justify_end().bg(theme.colors.accent.foreground)
+                        })
+                        .when(!enabled, |track| {
+                            track.justify_start().bg(with_alpha(
+                                theme.colors.foreground.secondary,
+                                if theme.is_dark { 0.35 } else { 0.30 },
+                            ))
+                        })
+                        .child(
+                            div()
+                                .size(ui_scale.row_height(
+                                    TOGGLE_KNOB_SIZE_PX,
+                                    TOGGLE_KNOB_COMFORTABLE_SIZE_PX,
+                                ))
+                                .rounded(px(theme.radii.pill))
+                                .bg(gpui::rgba(0xFFFFFFF2)),
+                        ),
+                ),
+        )
+}
+
+/// A read-only row: a label and a monospace value.
+pub fn settings_info_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+    theme: AppTheme,
+) -> Stateful<Div> {
+    let id = id.into();
+    row_shell(&id, theme)
+        .child(row_label(&id, label.into(), theme))
+        .child(
+            div()
+                .debug_selector(selector(&id, "value"))
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .justify_end()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .text_size(theme.ui_text(14.0))
+                        .font_family(crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY)
+                        .text_color(theme.colors.foreground.secondary)
+                        .line_clamp(1)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child(value.into()),
+                ),
+        )
+}
+
+/// A row that opens an external page; `value` names where it goes.
+pub fn settings_link_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    let id = id.into();
+    let debug = id.to_string();
+    div()
+        .id(id.clone())
+        .debug_selector(move || debug.clone())
+        .w_full()
+        .px_2()
+        .pt_1()
+        .pb_3()
+        .flex()
+        .flex_col()
+        .items_stretch()
+        .gap_0p5()
+        .rounded(px(theme.radii.row))
+        .border_b_1()
+        .border_color(settings_row_separator_color(theme))
+        .cursor(CursorStyle::PointingHand)
+        .control_interaction(InteractionStyle::new(theme), InteractionState::default())
+        .child(
+            div()
+                .debug_selector(selector(&id, "label"))
+                .min_w(px(0.0))
+                .text_size(theme.ui_text(14.0))
+                .child(label.into()),
+        )
+        .child(
+            div()
+                .debug_selector(selector(&id, "value"))
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .items_start()
+                .gap_2()
+                .text_size(theme.ui_text(14.0))
+                .text_color(theme.colors.accent.foreground)
+                .child(div().flex_1().min_w(px(0.0)).child(value.into()))
+                .child(div().flex_shrink_0().child(svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent.foreground,
+                    ui_scale.px(13.0),
+                ))),
+        )
+}
+
+/// A settings page in the navigation column. The caller attaches activation.
+pub fn settings_nav_item(
+    id: impl Into<SharedString>,
+    icon: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    let id = id.into();
+    let debug = id.to_string();
+    let icon_color = if selected {
+        theme.colors.accent.foreground
+    } else {
+        theme.colors.foreground.secondary
+    };
+    div()
+        .id(id)
+        .debug_selector(move || debug.clone())
+        .w_full()
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
+        .overflow_hidden()
+        .control_interaction(
+            InteractionStyle::new(theme),
+            InteractionState::default()
+                .selected(selected, theme.colors.interaction.pressed_background),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .child(svg_icon(icon.into(), icon_color, ui_scale.px(15.0))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_size(theme.ui_text(14.0))
+                .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
+                .text_color(theme.colors.foreground.primary)
+                .line_clamp(1)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(label.into()),
+        )
+}

@@ -4,14 +4,17 @@
 snapshot OUT [cargo test selection...]
     Build the selected test harnesses and record each harness's tests with
     their ignored flag: {"<target kind>:<target name>": {"<test path>": ignored}}.
-compare OLD NEW [--mapping OUT] [--harness OLD=NEW ...] [--replaced FILE]
+compare OLD NEW [--mapping OUT] [--harness OLD=NEW ...] [--split OLD=NEW ...] [--replaced FILE]
     Map every OLD test to exactly one NEW test in the same harness. A test may
     move into a child module (its old module path is a prefix of the new one and
     its leaf name is unchanged) but may not change harness, name, or ignored
     state. `--harness` declares that one harness's tests moved to another (a
     crate split); `--replaced` names tests deliberately removed or added, as a
-    JSON object {"removed": {"harness test": "why"}, "added": {...}}. Fails on
-    any other dropped, added, re-ignored, or ambiguous test.
+    JSON object {"removed": {"harness test": "why"}, "added": {...}}. `--split`
+    declares that some of OLD's tests moved to NEW (a module moved to another
+    crate): tests left unmatched on both sides then pair by leaf name when the
+    leaf is unique among them. Fails on any other dropped, added, re-ignored, or
+    ambiguous test.
 """
 
 import argparse
@@ -72,7 +75,7 @@ def moved_to(old, new):
     return all(part in remaining for part in old_parts[:-1])
 
 
-def compare(old_path, new_path, mapping_out=None, harness_moves=(), replaced_path=None):
+def compare(old_path, new_path, mapping_out=None, harness_moves=(), replaced_path=None, splits=()):
     old = json.loads(Path(old_path).read_text(encoding="utf-8"))
     new = json.loads(Path(new_path).read_text(encoding="utf-8"))
     replaced = json.loads(Path(replaced_path).read_text(encoding="utf-8")) if replaced_path else {}
@@ -99,9 +102,13 @@ def compare(old_path, new_path, mapping_out=None, harness_moves=(), replaced_pat
             raise SystemExit(f"--replaced: {harness} {name} is not in the new inventory")
     errors = []
     mapping = {}
+    leftover_old, leftover_new = {}, {}
     for harness in sorted(set(old) | set(new)):
-        if harness not in old or harness not in new:
-            errors.append(f"{harness}: harness {'added' if harness not in old else 'removed'}")
+        if harness not in old:
+            leftover_new.update({(harness, name): "in an added harness" for name in new[harness]})
+            continue
+        if harness not in new:
+            leftover_old.update({(harness, name): "in a removed harness" for name in old[harness]})
             continue
         before, after = old[harness], new[harness]
         unchanged = set(before) & set(after)
@@ -111,15 +118,40 @@ def compare(old_path, new_path, mapping_out=None, harness_moves=(), replaced_pat
         for name in sorted(set(before) - unchanged):
             candidates = [candidate for candidate in remaining_new if moved_to(name, candidate)]
             if len(candidates) != 1:
-                errors.append(f"{harness}: {name}: {len(candidates)} candidates {sorted(candidates)[:3]}")
+                leftover_old[(harness, name)] = f"{len(candidates)} candidates {sorted(candidates)[:3]}"
                 continue
             remaining_new.discard(candidates[0])
             mapping.setdefault(harness, {})[name] = candidates[0]
         for name in sorted(remaining_new):
-            errors.append(f"{harness}: {name}: new test without an old counterpart")
+            leftover_new[(harness, name)] = "new test without an old counterpart"
         for name, target in mapping.get(harness, {}).items():
             if before[name] != after[target]:
                 errors.append(f"{harness}: {name}: ignored {before[name]} -> {after[target]}")
+    # Declared splits: leftovers pair across (or within) the named harnesses by
+    # a leaf name that is unique on both sides.
+    for split in splits:
+        source, destination = split.split("=", 1)
+        harnesses = {source, destination}
+        leaf = lambda name: name.rsplit("::", 1)[-1]
+        olds = [key for key in leftover_old if key[0] == source]
+        news = [key for key in leftover_new if key[0] in harnesses]
+        old_leaves = {}
+        for key in olds:
+            old_leaves.setdefault(leaf(key[1]), []).append(key)
+        new_leaves = {}
+        for key in news:
+            new_leaves.setdefault(leaf(key[1]), []).append(key)
+        for name, keys in old_leaves.items():
+            targets = new_leaves.get(name, [])
+            if len(keys) != 1 or len(targets) != 1:
+                continue
+            (old_key,), (new_key,) = keys, targets
+            del leftover_old[old_key], leftover_new[new_key]
+            mapping.setdefault(old_key[0], {})[old_key[1]] = f"{new_key[0]} {new_key[1]}"
+            if old[old_key[0]][old_key[1]] != new[new_key[0]][new_key[1]]:
+                errors.append(f"{old_key[0]}: {old_key[1]}: ignored state changed in the split")
+    errors.extend(f"{harness}: {name}: {why}" for (harness, name), why in sorted(leftover_old.items()))
+    errors.extend(f"{harness}: {name}: {why}" for (harness, name), why in sorted(leftover_new.items()))
     if mapping_out:
         Path(mapping_out).write_text(json.dumps(mapping, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     moved = sum(1 for tests in mapping.values() for old_name, new_name in tests.items() if old_name != new_name)
@@ -142,12 +174,13 @@ def main():
     cmp.add_argument("--mapping")
     cmp.add_argument("--harness", action="append", default=[], metavar="OLD=NEW")
     cmp.add_argument("--replaced")
+    cmp.add_argument("--split", action="append", default=[], metavar="OLD=NEW")
     args = parser.parse_args()
     if args.command == "snapshot":
         selection = args.selection[1:] if args.selection[:1] == ["--"] else args.selection
         snapshot(args.out, selection)
         return 0
-    return compare(args.old, args.new, args.mapping, args.harness, args.replaced)
+    return compare(args.old, args.new, args.mapping, args.harness, args.replaced, args.split)
 
 
 if __name__ == "__main__":

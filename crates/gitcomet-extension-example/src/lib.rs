@@ -5,6 +5,8 @@
 
 use gitcomet_core::identity::{ProductIdentity, ProductLinks};
 
+pub mod review_counter;
+
 /// The example product's name, used for its windows, paths, and Git tools.
 pub const DISPLAY_NAME: &str = "Comet Example";
 /// Its command, directory, desktop app id, and Git tool name.

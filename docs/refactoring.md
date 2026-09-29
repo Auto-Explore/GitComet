@@ -84,3 +84,45 @@ Test moves: the executable's 241 unit tests moved with their modules from
 Replaced by `platform::dirs` tests, which cover every platform on every host:
 `session::tests::app_data_dir_*` (2) and crashlog's `crash_dir_base_*` and
 `non_empty_path_trims_and_rejects_empty_values` tests (4 on Linux).
+
+## Milestone 2: the UI kit
+
+`gitcomet-ui-kit` holds the GPUI foundations and components; the UI host
+re-exports its modules under their old `crate::` paths (`crate::kit`,
+`crate::theme`, `view::components`, ...), so host code did not change shape.
+
+- Preferences come in as plain values: `AppearancePreferences`,
+  `StoredFontPreferences`, and a stored scale percent. `session_ui.rs` is the
+  host's one adapter from `UiSession`.
+- Runtime policy is explicit: `ui_runtime::install(UiRuntime::live())` runs in
+  `UiLaunch::run`, the focused mergetool and difftool, and the benchmark
+  harnesses; everything else (every test) is deterministic. The previous
+  `cfg(test)` switch could not reach a dependency. The user theme folder is
+  likewise installed at launch (`theme::set_user_themes_dir`).
+- Window-layout and settings persistence moved out of the tooltip module to
+  `view/ui_persistence.rs`; the picker's workspace colour became a generic
+  `PickerSwatch` with the workspace adapter in `view/workspace_picker.rs`.
+- The icon set and its generation moved with `icons`; GitComet's artwork
+  (`gitcomet_mark.svg`, window icon, logo) stays in the host's asset source,
+  layered over `KitAssets`, and follows the identity's branding.
+- `test-support` exposes test helpers and hooks (counters, snapshots) and the
+  shared visual/clipboard locks; it adds functions, never behaviour switches.
+  `#![warn(unnameable_types)]` keeps every type in a public signature nameable.
+- Source guards are shared: `test_support::source_guards` (clipboard access,
+  unscaled icon sizes, unresolvable menu icons) run over the kit's sources in
+  the kit and over the host's sources in `render_guards.rs`, as does the
+  "rendering never builds its own theme" guard.
+- New shared components, used by the host: settings rows, cards, headings, and
+  navigation items (`settings_*`), navigation tabs (`navigation_tab*`, the
+  sidebar's Branches/Files strip), selectable fields
+  (`TextInputOptions::selectable*`, `selectable_field`), and the interstitial
+  card (`interstitial`, the splash and Git-unavailable screens).
+- Exit condition: `gitcomet-extension-example` renders and clicks a kit button
+  in a GPUI test without depending on the UI host (`boundaries.py`).
+
+Test moves: 428 tests moved from `gitcomet-ui-gpui` to `gitcomet-ui-kit`
+(`inventory.py compare --split gitcomet-ui-gpui:lib:gitcomet_ui_gpui=gitcomet-ui-kit:lib:gitcomet_ui_kit`).
+Three host guards became two each (kit and host scans), two window-frame tests
+stayed in the host (`window_focus_tests.rs`, `resize_grip_tests.rs`), and the
+asset-registry test split into the kit's icon check and the host's
+brand-over-kit listing check.

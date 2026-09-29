@@ -2707,7 +2707,7 @@ mod rope_backed_scanner_tests {
     #[test]
     fn the_rope_source_reads_non_ascii_offsets_without_panicking() {
         let text = "// caf\u{e9}\r\nlet s = \"\u{1f642}\";\n";
-        let rope = crate::kit::rope::Rope::from_str(text);
+        let rope = crate::kit::rope::Rope::from_text(text);
 
         // Every offset, including interior ones, must answer as the raw byte.
         for offset in 0..text.len() {
@@ -2812,7 +2812,7 @@ mod rope_backed_scanner_tests {
     fn rope_and_str_scanners_agree() {
         let (segments, output) = fixture();
         let block_map = block_map_for(&segments);
-        let rope = crate::kit::rope::Rope::from_str(&output);
+        let rope = crate::kit::rope::Rope::from_text(&output);
 
         assert_eq!(
             resolved_output_placeholder_protected_ranges(output.as_str()).as_ref(),
@@ -2887,7 +2887,7 @@ mod heuristic_window_tests {
     fn a_window_matches_the_whole_document_over_the_same_rows() {
         let theme = AppTheme::gitcomet_dark();
         let text = fixture();
-        let rope = Rope::from_str(&text);
+        let rope = Rope::from_text(&text);
         let language = rows::DiffSyntaxLanguage::Rust;
 
         let whole =
@@ -2950,7 +2950,7 @@ mod heuristic_window_tests {
     #[test]
     fn an_empty_or_out_of_bounds_window_is_empty() {
         let theme = AppTheme::gitcomet_dark();
-        let rope = Rope::from_str(&fixture());
+        let rope = Rope::from_text(&fixture());
         let language = rows::DiffSyntaxLanguage::Rust;
         assert!(
             resolved_output_heuristic_highlights_for_range(theme, &rope, language, 5..5).is_empty()
@@ -2987,7 +2987,7 @@ fn the_str_and_rope_sources_agree_on_out_of_range_and_mid_character_input() {
         "\u{1f642}\n\u{1f642}",
         "",
     ] {
-        let rope = Rope::from_str(text);
+        let rope = Rope::from_text(text);
         let past_end = text.len() + 5;
 
         for start in 0..=past_end {

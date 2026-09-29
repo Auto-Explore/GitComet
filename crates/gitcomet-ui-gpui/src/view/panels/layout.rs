@@ -234,23 +234,7 @@ fn commit_details_signature_badge(
 }
 
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_size(theme.ui_text(14.0))
-                .text_color(theme.colors.foreground.secondary)
-                .child(key),
-        )
-        .child(
-            div()
-                .w_full()
-                .min_w(px(0.0))
-                .text_size(theme.ui_text(14.0))
-                .child(value),
-        )
+    components::selectable_field(theme, key, value)
 }
 
 fn commit_details_monospace_value(input: Entity<components::TextInput>) -> AnyElement {

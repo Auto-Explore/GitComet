@@ -21,7 +21,7 @@ static SPLASH_BACKDROP_DARK_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::
 static SPLASH_BACKDROP_LIGHT_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 /// Interstitial geometry (loading and git-unavailable cards, Home buttons).
-const SPLASH_CARD_MAX_WIDTH_PX: f32 = 560.0;
+const SPLASH_CARD_MAX_WIDTH_PX: f32 = components::INTERSTITIAL_CARD_MAX_WIDTH_PX;
 const SPLASH_BODY_MAX_WIDTH_PX: f32 = 440.0;
 const SPLASH_DETAIL_MAX_WIDTH_PX: f32 = 460.0;
 const SPLASH_CTA_HEIGHT_PX: f32 = 36.0;
@@ -377,54 +377,14 @@ impl GitCometView {
         content: impl IntoElement,
         theme: AppTheme,
     ) -> AnyElement {
-        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
-        let border_glow = with_alpha(
-            theme.colors.stroke.default,
-            if theme.is_dark { 0.86 } else { 0.74 },
-        );
-
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .relative()
-            .flex()
-            .flex_1()
-            .min_h(px(0.0))
-            .items_center()
-            .justify_center()
-            .overflow_hidden()
-            .px_3()
-            .py_4()
-            .bg(self.splash_backdrop_base())
-            .child(self.interstitial_backdrop())
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .max_w(scaled_px(SPLASH_CARD_MAX_WIDTH_PX))
-                    .bg(with_alpha(
-                        theme.colors.surface.panel,
-                        if theme.is_dark { 0.96 } else { 0.98 },
-                    ))
-                    .border_1()
-                    .border_color(border_glow)
-                    .rounded(px(theme.radii.panel))
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(if theme.is_dark {
-                            0x00000052
-                        } else {
-                            0x171a3b14
-                        })
-                        .into(),
-                        offset: point(px(0.0), px(22.0)),
-                        blur_radius: px(52.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    }])
-                    .p_4()
-                    .child(content),
-            )
-            .into_any_element()
+        components::interstitial(
+            id,
+            self.splash_backdrop_base(),
+            self.interstitial_backdrop(),
+            content,
+            theme,
+            crate::ui_scale::UiScale::from_percent(self.ui_scale_percent),
+        )
     }
 
     fn git_unavailable_open_settings_button(

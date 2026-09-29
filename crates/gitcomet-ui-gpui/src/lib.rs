@@ -1,15 +1,16 @@
 mod app;
-mod appearance;
+// Foundations live in the UI kit; these keep the host's `crate::` paths.
+pub(crate) use gitcomet_ui_kit as kit;
+pub(crate) use gitcomet_ui_kit::{
+    appearance, bundled_fonts, clipboard, font_preferences, linux_gui_env, press_gesture,
+    text_runs, text_selection, text_selection_owner, theme, ui_probe, ui_runtime, ui_scale,
+    window_focus,
+};
 mod assets;
-mod bundled_fonts;
-mod clipboard;
 mod external_editor;
 pub mod focused_diff;
-mod font_preferences;
 mod http;
-mod kit;
 mod launch_guard;
-mod linux_gui_env;
 mod menu_labels;
 #[doc(hidden)]
 pub mod perf_alloc;
@@ -17,19 +18,14 @@ pub mod perf_alloc;
 pub mod perf_ram_guard;
 #[doc(hidden)]
 pub mod perf_sidecar;
-mod press_gesture;
+#[cfg(test)]
+mod render_guards;
 mod session_ui;
 mod startup_probe;
-mod text_runs;
-mod text_selection;
-mod text_selection_owner;
-mod theme;
-mod ui_probe;
-mod ui_runtime;
-mod ui_scale;
 mod view;
 mod window_controls;
-mod window_focus;
+#[cfg(test)]
+mod window_focus_tests;
 mod window_root_hook;
 mod workspaces;
 
@@ -51,6 +47,12 @@ pub use view::StartupCrashReport;
 #[doc(hidden)]
 pub mod benchmarks {
     pub use crate::view::rows::benchmarks::*;
+
+    /// Benchmarks measure the live app: background work, timers, and
+    /// animations run as they do after a real launch.
+    pub fn install_live_runtime() {
+        crate::ui_runtime::install(crate::ui_runtime::UiRuntime::live());
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,350 @@
+use super::element::TextElement;
+use super::state::*;
+use super::*;
+use crate::click::PointerClickExt as _;
+
+impl TextInput {
+    fn reset_focus(&mut self, cx: &mut Context<Self>) {
+        self.interaction.has_focus = false;
+        self.interaction.cursor_blink_visible = true;
+        self.interaction.cursor_blink_task.take();
+        self.interaction.context_menu = None;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        self.interaction.took_press = false;
+        self.interaction.pending_cursor_autoscroll = false;
+        self.interaction.cursor_autoscroll_retries_remaining = 0;
+        self.interaction.cursor_autoscroll_layout_waits_remaining = 0;
+        cx.notify();
+    }
+}
+
+impl Render for TextInput {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Bind on first render so inputs created with `new_inert` participate too.
+        if self.interaction.focus_subscriptions.is_none() {
+            self.interaction.focus_subscriptions = Some(crate::window_focus::observe_blur(
+                &self.focus_handle,
+                window,
+                cx,
+                Self::reset_focus,
+            ));
+        }
+        let action = std::mem::take(&mut self.probe_action);
+        crate::ui_probe::action_phase(action, "rendered", || {
+            let snapshot = self.content.snapshot();
+            serde_json::json!({"window":format!("{:?}", window.window_handle().window_id()),
+                "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()})
+        });
+        let style = self.style;
+        let focus = self.focus_handle.clone();
+        let entity_id = cx.entity().entity_id();
+        let chromeless = self.chromeless;
+        let multiline = self.multiline;
+        let display_width = (self.display_text && !multiline).then(|| {
+            let style = window.text_style();
+            let text: SharedString = self.text().to_owned().into();
+            let run = style.to_run(text.len());
+            let width = window
+                .text_system()
+                .shape_line(
+                    text,
+                    style.font_size.to_pixels(window.rem_size()),
+                    &[run],
+                    None,
+                )
+                .width;
+            // Explicit layout widths snap to the nearest device pixel. Round
+            // intrinsic text widths up first so a fractional glyph advance
+            // cannot shrink the label enough to trigger an ellipsis.
+            (width * window.scale_factor()).ceil() / window.scale_factor()
+        });
+        self.appearance_metrics = crate::appearance::current(cx);
+        self.editor_line_height = crate::ui_scale::design_px_from_window(
+            crate::appearance::current(cx).editor_line_height(),
+            window,
+        );
+        if self.editor_font {
+            self.line_height_override = Some(self.editor_line_height);
+        }
+        let leading_icon = self.leading_icon;
+        // Content-width layout: the wrappers below size to the widest line so an
+        // outer `overflow_scroll` container can scroll the field horizontally
+        // (and expose a horizontal `max_offset`), instead of clipping to the
+        // viewport. Opt-in, non-wrapping multiline only.
+        let content_width_layout =
+            multiline && self.interaction.content_width_layout && !self.soft_wrap;
+        let scaled_px = |value: f32| crate::ui_scale::design_px_from_window(value, window);
+        let pad_x = if chromeless { px(0.0) } else { scaled_px(8.0) };
+        let pad_y = if chromeless || !multiline {
+            px(0.0)
+        } else {
+            scaled_px(self.vertical_padding_override.unwrap_or(8.0))
+        };
+        // `min_h_full` alone makes GPUI treat the viewport height as the
+        // multiline field's final height, so descendant text taller than the
+        // viewport stops contributing to an outer scroll container's extent.
+        // Pair an explicit full height with the document's pixel minimum: the
+        // former fills short fields, while the latter keeps long fields
+        // scrollable.
+        let multiline_document_height = multiline.then(|| {
+            let source_rows = self.content.line_starts().len().max(1);
+            let visual_rows = if self.soft_wrap {
+                self.wrap
+                    .cache
+                    .filter(|cache| cache.rows > 0)
+                    .map(|cache| cache.rows)
+                    .or(self.wrap.last_rows.filter(|rows| *rows > 0))
+                    .unwrap_or(source_rows)
+            } else {
+                source_rows
+            };
+            self.effective_line_height(window) * visual_rows as f32 + pad_y * 2.0
+        });
+        let is_focused = crate::window_focus::is_active(&focus, window);
+
+        if self.interaction.has_focus != is_focused {
+            self.interaction.has_focus = is_focused;
+            self.interaction.cursor_blink_visible = true;
+            if !is_focused {
+                self.reset_focus(cx);
+            }
+        }
+
+        if is_focused
+            && self.interaction.cursor_blink_task.is_none()
+            && crate::ui_runtime::current().uses_cursor_blink()
+        {
+            let task = cx.spawn(
+                async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(800))
+                            .await;
+                        let should_continue = input
+                            .update_in(cx, |input, window, cx| {
+                                if !crate::window_focus::is_active(&input.focus_handle, window) {
+                                    input.reset_focus(cx);
+                                    return false;
+                                }
+
+                                if input.selection.range.is_empty() {
+                                    input.interaction.cursor_blink_visible =
+                                        !input.interaction.cursor_blink_visible;
+                                } else {
+                                    input.interaction.cursor_blink_visible = true;
+                                }
+                                cx.notify();
+                                true
+                            })
+                            .unwrap_or(false);
+
+                        if !should_continue {
+                            break;
+                        }
+                    }
+                },
+            );
+            self.interaction.cursor_blink_task = Some(task);
+        }
+
+        let mut text_surface = div()
+            // Refresh platform input registration when focus changes, while
+            // keeping the surrounding field's in-flight click state intact.
+            .id(if is_focused {
+                "focused_text"
+            } else {
+                "blurred_text"
+            })
+            .pl(if leading_icon.is_some() {
+                scaled_px(6.0)
+            } else {
+                pad_x
+            })
+            .pr(pad_x)
+            .py(pad_y);
+        if content_width_layout {
+            // At least the viewport, but grow to the widest line so the outer
+            // scroll container sees horizontal overflow. No clipping here — the
+            // container owns horizontal scrolling. `flex_shrink_0` stops the
+            // flex-row parent from shrinking it back down to the viewport.
+            text_surface = text_surface.min_w_full().flex_shrink_0();
+        } else {
+            text_surface = text_surface.w_full().min_w(px(0.0)).overflow_hidden();
+        }
+        let text_surface = text_surface.child(TextElement { input: cx.entity() });
+
+        // `track_focus` alone leaves the element stateless, and gpui only
+        // repaints on mouse-move for elements carrying an id — without one the
+        // unfocused hover border further down never reaches the screen.
+        let mut input = div().id(ElementId::from(("text_input_field", entity_id)));
+        if content_width_layout {
+            input = input.min_w_full();
+        } else {
+            input = input.w_full().min_w(px(0.0));
+        }
+        let mut input = input
+            .flex()
+            .track_focus(&focus)
+            .key_context("TextInput")
+            .cursor(CursorStyle::IBeam)
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::delete_word_left))
+            .on_action(cx.listener(Self::delete_word_right))
+            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::delete_to_line_end))
+            .on_action(cx.listener(Self::enter))
+            .on_action(cx.listener(Self::shift_enter))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::document_home))
+            .on_action(cx.listener(Self::document_end))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::page_up))
+            .on_action(cx.listener(Self::select_page_up))
+            .on_action(cx.listener(Self::page_down))
+            .on_action(cx.listener(Self::select_page_down))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
+            .on_action(cx.listener(Self::show_character_palette))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
+            .when(!self.interaction.suppress_right_click, |input| {
+                input.on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
+            })
+            .line_height(self.effective_line_height(window))
+            .when(!self.display_text, |d| {
+                d.text_size(if self.editor_font {
+                    crate::appearance::editor_size(window, cx)
+                } else {
+                    crate::ui_scale::design_px_from_window(
+                        crate::appearance::current(cx).ui_text(13.0),
+                        window,
+                    )
+                })
+            })
+            .when(!multiline && !chromeless, |d| {
+                d.h(crate::ui_scale::design_px_from_window(
+                    self.appearance_metrics
+                        .row_height(SINGLE_LINE_INPUT_HEIGHT_PX, 32.0),
+                    window,
+                ))
+            })
+            // The outer multiline surface may be constrained to the viewport;
+            // keep the document-sized inner field from flex-shrinking to that
+            // height so a long buffer still creates vertical scroll range.
+            .when(multiline, |d| d.flex_shrink_0())
+            .when(multiline && self.min_lines > 0, |d| {
+                let line_height = self.effective_line_height(window);
+                d.min_h(line_height * self.min_lines as f32 + pad_y * 2.0)
+            })
+            .when(!multiline, |d| d.items_center())
+            .when(multiline, |d| d.items_start())
+            .when_some(leading_icon, |d, icon_path| {
+                d.child(
+                    div()
+                        .pl(pad_x)
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        // Match a single-line input while keeping the icon
+                        // beside the first line as a multiline field grows.
+                        .h(self.effective_line_height(window))
+                        .when(multiline, |d| d.mt(pad_y))
+                        .child(
+                            gpui::svg()
+                                .path(icon_path)
+                                .size(scaled_px(14.0))
+                                .text_color(style.placeholder),
+                        ),
+                )
+            })
+            .child(text_surface);
+
+        if !chromeless {
+            input = input
+                .bg(style.background)
+                .border_1()
+                .rounded(px(style.radius));
+
+            if is_focused {
+                input = input.border_color(style.focus_border);
+            } else {
+                input = input
+                    .border_color(style.border)
+                    .hover(move |s| s.border_color(style.hover_border));
+            }
+
+            input = input.focus(move |s| s.border_color(style.focus_border));
+        }
+
+        let mut outer = div().id(ElementId::from(("text_input_root", entity_id)));
+        if content_width_layout {
+            // `items_start` so the flex-col cross axis doesn't stretch the inner
+            // field back to the viewport width, letting it keep its content width.
+            outer = outer.min_w_full().items_start();
+        } else {
+            outer = outer.w_full().min_w(px(0.0));
+        }
+        let mut outer = outer
+            .when_some(display_width, |d, width| d.w(width).max_w_full())
+            .flex()
+            .flex_col()
+            // The outer field fills a multiline viewport while the inner field
+            // remains document-sized. That preserves the scroll container's
+            // vertical content extent for long files, and lets presses in the
+            // remainder below a short file bubble into the same handlers.
+            .when_some(multiline_document_height, |d, document_height| {
+                d.h_full()
+                    .min_h(document_height)
+                    .cursor(CursorStyle::IBeam)
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                    .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
+                    .when(!self.interaction.suppress_right_click, |input| {
+                        input
+                            .on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
+                    })
+            })
+            .child(input);
+
+        if let Some(state) = self.interaction.context_menu {
+            outer = outer.child(
+                deferred(
+                    anchored()
+                        .position(state.anchor)
+                        .offset(point(px(4.0), px(4.0)))
+                        .child(self.render_context_menu(state, cx)),
+                )
+                .priority(10_000),
+            );
+        }
+
+        outer
+    }
+}

@@ -861,47 +861,9 @@ fn uniform_list_should_stop_scroll_propagation(
     }
 }
 
-fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    gpui::Rgba::new(
-        a.red + (b.red - a.red) * t,
-        a.green + (b.green - a.green) * t,
-        a.blue + (b.blue - a.blue) * t,
-        a.alpha + (b.alpha - a.alpha) * t,
-    )
-}
-
-fn settings_row_separator_color(theme: AppTheme) -> gpui::Rgba {
-    mix_color(
-        theme.colors.surface.canvas,
-        theme.colors.stroke.subtle,
-        if theme.is_dark { 0.14 } else { 0.10 },
-    )
-}
-
-fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
-    if theme.is_dark {
-        mix_color(
-            theme.colors.surface.raised,
-            theme.colors.surface.canvas,
-            0.58,
-        )
-    } else {
-        mix_color(
-            theme.colors.surface.raised,
-            theme.colors.stroke.default,
-            0.55,
-        )
-    }
-}
-
-fn settings_dropdown_border_color(theme: AppTheme) -> gpui::Rgba {
-    if theme.is_dark {
-        with_alpha(theme.colors.stroke.default, 0.98)
-    } else {
-        theme.colors.stroke.default
-    }
-}
+use crate::view::components::{
+    settings_dropdown_background, settings_dropdown_border_color, settings_row_separator_color,
+};
 
 fn settings_dropdown_height(
     item_count: usize,

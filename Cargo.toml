@@ -11,6 +11,7 @@ members = [
   "crates/gitcomet-fs-watch",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
 ]
 exclude = [
   "crates/win32-window-utils",
@@ -60,6 +61,7 @@ default-members = [
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
 ]
 
 [workspace.package]
@@ -78,6 +80,7 @@ gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
+gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
 
 # External crates
 alacritty_terminal = "0.26"

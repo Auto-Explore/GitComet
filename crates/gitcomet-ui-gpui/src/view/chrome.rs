@@ -49,14 +49,7 @@ pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATIO
 /// The scale a shared component is handed when it is drawn into a bar. One
 /// definition, so a component cannot end up pinned to a different baseline than
 /// the bar around it.
-pub(in crate::view) fn chrome_scale() -> ui_scale::UiScale {
-    ui_scale::UiScale::from_percent(ui_scale::DEFAULT_UI_SCALE_PERCENT).with_appearance(
-        crate::appearance::Appearance {
-            density: crate::appearance::UiDensity::Compact,
-            ..crate::appearance::Appearance::default()
-        },
-    )
-}
+pub(in crate::view) use crate::ui_scale::chrome_scale;
 
 pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
     ui_scale::design_px_from_percent(CLIENT_SIDE_DECORATION_INSET_PX, ui_scale_percent)
@@ -1083,10 +1076,13 @@ mod tests {
                 "view/panels/repo_tabs_bar.rs",
                 include_str!("panels/repo_tabs_bar.rs"),
             ),
-            ("view/components/tab.rs", include_str!("components/tab.rs")),
             (
-                "view/components/tab_bar.rs",
-                include_str!("components/tab_bar.rs"),
+                "gitcomet-ui-kit/src/components/tab.rs",
+                include_str!("../../../gitcomet-ui-kit/src/components/tab.rs"),
+            ),
+            (
+                "gitcomet-ui-kit/src/components/tab_bar.rs",
+                include_str!("../../../gitcomet-ui-kit/src/components/tab_bar.rs"),
             ),
         ];
         // Length-taking builders only: `border_*` and `rounded_*` are px, and
