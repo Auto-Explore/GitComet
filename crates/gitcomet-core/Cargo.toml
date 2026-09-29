@@ -15,6 +15,9 @@ test-support = []
 benchmarks = []
 
 [dependencies]
+chardetng = { workspace = true }
+encoding_rs = { workspace = true }
+gix-quote = { workspace = true }
 memchr = { workspace = true }
 process-wrap = { workspace = true }
 regex = { workspace = true }

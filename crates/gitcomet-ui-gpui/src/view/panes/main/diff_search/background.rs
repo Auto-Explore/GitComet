@@ -13,6 +13,7 @@ use std::sync::Mutex;
 /// key when adding a search surface; omitting its generation can publish stale rows.
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::view) struct SearchDocumentKey {
+    tab_width: usize,
     repo: Option<(RepoId, u64)>,
     patch: (Option<RepoId>, u64),
     file: (Option<RepoId>, u64, u64),
@@ -29,6 +30,108 @@ pub(in crate::view) struct SearchDocumentKey {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[gpui::test]
+    fn windows_and_search_snapshots_keep_their_own_tab_width(cx: &mut gpui::TestAppContext) {
+        use crate::view::{GitCometView, test_support::TestBackend};
+        use gitcomet_core::domain::DiffLineKind;
+        use gitcomet_state::store::AppStore;
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let panes = [2, 8].map(|width| {
+            let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+            let (view, window_cx) =
+                cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+            window_cx.update(|_, app| {
+                let pane = view.read(app).main_pane.clone();
+                let snapshot = pane.update(app, |pane, cx| {
+                    pane.default_tab_size = width;
+                    pane.sync_display_tab_width(cx);
+                    pane.diff_view = DiffViewMode::Inline;
+                    pane.diff_word_wrap = false;
+                    pane.diff_cache = Arc::from([AnnotatedDiffLine {
+                        kind: DiffLineKind::Add,
+                        text: "+\tneedle".into(),
+                        old_line: None,
+                        new_line: Some(1),
+                    }]);
+                    pane.ensure_diff_visible_indices();
+                    pane.capture_search_document()
+                });
+                (pane, snapshot, usize::from(width))
+            })
+        });
+
+        cx.update(|app| {
+            // Both windows have rendered. Copying from either must still use
+            // the offsets belonging to that window's layout.
+            for (pane, _, width) in &panes {
+                pane.update(app, |pane, cx| {
+                    let expected = format!("+{}needle", " ".repeat(*width));
+                    assert_eq!(
+                        pane.diff_text_full_line_for_region(0, DiffTextRegion::Inline)
+                            .as_ref(),
+                        expected
+                    );
+                    assert_eq!(
+                        pane.diff_text_line_len_for_region(0, DiffTextRegion::Inline),
+                        expected.len()
+                    );
+                    let anchor = DiffTextPos {
+                        source_visible_ix: 0,
+                        region: DiffTextRegion::Inline,
+                        offset: width + 1,
+                    };
+                    pane.diff_text_anchor = Some(anchor);
+                    pane.diff_text_head = Some(DiffTextPos {
+                        offset: width + 1 + "needle".len(),
+                        ..anchor
+                    });
+                    pane.copy_selected_diff_text_to_clipboard(cx);
+                    assert_eq!(crate::clipboard::read_text(cx).as_deref(), Some("needle"));
+                });
+            }
+
+            let keys = panes
+                .each_ref()
+                .map(|(pane, _, _)| pane.read(app).diff_search_document_key());
+            panes[0].0.update(app, |pane, cx| {
+                pane.default_tab_size = 3;
+                pane.sync_display_tab_width(cx);
+                assert!(keys[0] != pane.diff_search_document_key());
+            });
+            assert!(keys[1] == panes[1].0.read(app).diff_search_document_key());
+        });
+
+        // Workers must retain the captured width even after a pane changes it,
+        // and must not depend on the thread on which matching runs.
+        for (_, snapshot, width) in panes {
+            std::thread::spawn(move || {
+                let query = format!("+{}needle", " ".repeat(width));
+                assert_eq!(
+                    snapshot
+                        .search(
+                            &query,
+                            DiffSearchOptions::default(),
+                            CancellationToken::new()
+                        )
+                        .matches,
+                    [0]
+                );
+                assert!(
+                    snapshot
+                        .search(
+                            "+   needle",
+                            DiffSearchOptions::default(),
+                            CancellationToken::new()
+                        )
+                        .matches
+                        .is_empty()
+                );
+            })
+            .join()
+            .unwrap();
+        }
+    }
 
     #[gpui::test]
     fn search_snapshot_shares_rows_and_resize_only_invalidates_changed_wrap_plans(
@@ -166,7 +269,11 @@ mod tests {
                     "a row without tabs is shared, not copied"
                 );
                 let row = (rows.text)(tab_row, 0).expect("row text");
-                assert_eq!(row.as_ref(), "+    needle", "tabs still expand");
+                assert_eq!(
+                    row.as_ref(),
+                    "+    needle",
+                    "the diff sign does not advance the content's tab stop"
+                );
             });
         });
     }
@@ -494,6 +601,7 @@ impl RowDocument {
 impl MainPaneView {
     pub(super) fn diff_search_document_key(&self) -> SearchDocumentKey {
         SearchDocumentKey {
+            tab_width: self.display_tab_width,
             repo: self
                 .active_repo()
                 .map(|repo| (repo.id, repo.diff_state.diff_target_rev)),
@@ -537,6 +645,8 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn capture_search_document(&self) -> SearchDocument {
+        let tab_width = self.display_tab_width;
+
         if self.is_file_editor_active() {
             return SearchDocument(DocumentSource::Editor(
                 self.file_editor_search_source.clone().unwrap_or_default(),
@@ -733,7 +843,15 @@ impl MainPaneView {
                         if let Some(header) = headers.get(&ix) {
                             return Some(header.as_ref().into());
                         }
-                        patch_line(ix)
+                        return patch_line(ix).map(|line| {
+                            if line.as_ref().contains('\t') {
+                                crate::view::tab_width::expand_patch_tabs(tab_width, line.as_ref())
+                                    .into_owned()
+                                    .into()
+                            } else {
+                                line
+                            }
+                        });
                     } else {
                         match split
                             .as_ref()
@@ -758,7 +876,11 @@ impl MainPaneView {
                     if (wrapped || view == DiffViewMode::Split || !file_view)
                         && raw.as_ref().contains('\t')
                     {
-                        Some(expand_tabs_to_string(raw.as_ref()).into())
+                        Some(
+                            crate::view::tab_width::expand_tabs(tab_width, raw.as_ref())
+                                .into_owned()
+                                .into(),
+                        )
                     } else {
                         Some(raw)
                     }

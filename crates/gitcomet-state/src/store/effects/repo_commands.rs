@@ -133,6 +133,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             path.display(),
             if *stage { " · stage after saving" } else { "" }
         ),
+        RepoCommandKind::AppendGitattributesRule { rule } => rule.clone(),
         RepoCommandKind::AppendGitignorePatterns { patterns } => match patterns.as_slice() {
             [] => GITIGNORE_FILE_NAME.to_string(),
             [pattern] => pattern.clone(),
@@ -332,7 +333,7 @@ pub(super) fn schedule_save_worktree_file(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
-    contents: String,
+    contents: crate::msg::ContentBytes,
     stage: bool,
 ) {
     let command_path = path.clone();
@@ -394,6 +395,52 @@ pub(super) fn schedule_append_gitignore_patterns(
         },
         move |repo| append_gitignore_patterns_in_workdir(&repo.spec().workdir, &patterns),
     );
+}
+
+pub(super) fn schedule_append_gitattributes_rule(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    rule: String,
+) {
+    let command_rule = rule.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AppendGitattributesRule { rule: command_rule },
+        move |repo| append_gitattributes_rule_in_workdir(&repo.spec().workdir, &rule),
+    );
+}
+
+/// Read and write in the worker, byte for byte: the file may be in any
+/// encoding and may be edited elsewhere at the same time.
+fn append_gitattributes_rule_in_workdir(
+    workdir: &Path,
+    rule: &str,
+) -> Result<CommandOutput, Error> {
+    use gitcomet_core::gitattributes::{GITATTRIBUTES_FILE_NAME, NOTHING_TO_ADD, append_rule};
+    let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITATTRIBUTES_FILE_NAME))?;
+    let existing = match std::fs::read(&full) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+    };
+    let stdout = match append_rule(&existing, rule) {
+        Some(updated) => {
+            std::fs::write(&full, updated).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            String::new()
+        }
+        None => NOTHING_TO_ADD.to_string(),
+    };
+    Ok(CommandOutput {
+        command: format!("Update {GITATTRIBUTES_FILE_NAME}"),
+        stdout,
+        stderr: String::new(),
+        exit_code: Some(0),
+    })
 }
 
 fn append_gitignore_patterns_in_workdir(
@@ -761,7 +808,7 @@ pub(super) fn schedule_stage_hunk(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    patch: String,
+    patch: crate::msg::ContentBytes,
 ) {
     schedule_repo_command(
         executor,
@@ -769,7 +816,7 @@ pub(super) fn schedule_stage_hunk(
         msg_tx,
         repo_id,
         RepoCommandKind::StageHunk,
-        move |repo| repo.apply_unified_patch_to_index_with_output(&patch, false),
+        move |repo| repo.apply_unified_patch_to_index_with_output(patch.as_bytes(), false),
     );
 }
 
@@ -778,7 +825,7 @@ pub(super) fn schedule_unstage_hunk(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    patch: String,
+    patch: crate::msg::ContentBytes,
 ) {
     schedule_repo_command(
         executor,
@@ -786,7 +833,7 @@ pub(super) fn schedule_unstage_hunk(
         msg_tx,
         repo_id,
         RepoCommandKind::UnstageHunk,
-        move |repo| repo.apply_unified_patch_to_index_with_output(&patch, true),
+        move |repo| repo.apply_unified_patch_to_index_with_output(patch.as_bytes(), true),
     );
 }
 
@@ -795,7 +842,7 @@ pub(super) fn schedule_apply_worktree_patch(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    patch: String,
+    patch: crate::msg::ContentBytes,
     reverse: bool,
 ) {
     schedule_repo_command(
@@ -804,7 +851,7 @@ pub(super) fn schedule_apply_worktree_patch(
         msg_tx,
         repo_id,
         RepoCommandKind::ApplyWorktreePatch { reverse },
-        move |repo| repo.apply_unified_patch_to_worktree_with_output(&patch, reverse),
+        move |repo| repo.apply_unified_patch_to_worktree_with_output(patch.as_bytes(), reverse),
     );
 }
 

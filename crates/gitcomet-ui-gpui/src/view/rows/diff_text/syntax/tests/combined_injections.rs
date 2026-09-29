@@ -916,6 +916,8 @@ fn nested_script_with_template_gaps_obeys_the_window_byte_ceiling() {
 
 #[test]
 fn nested_script_click_recovery_honors_the_remaining_deadline() {
+    let tab_width = 4;
+
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
     let text = large_template_script("");
     let document = prepare_test_document_from_shared_text(DiffSyntaxLanguage::Jinja, &text);
@@ -937,7 +939,7 @@ fn nested_script_click_recovery_honors_the_remaining_deadline() {
 
     let column = offset - state.line_starts[1];
     let started = Instant::now();
-    let _ = prepared_document_syntax_pair_at_display_offset(document, 1, column);
+    let _ = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, column);
     assert!(TS_INJECTION_CACHE.with(|cache| {
         cache
             .borrow()
@@ -959,7 +961,7 @@ fn nested_script_click_recovery_honors_the_remaining_deadline() {
         "const",
     ));
     let started = Instant::now();
-    let pair = prepared_document_syntax_pair_at_display_offset(document, 1, column)
+    let pair = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, column)
         .expect("warm script tree should answer the click");
     assert_eq!(pair.kind, SyntaxPairKind::Bracket);
     eprintln!("warm nested click: {:?}", started.elapsed());
@@ -968,6 +970,8 @@ fn nested_script_click_recovery_honors_the_remaining_deadline() {
 
 #[test]
 fn nested_script_clicks_build_trees_without_tokenizing_and_later_paint_reuses_them() {
+    let tab_width = 4;
+
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
     let text = "<script>const value = (123);\nconsole.log(value);</script>\n";
     let document = prepare_test_document_from_shared_text(DiffSyntaxLanguage::Jinja, text);
@@ -977,7 +981,7 @@ fn nested_script_clicks_build_trees_without_tokenizing_and_later_paint_reuses_th
     ensure_injection_chain_cached_for_click_lookup(&state, offset, Some(layers), Instant::now());
     assert!(TS_INJECTION_CACHE.with(|cache| cache.borrow().is_empty()));
 
-    let pair = prepared_document_syntax_pair_at_display_offset(document, 0, offset)
+    let pair = prepared_document_syntax_pair_at_display_offset(tab_width, document, 0, offset)
         .expect("cold script tree should answer a bracket click");
     assert_eq!(pair.kind, SyntaxPairKind::Bracket);
     let key = TS_INJECTION_CACHE.with(|cache| {
@@ -994,6 +998,7 @@ fn nested_script_clicks_build_trees_without_tokenizing_and_later_paint_reuses_th
     TS_INJECTION_TREE_PARSE_COUNT.with(|count| count.set(0));
 
     let occurrences = prepared_document_occurrences_at_display_offset(
+        tab_width,
         document,
         0,
         text.find("value").expect("script identifier"),
@@ -1072,6 +1077,8 @@ fn a_combined_layer_missing_the_foreground_budget_leaves_the_document_ready() {
 /// `.html` paired correctly, which is what made the two views disagree.
 #[test]
 fn combined_layer_pair_lights_a_whole_tag_in_a_template() {
+    let tab_width = 4;
+
     let text =
         "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
@@ -1079,7 +1086,7 @@ fn combined_layer_pair_lights_a_whole_tag_in_a_template() {
     // it can be clicked. Without this the test silently exercises the host path.
     let _ = syntax_tokens_for_prepared_document_line(document, 1);
 
-    let pair = prepared_document_syntax_pair_at_display_offset(document, 1, 2)
+    let pair = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, 2)
         .expect("clicking the div element name should pair it with its closing tag");
     assert_eq!(pair.kind, SyntaxPairKind::Tag);
     assert_eq!(pair.open[0].line_ix, 1);
@@ -1099,6 +1106,8 @@ fn combined_layer_pair_lights_a_whole_tag_in_a_template() {
 /// editor looked right while the other views looked broken.
 #[test]
 fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
+    let tab_width = 4;
+
     let text =
         "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
@@ -1114,7 +1123,8 @@ fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
 
     let line_start = text.find("<div").expect("fixture has a div");
     for column in 0..6 {
-        let prepared = prepared_document_syntax_pair_at_display_offset(document, 1, column);
+        let prepared =
+            prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, column);
         let live_pair = snapshot.syntax_pair_at(line_start + column);
         assert_eq!(
             prepared.is_some(),
@@ -1137,6 +1147,8 @@ fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
 /// `syntax_pair_at_never_straddles_a_combined_layer_gap`.
 #[test]
 fn combined_layer_pair_does_not_answer_inside_a_template_gap() {
+    let tab_width = 4;
+
     let text = "<div>\n{% if cond %}\n<span>hi</span>\n{% endif %}\n</div>\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
     for line_ix in 0..text.lines().count() {
@@ -1145,7 +1157,7 @@ fn combined_layer_pair_does_not_answer_inside_a_template_gap() {
 
     // Column 3 of `{% if cond %}` is inside the template tag, which no HTML
     // range covers. Whatever answers, it must not be an HTML tag pair.
-    if let Some(pair) = prepared_document_syntax_pair_at_display_offset(document, 1, 3) {
+    if let Some(pair) = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, 3) {
         assert_ne!(
             pair.kind,
             SyntaxPairKind::Tag,
@@ -1158,6 +1170,8 @@ fn combined_layer_pair_does_not_answer_inside_a_template_gap() {
 /// layer selection so one click cannot resolve to two different grammars.
 #[test]
 fn occurrences_inside_a_combined_layer_span_every_range() {
+    let tab_width = 4;
+
     let text =
         "<div id=\"card\">\n{% if cond %}\n<span data=\"card\">hi</span>\n{% endif %}\n</div>\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
@@ -1166,7 +1180,7 @@ fn occurrences_inside_a_combined_layer_span_every_range() {
     }
 
     // `card` on line 0, inside the attribute value.
-    let found = prepared_document_occurrences_at_display_offset(document, 0, 10);
+    let found = prepared_document_occurrences_at_display_offset(tab_width, document, 0, 10);
     assert!(
         found.iter().any(|span| span.line_ix == 0),
         "the clicked name is always part of its own answer: {found:?}"

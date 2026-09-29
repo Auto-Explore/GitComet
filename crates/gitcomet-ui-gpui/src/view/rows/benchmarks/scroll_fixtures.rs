@@ -106,13 +106,15 @@ impl LargeFileDiffScrollFixture {
     }
 
     fn build_styled_line(&self, line_ix: usize) -> (CachedDiffStyledText, bool) {
+        let tab_width = 4;
+
         let line = self
             .lines
             .get(line_ix)
             .map(String::as_str)
             .unwrap_or_default();
         if let Some(document) = self.prepared_document {
-            return super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+            return super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(tab_width,
                 self.theme,
                 &self.highlight_palette,
                 super::diff_text::PreparedDiffTextBuildRequest {
@@ -137,6 +139,7 @@ impl LargeFileDiffScrollFixture {
 
         (
             super::diff_text::build_cached_diff_styled_text_with_palette(
+                tab_width,
                 self.theme,
                 &self.highlight_palette,
                 super::diff_text::DiffTextBuildRequest {

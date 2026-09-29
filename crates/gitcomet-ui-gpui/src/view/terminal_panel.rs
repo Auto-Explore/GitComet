@@ -801,17 +801,12 @@ impl GitCometView {
         {
             return true;
         }
-        // With auto-save on, a buffer inside its 800 ms quiet period is not an
-        // unsaved edit — it is a write that has not fired yet, so the user is
-        // asked nothing. But flushing only *dispatches* the write, and returning
-        // `false` here let the caller quit out from under it: the store never
-        // reduced the message and the edits were lost. Take over the close and
-        // let it through once the write has actually drained.
-        let flushed_a_pending_write = self.main_pane.update(cx, |pane, cx| {
-            let pending = pane.auto_save_file_edits && !pane.unsaved_file_edit_labels().is_empty();
-            pane.flush_file_editor_buffer(cx);
-            pending
-        });
+        // Flush auto-save before closing and wait for any dispatched write to
+        // drain. If encoding fails, no write was dispatched and the dirty
+        // buffer needs the Save/Discard prompt below.
+        let flushed_a_pending_write = self
+            .main_pane
+            .update(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
         if flushed_a_pending_write {
             self.retry_once_file_edit_writes_drain(action, cx);
             return true;
@@ -855,13 +850,18 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.pending_unsaved_file_edits_prompt = None;
-        self.main_pane.update(cx, |pane, cx| {
+        let saved = self.main_pane.update(cx, |pane, cx| {
             if save {
-                pane.save_all_file_edits(cx);
+                pane.save_all_file_edits(cx)
             } else {
                 pane.discard_all_file_edits(cx);
+                true
             }
         });
+
+        if !saved {
+            return;
+        }
 
         if !save {
             // Ordering note: the caller's `close_popover` defers a clear of

@@ -385,6 +385,8 @@ fn treesitter_document_cache_lru_touch_keeps_recent_entry_alive() {
 
 #[test]
 fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
+    let tab_width = 4;
+
     let _lock = lock_global_counter_tests();
     reset_prepared_syntax_cache();
 
@@ -404,7 +406,7 @@ fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
         "a retained shared seed should rehydrate an otherwise stale handle"
     );
     let open = text.find('[').expect("opening bracket");
-    let pair = prepared_document_syntax_pair_at_display_offset(target, 0, open)
+    let pair = prepared_document_syntax_pair_at_display_offset(tab_width, target, 0, open)
         .expect("the rehydrated handle should support pair lookup");
     assert_eq!(pair.open[0].display_range, open..open + 1);
     let close = text.find(']').expect("closing bracket");

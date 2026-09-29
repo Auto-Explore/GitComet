@@ -1529,6 +1529,42 @@ fn worktree_file_source_memo_invalidates_on_global_attributes_change() {
 }
 
 #[test]
+fn worktree_file_source_memo_invalidates_on_config_change() {
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_repo(tmp.path());
+    git_success(tmp.path(), &["config", "core.autocrlf", "false"]);
+    commit_file(tmp.path(), "src.txt", "one\ntwo\n", "base");
+    let path = tmp.path().join("src.txt");
+    fs::write(&path, "one\r\nTWO\r\n").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30))
+        .unwrap();
+    let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+    let repo = open_repo(tmp.path());
+    let target = DiffTarget::WorkingTree {
+        path: "src.txt".into(),
+        area: DiffArea::Unstaged,
+    };
+    let read_source = || {
+        let text = repo.diff_file_text_impl(&target).unwrap().unwrap();
+        fs::read(text.new_source.unwrap().path).unwrap()
+    };
+    assert_eq!(read_source(), b"one\r\nTWO\r\n");
+    assert_eq!(read_source(), b"one\r\nTWO\r\n");
+    if cfg!(unix) {
+        assert_eq!(repo.worktree_source_memo.lock().unwrap().len(), 1);
+    }
+    git_success(tmp.path(), &["config", "core.autocrlf", "true"]);
+    assert_eq!(read_source(), b"one\nTWO\n");
+    git_success(tmp.path(), &["config", "core.autocrlf", "false"]);
+    assert_eq!(read_source(), b"one\r\nTWO\r\n");
+}
+
+#[test]
 fn worktree_file_source_memo_invalidates_on_index_attributes_change() {
     assert_attribute_source_invalidates_memo(true);
 }

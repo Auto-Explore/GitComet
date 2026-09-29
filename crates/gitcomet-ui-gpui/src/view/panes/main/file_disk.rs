@@ -66,16 +66,45 @@ pub(super) fn disk_stamp(meta: &std::fs::Metadata) -> DiskStamp {
 enum KnownBytes {
     /// Seen on disk, by hash.
     Seen(u64),
-    /// A save dispatched and not yet seen on disk, by its text. Compared on the
+    /// A save dispatched and not yet seen on disk, by its bytes. Compared on the
     /// check's thread, so saving never hashes the file on the UI thread.
-    Pending(SharedString),
+    Pending(PendingWrite),
+}
+
+/// Bytes a save is writing: the buffer's own text when the file is UTF-8,
+/// otherwise its encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::view) enum PendingWrite {
+    Text(SharedString),
+    Encoded(Arc<[u8]>),
+}
+
+impl PendingWrite {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Text(text) => text.as_bytes(),
+            Self::Encoded(bytes) => bytes,
+        }
+    }
+}
+
+impl From<SharedString> for PendingWrite {
+    fn from(text: SharedString) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<&'static str> for PendingWrite {
+    fn from(text: &'static str) -> Self {
+        Self::Text(text.into())
+    }
 }
 
 impl KnownBytes {
     fn matches(&self, bytes: &[u8], hash: u64) -> bool {
         match self {
             Self::Seen(seen) => *seen == hash,
-            Self::Pending(text) => text.as_bytes() == bytes,
+            Self::Pending(write) => write.as_bytes() == bytes,
         }
     }
 }
@@ -104,8 +133,8 @@ impl DiskIdentity {
     /// A write was dispatched but has not necessarily landed, so both the
     /// bytes before it and the bytes it writes are ours for now. `text` is the
     /// handle the save already built; nothing is copied or hashed here.
-    pub(in crate::view) fn note_pending_write(&mut self, text: SharedString) {
-        let pending = KnownBytes::Pending(text);
+    pub(in crate::view) fn note_pending_write(&mut self, write: PendingWrite) {
+        let pending = KnownBytes::Pending(write);
         if self.known.last() != Some(&pending) {
             self.known.push(pending);
             if self.known.len() > MAX_KNOWN_BYTES {
@@ -688,7 +717,7 @@ mod tests {
     }
 
     fn pending(text: &str) -> KnownBytes {
-        KnownBytes::Pending(SharedString::from(text.to_string()))
+        KnownBytes::Pending(PendingWrite::Text(SharedString::from(text.to_string())))
     }
 
     #[test]
@@ -722,6 +751,13 @@ mod tests {
     }
 
     #[test]
+    fn an_encoded_save_is_recognized_by_its_bytes_not_its_text() {
+        let known = KnownBytes::Pending(PendingWrite::Encoded(Arc::from(&b"caf\xe9\n"[..])));
+        assert!(known.matches(b"caf\xe9\n", 0));
+        assert!(!known.matches("café\n".as_bytes(), 0));
+    }
+
+    #[test]
     fn adopting_what_the_notice_saw_keeps_saves_still_on_their_way() {
         let mut identity = DiskIdentity::loaded(stamp(1), Some(10));
         identity.note_pending_write("mine".into());
@@ -733,7 +769,7 @@ mod tests {
     fn pending_writes_are_capped() {
         let mut identity = DiskIdentity::loaded(stamp(1), Some(0));
         for ix in 1..=20 {
-            identity.note_pending_write(SharedString::from(ix.to_string()));
+            identity.note_pending_write(SharedString::from(ix.to_string()).into());
         }
         assert_eq!(identity.known.len(), MAX_KNOWN_BYTES);
         assert_eq!(identity.known.last(), Some(&pending("20")));

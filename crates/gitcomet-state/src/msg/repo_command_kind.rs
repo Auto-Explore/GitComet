@@ -143,6 +143,9 @@ pub enum RepoCommandKind {
     AppendGitignorePatterns {
         patterns: Vec<String>,
     },
+    AppendGitattributesRule {
+        rule: String,
+    },
     ExportPatch {
         commit_id: CommitId,
         dest: PathBuf,
@@ -214,6 +217,7 @@ impl RepoCommandKind {
             | Self::CheckoutConflictBase { .. }
             | Self::LaunchMergetool { .. }
             | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
             | Self::ExportPatch { .. }
             | Self::ApplyPatch { .. }
             | Self::AddSubmodule { .. }
@@ -289,6 +293,7 @@ impl RepoCommandKind {
             Self::LaunchMergetool { .. } => "Mergetool",
             Self::SaveWorktreeFile { .. } => "Save file",
             Self::AppendGitignorePatterns { .. } => "Update .gitignore",
+            Self::AppendGitattributesRule { .. } => "Update .gitattributes",
             Self::ExportPatch { .. } => "Export patch",
             Self::ApplyPatch { .. } => "Apply patch",
             Self::AddWorktree { .. } => "Add worktree",

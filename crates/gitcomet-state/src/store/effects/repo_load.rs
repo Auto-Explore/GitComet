@@ -25,6 +25,8 @@ use super::util::{
 };
 
 pub(super) struct SelectedDiffLoadOptions {
+    /// Read the file's `.gitattributes` and text config.
+    pub(super) load_text_attributes: bool,
     pub(super) load_patch_diff: bool,
     pub(super) load_file_text: bool,
     pub(super) preview_text_side: Option<DiffPreviewTextSide>,
@@ -238,6 +240,7 @@ mod selected_diff_guard_tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let msg_tx = StoreWorkerSender::for_test_msg_sender(tx);
         let load = |patch, text, summary, image| SelectedDiffLoadOptions {
+            load_text_attributes: false,
             load_patch_diff: patch,
             load_file_text: text,
             preview_text_side: None,
@@ -827,6 +830,7 @@ pub(super) fn schedule_load_conflict_file(
     repo_id: RepoId,
     path: PathBuf,
     mode: ConflictFileLoadMode,
+    encoding: Option<gitcomet_core::text_format::TextEncoding>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let trace_path = path.clone();
@@ -834,7 +838,11 @@ pub(super) fn schedule_load_conflict_file(
 
         let conflict_session_started = Instant::now();
         let conflict_session = load_full
-            .then(|| repo.conflict_session(&path).ok().flatten())
+            .then(|| {
+                repo.conflict_session_with_encoding(&path, encoding)
+                    .ok()
+                    .flatten()
+            })
             .flatten();
         let session_ref = conflict_session.as_ref();
         mergetool_trace::record_with(|| {
@@ -979,7 +987,7 @@ pub(super) fn schedule_load_conflict_file(
                 repo_id,
                 path,
                 result: Box::new(result),
-                conflict_session,
+                conflict_session: conflict_session.map(Box::new),
             }),
         );
     });
@@ -2020,7 +2028,7 @@ pub(super) fn schedule_open_file_at_commit_parent(
                 // instead of silently doing nothing.
                 send_or_log(
                     &msg_tx,
-                    Msg::ShowBannerError {
+                    Msg::ReportError {
                         repo_id: Some(repo_id),
                         message: format!("Could not open file at parent commit: {e}"),
                     },
@@ -2050,16 +2058,37 @@ pub(super) fn schedule_load_recent_commit_messages(
     });
 }
 
+/// The user's encoding choice for `path`, when it is the open file.
+pub(super) fn file_encoding_override(
+    thread_state: &RwLock<Arc<AppState>>,
+    repo_id: RepoId,
+    path: &Path,
+) -> Option<gitcomet_core::text_format::TextEncoding> {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)?
+        .diff_state
+        .text_override_for(path)?
+        .encoding
+}
+
 pub(super) fn schedule_load_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
+    encoding: Option<gitcomet_core::text_format::TextEncoding>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         // UI consumes this parsed diff through paged/lazy row adapters.
-        let result = repo.diff_parsed(&target);
+        let result = repo.diff_parsed_with_encoding_cancellable(
+            &target,
+            encoding,
+            &CancellationToken::new(),
+        );
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
@@ -2077,9 +2106,14 @@ pub(super) fn schedule_load_diff_file(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
+    encoding: Option<gitcomet_core::text_format::TextEncoding>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_file_text(&target);
+        let result = repo.diff_file_text_with_encoding_cancellable(
+            &target,
+            encoding,
+            &CancellationToken::new(),
+        );
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
@@ -2260,7 +2294,38 @@ pub(super) fn schedule_load_selected_diff(
     options: SelectedDiffLoadOptions,
 ) {
     let (target, target_rev) = selection;
+    let encoding = target
+        .file_path()
+        .and_then(|path| file_encoding_override(&thread_state, repo_id, path));
     let guard = SelectedDiffLoadGuard::new(thread_state, repo_id, target.clone(), target_rev);
+    if options.load_text_attributes
+        && let Some(path) = target.file_path().map(Path::to_path_buf)
+    {
+        let target = target.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            &slots.text_attributes,
+            "selected_diff_text_attributes",
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.text_attributes(&path);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
     if options.load_patch_diff {
         let target = target.clone();
         let msg_tx = msg_tx.clone();
@@ -2276,7 +2341,8 @@ pub(super) fn schedule_load_selected_diff(
             guard,
             move |repo, msg_tx, guard| {
                 // UI consumes this parsed diff through paged/lazy row adapters.
-                let result = repo.diff_parsed_cancellable(&target, &cancellation);
+                let result =
+                    repo.diff_parsed_with_encoding_cancellable(&target, encoding, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2303,7 +2369,8 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.diff_file_text_cancellable(&target, &cancellation);
+                let result =
+                    repo.diff_file_text_with_encoding_cancellable(&target, encoding, &cancellation);
                 if !guard.is_current() {
                     return;
                 }

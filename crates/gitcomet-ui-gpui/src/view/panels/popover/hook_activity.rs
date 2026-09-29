@@ -397,7 +397,7 @@ fn history_row(
         )
 }
 
-fn visible_scroll_surface(
+pub(super) fn visible_scroll_surface(
     theme: AppTheme,
     container_id: &'static str,
     surface_id: &'static str,

@@ -866,6 +866,10 @@ impl PopoverHost {
             hook_activity_history_scroll: ScrollHandle::new(),
             hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
+            error_details_selected: None,
+            error_details_text: Default::default(),
+            error_details_scroll: ScrollHandle::new(),
+            error_details_rail_scroll: ScrollHandle::new(),
             commit_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
@@ -1059,6 +1063,14 @@ impl PopoverHost {
     }
 
     #[cfg(test)]
+    pub(in crate::view) fn error_details_text_for_test(
+        &self,
+        key: &str,
+    ) -> Option<Entity<components::TextInput>> {
+        self.error_details_text.input_for_test(key)
+    }
+
+    #[cfg(test)]
     pub(in crate::view) fn hook_activity_text_for_test(
         &self,
         key: &str,
@@ -1236,12 +1248,31 @@ impl PopoverHost {
         matches!(self.popover, Some(PopoverKind::UnsavedFileEditsConfirm(_)))
     }
 
+    /// The toast host's errors changed: repaint the error details dialog, or
+    /// close it once none is left.
+    pub(in crate::view) fn error_notices_changed(
+        &mut self,
+        errors: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !matches!(self.popover, Some(PopoverKind::ErrorDetails { .. })) {
+            return;
+        }
+        if errors == 0 {
+            self.close_popover(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();
         if dismissing_hook_activity {
             self.hook_activity_text = Default::default();
         }
+        self.error_details_selected = None;
+        self.error_details_text = Default::default();
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -1399,6 +1430,7 @@ impl PopoverHost {
             Some(
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
+                    | PopoverKind::TextFormatMenu { .. }
                     | PopoverKind::WebLinkMenu { .. }
                     | PopoverKind::LocalFileLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
@@ -2626,6 +2658,13 @@ impl PopoverHost {
             window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
+                PopoverKind::ErrorDetails { toast_id } => {
+                    self.error_details_selected = Some(*toast_id);
+                    self.error_details_text = Default::default();
+                    self.error_details_scroll = ScrollHandle::new();
+                    self.error_details_rail_scroll = ScrollHandle::new();
+                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                }
                 PopoverKind::HookActivity {
                     repo_id,
                     operation_id,
