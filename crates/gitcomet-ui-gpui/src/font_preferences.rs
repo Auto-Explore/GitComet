@@ -1,5 +1,4 @@
 use crate::bundled_fonts;
-use gitcomet_state::session;
 use gpui::{BorrowAppContext, FontFeatures, Window};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
@@ -225,9 +224,18 @@ where
     applied_editor_font_family(&selection)
 }
 
-pub(crate) fn current_or_initialize_from_session<C>(
+/// Stored font choices, as a settings store keeps them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct StoredFontPreferences<'a> {
+    pub(crate) ui_font_family: Option<&'a str>,
+    pub(crate) editor_font_family: Option<&'a str>,
+    pub(crate) use_font_ligatures: Option<bool>,
+}
+
+/// The live fonts resolved for `window`, initialized once from `stored`.
+pub(crate) fn current_or_initialize<C>(
     window: &Window,
-    ui_session: &session::UiSession,
+    stored: StoredFontPreferences<'_>,
     cx: &mut C,
 ) -> AppFontPreferences
 where
@@ -244,9 +252,9 @@ where
     } else {
         resolve_for_window(
             window,
-            ui_session.ui_font_family.as_deref(),
-            ui_session.editor_font_family.as_deref(),
-            ui_session.use_font_ligatures,
+            stored.ui_font_family,
+            stored.editor_font_family,
+            stored.use_font_ligatures,
         )
     };
     cx.set_global(next.clone());

@@ -53,8 +53,9 @@ pub use picker_prompt::picker_prompt_layout;
 pub use picker_prompt::{
     OnRemoveFn, PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent,
     PickerPromptGeometry, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout,
-    PickerPromptOrder, PickerRowKey, PickerRowSpec, picker_prompt_layout_ordered, picker_row,
-    remove_row_button, row_height as picker_row_height, selected_hint_pill, workspace_picker_item,
+    PickerPromptOrder, PickerRowKey, PickerRowSpec, PickerSwatch, PickerSwatchColors,
+    picker_prompt_layout_ordered, picker_row, remove_row_button, row_height as picker_row_height,
+    selected_hint_pill,
 };
 pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus};
 pub use repository_badge::{

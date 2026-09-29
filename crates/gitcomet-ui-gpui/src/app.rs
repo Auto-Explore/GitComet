@@ -1033,7 +1033,7 @@ fn open_gitcomet_window(
 ) -> gpui::WindowHandle<GitCometView> {
     clear_clean_shutdown_request(cx);
     let ui_session = session::load();
-    let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+    let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
     crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
     let default_size = fit_default_window_size(

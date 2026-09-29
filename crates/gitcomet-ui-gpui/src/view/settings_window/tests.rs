@@ -3652,7 +3652,7 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
     );
     let row: &'static str = format!("settings_window_workspace_{id}").leak();
     assert!(settings_cx.debug_bounds(row).is_some());
-    let dot: &'static str = format!("settings_window_workspace_dot_{id}").leak();
+    let dot: &'static str = format!("settings_window_swatch_{id}").leak();
     assert!(
         settings_cx.debug_bounds(dot).is_some(),
         "rows are the picker's workspace rows, colour dot included"

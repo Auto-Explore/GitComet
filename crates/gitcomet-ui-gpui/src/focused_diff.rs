@@ -160,10 +160,9 @@ impl FocusedDiffView {
             .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
 
         let theme = AppTheme::default_for_window_appearance(window.appearance());
-        crate::appearance::initialize(&ui_session, cx);
-        let ui_scale = crate::ui_scale::current_or_initialize_from_session(&ui_session, cx);
-        let font_preferences =
-            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
+        crate::session_ui::initialize_appearance(&ui_session, cx);
+        let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
+        let font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
 
         Self {
             lines,
@@ -646,7 +645,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                     eprintln!("Failed to register bundled fonts: {err:#}");
                 }
                 let ui_session = session::load();
-                let ui_scale = crate::ui_scale::current_or_initialize_from_session(&ui_session, cx);
+                let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
                 cx.on_window_closed(|cx, _| {
                     if cx.windows().is_empty() {
                         cx.quit();

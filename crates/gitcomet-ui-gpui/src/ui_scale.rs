@@ -1,4 +1,3 @@
-use gitcomet_state::session;
 use gpui::{BorrowAppContext, Pixels, Size, Window, px, size};
 
 pub(crate) const DEFAULT_UI_SCALE_PERCENT: u32 = 100;
@@ -32,10 +31,8 @@ where
     cx.update_default_global::<AppUiScale, _>(|scale, _cx| *scale)
 }
 
-pub(crate) fn current_or_initialize_from_session<C>(
-    ui_session: &session::UiSession,
-    cx: &mut C,
-) -> AppUiScale
+/// The live scale, initialized once per app from the stored percent.
+pub(crate) fn current_or_initialize<C>(stored_percent: Option<u32>, cx: &mut C) -> AppUiScale
 where
     C: BorrowAppContext,
 {
@@ -45,7 +42,7 @@ where
     }
 
     let next = AppUiScale {
-        percent: sanitize_percent(ui_session.ui_scale_percent),
+        percent: sanitize_percent(stored_percent),
         initialized: true,
     };
     cx.set_global(next);

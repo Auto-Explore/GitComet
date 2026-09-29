@@ -343,7 +343,8 @@ fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
         .to_lowercase();
     SortableRow {
         entry: RepoPickerEntry::Workspace(workspace.id),
-        item: components::workspace_picker_item(&workspace).section(WORKSPACES_SECTION),
+        item: crate::view::workspace_picker::workspace_picker_item(&workspace)
+            .section(WORKSPACES_SECTION),
         name_key,
         path_key,
         recency,

@@ -1064,15 +1064,14 @@ impl GitCometView {
             }
         };
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
-        crate::appearance::initialize(&ui_session, cx);
+        crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
-        let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
         // The application-wide scale may already have been initialized by
         // another window. Keep the shared runtime preferences aligned with the
         // value every view will actually render with.
         ui_preferences.appearance.ui_scale_percent = ui_scale.percent;
-        let _font_preferences =
-            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
+        let _font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
         if should_seed_initial_repository_from_session(
             view_mode,
             initial_path.as_deref(),

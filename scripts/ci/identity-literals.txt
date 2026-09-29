@@ -16,6 +16,8 @@ crates/gitcomet-core/src/identity.rs identifier 7 GitComet's own identity (defin
 crates/gitcomet-core/src/identity.rs package-metadata 1 GitComet's own identity (definition site)
 crates/gitcomet-core/src/identity.rs vendor 7 GitComet's own identity (definition site)
 crates/gitcomet-core/src/signing_tools.rs identifier 1 temporary directory prefix
+crates/gitcomet-extension-example-app/src/main.rs display-name 1 the example product describes itself as built on GitComet crates
+crates/gitcomet-extension-example/src/lib.rs package-metadata 1 the example product's own identity (definition site)
 crates/gitcomet-fs-watch/src/macos.rs identifier 1 FSEvents dispatch queue label
 crates/gitcomet-git-gix/examples/status-refresh-bench.rs identifier 2 benchmark example scratch names
 crates/gitcomet-git-gix/src/repo/diff.rs identifier 2 temporary file prefixes

@@ -474,7 +474,7 @@ impl GitCometView {
                 components::picker_row(
                     theme,
                     ui_scale,
-                    &components::workspace_picker_item(&workspace),
+                    &crate::view::workspace_picker::workspace_picker_item(&workspace),
                     components::PickerRowSpec {
                         id: row_id.clone().into(),
                         selector_prefix: "home",

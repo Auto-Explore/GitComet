@@ -10,7 +10,7 @@ use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, ScrollHandle, SharedString, WeakEntity, Window, div, px,
+    MouseMoveEvent, Pixels, Rgba, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use palette::IntoColor;
 use std::collections::BTreeSet;
@@ -74,16 +74,55 @@ pub struct PickerPromptItem {
     secondary: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
     repository_initials: Option<SharedString>,
-    workspace_swatch: Option<WorkspaceSwatch>,
+    swatch: Option<PickerSwatch>,
     section: Option<SharedString>,
     removable: bool,
 }
 
-/// A workspace row's colour: a dot in the leading slot and, once one is chosen,
-/// its window's title-bar tint behind the row. Resolved against the theme at
-/// render time, so a cached row follows a theme switch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WorkspaceSwatch(Option<gitcomet_state::session::WorkspaceColor>);
+/// A row's colour: a dot in the leading slot and, optionally, a tint behind the
+/// row. Resolved against the theme at render time, so a cached row follows a
+/// theme switch.
+#[derive(Clone)]
+pub struct PickerSwatch {
+    /// Identifies the colour, so equal rows compare equal.
+    key: u64,
+    resolve: Rc<dyn Fn(AppTheme) -> PickerSwatchColors>,
+}
+
+/// What a [`PickerSwatch`] paints in one theme.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PickerSwatchColors {
+    pub dot: Rgba,
+    /// Opaque fill behind the row; hover and selection flatten onto it.
+    pub row_tint: Option<Rgba>,
+}
+
+impl PickerSwatch {
+    pub fn new(key: u64, resolve: impl Fn(AppTheme) -> PickerSwatchColors + 'static) -> Self {
+        Self {
+            key,
+            resolve: Rc::new(resolve),
+        }
+    }
+
+    fn colors(&self, theme: AppTheme) -> PickerSwatchColors {
+        (self.resolve)(theme)
+    }
+}
+
+impl PartialEq for PickerSwatch {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for PickerSwatch {}
+
+impl std::fmt::Debug for PickerSwatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PickerSwatch").field(&self.key).finish()
+    }
+}
 
 /// Row and header metrics, taken from Zed's title-bar menus so the two read the
 /// same: a row's fill is inset from the popover edge rather than spanning it, and
@@ -969,7 +1008,7 @@ impl PickerPromptItem {
             secondary: Vec::new(),
             icon: None,
             repository_initials: None,
-            workspace_swatch: None,
+            swatch: None,
             section: None,
             removable: false,
         }
@@ -1004,14 +1043,11 @@ impl PickerPromptItem {
         self
     }
 
-    /// Uses a workspace's colour dot in the row's leading slot, and tints the row
-    /// the way that workspace tints its title bar. Takes the leading slot the way
+    /// Uses a colour dot in the row's leading slot and, if the swatch has one,
+    /// tints the row. Takes the leading slot the way
     /// [`Self::repository_initials`] does.
-    pub fn workspace_color(
-        mut self,
-        color: Option<gitcomet_state::session::WorkspaceColor>,
-    ) -> Self {
-        self.workspace_swatch = Some(WorkspaceSwatch(color));
+    pub fn swatch(mut self, swatch: PickerSwatch) -> Self {
+        self.swatch = Some(swatch);
         self
     }
 
@@ -1319,35 +1355,6 @@ fn match_items(
     out
 }
 
-/// A workspace as every workspace list shows it: its name and state, its
-/// repositories underneath, and its colour.
-pub fn workspace_picker_item(workspace: &gitcomet_state::session::Workspace) -> PickerPromptItem {
-    let state = if workspace.restore_on_launch {
-        "Open"
-    } else {
-        "Saved"
-    };
-    let detail = format!(
-        "{state} · {}",
-        crate::workspaces::repository_count_label(workspace.repositories.len())
-    );
-    let repositories = workspace
-        .repositories
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    PickerPromptItem::from_parts([
-        PickerPromptItemPart::new(workspace.display_name())
-            .profile(super::TextTruncationProfile::End)
-            .flexible(false),
-        PickerPromptItemPart::separator(" - "),
-        PickerPromptItemPart::path(detail),
-    ])
-    .secondary_parts([PickerPromptItemPart::path(repositories)])
-    .workspace_color(workspace.color)
-}
-
 /// How a row's debug selectors are keyed.
 #[derive(Clone, Debug)]
 pub enum PickerRowKey {
@@ -1416,12 +1423,11 @@ pub fn picker_row<V: 'static>(
     };
     let label = picker_item_label(theme, item, match_range, tooltip_host, cx);
     let row_initials = item.repository_initials.clone();
-    let row_swatch = item.workspace_swatch;
+    let row_swatch = item.swatch.as_ref().map(|swatch| swatch.colors(theme));
     let has_initials = row_initials.is_some() || row_swatch.is_some();
     // Opaque, so hover and selection below flatten onto it instead
     // of replacing it.
-    let row_tint = row_swatch
-        .and_then(|WorkspaceSwatch(color)| crate::view::chrome::workspace_row_tint(color, theme));
+    let row_tint = row_swatch.and_then(|colors| colors.row_tint);
     let row_icon = (!has_initials)
         .then(|| row_leading_icon(item, leading_icon, marked))
         .flatten();
@@ -1458,11 +1464,8 @@ pub fn picker_row<V: 'static>(
                 .debug_selector(part_selector("item_icon")),
             )
         })
-        .when_some(row_swatch, |row, WorkspaceSwatch(color)| {
-            row.child(
-                workspace_dot(theme, ui_scale, color)
-                    .debug_selector(part_selector("workspace_dot")),
-            )
+        .when_some(row_swatch, |row, colors| {
+            row.child(swatch_dot(ui_scale, colors.dot).debug_selector(part_selector("swatch")))
         })
         .when_some(row_initials, |row, initials| {
             row.child(
@@ -1507,11 +1510,7 @@ pub fn picker_row<V: 'static>(
 
 /// A workspace's colour dot, centred in a slot as wide as the repository badge so
 /// workspace and repository rows start their text at the same edge.
-fn workspace_dot(
-    theme: AppTheme,
-    ui_scale: UiScale,
-    color: Option<gitcomet_state::session::WorkspaceColor>,
-) -> Div {
+fn swatch_dot(ui_scale: UiScale, color: Rgba) -> Div {
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     div()
         .flex_none()
@@ -1519,12 +1518,7 @@ fn workspace_dot(
         .flex()
         .items_center()
         .justify_center()
-        .child(
-            div()
-                .size(scaled_px(10.0))
-                .rounded_full()
-                .bg(crate::view::chrome::workspace_color(color, theme)),
-        )
+        .child(div().size(scaled_px(10.0)).rounded_full().bg(color))
 }
 
 /// The icon in a row's leading slot.

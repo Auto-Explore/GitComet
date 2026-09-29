@@ -18,6 +18,7 @@ pub mod perf_ram_guard;
 #[doc(hidden)]
 pub mod perf_sidecar;
 mod press_gesture;
+mod session_ui;
 mod startup_probe;
 mod text_runs;
 mod text_selection;

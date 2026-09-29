@@ -1,5 +1,4 @@
 //! App-wide density and typography, independent of the window's UI scale.
-use gitcomet_state::session::UiSession;
 use gpui::{App, Pixels, Window};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -117,18 +116,28 @@ impl Default for Appearance {
 }
 impl gpui::Global for Appearance {}
 
+/// Stored appearance choices, as a settings store keeps them; `None` means
+/// the user never chose.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AppearancePreferences<'a> {
+    /// A [`UiDensity::key`]; unknown keys fall back to the default.
+    pub(crate) density: Option<&'a str>,
+    pub(crate) ui_font_size_px: Option<u32>,
+    pub(crate) editor_font_size_px: Option<u32>,
+    pub(crate) markdown_preview_font_size_px: Option<u32>,
+}
+
 impl Appearance {
-    pub(crate) fn from_session(session: &UiSession) -> Self {
+    pub(crate) fn from_preferences(preferences: AppearancePreferences<'_>) -> Self {
         Self {
-            density: session
-                .ui_density
-                .as_deref()
+            density: preferences
+                .density
                 .and_then(UiDensity::from_key)
                 .unwrap_or(UiDensity::PREFERENCE_DEFAULT),
-            ui_font_size_px: FontRole::Ui.sanitize(session.ui_font_size_px),
-            editor_font_size_px: FontRole::Editor.sanitize(session.editor_font_size_px),
+            ui_font_size_px: FontRole::Ui.sanitize(preferences.ui_font_size_px),
+            editor_font_size_px: FontRole::Editor.sanitize(preferences.editor_font_size_px),
             markdown_preview_font_size_px: FontRole::Markdown
-                .sanitize(session.markdown_preview_font_size_px),
+                .sanitize(preferences.markdown_preview_font_size_px),
         }
     }
 
@@ -180,21 +189,22 @@ pub(crate) fn current(cx: &App) -> Appearance {
     cx.try_global::<Appearance>().copied().unwrap_or_default()
 }
 
-/// Tracks whether the session has been applied. The presence of the global
+/// Tracks whether the preferences have been applied. The presence of the global
 /// cannot answer that: `UiScale::current` reads the appearance through
 /// `update_default_global`, which installs the Default when none is set.
 #[derive(Default)]
 struct AppearanceInitialized(bool);
 impl gpui::Global for AppearanceInitialized {}
 
-pub(crate) fn initialize(session: &UiSession, cx: &mut App) {
+/// Applies the stored preferences once per app; later calls keep what is live.
+pub(crate) fn initialize(preferences: AppearancePreferences<'_>, cx: &mut App) {
     if cx
         .try_global::<AppearanceInitialized>()
         .is_some_and(|initialized| initialized.0)
     {
         return;
     }
-    cx.set_global(Appearance::from_session(session));
+    cx.set_global(Appearance::from_preferences(preferences));
     cx.set_global(AppearanceInitialized(true));
 }
 
@@ -225,21 +235,19 @@ mod tests {
     #[test]
     fn legacy_sessions_and_invalid_values_have_bounded_defaults() {
         assert_eq!(
-            Appearance::from_session(&UiSession::default()),
+            Appearance::from_preferences(AppearancePreferences::default()),
             Appearance {
                 density: UiDensity::PREFERENCE_DEFAULT,
                 ..Appearance::default()
             },
             "a fresh session gets the preferred density over the baseline"
         );
-        let session = UiSession {
-            ui_density: Some("unknown".into()),
+        let appearance = Appearance::from_preferences(AppearancePreferences {
+            density: Some("unknown"),
             ui_font_size_px: Some(0),
             editor_font_size_px: Some(200),
             markdown_preview_font_size_px: Some(13),
-            ..UiSession::default()
-        };
-        let appearance = Appearance::from_session(&session);
+        });
         assert_eq!(appearance.density, UiDensity::Comfortable);
         assert_eq!(
             (appearance.ui_font_size_px, appearance.editor_font_size_px),
@@ -279,17 +287,17 @@ mod tests {
     fn initialize_still_applies_the_session_after_something_installed_a_default(
         cx: &mut gpui::TestAppContext,
     ) {
-        let session = UiSession {
-            ui_density: Some(UiDensity::Spacious.key().to_string()),
+        let preferences = AppearancePreferences {
+            density: Some(UiDensity::Spacious.key()),
             ui_font_size_px: Some(20),
-            ..UiSession::default()
+            ..AppearancePreferences::default()
         };
 
         cx.update(|cx| {
             // Anything that asks for the scale before the first view is built.
             let _ = crate::ui_scale::UiScale::current(cx);
 
-            initialize(&session, cx);
+            initialize(preferences, cx);
 
             assert_eq!(current(cx).density, UiDensity::Spacious);
             assert_eq!(current(cx).ui_font_size_px, 20);
@@ -301,9 +309,9 @@ mod tests {
         for density in UiDensity::ALL {
             assert_eq!(UiDensity::from_key(density.key()), Some(density));
             assert_eq!(
-                Appearance::from_session(&UiSession {
-                    ui_density: Some(density.key().to_string()),
-                    ..UiSession::default()
+                Appearance::from_preferences(AppearancePreferences {
+                    density: Some(density.key()),
+                    ..AppearancePreferences::default()
                 })
                 .density,
                 density
@@ -369,7 +377,7 @@ mod tests {
                 "{role:?} default must sit in its own range"
             );
             assert_eq!(
-                Appearance::from_session(&UiSession::default()).size(role),
+                Appearance::from_preferences(AppearancePreferences::default()).size(role),
                 role.default_size(),
                 "a session with no stored size must land on the default"
             );

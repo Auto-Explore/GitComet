@@ -678,7 +678,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     }
 
     let ui_session = session::load();
-    let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+    let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
     let bounds = Bounds::centered(
         None,
         crate::app::fit_default_window_size(
@@ -1007,8 +1007,8 @@ impl SettingsWindowView {
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);
-        crate::appearance::initialize(&ui_session, cx);
-        let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        crate::session_ui::initialize_appearance(&ui_session, cx);
+        let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
         let window_controls =
             crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
         let browser_open_target = ui_session
@@ -1016,8 +1016,7 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(crate::app::BrowserOpenTarget::from_key)
             .unwrap_or_default();
-        let font_preferences =
-            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
+        let font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
