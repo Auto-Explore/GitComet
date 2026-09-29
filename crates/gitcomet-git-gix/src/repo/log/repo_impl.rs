@@ -1081,6 +1081,10 @@ impl GixRepo {
 /// and panic once objects are packed. Such names are resolved here instead,
 /// and a spec with a hex run wider than the repository digest is never handed
 /// to gix.
+///
+/// Workaround: once gix takes the hash kind from the repository instead of the
+/// hex length, the helpers below can be deleted and this can call
+/// `rev_parse_single` directly.
 fn find_commit_by_id<'repo>(
     repo: &'repo gix::Repository,
     id: &CommitId,
