@@ -767,23 +767,13 @@ pub(in crate::view) fn indexed_line_text<'a>(
     line_starts: &[usize],
     line_ix: usize,
 ) -> Option<&'a str> {
-    if text.is_empty() {
+    // Unlike the diff panes, the empty line after a trailing newline has no
+    // text here.
+    let range = gitcomet_core::text_utils::line_byte_range(line_starts, text.len(), line_ix)?;
+    if range.start >= text.len() {
         return None;
     }
-    let text_len = text.len();
-    let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-    if start >= text_len {
-        return None;
-    }
-    let mut end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-        end = end.saturating_sub(1);
-    }
-    Some(text.get(start..end).unwrap_or(""))
+    Some(text.get(range).unwrap_or(""))
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

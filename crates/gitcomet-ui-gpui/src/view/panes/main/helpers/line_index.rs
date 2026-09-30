@@ -147,11 +147,7 @@ pub(in crate::view) fn indexed_line_count_from_len(
     source_len: usize,
     line_starts: &[usize],
 ) -> usize {
-    if source_len == 0 {
-        0
-    } else {
-        line_starts.len().max(1)
-    }
+    gitcomet_core::text_utils::line_count_from_starts(source_len, line_starts)
 }
 
 pub(in crate::view::panes::main) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
@@ -163,24 +159,7 @@ pub(in crate::view) fn indexed_line_byte_range(
     source_len: usize,
     line_ix: usize,
 ) -> Option<Range<usize>> {
-    let line_count = indexed_line_count_from_len(source_len, line_starts);
-    if line_ix >= line_count {
-        return None;
-    }
-
-    let start = line_starts
-        .get(line_ix)
-        .copied()
-        .unwrap_or(source_len)
-        .min(source_len);
-    let end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .map(|next| next.saturating_sub(1))
-        .unwrap_or(source_len)
-        .min(source_len)
-        .max(start);
-    Some(start..end)
+    gitcomet_core::text_utils::line_byte_range(line_starts, source_len, line_ix)
 }
 
 /// Number of logical rows produced by `split('\n')` (always at least 1).

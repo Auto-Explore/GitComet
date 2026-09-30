@@ -134,6 +134,42 @@ pub fn line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+/// Lines described by [`line_starts`] for text of `source_len` bytes: none
+/// for empty text, else one per start (a trailing newline keeps its final
+/// empty line).
+pub fn line_count_from_starts(source_len: usize, line_starts: &[usize]) -> usize {
+    if source_len == 0 {
+        0
+    } else {
+        line_starts.len().max(1)
+    }
+}
+
+/// Byte range of line `line_ix` without its `\n`, from [`line_starts`];
+/// the empty line after a trailing newline is `len..len`.
+pub fn line_byte_range(
+    line_starts: &[usize],
+    source_len: usize,
+    line_ix: usize,
+) -> Option<std::ops::Range<usize>> {
+    if line_ix >= line_count_from_starts(source_len, line_starts) {
+        return None;
+    }
+    let start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(source_len)
+        .min(source_len);
+    let end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .map(|next| next.saturating_sub(1))
+        .unwrap_or(source_len)
+        .min(source_len)
+        .max(start);
+    Some(start..end)
+}
+
 /// `(CRLF count, total LF count)` of `text` in one scan; every LF is found
 /// with `memchr` and the byte before it decides whether it was a CRLF.
 pub fn count_line_feeds(text: &str) -> (usize, usize) {
@@ -854,6 +890,23 @@ mod tests {
         assert_eq!(line_starts("a"), vec![0]);
         assert_eq!(line_starts("a\n"), vec![0, 2]);
         assert_eq!(line_starts("a\r\nbc\n\nd"), vec![0, 3, 6, 7]);
+    }
+
+    #[test]
+    fn line_ranges_exclude_newlines_and_keep_the_trailing_empty_line() {
+        use super::{line_byte_range, line_count_from_starts, line_starts};
+        let text = "ab\n\ncd\n";
+        let starts = line_starts(text);
+        assert_eq!(line_count_from_starts(text.len(), &starts), 4);
+        let ranges: Vec<_> = (0..5)
+            .map(|ix| line_byte_range(&starts, text.len(), ix))
+            .collect();
+        assert_eq!(
+            ranges,
+            vec![Some(0..2), Some(3..3), Some(4..6), Some(7..7), None]
+        );
+        assert_eq!(line_count_from_starts(0, &line_starts("")), 0);
+        assert_eq!(line_byte_range(&line_starts(""), 0, 0), None);
     }
 
     #[test]
