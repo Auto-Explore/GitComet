@@ -422,6 +422,16 @@ fn close_guards_ask_once_after_the_host_guards(cx: &mut gpui::TestAppContext) {
     test_support::redraw(cx);
     assert!(cx.debug_bounds("close_guard_reasons").is_some());
 
+    // Asking again while the prompt is up keeps the one prompt.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_repos(vec![RepoId(1)], None, cx);
+            assert!(this.pending_close_guard_prompt.is_none());
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("close_guard_reasons").is_some());
+
     // Confirming closes without asking again.
     click_debug_selector(cx, "close_guard_confirm");
     test_support::redraw(cx);

@@ -1259,6 +1259,12 @@ impl PopoverHost {
         matches!(self.popover, Some(PopoverKind::UnsavedFileEditsConfirm(_)))
     }
 
+    /// Like [`Self::showing_unsaved_file_edits_prompt`], for the close-guard
+    /// confirmation.
+    pub(in crate::view) fn showing_close_guard_prompt(&self) -> bool {
+        matches!(self.popover, Some(PopoverKind::CloseGuardConfirm(_)))
+    }
+
     #[cfg(test)]
     pub(crate) fn activate_closed_repo_picker_entry_for_test(
         &mut self,

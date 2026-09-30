@@ -366,6 +366,13 @@ impl GitCometView {
         action: &TerminalShutdownAction,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        // A close asked again while its confirmation is up is the same
+        // close: keep the one prompt rather than queueing another.
+        if self.pending_close_guard_prompt.is_some()
+            || self.popover_host.read(cx).showing_close_guard_prompt()
+        {
+            return true;
+        }
         let mut reasons = self.late_close_guard_reasons(action, cx);
         if matches!(action, TerminalShutdownAction::QuitApp) {
             // A quit closes every window; the others' reasons count too.
