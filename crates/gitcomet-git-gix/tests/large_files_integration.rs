@@ -9,6 +9,7 @@ use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatus, FileStatusKind, Re
 use gitcomet_core::large_files::{
     LargeFileContent, LargeFilePointer, LargeFileSide, LargeFileWorktree,
 };
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -699,7 +700,13 @@ fn commit_file_rows_carry_large_file_state() {
 }
 
 fn file_url(path: &Path) -> String {
-    format!("file://{}", path.display())
+    // git-lfs rejects `file://C:\...`; drive paths need `file:///C:/...`.
+    let path = path.to_string_lossy().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    }
 }
 
 fn run_lfs(repo: &Path, command: gitcomet_core::large_files::LargeFileCommand) -> String {
@@ -926,6 +933,9 @@ fn lfs_tracking_a_literal_filename_does_not_track_a_glob_match() {
 
 /// Three revisions ensure a historical download cannot pass by fetching HEAD.
 fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
+    // The backend canonicalizes its workdir (macOS /private/var, Windows long
+    // names), so absolute paths the tests pass must be canonical too.
+    let root = &canonicalize_or_original(root.to_path_buf());
     let repo = root.join("source");
     init_lfs_repo(&repo);
     fs::write(repo.join("a.bin"), "middle version\n").unwrap();
@@ -1254,7 +1264,10 @@ fn lfs_named_checkout_treats_glob_characters_literally() {
     }
     for (selected, other) in [
         ("a[1].bin", "a1.bin"),
+        // Windows cannot name files with trailing blanks or backslashes.
+        #[cfg(unix)]
         ("clip.bin ", "clip.bin"),
+        #[cfg(unix)]
         ("clip.bin\t", "clip.bin"),
         #[cfg(unix)]
         ("clip.bin\\", "clip.bin"),
@@ -1411,7 +1424,9 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
     for (path, range) in [
         ("a.bin", false),
         ("nested/a [1].bin", false),
+        #[cfg(unix)]
         ("clip ", false),
+        #[cfg(unix)]
         ("clip\t", false),
         #[cfg(unix)]
         ("clip\\", false),
@@ -1963,7 +1978,9 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
+    // Compared with the backend's canonical storage path.
+    let root = canonicalize_or_original(dir.path().to_path_buf());
+    let repo = root.join("repo");
     init_lfs_repo(&repo);
     fs::write(
         repo.join(".gitattributes"),
@@ -1992,7 +2009,7 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
     };
     let cancellation = CancellationToken::new();
     let mut previous = repo.join(".git/lfs");
-    for configured in [PathBuf::from("moved-lfs"), dir.path().join("external-lfs")] {
+    for configured in [PathBuf::from("moved-lfs"), root.join("external-lfs")] {
         git(
             &repo,
             &["config", "lfs.storage", configured.to_str().unwrap()],

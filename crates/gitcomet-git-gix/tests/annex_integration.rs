@@ -601,6 +601,8 @@ fn watch_info_only_excludes_annex_content_and_databases() {
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);
+    // Watch dirs are canonical (macOS /private/var, Windows long names).
+    let repo = gitcomet_core::path_utils::canonicalize_or_original(repo);
     let info = GixBackend
         .repository_watch_info(&repo)
         .unwrap()

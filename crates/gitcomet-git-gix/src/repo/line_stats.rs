@@ -281,9 +281,9 @@ fn index_is_annex_pointer(
     let Some(id) = index_id else {
         return false;
     };
-    repo.find_header(id).is_ok_and(|header| {
-        header.size() <= gitcomet_core::annex::POINTER_MAX_BYTES as u64
-    }) && read_commit_stats_blob(repo, Some(id), buf)
+    repo.find_header(id)
+        .is_ok_and(|header| header.size() <= gitcomet_core::annex::POINTER_MAX_BYTES as u64)
+        && read_commit_stats_blob(repo, Some(id), buf)
         && gitcomet_core::annex::key_from_pointer(buf).is_some()
 }
 
