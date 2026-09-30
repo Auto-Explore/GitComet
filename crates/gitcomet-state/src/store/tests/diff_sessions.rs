@@ -271,3 +271,81 @@ fn encoding_blame_and_worktree_edits_reload_the_right_sessions() {
     assert_ne!(state.repos[0].diff_sessions[&live].generation, before[0]);
     assert_eq!(state.repos[0].diff_sessions[&pinned].generation, before[1]);
 }
+
+#[test]
+fn change_lists_load_by_generation_and_give_each_file_its_target() {
+    use crate::diff_session::ChangeSource;
+    use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
+
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let view = DiffViewId::next();
+    let lifetime = state.repos[0].lifetime();
+    let source = ChangeSource::Comparison {
+        from: CommitId("main".into()),
+        to: Some(CommitId("feature".into())),
+        options: gitcomet_core::services::ComparisonOptions::merge_base(),
+    };
+    let first = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::OpenChanges {
+            repo_id,
+            view,
+            source: source.clone(),
+        }),
+    );
+    let first = session_effect(&first).clone();
+    assert!(matches!(&first.work, DiffSessionWork::Changes { source: sent } if *sent == source));
+    let reopened = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::OpenChanges {
+            repo_id,
+            view,
+            source: source.clone(),
+        }),
+    );
+    let second = session_effect(&reopened).clone();
+    assert!(first.cancellation.is_cancelled());
+
+    let renamed = CommitFileChange::new(PathBuf::from("new.rs"), FileStatusKind::Renamed)
+        .with_old_path(Some(PathBuf::from("old.rs")));
+    for generation in [first.generation, second.generation] {
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::DiffSession(DiffSessionMsg::ChangesLoaded {
+                repo_id,
+                view,
+                lifetime,
+                generation,
+                result: Ok((Some(CommitId("fork".into())), vec![renamed.clone()])),
+            }),
+        );
+    }
+    let list = &state.repos[0].change_lists[&view];
+    assert!(matches!(&list.files, Loadable::Ready(files) if files.len() == 1));
+    assert_eq!(list.rev, 3, "open, reopen, and one accepted load");
+    let target = list.source.target_for(&renamed, list.base.as_ref());
+    assert_eq!(
+        target,
+        DiffTarget::commit_range(
+            CommitId("fork".into()),
+            Some(CommitId("feature".into())),
+            Some(PathBuf::from("new.rs"))
+        )
+    );
+    assert_eq!(target.old_file_path(), Some(std::path::Path::new("old.rs")));
+
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::CloseChanges { repo_id, view }),
+    );
+    assert!(second.cancellation.is_cancelled());
+    assert!(state.repos[0].change_lists.is_empty());
+}

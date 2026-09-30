@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::diff_session::{
-    DiffSession, DiffSessionContent, DiffSessionEffect, DiffSessionMsg as Event, DiffSessionWork,
-    DiffViewId,
+    ChangeListSession, DiffSession, DiffSessionContent, DiffSessionEffect, DiffSessionMsg as Event,
+    DiffSessionWork, DiffViewId,
 };
 use crate::model::RepoState;
 use std::sync::Arc;
@@ -75,6 +75,62 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Event::OpenChanges {
+            repo_id,
+            view,
+            source,
+        } => with_repo(state, repo_id, |repo| {
+            let (repo_id, lifetime) = (repo.id, repo.lifetime());
+            let lists = Arc::make_mut(&mut repo.change_lists);
+            let list = lists
+                .entry(view)
+                .and_modify(|list| list.source = source.clone())
+                .or_insert_with(|| ChangeListSession::new(source));
+            load_changes(repo_id, lifetime, view, list)
+        }),
+        Event::CloseChanges { repo_id, view } => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+                && repo.change_lists.contains_key(&view)
+                && let Some(list) = Arc::make_mut(&mut repo.change_lists).remove(&view)
+            {
+                list.cancellation.cancel();
+            }
+            Vec::new()
+        }
+        Event::ChangesLoaded {
+            repo_id,
+            view,
+            lifetime,
+            generation,
+            result,
+        } => {
+            let Some(repo) = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+            else {
+                return Vec::new();
+            };
+            if !repo
+                .change_lists
+                .get(&view)
+                .is_some_and(|list| list.generation == generation)
+            {
+                return Vec::new();
+            }
+            let list = Arc::make_mut(&mut repo.change_lists)
+                .get_mut(&view)
+                .expect("checked above");
+            match result {
+                Ok((base, files)) => {
+                    list.base = base;
+                    list.files = Loadable::Ready(Arc::new(files));
+                }
+                Err(error) => list.files = Loadable::Error(error.to_string()),
+            }
+            list.rev = list.rev.wrapping_add(1);
+            Vec::new()
+        }
         Event::Loaded {
             repo_id,
             view,
@@ -119,23 +175,54 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
     }
 }
 
-/// Reloads the sessions that follow the working tree after an external edit.
+/// Reloads the sessions and lists that follow the working tree after an
+/// external edit.
 pub(super) fn reload_worktree_sessions(repo: &mut RepoState) -> Vec<Effect> {
-    if !repo
+    let (repo_id, lifetime) = (repo.id, repo.lifetime());
+    let mut effects = Vec::new();
+    if repo
         .diff_sessions
         .values()
         .any(DiffSession::follows_worktree)
     {
-        return Vec::new();
+        for (view, session) in Arc::make_mut(&mut repo.diff_sessions).iter_mut() {
+            if session.follows_worktree() {
+                effects.extend(load(repo_id, lifetime, *view, session));
+            }
+        }
     }
-    let (repo_id, lifetime) = (repo.id, repo.lifetime());
-    let mut effects = Vec::new();
-    for (view, session) in Arc::make_mut(&mut repo.diff_sessions).iter_mut() {
-        if session.follows_worktree() {
-            effects.extend(load(repo_id, lifetime, *view, session));
+    if repo
+        .change_lists
+        .values()
+        .any(|list| list.source.follows_worktree())
+    {
+        for (view, list) in Arc::make_mut(&mut repo.change_lists).iter_mut() {
+            if list.source.follows_worktree() {
+                effects.extend(load_changes(repo_id, lifetime, *view, list));
+            }
         }
     }
     effects
+}
+
+fn load_changes(
+    repo_id: RepoId,
+    lifetime: u64,
+    view: DiffViewId,
+    list: &mut ChangeListSession,
+) -> Vec<Effect> {
+    let cancellation = list.next_generation();
+    list.files = Loadable::Loading;
+    vec![Effect::DiffSession(DiffSessionEffect {
+        repo_id,
+        view,
+        lifetime,
+        generation: list.generation,
+        work: DiffSessionWork::Changes {
+            source: list.source.clone(),
+        },
+        cancellation,
+    })]
 }
 
 fn loadable<T>(result: gitcomet_core::services::Result<T>) -> Loadable<T> {

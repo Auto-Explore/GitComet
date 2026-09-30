@@ -7,9 +7,13 @@
 //! each session's cancellation token stops only its own loads.
 
 use crate::model::{Loadable, RepoId, Shared};
-use gitcomet_core::domain::{BlameSource, Diff, DiffArea, DiffTarget, FileDiffImage, FileDiffText};
+use gitcomet_core::domain::{
+    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffTarget, FileDiffImage,
+    FileDiffText,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::BlameLine;
+use gitcomet_core::services::ComparisonOptions;
 use gitcomet_core::services::{CancellationToken, Result};
 use gitcomet_core::text_format::TextEncoding;
 use std::path::PathBuf;
@@ -106,6 +110,70 @@ impl DiffSession {
     }
 }
 
+/// Where a hosted file list's changes come from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChangeSource {
+    /// What a commit changed, against its first parent.
+    Commit(CommitId),
+    /// `from` to `to` (the working tree when `None`).
+    Comparison {
+        from: CommitId,
+        to: Option<CommitId>,
+        options: ComparisonOptions,
+    },
+}
+
+impl ChangeSource {
+    /// The diff target for one listed change, carrying its rename source.
+    pub fn target_for(&self, change: &CommitFileChange, base: Option<&CommitId>) -> DiffTarget {
+        match self {
+            Self::Commit(id) => DiffTarget::commit(id.clone(), None),
+            Self::Comparison { from, to, .. } => {
+                DiffTarget::commit_range(base.unwrap_or(from).clone(), to.clone(), None)
+            }
+        }
+        .for_change(change)
+    }
+
+    /// Whether the working tree is one side, so external edits reload it.
+    pub fn follows_worktree(&self) -> bool {
+        matches!(self, Self::Comparison { to: None, .. })
+    }
+}
+
+/// A hosted file list's changes, loaded like a diff session.
+#[derive(Clone, Debug)]
+pub struct ChangeListSession {
+    pub source: ChangeSource,
+    pub generation: u64,
+    pub rev: u64,
+    pub files: Loadable<Shared<Vec<CommitFileChange>>>,
+    /// The commit a comparison measured from (its merge base when asked).
+    pub base: Option<CommitId>,
+    pub(crate) cancellation: CancellationToken,
+}
+
+impl ChangeListSession {
+    pub(crate) fn new(source: ChangeSource) -> Self {
+        Self {
+            source,
+            generation: 0,
+            rev: 0,
+            files: Loadable::NotLoaded,
+            base: None,
+            cancellation: CancellationToken::new(),
+        }
+    }
+
+    pub(crate) fn next_generation(&mut self) -> CancellationToken {
+        self.cancellation.cancel();
+        self.cancellation = CancellationToken::new();
+        self.generation = self.generation.wrapping_add(1);
+        self.rev = self.rev.wrapping_add(1);
+        self.cancellation.clone()
+    }
+}
+
 /// Messages for diff sessions. `Loaded` comes from the store's own workers.
 #[derive(Debug)]
 pub enum DiffSessionMsg {
@@ -133,6 +201,24 @@ pub enum DiffSessionMsg {
     Close {
         repo_id: RepoId,
         view: DiffViewId,
+    },
+    /// Opens (or re-sources) change list `view`.
+    OpenChanges {
+        repo_id: RepoId,
+        view: DiffViewId,
+        source: ChangeSource,
+    },
+    CloseChanges {
+        repo_id: RepoId,
+        view: DiffViewId,
+    },
+    ChangesLoaded {
+        repo_id: RepoId,
+        view: DiffViewId,
+        lifetime: u64,
+        generation: u64,
+        /// The commit measured from, and the files.
+        result: Result<(Option<CommitId>, Vec<CommitFileChange>)>,
     },
     Loaded {
         repo_id: RepoId,
@@ -164,6 +250,9 @@ pub enum DiffSessionWork {
     Blame {
         path: PathBuf,
         source: BlameSource,
+    },
+    Changes {
+        source: ChangeSource,
     },
 }
 
@@ -218,6 +307,13 @@ impl DiffSessionEffect {
                 replies
             }
             DiffSessionWork::Blame { .. } => vec![reply(DiffSessionContent::Blame(Err(error)))],
+            DiffSessionWork::Changes { .. } => vec![DiffSessionMsg::ChangesLoaded {
+                repo_id,
+                view,
+                lifetime,
+                generation,
+                result: Err(error),
+            }],
         }
     }
 }

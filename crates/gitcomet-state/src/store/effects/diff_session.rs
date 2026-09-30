@@ -74,6 +74,26 @@ pub(super) fn schedule(
                         ));
                     }
                 }
+                DiffSessionWork::Changes { source } => {
+                    let result = match source {
+                        crate::diff_session::ChangeSource::Commit(id) => repo
+                            .commit_details(&id)
+                            .map(|details| (details.parent_ids.first().cloned(), details.files)),
+                        crate::diff_session::ChangeSource::Comparison { from, to, options } => repo
+                            .compare_files(&from, to.as_ref(), &options, &cancellation)
+                            .map(|comparison| (Some(comparison.base), comparison.files)),
+                    };
+                    util::send_or_log(
+                        &tx,
+                        Msg::DiffSession(Event::ChangesLoaded {
+                            repo_id,
+                            view,
+                            lifetime,
+                            generation,
+                            result,
+                        }),
+                    );
+                }
                 DiffSessionWork::Blame { path, source } => {
                     if !cancellation.is_cancelled() {
                         send(DiffSessionContent::Blame(repo_load::load_blame(

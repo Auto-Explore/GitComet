@@ -1856,6 +1856,9 @@ pub struct RepoState {
     /// Hosted diff panes' sessions, apart from History's selected diff.
     pub diff_sessions:
         Arc<FxHashMap<crate::diff_session::DiffViewId, crate::diff_session::DiffSession>>,
+    /// Hosted file lists' changes.
+    pub change_lists:
+        Arc<FxHashMap<crate::diff_session::DiffViewId, crate::diff_session::ChangeListSession>>,
     /// The worktree paths of the change that set `worktree_change_rev`; see
     /// [`RepoState::worktree_paths_changed_since`].
     pub worktree_changed_paths: crate::msg::ChangedPaths,
@@ -1970,6 +1973,7 @@ impl RepoState {
             worktree_change_rev: 0,
             worktree_changed_paths: crate::msg::ChangedPaths::Unknown,
             diff_sessions: Arc::default(),
+            change_lists: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
             feedback: RepoFeedbackState::default(),
