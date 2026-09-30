@@ -59,6 +59,8 @@ const CPU_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 /// frames is sampled several times, large enough to stay negligible.
 const PING_INTERVAL: Duration = Duration::from_millis(4);
 const SLOW_FRAME: Duration = Duration::from_millis(16);
+/// Records the writer thread may lag behind before new ones are dropped.
+const QUEUE_CAPACITY: usize = 8192;
 
 struct ProbeLog {
     started: Instant,
@@ -79,6 +81,9 @@ impl ProbeLog {
 enum ProbeRecord {
     Text(String),
     Json(Value),
+    /// One interval's operation trace, serialized on the writer thread: one
+    /// queue slot however many records it holds.
+    Traced(gitcomet_core::op_trace::Drained),
     /// Sample every thread's CPU time on the writer thread, off the UI thread.
     SampleThreads {
         at_ms: f64,
@@ -86,6 +91,7 @@ enum ProbeRecord {
     /// Acknowledged once every earlier record is written and flushed.
     Flush(mpsc::SyncSender<()>),
 }
+static NEXT_ACTION: AtomicU64 = AtomicU64::new(1);
 
 /// `None` until [`start_if_enabled`] runs with the probe switched on.
 static LOG: OnceLock<ProbeLog> = OnceLock::new();
@@ -129,6 +135,15 @@ fn probe_writer(rx: mpsc::Receiver<ProbeRecord>, file: Option<File>, jsonl: Opti
                         if let Some(file) = jsonl.as_mut() {
                             serde_json::to_writer(&mut *file, &value)?;
                             file.write_all(b"\n")?;
+                        }
+                    }
+                    ProbeRecord::Traced(traced) => {
+                        if let Some(file) = jsonl.as_mut() {
+                            let threads = traced.threads.iter().map(thread_record);
+                            for record in threads.chain(traced.records.iter().map(stage_record)) {
+                                serde_json::to_writer(&mut *file, &record)?;
+                                file.write_all(b"\n")?;
+                            }
                         }
                     }
                     ProbeRecord::SampleThreads { at_ms } => {
@@ -237,9 +252,7 @@ pub(crate) fn begin_action(kind: &'static str) -> u64 {
     let Some(log) = LOG.get().filter(|log| log.jsonl) else {
         return 0;
     };
-    // Shares the operation-trace id space, so an action and the store work
-    // it causes carry the same id.
-    let id = gitcomet_core::op_trace::next_op();
+    let id = NEXT_ACTION.fetch_add(1, Ordering::Relaxed);
     write_json(&[
         json!({"event":"action", "kind":kind, "phase":"begin", "id":id,
         "at_ms":milliseconds(log.started.elapsed())}),
@@ -278,6 +291,15 @@ fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
             "animation_interval_ms": frame.animation_interval.map(milliseconds),
         }),
     }
+}
+
+fn thread_record(thread: &gitcomet_core::op_trace::ThreadInfo) -> Value {
+    json!({"event": "thread", "thread": thread.thread, "name": thread.name, "tid": thread.os_tid})
+}
+
+/// Queues one interval's operation trace for the writer.
+fn enqueue_trace(log: &ProbeLog, traced: gitcomet_core::op_trace::Drained) {
+    log.enqueue(ProbeRecord::Traced(traced));
 }
 
 fn stage_record(record: &gitcomet_core::op_trace::Record) -> Value {
@@ -351,7 +373,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     let file = open_log(LOG_PATH_ENV);
     let jsonl = open_log(JSONL_PATH_ENV);
     let jsonl_enabled = jsonl.is_some();
-    let (writer, records) = mpsc::sync_channel(8192);
+    let (writer, records) = mpsc::sync_channel(QUEUE_CAPACITY);
     if std::thread::Builder::new()
         .name("ui-probe-writer".into())
         .spawn(move || probe_writer(records, file, jsonl))
@@ -444,9 +466,6 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
             if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
                 let traced = gitcomet_core::op_trace::drain();
-                records.extend(traced.threads.iter().map(|thread| json!({"event": "thread",
-                    "thread": thread.thread, "name": thread.name, "tid": thread.os_tid})));
-                records.extend(traced.records.iter().map(stage_record));
                 records.push(json!({"event": "interval", "at_ms": milliseconds(now.duration_since(started)),
                     "records_dropped": LOG.get().map(|log| log.dropped.load(Ordering::Relaxed)).unwrap_or(0),
                     "stage_records_dropped": traced.dropped,
@@ -480,6 +499,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
                 });
                 write_json(&records);
                 if let Some(log) = LOG.get() {
+                    enqueue_trace(log, traced);
                     log.enqueue(ProbeRecord::SampleThreads { at_ms: milliseconds(now.duration_since(started)) });
                 }
             }
@@ -738,6 +758,49 @@ mod tests {
         log.enqueue(ProbeRecord::Json(json!({"id": 2})));
         assert_eq!(log.dropped.load(Ordering::Relaxed), 1);
         assert!(matches!(rx.try_recv(), Ok(ProbeRecord::Json(value)) if value["id"] == 1));
+    }
+
+    #[test]
+    fn one_interval_of_trace_records_fits_the_probe_queue() {
+        use gitcomet_core::op_trace::{Drained, Record, Stage};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace.jsonl");
+        // The live queue, with the writer not draining it yet.
+        let (writer, rx) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let log = ProbeLog {
+            started: Instant::now(),
+            interval: DEFAULT_INTERVAL,
+            writer,
+            jsonl: true,
+            dropped: AtomicU64::new(0),
+        };
+        let record = Record {
+            at_ns: 1,
+            thread: 1,
+            op: 1,
+            stage: Stage::Received,
+            label: "Msg",
+            a: 0,
+            b: 0,
+        };
+        let records = vec![record; 10_000];
+        enqueue_trace(
+            &log,
+            Drained {
+                records,
+                threads: Vec::new(),
+                dropped: 0,
+            },
+        );
+        assert_eq!(log.dropped.load(Ordering::Relaxed), 0);
+        drop(log);
+        probe_writer(rx, None, Some(File::create(&path).unwrap()));
+        let written = std::fs::read_to_string(&path).unwrap();
+        let stages = written
+            .lines()
+            .filter(|line| line.contains(r#""event":"stage""#))
+            .count();
+        assert_eq!(stages, 10_000);
     }
 
     #[test]

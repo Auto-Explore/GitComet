@@ -312,6 +312,17 @@ class LiveUiMeasurementTests(unittest.TestCase):
             if step["do"] == "command":
                 self.assertEqual(step["witness"], {"kind": "repo_closed", "path": str(secondary)})
 
+    def test_status_touch_rewrites_the_save_file_with_its_own_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            (repository / "x.txt").write_bytes(b"one\r\ntwo\n")
+            steps = live_ui.scenario("status-touch", repository, save_file="x.txt")["steps"]
+            write = next(step for step in steps if step["do"] == "write_files")
+            self.assertEqual((write["paths"], write["contents"]), (["x.txt"], "one\r\ntwo\n"))
+            # A missing file would be created untracked and deleted each round.
+            with self.assertRaises(ValueError):
+                live_ui.scenario("status-touch", repository, save_file="missing.txt")
+
     def test_lifecycle_growth_is_per_measured_cycle(self):
         phase = lambda at, name, state: {"event": "scenario_phase", "at_ms": at,  # noqa: E731
                                          "detail": {"name": name, "state": state}}

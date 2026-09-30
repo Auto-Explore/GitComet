@@ -164,6 +164,15 @@ def lifecycle_cycle(secondary):
             {"do": "wait_ready", "timeout_ms": 60_000}]
 
 
+def file_text(repository, path):
+    """A file's exact contents (line endings included), so writing them back
+    changes nothing."""
+    try:
+        return (Path(repository) / path).read_bytes().decode("utf-8")
+    except (FileNotFoundError, UnicodeDecodeError) as error:
+        raise ValueError(f"{path} must be an existing UTF-8 file: {error}") from error
+
+
 def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
     ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
@@ -177,6 +186,14 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
                 + [{"do": "phase", "name": "cycles"}]
                 + [step for _ in range(cycles) for step in lifecycle_cycle(secondary)]
                 + [{"do": "phase", "name": "after_cycles"}, {"do": "settle", "ms": 10_000}]}
+    if name == "status-touch":
+        # Saves that rewrite identical bytes: an editor's save-all. The
+        # watcher fires, but nothing should change or redraw.
+        return {"steps": ready + [
+            {"do": "phase", "name": "touch"},
+            {"do": "write_files", "paths": [save_file], "contents": file_text(repository, save_file),
+             "rounds": 40, "interval_ms": 500, "expect_status": False},
+            {"do": "settle", "ms": 3000}]}
     if name == "status-burst":
         # A 50-file save burst (formatter, branch switch), restored each round.
         return {"steps": ready + [
@@ -202,13 +219,6 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
              "flip_every": 100, "witness": {"kind": "history_scrolled"}},
             {"do": "phase", "name": "output_settling"},
             {"do": "settle", "ms": 10_000}],
-        # Saves that rewrite identical bytes: an editor's save-all. The
-        # watcher fires, but nothing should change or redraw.
-        "status-touch": ready + [
-            {"do": "phase", "name": "touch"},
-            {"do": "write_files", "paths": [SAVE_FILE], "contents": "saved content\n",
-             "rounds": 40, "interval_ms": 500, "expect_status": False},
-            {"do": "settle", "ms": 3000}],
         # A terminal opened, then hidden, must stop costing anything.
         "idle-hidden-terminal": ready + [
             {"do": "command", "id": "toggle-terminal"},
@@ -1012,7 +1022,7 @@ def main():
     single.add_argument("--timeout", type=int, default=600)
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
-    single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
+    single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
     single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     single.add_argument("--cycles", type=positive_int, default=100,
@@ -1030,7 +1040,7 @@ def main():
     paired.add_argument("--reverse", action="store_true")
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
-    paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
+    paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     paired.add_argument("--max-load", type=float,
                         help="wait before each run until the 1-minute load average is below this")

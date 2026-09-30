@@ -54,8 +54,9 @@ pub(super) struct ScrollInteraction {
     pub manual_pending: bool,
     pub generation: u64,
     pub logical: Option<LogicalViewport>,
-    /// Window-space bounds of the indexed viewport at its last prepaint.
-    pub viewport_bounds: Option<Bounds<Pixels>>,
+    /// Window-space bounds of the indexed viewport at its last prepaint, and
+    /// the repository it showed.
+    pub viewport_bounds: Option<(RepoId, Bounds<Pixels>)>,
     frozen_extent: Option<Pixels>,
 }
 
