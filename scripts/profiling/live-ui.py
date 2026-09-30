@@ -843,6 +843,8 @@ METRICS = [
 # variants completed the same inputs; a variant that let most inputs be
 # superseded reports only its cheap survivors.
 COMPLETION_SENSITIVE = ("inputs.input_to_", "inputs.apply_ms", "inputs.dispatch_delay_ms")
+# Per run, not per phase: compared under the pseudo-phase "launch".
+LAUNCH_METRICS = [("spawn_to_first_draw_ms", "lower"), ("spawn_to_ready_ms", "lower")]
 
 
 def lookup(data, dotted):
@@ -896,6 +898,19 @@ def compare(samples, scenarios):
                     if any(b is None or c is None or abs(b - c) > 0.05 * max(b, c, 1) for b, c in completed):
                         entry["not_comparable"] = "variants completed different inputs; compare inputs.witnessed"
                 result[name][phase][metric] = entry
+        pairs = [pair for key, pair in by_pair.items() if key[2] == name and len(pair) == 2]
+        launch = {}
+        for metric, direction in LAUNCH_METRICS:
+            values = [((p["baseline"]["summary"].get("startup") or {}).get(metric),
+                       (p["candidate"]["summary"].get("startup") or {}).get(metric)) for p in pairs]
+            values = [(b, c) for b, c in values if b is not None and c is not None]
+            if values:
+                launch[metric] = {"direction": direction,
+                                  "baseline_median": statistics.median(b for b, _ in values),
+                                  "candidate_median": statistics.median(c for _, c in values),
+                                  "ratio": bootstrap_ratio(values)}
+        if launch:
+            result[name]["launch"] = launch
     return result
 
 

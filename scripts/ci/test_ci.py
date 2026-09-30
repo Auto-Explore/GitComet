@@ -330,6 +330,18 @@ class LiveUiMeasurementTests(unittest.TestCase):
             retention = live_ui.summarize(root)["retention"]
         self.assertEqual(retention["pss_kib"]["growth_per_cycle"], 100)
 
+    def test_launch_times_are_compared_per_run(self):
+        def sample(variant, pair, ready):
+            return {"session": "s", "pair": pair, "scenario": "startup", "variant": variant,
+                    "summary": {"phases": {}, "startup": {"spawn_to_ready_ms": ready,
+                                                           "spawn_to_first_draw_ms": ready - 30}}}
+        samples = [sample(v, pair, 220 + pair + (20 if v == "candidate" else 0))
+                   for pair in range(1, 4) for v in ("baseline", "candidate")]
+        launch = live_ui.compare(samples, ["startup"])["startup"]["launch"]
+        self.assertEqual((launch["spawn_to_ready_ms"]["baseline_median"],
+                          launch["spawn_to_ready_ms"]["candidate_median"]), (222, 242))
+        self.assertGreater(launch["spawn_to_first_draw_ms"]["ratio"]["ci95"][0], 1.0)
+
     def test_quiet_gate_waits_for_the_load_to_drop(self):
         loads = iter([["9.0", "5", "5"], ["4.0", "5", "5"], ["1.5", "5", "5"]])
         with patch.object(live_ui, "load_average", lambda: next(loads)), \
