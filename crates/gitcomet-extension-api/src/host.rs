@@ -233,6 +233,15 @@ pub trait WindowHostImpl {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
 
+    /// Opens a window of its own showing `content`, titled `title`.
+    fn open_window(
+        &self,
+        title: SharedString,
+        content: WindowContent,
+        on_closed: OnWindowClosed,
+        cx: &mut App,
+    ) -> Result<PopOutWindow, HostError>;
+
     /// Shows a transient notification.
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError>;
 
@@ -250,6 +259,37 @@ pub trait WindowHostImpl {
         value: serde_json::Value,
         cx: &mut App,
     ) -> Result<Result<(), StorageError>, HostError>;
+}
+
+/// Builds a pop-out window's content.
+pub type WindowContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
+
+/// Runs once when a pop-out window closes, however it closes.
+pub type OnWindowClosed = Box<dyn FnOnce(&mut App)>;
+
+/// What the host implements behind a [`PopOutWindow`].
+pub trait PopOutImpl {
+    fn close(&self, cx: &mut App);
+    fn is_open(&self, cx: &App) -> bool;
+}
+
+/// A window opened with [`WindowHost::open_window`]. Dropping the handle
+/// leaves it open; it closes with the window that opened it.
+#[derive(Clone)]
+pub struct PopOutWindow(Rc<dyn PopOutImpl>);
+
+impl PopOutWindow {
+    pub fn new(window: Rc<dyn PopOutImpl>) -> Self {
+        Self(window)
+    }
+
+    pub fn close(&self, cx: &mut App) {
+        self.0.close(cx)
+    }
+
+    pub fn is_open(&self, cx: &App) -> bool {
+        self.0.is_open(cx)
+    }
 }
 
 /// A weak handle to one window of the host.
@@ -440,6 +480,21 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.0.open_dialog(title.into(), Box::new(content), cx)
+    }
+
+    /// Opens a window of its own showing `content`, such as a pane's view
+    /// popped out of the extension's layout (mount a view in one window at a
+    /// time). It closes with this window; `on_closed` runs once when it
+    /// closes, however it closes.
+    pub fn open_window(
+        &self,
+        title: impl Into<SharedString>,
+        content: impl FnOnce(&mut Window, &mut App) -> AnyView + 'static,
+        on_closed: impl FnOnce(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Result<PopOutWindow, HostError> {
+        self.0
+            .open_window(title.into(), Box::new(content), Box::new(on_closed), cx)
     }
 
     pub fn notify(&self, message: impl Into<SharedString>, cx: &mut App) -> Result<(), HostError> {

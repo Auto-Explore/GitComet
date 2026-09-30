@@ -540,6 +540,17 @@ impl WindowHostImpl for HostWindow {
         }))
     }
 
+    fn open_window(
+        &self,
+        title: SharedString,
+        content: gitcomet_extension_api::WindowContent,
+        on_closed: gitcomet_extension_api::OnWindowClosed,
+        cx: &mut App,
+    ) -> Result<gitcomet_extension_api::PopOutWindow, HostError> {
+        self.live()?;
+        super::pop_out::open(self.host()?, self.window_id, title, content, on_closed, cx)
+    }
+
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError> {
         let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
         cx.defer(move |cx| {

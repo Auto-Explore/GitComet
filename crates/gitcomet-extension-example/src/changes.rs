@@ -2,14 +2,16 @@
 //! file list, the picked file in one diff pane and the previous pick in a
 //! second, read-only one. Retargeting either leaves the other and History
 //! as they were. Clicking the current pane's gutter flags a line, and a
-//! selection can be given a note shown under it.
+//! selection can be given a note shown under it. The current pane can pop
+//! out into a window of its own and comes back when that window closes.
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
     ChangeSource, DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
     DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction, FileList,
-    RepositoryViewContext,
+    PopOutWindow, RepositoryViewContext,
 };
+use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
 use gitcomet_ui_kit::gpui::{
     AnyElement, App, Context, SharedString, WeakEntity, Window, div, px, rgb_to_hsla,
@@ -25,6 +27,8 @@ pub struct ChangesView {
     /// The current pane's flagged lines and notes; a new pick clears them.
     flags: BTreeSet<(DiffLineSide, u32)>,
     notes: Vec<DiffInset>,
+    /// The window the current pane is shown in instead of here.
+    popped: Option<PopOutWindow>,
 }
 
 impl ChangesView {
@@ -52,7 +56,40 @@ impl ChangesView {
             previous: None,
             flags: BTreeSet::new(),
             notes: Vec::new(),
+            popped: None,
         }
+    }
+
+    pub fn popped(&self) -> Option<&PopOutWindow> {
+        self.popped.as_ref()
+    }
+
+    /// Shows the current pane in a window of its own until that closes.
+    fn pop_out(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = &self.current else {
+            return;
+        };
+        if self.popped.is_some() {
+            return;
+        }
+        let pane = current.view();
+        let view = cx.weak_entity();
+        self.popped = self
+            .context
+            .window
+            .open_window(
+                "Diff",
+                move |_, _| pane,
+                move |cx| {
+                    let _ = view.update(cx, |this, cx| {
+                        this.popped = None;
+                        cx.notify();
+                    });
+                },
+                cx,
+            )
+            .ok();
+        cx.notify();
     }
 
     /// Options for the current pane: gutter flags and selection notes.
@@ -177,6 +214,15 @@ fn slot(pane: Option<&DiffPane>, empty: &'static str) -> AnyElement {
     div().flex_1().min_h_0().child(body).into_any_element()
 }
 
+fn popped_slot() -> AnyElement {
+    div()
+        .flex_1()
+        .min_h_0()
+        .p_3()
+        .child("Shown in its own window")
+        .into_any_element()
+}
+
 impl Render for ChangesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.context.window.theme(cx);
@@ -205,7 +251,19 @@ impl Render for ChangesView {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(slot(self.current.as_ref(), "Pick a file"))
+                    .when(self.current.is_some() && self.popped.is_none(), |column| {
+                        column.child(div().flex().flex_none().px_2().py_1().child(
+                            Button::new("example_changes_pop_out", "Pop out").on_click(
+                                theme,
+                                cx,
+                                |this, _, _, cx| this.pop_out(cx),
+                            ),
+                        ))
+                    })
+                    .child(match self.popped {
+                        Some(_) => popped_slot(),
+                        None => slot(self.current.as_ref(), "Pick a file"),
+                    })
                     .child(slot(self.previous.as_ref(), "The previous pick shows here")),
             )
     }

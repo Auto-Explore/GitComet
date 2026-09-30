@@ -314,3 +314,11 @@ Still to do, deliberately kept out of this step:
   virtual, and pin the current group's header with a list decoration that
   reads precomputed group starts each frame; a UI test scrolls and checks
   the rows are never regrouped.
+- `WindowHost::open_window` opens a pop-out window showing any view, such
+  as a pane's (one window at a time per view). Pop-outs take native
+  decorations like the focused difftool and the main window's app id, close
+  when the window that opened them closes (observed as a window closing,
+  not as the root view's release, which any stray handle would delay), and
+  run their `on_closed` once however they close. The example's Changes view
+  pops its current pane out and takes it back; side by side is the two
+  independent panes it already lays out.

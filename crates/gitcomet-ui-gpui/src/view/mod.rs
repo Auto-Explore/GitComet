@@ -250,6 +250,7 @@ mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod pop_out;
 mod preference_sync;
 mod preferences;
 mod reflog_panel;

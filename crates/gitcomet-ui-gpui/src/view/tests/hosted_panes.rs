@@ -256,26 +256,28 @@ fn selector(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
-#[gpui::test]
-fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let (_dir, store, view, cx) = open_repository(cx);
+/// Opens the example's Changes view and waits for its file list.
+fn open_changes_view(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    store: &AppStore,
+) -> (
+    u64,
+    gpui::Entity<gitcomet_extension_example::changes::ChangesView>,
+) {
     click_debug_selector(cx, "repository_view_1");
-    let list_id = {
-        let mut id = None;
-        settle(cx, &view, &store, "the example's file list", |cx| {
-            id = store.snapshot().repos[0]
-                .change_lists
-                .keys()
-                .next()
-                .copied();
-            id.is_some_and(|id| {
-                cx.debug_bounds(selector(format!("hosted_file_list_{}_file_b.rs", id.0)))
-                    .is_some()
-            })
-        });
-        id.unwrap().0
-    };
+    let mut id = None;
+    settle(cx, view, store, "the example's file list", |cx| {
+        id = store.snapshot().repos[0]
+            .change_lists
+            .keys()
+            .next()
+            .copied();
+        id.is_some_and(|id| {
+            cx.debug_bounds(selector(format!("hosted_file_list_{}_file_b.rs", id.0)))
+                .is_some()
+        })
+    });
     let changes = cx.update(|_window, app| {
         let this = view.read(app);
         let repo = this.active_repo().unwrap();
@@ -286,6 +288,14 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
             .downcast::<gitcomet_extension_example::changes::ChangesView>()
             .unwrap_or_else(|_| panic!("the Changes view"))
     });
+    (id.unwrap().0, changes)
+}
+
+#[gpui::test]
+fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
     let shown = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
             let changes = changes.read(app);
@@ -785,4 +795,76 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
         cx.debug_bounds(selector(format!("hosted_file_list_{id}_group_Modified")))
             .is_some()
     );
+}
+
+#[gpui::test]
+fn the_example_pops_its_pane_out_and_back(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "the first pick", |_| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+    });
+    let pane_id = store.snapshot().repos[0]
+        .diff_sessions
+        .keys()
+        .next()
+        .unwrap()
+        .0;
+    let row = selector(format!("hosted_diff_{pane_id}_row_0"));
+    settle(cx, &view, &store, "the pane's rows", |cx| {
+        cx.debug_bounds(row).is_some()
+    });
+    // App-level: the last check runs after the main window has gone.
+    let windows = |cx: &mut gpui::VisualTestContext| cx.cx.update(|app| app.windows());
+    let before = windows(cx);
+
+    click_debug_selector(cx, "example_changes_pop_out");
+    cx.run_until_parked();
+    let after = windows(cx);
+    assert_eq!(after.len(), before.len() + 1);
+    let popped = *after
+        .iter()
+        .find(|window| !before.contains(window))
+        .unwrap();
+    publish(cx, &view, store.snapshot());
+    assert!(
+        cx.debug_bounds(row).is_none(),
+        "the pane left the main window"
+    );
+    let mut pop_cx = gpui::VisualTestContext::from_window(popped, cx);
+    for _ in 0..2 {
+        pop_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        pop_cx.run_until_parked();
+    }
+    assert!(pop_cx.debug_bounds("extension_pop_out").is_some());
+    assert!(
+        pop_cx.debug_bounds(row).is_some(),
+        "the pane draws in its window"
+    );
+
+    // Closing it from its handle returns the pane.
+    cx.update(|_window, app| {
+        let handle = changes.read(app).popped().cloned().unwrap();
+        handle.close(app);
+    });
+    cx.run_until_parked();
+    assert_eq!(windows(cx).len(), before.len());
+    assert!(cx.update(|_window, app| changes.read(app).popped().is_none()));
+    publish(cx, &view, store.snapshot());
+    assert!(cx.debug_bounds(row).is_some());
+
+    // A pop-out closes with the window that opened it.
+    click_debug_selector(cx, "example_changes_pop_out");
+    cx.run_until_parked();
+    assert_eq!(windows(cx).len(), before.len() + 1);
+    cx.update(|window, _app| window.remove_window());
+    cx.run_until_parked();
+    assert!(windows(cx).is_empty());
 }
