@@ -164,6 +164,7 @@ pub(super) enum AdjacentDiffFileTarget {
         commit_id: CommitId,
         target_ix: usize,
         path: std::path::PathBuf,
+        old_path: Option<std::path::PathBuf>,
     },
 }
 
@@ -258,12 +259,13 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 (current_ix + 1 < visible_source_indices.len()).then_some(current_ix + 1)?
             };
             let source_ix = *visible_source_indices.get(target_ix)?;
-            let path = details.files.get(source_ix)?.path.clone();
+            let file = details.files.get(source_ix)?;
 
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
                 target_ix,
-                path,
+                path: file.path.clone(),
+                old_path: file.old_path.clone(),
             })
         }
         DiffTarget::Commit { path: None, .. } => None,
@@ -409,10 +411,11 @@ impl MainPaneView {
                 commit_id,
                 target_ix,
                 path,
+                old_path,
             } => {
                 self.store.dispatch(Msg::SelectDiff {
                     repo_id,
-                    target: DiffTarget::commit(commit_id, Some(path)),
+                    target: DiffTarget::commit(commit_id, Some(path)).with_old_path(old_path),
                 });
                 self.scroll_commit_details_file_to_ix(target_ix, cx);
             }
@@ -621,6 +624,7 @@ mod tests {
                 commit_id: commit_id.clone(),
                 target_ix: 0,
                 path: file_a,
+                old_path: None,
             })
         );
         assert_eq!(
@@ -636,6 +640,7 @@ mod tests {
                 commit_id,
                 target_ix: 2,
                 path: file_c,
+                old_path: None,
             })
         );
     }
@@ -690,6 +695,7 @@ mod tests {
                 commit_id: commit_id.clone(),
                 target_ix: 0,
                 path: file_c,
+                old_path: None,
             })
         );
         assert_eq!(

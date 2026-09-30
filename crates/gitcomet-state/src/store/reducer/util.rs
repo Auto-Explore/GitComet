@@ -1337,7 +1337,7 @@ fn summarize_command(
 
     if !ok {
         let label = match command {
-            RepoCommandKind::FetchAll => "Fetch",
+            RepoCommandKind::FetchAll | RepoCommandKind::FetchRefspecs { .. } => "Fetch",
             RepoCommandKind::PruneMergedBranches => "Prune merged branches",
             RepoCommandKind::PruneLocalTags => "Prune local tags",
             RepoCommandKind::Pull { .. } => "Pull",
@@ -1421,7 +1421,7 @@ fn summarize_command(
     }
 
     let summary = match command {
-        RepoCommandKind::FetchAll => {
+        RepoCommandKind::FetchAll | RepoCommandKind::FetchRefspecs { .. } => {
             if output.stderr.trim().is_empty() && output.stdout.trim().is_empty() {
                 "Fetch: Already up to date".to_string()
             } else {

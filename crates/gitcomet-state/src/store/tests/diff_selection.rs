@@ -1277,12 +1277,10 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         checked_out_head: Some(CommitId("old-head".into())),
         ranges: vec![],
         live_staged: vec![],
-        live_unstaged: vec![SubmoduleInnerChange {
-            path: PathBuf::from("src/lib.rs"),
-            kind: FileStatusKind::Modified,
-            additions: Some(1),
-            deletions: Some(1),
-        }],
+        live_unstaged: vec![
+            SubmoduleInnerChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified)
+                .with_line_counts(Some(1), Some(1)),
+        ],
     }));
     repo_state.diff_state.inline_submodule_diff_rev = 1;
     repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
@@ -1333,18 +1331,13 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
                 ranges: vec![],
                 live_staged: vec![],
                 live_unstaged: vec![
-                    SubmoduleInnerChange {
-                        path: PathBuf::from("README.md"),
-                        kind: FileStatusKind::Modified,
-                        additions: Some(2),
-                        deletions: Some(0),
-                    },
-                    SubmoduleInnerChange {
-                        path: PathBuf::from("src/lib.rs"),
-                        kind: FileStatusKind::Modified,
-                        additions: Some(4),
-                        deletions: Some(1),
-                    },
+                    SubmoduleInnerChange::new(PathBuf::from("README.md"), FileStatusKind::Modified)
+                        .with_line_counts(Some(2), Some(0)),
+                    SubmoduleInnerChange::new(
+                        PathBuf::from("src/lib.rs"),
+                        FileStatusKind::Modified,
+                    )
+                    .with_line_counts(Some(4), Some(1)),
                 ],
             }),
         }),
@@ -5220,12 +5213,10 @@ fn reloading_an_identical_submodule_summary_keeps_the_arc_and_revision() {
         checked_out_head: Some(CommitId("head".into())),
         ranges: vec![],
         live_staged: vec![],
-        live_unstaged: vec![SubmoduleInnerChange {
-            path: PathBuf::from("src/lib.rs"),
-            kind: FileStatusKind::Modified,
-            additions: Some(1),
-            deletions: Some(1),
-        }],
+        live_unstaged: vec![
+            SubmoduleInnerChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified)
+                .with_line_counts(Some(1), Some(1)),
+        ],
     };
 
     let mut repo_state = RepoState::new_opening(
@@ -5325,11 +5316,12 @@ fn reloading_an_identical_submodule_summary_rereads_the_patch_without_rebuilding
         ranges: vec![],
         live_staged: vec![],
         live_unstaged: (0..4)
-            .map(|ix| SubmoduleInnerChange {
-                path: PathBuf::from(format!("src/file_{ix}.rs")),
-                kind: FileStatusKind::Modified,
-                additions: Some(1),
-                deletions: Some(1),
+            .map(|ix| {
+                SubmoduleInnerChange::new(
+                    PathBuf::from(format!("src/file_{ix}.rs")),
+                    FileStatusKind::Modified,
+                )
+                .with_line_counts(Some(1), Some(1))
             })
             .collect(),
     };
@@ -5476,12 +5468,10 @@ fn reloading_an_identical_submodule_summary_does_not_re_read_a_range_entry() {
             from: Some(CommitId("aaaa".into())),
             to: Some(CommitId("bbbb".into())),
             unavailable_reason: None,
-            changes: vec![SubmoduleInnerChange {
-                path: PathBuf::from("src/lib.rs"),
-                kind: FileStatusKind::Modified,
-                additions: Some(1),
-                deletions: Some(1),
-            }],
+            changes: vec![
+                SubmoduleInnerChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified)
+                    .with_line_counts(Some(1), Some(1)),
+            ],
         }],
         live_staged: vec![],
         live_unstaged: vec![],

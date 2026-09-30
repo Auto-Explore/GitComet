@@ -1273,3 +1273,43 @@ fn tracked_branch_listing_scales_with_branch_count() {
         "5x branches should not take 12x as long: {durations:?}"
     );
 }
+
+/// A refspec fetch brings exactly the named refs, including ones outside the
+/// remote's configured refspecs (the way pull-request heads are fetched).
+#[test]
+fn fetch_refspecs_fetches_exactly_the_named_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream_repo = dir.path().join("upstream");
+    initialize_repo_with_commit(&upstream_repo);
+    run_git(&upstream_repo, &["update-ref", "refs/pull/7/head", "HEAD"]);
+    run_git(&upstream_repo, &["branch", "unrelated"]);
+
+    let repo = dir.path().join("repo");
+    initialize_repo_with_commit(&repo);
+    run_git(
+        &repo,
+        &["remote", "add", "origin", &git_remote_url(&upstream_repo)],
+    );
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let output = opened
+        .fetch_refspecs_with_output(
+            "origin",
+            &["+refs/pull/7/head:refs/remotes/origin/pr/7".to_string()],
+        )
+        .expect("refspec fetch");
+    assert!(output.command.contains("refs/pull/7/head"), "{output:?}");
+
+    let refs = run_git_capture(&repo, &["for-each-ref", "--format=%(refname)"]);
+    assert!(refs.contains("refs/remotes/origin/pr/7"), "{refs}");
+    assert!(
+        !refs.contains("refs/remotes/origin/unrelated"),
+        "only the named refspec is fetched: {refs}"
+    );
+
+    let error = opened
+        .fetch_refspecs_with_output("origin", &["--upload-pack=evil".to_string()])
+        .expect_err("an option-shaped refspec is refused");
+    assert!(error.to_string().contains("refspec"), "{error}");
+    assert!(opened.fetch_refspecs_with_output("origin", &[]).is_err());
+}

@@ -2054,6 +2054,11 @@ fn commit_details_reports_root_and_rename_file_changes() {
     );
     let rename_id = git_stdout(repo, &["rev-parse", "HEAD"]);
 
+    let blob = gitcomet_core::domain::ObjectHash(
+        git_stdout(repo, &["rev-parse", "HEAD:new name.txt"]).into(),
+    );
+    let regular = Some(gitcomet_core::domain::FileMode::Regular);
+
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let root_details = opened
@@ -2074,6 +2079,8 @@ fn commit_details_reports_root_and_rename_file_changes() {
                 FileStatusKind::Added
             )
             .with_line_counts(Some(1), Some(0))
+            .with_ids(None, Some(blob.clone()))
+            .with_modes(None, regular)
         ]
     );
 
@@ -2088,6 +2095,10 @@ fn commit_details_reports_root_and_rename_file_changes() {
                 FileStatusKind::Renamed
             )
             .with_line_counts(Some(0), Some(0))
+            // A pure rename keeps its content; the source is recorded.
+            .with_old_path(Some(Path::new("old name.txt").to_path_buf()))
+            .with_ids(Some(blob.clone()), Some(blob))
+            .with_modes(regular, regular)
         ]
     );
 }

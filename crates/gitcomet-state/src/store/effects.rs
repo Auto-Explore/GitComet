@@ -1145,6 +1145,18 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::FetchRefspecs {
+            repo_id,
+            remote,
+            refspecs,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::FetchRefspecs { remote, refspecs },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::PruneMergedBranches { repo_id } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -2735,6 +2747,14 @@ pub(super) fn schedule_effect(
             prune,
             auth,
         } => repo_commands::schedule_fetch_all(executor, repos, msg_tx, repo_id, prune, auth),
+        Effect::FetchRefspecs {
+            repo_id,
+            remote,
+            refspecs,
+            auth,
+        } => repo_commands::schedule_fetch_refspecs(
+            executor, repos, msg_tx, repo_id, remote, refspecs, auth,
+        ),
         Effect::PruneMergedBranches { repo_id } => {
             repo_commands::schedule_prune_merged_branches(executor, repos, msg_tx, repo_id)
         }

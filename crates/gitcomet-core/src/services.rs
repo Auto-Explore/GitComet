@@ -10,6 +10,61 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Which commit a comparison measures its newer side against.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum ComparisonBase {
+    /// The older endpoint itself (`git diff from to`).
+    #[default]
+    Direct,
+    /// The endpoints' merge base (`git diff from...to`): what the newer side
+    /// adds since it diverged.
+    MergeBase,
+}
+
+/// How [`GitRepository::compare_files`] compares. The default is what
+/// [`GitRepository::diff_range_files`] has always done.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub struct ComparisonOptions {
+    pub base: ComparisonBase,
+    /// With a working-tree tip, also list untracked files (as added). Off by
+    /// default; it has no effect when both sides are commits.
+    pub include_untracked: bool,
+}
+
+impl ComparisonOptions {
+    pub fn direct() -> Self {
+        Self::default()
+    }
+
+    pub fn merge_base() -> Self {
+        Self {
+            base: ComparisonBase::MergeBase,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_untracked(mut self, include_untracked: bool) -> Self {
+        self.include_untracked = include_untracked;
+        self
+    }
+}
+
+/// The result of [`GitRepository::compare_files`]: the files, and the commit
+/// the comparison actually measured from (the merge base, when asked for).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct Comparison {
+    pub base: CommitId,
+    pub files: Vec<CommitFileChange>,
+}
+
+impl Comparison {
+    pub fn new(base: CommitId, files: Vec<CommitFileChange>) -> Self {
+        Self { base, files }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
@@ -721,6 +776,67 @@ pub trait GitRepository: Send + Sync {
             "range file listing is not implemented for this backend",
         )))
     }
+    /// Files that differ between `from` and `to` (the working tree when
+    /// `None`), honoring `options`, with rename sources, ids, and modes where
+    /// the backend reports them. Measures from the merge base when asked.
+    ///
+    /// The default honors only what it can: the direct comparison is
+    /// [`Self::diff_range_files`], a merge base comes from
+    /// [`Self::merge_base`], and untracked files are `Unsupported` rather than
+    /// silently left out.
+    fn compare_files(
+        &self,
+        from: &CommitId,
+        to: Option<&CommitId>,
+        options: &ComparisonOptions,
+        cancellation: &CancellationToken,
+    ) -> Result<Comparison> {
+        if options.include_untracked && to.is_none() {
+            return Err(Error::new(ErrorKind::Unsupported(
+                "listing untracked files in a comparison is not implemented for this backend",
+            )));
+        }
+        let base = match options.base {
+            ComparisonBase::Direct => from.clone(),
+            ComparisonBase::MergeBase => {
+                let head = match to {
+                    Some(to) => to.clone(),
+                    None => self.head_commit_id()?.ok_or_else(|| {
+                        Error::new(ErrorKind::Backend(
+                            "a merge-base comparison with the working tree needs a HEAD commit"
+                                .to_string(),
+                        ))
+                    })?,
+                };
+                self.merge_base(from, &head)?.ok_or_else(|| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "{from} and {head} have no merge base"
+                    )))
+                })?
+            }
+        };
+        cancellation.check_cancelled()?;
+        let files = self.diff_range_files(&base, to)?;
+        cancellation.check_cancelled()?;
+        Ok(Comparison::new(base, files))
+    }
+
+    /// The best common ancestor of `a` and `b`, or `None` when their
+    /// histories are unrelated.
+    fn merge_base(&self, _a: &CommitId, _b: &CommitId) -> Result<Option<CommitId>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "merge-base lookup is not implemented for this backend",
+        )))
+    }
+
+    /// Whether `ancestor` is reachable from `descendant` (a commit is its own
+    /// ancestor).
+    fn is_ancestor(&self, _ancestor: &CommitId, _descendant: &CommitId) -> Result<bool> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "ancestry checks are not implemented for this backend",
+        )))
+    }
+
     /// Added/removed line counts for every uncommitted change, both lanes.
     ///
     /// Separate from `status`, which decides most entries from stat data alone
@@ -1317,6 +1433,18 @@ pub trait GitRepository: Send + Sync {
 
     fn fetch_all_with_output_prune(&self, _prune: bool) -> Result<CommandOutput> {
         self.fetch_all_with_output()
+    }
+
+    /// Fetches exactly `refspecs` from `remote` (for example
+    /// `+refs/pull/7/head:refs/remotes/origin/pr/7`), pruning nothing.
+    fn fetch_refspecs_with_output(
+        &self,
+        _remote: &str,
+        _refspecs: &[String],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetching refspecs is not implemented for this backend",
+        )))
     }
 
     fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
@@ -1948,6 +2076,36 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
+    /// The default comparison is `diff_range_files`, measured from `from`,
+    /// and a merge base comes from `merge_base` when a backend provides one.
+    #[test]
+    fn default_compare_files_delegates_to_the_range_listing_and_merge_base() {
+        let repo = RecordingHistoryModeRepo::new();
+        let cancel = super::CancellationToken::new();
+        let main = CommitId("main".into());
+        let feature = CommitId("feature".into());
+        let direct = repo
+            .compare_files(
+                &main,
+                Some(&feature),
+                &super::ComparisonOptions::direct(),
+                &cancel,
+            )
+            .unwrap();
+        assert_eq!(direct.base, main);
+        assert_eq!(direct.files[0].path, PathBuf::from("from-main"));
+        let since_fork = repo
+            .compare_files(
+                &main,
+                Some(&feature),
+                &super::ComparisonOptions::merge_base(),
+                &cancel,
+            )
+            .unwrap();
+        assert_eq!(since_fork.base, CommitId("fork".into()));
+        assert_eq!(since_fork.files[0].path, PathBuf::from("from-fork"));
+    }
+
     /// Pins the fallback behavior of every provided [`GitRepository`] method.
     ///
     /// These defaults are what a backend inherits when it does not implement an
@@ -2012,6 +2170,23 @@ mod tests {
         ));
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
+        assert_unsupported(repo.merge_base(&commit, &commit));
+        assert_unsupported(repo.is_ancestor(&commit, &commit));
+        let cancel = super::CancellationToken::new();
+        // Options a fallback cannot honor fail instead of returning a list
+        // that silently leaves files out.
+        assert_unsupported(repo.compare_files(
+            &commit,
+            None,
+            &super::ComparisonOptions::direct().with_untracked(true),
+            &cancel,
+        ));
+        assert_unsupported(repo.compare_files(
+            &commit,
+            Some(&commit),
+            &super::ComparisonOptions::merge_base(),
+            &cancel,
+        ));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
         assert_unsupported(repo.revert_with_output(&commit, true, None));
         assert_unsupported(repo.rebase_with_output("main"));
@@ -2129,6 +2304,21 @@ mod tests {
     impl GitRepository for RecordingHistoryModeRepo {
         fn spec(&self) -> &RepoSpec {
             &self.spec
+        }
+
+        fn diff_range_files(
+            &self,
+            from: &CommitId,
+            _to: Option<&CommitId>,
+        ) -> super::Result<Vec<crate::domain::CommitFileChange>> {
+            Ok(vec![crate::domain::CommitFileChange::new(
+                PathBuf::from(format!("from-{from}")),
+                crate::domain::FileStatusKind::Modified,
+            )])
+        }
+
+        fn merge_base(&self, _a: &CommitId, _b: &CommitId) -> super::Result<Option<CommitId>> {
+            Ok(Some(CommitId("fork".into())))
         }
 
         fn log_head_page(

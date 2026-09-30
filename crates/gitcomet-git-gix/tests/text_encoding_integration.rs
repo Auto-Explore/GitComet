@@ -968,3 +968,47 @@ fn review_conflict_stages_share_legacy_detection_evidence() {
         TextEncoding::WINDOWS_1252
     );
 }
+
+/// A renamed file's old side reads from its source path, decoded by that
+/// path's attributes; before rename-aware loading it had no old side at all.
+#[test]
+fn a_renamed_files_old_side_decodes_with_its_source_paths_encoding() {
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let repo_dir = dir.path();
+    fs::write(
+        repo_dir.join(".gitattributes"),
+        "*.sjis encoding=shift_jis\n",
+    )
+    .unwrap();
+    // 日本 on each of enough lines that the edit keeps it a rename.
+    let lines = b"\x93\xfa\x96\x7b\n".repeat(12);
+    fs::write(repo_dir.join("old.sjis"), &lines).unwrap();
+    commit_all(repo_dir, "base");
+    git(repo_dir, &["mv", "old.sjis", "new.sjis"]);
+    let mut edited = lines.clone();
+    edited.extend_from_slice(b"\x93\xfa\n");
+    fs::write(repo_dir.join("new.sjis"), &edited).unwrap();
+    let renamed = commit_all(repo_dir, "rename");
+
+    let repo = open(repo_dir);
+    let details = repo.commit_details(&renamed).unwrap();
+    let file = details
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("new.sjis"))
+        .expect("the renamed file is listed");
+    assert_eq!(file.old_path.as_deref(), Some(Path::new("old.sjis")));
+    let target = DiffTarget::commit(renamed, None).for_change(file);
+    let text = file_text(&*repo, &target, None);
+    assert_eq!(read_side(text.old_source.as_ref()), "日本\n".repeat(12));
+    assert_eq!(
+        read_side(text.new_source.as_ref()),
+        format!("{}日\n", "日本\n".repeat(12))
+    );
+    let format = text
+        .old_source
+        .and_then(|side| side.format)
+        .expect("old format");
+    assert_eq!(format.format.encoding.name(), "Shift_JIS");
+}

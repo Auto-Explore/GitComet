@@ -499,6 +499,12 @@ pub enum Effect {
         prune: bool,
         auth: Option<StagedGitAuth>,
     },
+    FetchRefspecs {
+        repo_id: RepoId,
+        remote: String,
+        refspecs: Vec<String>,
+        auth: Option<StagedGitAuth>,
+    },
     PruneMergedBranches {
         repo_id: RepoId,
     },

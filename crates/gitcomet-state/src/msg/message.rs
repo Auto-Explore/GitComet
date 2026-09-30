@@ -820,6 +820,13 @@ pub enum Msg {
     FetchAll {
         repo_id: RepoId,
     },
+    /// Fetches exactly `refspecs` from `remote`, through the same
+    /// authentication, progress, retry, and refresh as a full fetch.
+    FetchRefspecs {
+        repo_id: RepoId,
+        remote: String,
+        refspecs: Vec<String>,
+    },
     PruneMergedBranches {
         repo_id: RepoId,
     },

@@ -1083,6 +1083,33 @@ impl GixRepo {
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
+    /// `git fetch <remote> <refspec>...`: exactly the refspecs asked for, with
+    /// pruning off whatever the configuration says.
+    pub(super) fn fetch_refspecs_with_output_impl(
+        &self,
+        remote: &str,
+        refspecs: &[String],
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        if refspecs.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(
+                "a refspec fetch needs at least one refspec".to_string(),
+            )));
+        }
+        for refspec in refspecs {
+            validate_ref_like_arg(refspec, "refspec")?;
+        }
+        let label = format!("git fetch {remote} {}", refspecs.join(" "));
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("fetch")
+            .arg("--no-prune")
+            .arg("--no-prune-tags")
+            .arg("--")
+            .arg(remote)
+            .args(refspecs);
+        run_git_command_with_optional_output(cmd, &label, true)
+    }
+
     fn prune_remote_tracking_refs_command_with_optional_output_impl(
         &self,
         remote: &str,

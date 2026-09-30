@@ -97,33 +97,44 @@ impl GixRepo {
                 cmd.arg("--").arg(path);
             }
             DiffTarget::Commit {
-                commit_id, path, ..
+                commit_id,
+                path,
+                old_path,
+                ..
             } => {
                 cmd.arg("show")
                     .arg("--no-ext-diff")
                     .arg("-m")
                     .arg("--first-parent")
-                    .arg("--pretty=format:")
-                    .arg(commit_id.as_ref());
+                    .arg("--pretty=format:");
+                // A rename source joins the pathspec so Git pairs the two
+                // paths instead of showing an addition.
+                if old_path.is_some() {
+                    cmd.arg("--find-renames");
+                }
+                cmd.arg(commit_id.as_ref());
                 if let Some(path) = path {
-                    cmd.arg("--").arg(path);
+                    cmd.arg("--").args(old_path).arg(path);
                 }
             }
             DiffTarget::CommitRange {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
                 ..
             } => {
-                cmd.arg("diff")
-                    .arg("--no-ext-diff")
-                    .arg(from_commit_id.as_ref());
+                cmd.arg("diff").arg("--no-ext-diff");
+                if old_path.is_some() {
+                    cmd.arg("--find-renames");
+                }
+                cmd.arg(from_commit_id.as_ref());
                 // `None` tip: `git diff <from>` compares against the working tree.
                 if let Some(to_commit_id) = to_commit_id {
                     cmd.arg(to_commit_id.as_ref());
                 }
                 if let Some(path) = path {
-                    cmd.arg("--").arg(path);
+                    cmd.arg("--").args(old_path).arg(path);
                 }
             }
         }
@@ -508,7 +519,10 @@ impl GixRepo {
                 Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
             DiffTarget::Commit {
-                commit_id, path, ..
+                commit_id,
+                path,
+                old_path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -520,7 +534,7 @@ impl GixRepo {
                     Some(parent) => self.file_diff_source_from_revision_path(
                         &repo,
                         &parent,
-                        path,
+                        old_path.as_ref().unwrap_or(path),
                         cancellation,
                     )?,
                     None => None,
@@ -538,6 +552,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
                 ..
             } => {
                 let Some(path) = path else {
@@ -547,7 +562,7 @@ impl GixRepo {
                 let old = self.file_diff_source_from_revision_path(
                     &repo,
                     from_commit_id.as_ref(),
-                    path,
+                    old_path.as_ref().unwrap_or(path),
                     cancellation,
                 )?;
                 let new = match to_commit_id {
@@ -629,7 +644,10 @@ impl GixRepo {
                 }
             }
             DiffTarget::Commit {
-                commit_id, path, ..
+                commit_id,
+                path,
+                old_path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -645,7 +663,11 @@ impl GixRepo {
                         else {
                             return Ok(None);
                         };
-                        gix_revision_path_blob_object_id_optional(&repo, &parent, path)?
+                        gix_revision_path_blob_object_id_optional(
+                            &repo,
+                            &parent,
+                            old_path.as_ref().unwrap_or(path),
+                        )?
                     }
                 };
 
@@ -660,6 +682,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
                 ..
             } => {
                 let Some(path) = path else {
@@ -684,7 +707,7 @@ impl GixRepo {
                     DiffPreviewTextSide::Old => gix_revision_path_blob_object_id_optional(
                         &repo,
                         from_commit_id.as_ref(),
-                        path,
+                        old_path.as_ref().unwrap_or(path),
                     )?,
                 };
 
@@ -806,7 +829,10 @@ impl GixRepo {
                 }))
             }
             DiffTarget::Commit {
-                commit_id, path, ..
+                commit_id,
+                path,
+                old_path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -816,9 +842,11 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => {
-                        gix_revision_path_image_blob_bytes_optional(&repo, &parent, path)?
-                    }
+                    Some(parent) => gix_revision_path_image_blob_bytes_optional(
+                        &repo,
+                        &parent,
+                        old_path.as_ref().unwrap_or(path),
+                    )?,
                     None => None,
                 };
                 let new =
@@ -834,6 +862,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
                 ..
             } => {
                 let Some(path) = path else {
@@ -844,7 +873,7 @@ impl GixRepo {
                 let old = gix_revision_path_image_blob_bytes_optional(
                     &repo,
                     from_commit_id.as_ref(),
-                    path,
+                    old_path.as_ref().unwrap_or(path),
                 )?;
                 let new = match to_commit_id {
                     Some(to_commit_id) => gix_revision_path_image_blob_bytes_optional(
@@ -1074,6 +1103,11 @@ impl GixRepo {
     }
 
     fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
+        // The fast path reads one path on both sides; a rename is neither a
+        // pure addition nor a deletion, so Git pairs it instead.
+        if target.old_file_path().is_some() {
+            return Ok(None);
+        }
         let repo = self.repo();
         let Some((path, old_revision, new_revision)) = commit_path_diff_revisions(target, &repo)?
         else {

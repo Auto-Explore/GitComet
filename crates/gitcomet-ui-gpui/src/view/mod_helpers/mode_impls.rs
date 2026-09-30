@@ -773,6 +773,9 @@ pub(crate) fn normalize_bootstrap_diff_target(
     repo_path: &std::path::Path,
     target: DiffTarget,
 ) -> DiffTarget {
+    let old_path = target
+        .old_file_path()
+        .map(|path| normalize_bootstrap_target_path(repo_path, path.to_path_buf()));
     match target {
         DiffTarget::WorkingTree { path, area, .. } => {
             DiffTarget::working_tree(normalize_bootstrap_target_path(repo_path, path), area)
@@ -794,6 +797,7 @@ pub(crate) fn normalize_bootstrap_diff_target(
             path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
         ),
     }
+    .with_old_path(old_path)
 }
 
 pub(crate) fn focused_mergetool_target_path(

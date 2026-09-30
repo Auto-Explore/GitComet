@@ -18,11 +18,12 @@ fn summary(count: usize) -> SubmoduleDiffSummary {
             to: Some(CommitId("b".into())),
             unavailable_reason: None,
             changes: (0..count)
-                .map(|ix| SubmoduleInnerChange {
-                    path: PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
-                    kind: FileStatusKind::Modified,
-                    additions: Some(2),
-                    deletions: Some(1),
+                .map(|ix| {
+                    SubmoduleInnerChange::new(
+                        PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
+                        FileStatusKind::Modified,
+                    )
+                    .with_line_counts(Some(2), Some(1))
                 })
                 .collect(),
         }],
@@ -347,11 +348,12 @@ fn summary_without_ranges(count: usize) -> SubmoduleDiffSummary {
     let mut summary = summary(count);
     summary.ranges = Vec::new();
     summary.live_unstaged = (0..count)
-        .map(|ix| SubmoduleInnerChange {
-            path: PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
-            kind: FileStatusKind::Modified,
-            additions: Some(2),
-            deletions: Some(1),
+        .map(|ix| {
+            SubmoduleInnerChange::new(
+                PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
+                FileStatusKind::Modified,
+            )
+            .with_line_counts(Some(2), Some(1))
         })
         .collect();
     summary

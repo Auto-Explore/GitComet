@@ -392,6 +392,58 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
 }
 
 #[test]
+fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let refspecs = vec!["refs/heads/topic:refs/remotes/origin/topic".to_string()];
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::FetchRefspecs {
+            repo_id,
+            remote: "origin".to_string(),
+            refspecs: refspecs.clone(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::FetchRefspecs { remote, refspecs: sent, auth: None, .. }]
+            if remote == "origin" && sent == &refspecs
+    ));
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchRefspecs {
+                remote: "origin".to_string(),
+                refspecs,
+            },
+            result: Ok(CommandOutput::empty_success("git fetch origin")),
+        }),
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+    assert!(
+        matches!(state.repos[0].remote_branches, Loadable::Loading),
+        "a fetch reloads the remote branches"
+    );
+}
+
+#[test]
 fn pull_variants_snapshot_the_global_remote_prune_setting() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);

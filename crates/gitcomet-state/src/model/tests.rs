@@ -4,11 +4,9 @@ use std::time::SystemTime;
 fn summary_with_live_halves(
     mode: gitcomet_core::domain::SubmoduleDiffSummaryMode,
 ) -> SubmoduleDiffSummary {
-    let change = |name: &str| SubmoduleInnerChange {
-        path: PathBuf::from(name),
-        kind: FileStatusKind::Modified,
-        additions: Some(1),
-        deletions: Some(0),
+    let change = |name: &str| {
+        SubmoduleInnerChange::new(PathBuf::from(name), FileStatusKind::Modified)
+            .with_line_counts(Some(1), Some(0))
     };
     SubmoduleDiffSummary {
         path: PathBuf::from("vendor/lib"),

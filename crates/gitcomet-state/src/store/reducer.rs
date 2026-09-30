@@ -317,6 +317,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
             | Msg::FetchAll { .. }
+            | Msg::FetchRefspecs { .. }
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
             | Msg::Pull { .. }
@@ -492,6 +493,11 @@ fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) 
 fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
     Some(match command {
         RepoCommandKind::FetchAll => Msg::FetchAll { repo_id },
+        RepoCommandKind::FetchRefspecs { remote, refspecs } => Msg::FetchRefspecs {
+            repo_id,
+            remote,
+            refspecs,
+        },
         RepoCommandKind::PruneMergedBranches => Msg::PruneMergedBranches { repo_id },
         RepoCommandKind::PruneLocalTags => Msg::PruneLocalTags { repo_id },
         RepoCommandKind::Pull { mode } => Msg::Pull { repo_id, mode },
@@ -723,6 +729,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::CommitAmend { auth: slot, .. }
         | Effect::SafePushAfterCommit { auth: slot, .. }
         | Effect::FetchAll { auth: slot, .. }
+        | Effect::FetchRefspecs { auth: slot, .. }
         | Effect::Pull { auth: slot, .. }
         | Effect::PullBranch { auth: slot, .. }
         | Effect::PushWithTags { auth: slot, .. }
@@ -1968,6 +1975,11 @@ fn reduce_inner(
             actions_emit_effects::safe_push_after_commit(repo_id, context)
         }
         Msg::FetchAll { repo_id } => actions_emit_effects::fetch_all(repos, state, repo_id),
+        Msg::FetchRefspecs {
+            repo_id,
+            remote,
+            refspecs,
+        } => actions_emit_effects::fetch_refspecs(repos, state, repo_id, remote, refspecs),
         Msg::PruneMergedBranches { repo_id } => {
             actions_emit_effects::prune_merged_branches(repos, state, repo_id)
         }

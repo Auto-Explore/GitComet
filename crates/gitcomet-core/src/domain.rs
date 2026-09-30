@@ -235,12 +235,56 @@ pub struct CommitSignature {
     pub key_id: Option<Arc<str>>,
 }
 
+/// A Git object id in hex: the blob holding a file's content, or the commit
+/// a submodule's gitlink points at.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+pub struct ObjectHash(pub Arc<str>);
+
+impl ObjectHash {
+    /// Git's all-zero id, which stands for "no object" (for example the
+    /// working-tree side of a comparison), is `None`.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        (!hex.is_empty() && !hex.bytes().all(|byte| byte == b'0')).then(|| Self(hex.into()))
+    }
+}
+
+impl AsRef<str> for ObjectHash {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A tree entry's mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum FileMode {
+    Regular,
+    Executable,
+    Symlink,
+    /// A submodule pointer.
+    Gitlink,
+}
+
+impl FileMode {
+    /// Parses Git's octal mode (`100644`, `100755`, `120000`, `160000`); other
+    /// modes, including "absent" (`000000`) and trees, are `None`.
+    pub fn from_octal(mode: &[u8]) -> Option<Self> {
+        match mode {
+            b"100644" | b"100664" => Some(Self::Regular),
+            b"100755" => Some(Self::Executable),
+            b"120000" => Some(Self::Symlink),
+            b"160000" => Some(Self::Gitlink),
+            _ => None,
+        }
+    }
+}
+
 /// One file a commit or comparison changes. Build it with
 /// [`CommitFileChange::new`]: it is non-exhaustive so fields can be added
 /// without breaking callers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct CommitFileChange {
+    /// The file's path on the newer side (for a deletion, its last path).
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub is_submodule: bool,
@@ -249,6 +293,15 @@ pub struct CommitFileChange {
     pub additions: Option<u32>,
     /// Removed line count; `None` under the same conditions as `additions`.
     pub deletions: Option<u32>,
+    /// Where a renamed or copied file came from.
+    pub old_path: Option<PathBuf>,
+    /// The content on each side; `None` where the side is absent or is the
+    /// working tree, or when the backend does not report ids.
+    pub old_id: Option<ObjectHash>,
+    pub new_id: Option<ObjectHash>,
+    /// The mode on each side; `None` where the side is absent or unknown.
+    pub old_mode: Option<FileMode>,
+    pub new_mode: Option<FileMode>,
 }
 
 impl CommitFileChange {
@@ -259,6 +312,11 @@ impl CommitFileChange {
             is_submodule: false,
             additions: None,
             deletions: None,
+            old_path: None,
+            old_id: None,
+            new_id: None,
+            old_mode: None,
+            new_mode: None,
         }
     }
 
@@ -271,6 +329,33 @@ impl CommitFileChange {
         self.additions = additions;
         self.deletions = deletions;
         self
+    }
+
+    /// Records a rename or copy source. The same path is not a rename.
+    pub fn with_old_path(mut self, old_path: Option<PathBuf>) -> Self {
+        self.old_path = old_path.filter(|old| *old != self.path);
+        self
+    }
+
+    pub fn with_ids(mut self, old_id: Option<ObjectHash>, new_id: Option<ObjectHash>) -> Self {
+        self.old_id = old_id;
+        self.new_id = new_id;
+        self
+    }
+
+    pub fn with_modes(mut self, old_mode: Option<FileMode>, new_mode: Option<FileMode>) -> Self {
+        self.old_mode = old_mode;
+        self.new_mode = new_mode;
+        self
+    }
+
+    /// Only the mode changed (for example the executable bit).
+    pub fn is_mode_change_only(&self) -> bool {
+        self.old_id.is_some()
+            && self.old_id == self.new_id
+            && self.old_mode.is_some()
+            && self.new_mode.is_some()
+            && self.old_mode != self.new_mode
     }
 }
 
@@ -506,11 +591,38 @@ impl UncommittedLineStats {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct SubmoduleInnerChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
+    /// Where a renamed file came from inside the submodule.
+    pub old_path: Option<PathBuf>,
+}
+
+impl SubmoduleInnerChange {
+    pub fn new(path: PathBuf, kind: FileStatusKind) -> Self {
+        Self {
+            path,
+            kind,
+            additions: None,
+            deletions: None,
+            old_path: None,
+        }
+    }
+
+    pub fn with_line_counts(mut self, additions: Option<u32>, deletions: Option<u32>) -> Self {
+        self.additions = additions;
+        self.deletions = deletions;
+        self
+    }
+
+    /// Records a rename source. The same path is not a rename.
+    pub fn with_old_path(mut self, old_path: Option<PathBuf>) -> Self {
+        self.old_path = old_path.filter(|old| *old != self.path);
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -616,7 +728,11 @@ pub const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// ([`DiffTarget::working_tree`], [`DiffTarget::commit`],
 /// [`DiffTarget::commit_range`]): the variants are non-exhaustive so fields
 /// can be added without breaking callers, and patterns end in `..`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// Equality ignores a file's `old_path`: it is derived from the commit and the
+/// path, so two targets naming the same file are the same target whether or
+/// not one carries its rename source.
+#[derive(Clone, Debug)]
 pub enum DiffTarget {
     #[non_exhaustive]
     WorkingTree { path: PathBuf, area: DiffArea },
@@ -624,6 +740,9 @@ pub enum DiffTarget {
     Commit {
         commit_id: CommitId,
         path: Option<PathBuf>,
+        /// Where `path` was renamed or copied from in this commit, so the old
+        /// side loads from there.
+        old_path: Option<PathBuf>,
     },
     #[non_exhaustive]
     CommitRange {
@@ -633,8 +752,51 @@ pub enum DiffTarget {
         /// tree (`git diff from`), so the tip tracks uncommitted changes.
         to_commit_id: Option<CommitId>,
         path: Option<PathBuf>,
+        /// Where `path` was renamed or copied from across the range.
+        old_path: Option<PathBuf>,
     },
 }
+
+impl PartialEq for DiffTarget {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::WorkingTree { path, area },
+                Self::WorkingTree {
+                    path: other_path,
+                    area: other_area,
+                },
+            ) => path == other_path && area == other_area,
+            (
+                Self::Commit {
+                    commit_id, path, ..
+                },
+                Self::Commit {
+                    commit_id: other_id,
+                    path: other_path,
+                    ..
+                },
+            ) => commit_id == other_id && path == other_path,
+            (
+                Self::CommitRange {
+                    from_commit_id,
+                    to_commit_id,
+                    path,
+                    ..
+                },
+                Self::CommitRange {
+                    from_commit_id: other_from,
+                    to_commit_id: other_to,
+                    path: other_path,
+                    ..
+                },
+            ) => from_commit_id == other_from && to_commit_id == other_to && path == other_path,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for DiffTarget {}
 
 impl DiffTarget {
     /// A working-tree file in `area` (unstaged or staged).
@@ -644,7 +806,11 @@ impl DiffTarget {
 
     /// What `commit_id` changed, in one file or all of them.
     pub fn commit(commit_id: CommitId, path: Option<PathBuf>) -> Self {
-        Self::Commit { commit_id, path }
+        Self::Commit {
+            commit_id,
+            path,
+            old_path: None,
+        }
     }
 
     /// `from` to `to`, or to the working tree when `to` is `None`.
@@ -657,6 +823,44 @@ impl DiffTarget {
             from_commit_id,
             to_commit_id,
             path,
+            old_path: None,
+        }
+    }
+
+    /// The file's rename or copy source, for commit and range targets; the
+    /// same path is not a rename. Working-tree targets are unchanged.
+    pub fn with_old_path(mut self, source: Option<PathBuf>) -> Self {
+        match &mut self {
+            Self::Commit { path, old_path, .. } | Self::CommitRange { path, old_path, .. } => {
+                *old_path = source.filter(|source| Some(source) != path.as_ref());
+            }
+            Self::WorkingTree { .. } => {}
+        }
+        self
+    }
+
+    /// The target for one file of a commit's or comparison's change list,
+    /// carrying its rename source.
+    pub fn for_change(self, change: &CommitFileChange) -> Self {
+        match self {
+            Self::Commit { commit_id, .. } => Self::commit(commit_id, Some(change.path.clone())),
+            Self::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                ..
+            } => Self::commit_range(from_commit_id, to_commit_id, Some(change.path.clone())),
+            working_tree @ Self::WorkingTree { .. } => return working_tree,
+        }
+        .with_old_path(change.old_path.clone())
+    }
+
+    /// Where the file shown was renamed or copied from, if it was.
+    pub fn old_file_path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Commit { old_path, .. } | Self::CommitRange { old_path, .. } => {
+                old_path.as_deref()
+            }
+            Self::WorkingTree { .. } => None,
         }
     }
 
@@ -1584,6 +1788,8 @@ pub struct LogCursor {
 
 #[cfg(test)]
 mod tests {
+    mod comparison;
+
     use super::*;
     use rustc_hash::FxHashSet;
     use std::io::Cursor;

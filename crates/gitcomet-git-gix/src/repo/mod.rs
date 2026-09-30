@@ -41,6 +41,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
 }
 
 mod blame;
+mod comparison;
 mod config;
 mod conflict_stages;
 mod diff;
@@ -741,6 +742,24 @@ impl GitRepository for GixRepo {
         self.resolve_commit_impl(reference)
     }
 
+    fn compare_files(
+        &self,
+        from: &CommitId,
+        to: Option<&CommitId>,
+        options: &gitcomet_core::services::ComparisonOptions,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::services::Comparison> {
+        self.compare_files_impl(from, to, options, cancellation)
+    }
+
+    fn merge_base(&self, a: &CommitId, b: &CommitId) -> Result<Option<CommitId>> {
+        self.merge_base_impl(a, b)
+    }
+
+    fn is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+        self.is_ancestor_impl(ancestor, descendant)
+    }
+
     fn diff_range_files(
         &self,
         from: &CommitId,
@@ -1181,6 +1200,14 @@ impl GitRepository for GixRepo {
 
     fn fetch_all_with_output_prune(&self, prune: bool) -> Result<CommandOutput> {
         self.fetch_all_with_output_impl(prune)
+    }
+
+    fn fetch_refspecs_with_output(
+        &self,
+        remote: &str,
+        refspecs: &[String],
+    ) -> Result<CommandOutput> {
+        self.fetch_refspecs_with_output_impl(remote, refspecs)
     }
 
     fn pull(&self, mode: PullMode) -> Result<()> {

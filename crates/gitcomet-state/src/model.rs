@@ -1449,7 +1449,8 @@ fn submodule_change_at(
                     from_commit_id.clone(),
                     Some(to_commit_id.clone()),
                     Some(change.path.clone()),
-                ),
+                )
+                .with_old_path(change.old_path.clone()),
                 InlineSubmoduleDiffSection::Range(range.kind),
             ))
         }
