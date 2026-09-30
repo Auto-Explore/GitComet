@@ -475,10 +475,20 @@ pub(crate) struct GixRepo {
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
     >,
+    /// Fixed at open: refs the all-branches walk leaves out.
+    history_ref_filter: gitcomet_core::services::HistoryRefFilter,
 }
 
 impl GixRepo {
     pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Self {
+        Self::new_with_options(workdir, repo, Default::default())
+    }
+
+    pub(crate) fn new_with_options(
+        workdir: PathBuf,
+        repo: gix::ThreadSafeRepository,
+        options: gitcomet_core::services::RepositoryOptions,
+    ) -> Self {
         let config_repo = config::ConfigRepo::new(repo.to_thread_local());
         Self {
             spec: RepoSpec { workdir },
@@ -501,6 +511,7 @@ impl GixRepo {
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),
+            history_ref_filter: options.history_ref_filter,
         }
     }
 

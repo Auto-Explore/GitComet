@@ -49,6 +49,7 @@ pub struct AppLaunch {
     about: String,
     on_prepare: Option<PrepareHook>,
     extensions: Extensions,
+    repository_options: gitcomet_core::services::RepositoryOptions,
 }
 
 impl AppLaunch {
@@ -58,6 +59,7 @@ impl AppLaunch {
             about: cli::DEFAULT_ABOUT.to_string(),
             on_prepare: None,
             extensions: Extensions::default(),
+            repository_options: Default::default(),
         }
     }
 
@@ -92,6 +94,16 @@ impl AppLaunch {
         self
     }
 
+    /// Options every repository opens with, such as refs History leaves out.
+    /// The default changes nothing.
+    pub fn repository_options(
+        mut self,
+        options: gitcomet_core::services::RepositoryOptions,
+    ) -> Self {
+        self.repository_options = options;
+        self
+    }
+
     /// Runs with the process arguments and returns the exit code.
     pub fn run(self) -> i32 {
         self.run_with_args(std::env::args_os().collect())
@@ -104,6 +116,7 @@ impl AppLaunch {
             about,
             on_prepare,
             extensions,
+            repository_options,
         } = self;
         if let Err(message) = install_identity(identity) {
             eprintln!("{message}");
@@ -114,7 +127,7 @@ impl AppLaunch {
         crashlog::install();
 
         dispatch(cli::parse_cli(args, &about), on_prepare, move |mode| {
-            launch::run_mode(mode, extensions)
+            launch::run_mode(mode, extensions, repository_options)
         })
     }
 }

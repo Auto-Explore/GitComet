@@ -2015,8 +2015,148 @@ pub struct RepositoryWatchInfo {
     pub discovery_incomplete: bool,
 }
 
+/// Ref names History leaves out of its all-branches walk, as patterns over
+/// full names: a plain name matches itself and everything under it
+/// (`refs/pull` covers `refs/pull/7/head`), `*` matches within one path
+/// segment, and `**` across segments (`refs/remotes/*/pr/**`).
+///
+/// Immutable and cheap to clone; the default excludes nothing. It filters the
+/// walk's starting refs only: HEAD is always walked, and a commit reachable
+/// from a kept ref stays visible.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct HistoryRefFilter {
+    excluded: Arc<[Arc<str>]>,
+}
+
+impl HistoryRefFilter {
+    pub fn excluding<I, S>(patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<Arc<str>>,
+    {
+        let mut excluded: Vec<Arc<str>> = patterns.into_iter().map(Into::into).collect();
+        excluded.retain(|pattern| !pattern.is_empty());
+        excluded.sort();
+        excluded.dedup();
+        Self {
+            excluded: excluded.into(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.excluded.is_empty()
+    }
+
+    pub fn patterns(&self) -> &[Arc<str>] {
+        &self.excluded
+    }
+
+    /// Whether the full ref name `name` (`refs/heads/main`) is left out.
+    pub fn excludes(&self, name: &str) -> bool {
+        self.excluded
+            .iter()
+            .any(|pattern| ref_pattern_matches(pattern, name))
+    }
+}
+
+fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
+    if !pattern.contains('*') {
+        let pattern = pattern.trim_end_matches('/');
+        return name == pattern
+            || name
+                .strip_prefix(pattern)
+                .is_some_and(|rest| rest.starts_with('/'));
+    }
+    glob_segments(
+        &pattern.split('/').collect::<Vec<_>>(),
+        &name.split('/').collect::<Vec<_>>(),
+    )
+}
+
+fn glob_segments(pattern: &[&str], name: &[&str]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some((&"**", rest)) => (0..=name.len()).any(|skip| glob_segments(rest, &name[skip..])),
+        Some((segment, rest)) => name
+            .split_first()
+            .is_some_and(|(first, tail)| glob_segment(segment, first) && glob_segments(rest, tail)),
+    }
+}
+
+/// `*` within one segment.
+fn glob_segment(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !text.starts_with(first) || !text[first.len()..].ends_with(last) {
+        return false;
+    }
+    let mut rest = &text[first.len()..text.len() - last.len()];
+    for middle in &parts[1..parts.len() - 1] {
+        match rest.find(middle) {
+            Some(at) => rest = &rest[at + middle.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Options fixed when a repository opens. The default changes nothing.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub struct RepositoryOptions {
+    pub history_ref_filter: HistoryRefFilter,
+}
+
+impl RepositoryOptions {
+    pub fn with_history_ref_filter(mut self, filter: HistoryRefFilter) -> Self {
+        self.history_ref_filter = filter;
+        self
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+fn unsupported_repository_options() -> Error {
+    Error::new(ErrorKind::Unsupported(
+        "repository options are not supported by this backend",
+    ))
+}
+
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    /// Opens `workdir` with `options`. A backend that cannot honor a
+    /// non-default option refuses instead of opening without it.
+    fn open_with_options(
+        &self,
+        workdir: &Path,
+        options: &RepositoryOptions,
+    ) -> Result<Arc<dyn GitRepository>> {
+        if options.is_default() {
+            self.open(workdir)
+        } else {
+            Err(unsupported_repository_options())
+        }
+    }
+
+    /// [`Self::open_with_options`], cancellable.
+    fn open_cancellable_with_options(
+        &self,
+        workdir: &Path,
+        options: &RepositoryOptions,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<dyn GitRepository>> {
+        if options.is_default() {
+            self.open_cancellable(workdir, cancellation)
+        } else {
+            Err(unsupported_repository_options())
+        }
+    }
 
     /// Resolve metadata and ignore/configuration sources without running status or filters.
     fn repository_watch_info(&self, _workdir: &Path) -> Result<Option<RepositoryWatchInfo>> {
@@ -2043,6 +2183,63 @@ pub trait GitBackend: Send + Sync {
         let repo = self.open(workdir)?;
         cancellation.check_cancelled()?;
         Ok(repo)
+    }
+}
+
+/// A backend whose repositories all open with the same options (for example
+/// a product's history ref filter).
+pub struct ConfiguredBackend {
+    inner: Arc<dyn GitBackend>,
+    options: RepositoryOptions,
+}
+
+impl ConfiguredBackend {
+    pub fn new(inner: Arc<dyn GitBackend>, options: RepositoryOptions) -> Self {
+        Self { inner, options }
+    }
+}
+
+impl GitBackend for ConfiguredBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        self.inner.open_with_options(workdir, &self.options)
+    }
+
+    fn open_with_options(
+        &self,
+        workdir: &Path,
+        options: &RepositoryOptions,
+    ) -> Result<Arc<dyn GitRepository>> {
+        self.inner.open_with_options(workdir, options)
+    }
+
+    fn open_cancellable(
+        &self,
+        workdir: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<dyn GitRepository>> {
+        self.inner
+            .open_cancellable_with_options(workdir, &self.options, cancellation)
+    }
+
+    fn open_cancellable_with_options(
+        &self,
+        workdir: &Path,
+        options: &RepositoryOptions,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<dyn GitRepository>> {
+        self.inner
+            .open_cancellable_with_options(workdir, options, cancellation)
+    }
+
+    fn repository_watch_info(&self, workdir: &Path) -> Result<Option<RepositoryWatchInfo>> {
+        self.inner.repository_watch_info(workdir)
+    }
+
+    fn worktree_ignore_matcher(
+        &self,
+        workdir: &Path,
+    ) -> Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+        self.inner.worktree_ignore_matcher(workdir)
     }
 }
 
@@ -2075,6 +2272,76 @@ mod tests {
     use crate::test_support::UnconfiguredRepository;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn history_ref_filters_match_names_prefixes_and_globs() {
+        use super::HistoryRefFilter;
+        let filter = HistoryRefFilter::excluding([
+            "refs/pull",
+            "refs/remotes/*/pr/**",
+            "refs/heads/wip-*",
+            "",
+        ]);
+        assert_eq!(filter.patterns().len(), 3, "empty patterns are dropped");
+        for excluded in [
+            "refs/pull",
+            "refs/pull/7/head",
+            "refs/remotes/origin/pr/7",
+            "refs/remotes/origin/pr/7/merge",
+            "refs/heads/wip-parser",
+        ] {
+            assert!(filter.excludes(excluded), "{excluded}");
+        }
+        for kept in [
+            "refs/pulled/7",
+            "refs/heads/main",
+            "refs/remotes/origin/main",
+            "refs/remotes/origin/nested/pr/7",
+            "refs/heads/wip",
+            "refs/heads/wip-a/b",
+        ] {
+            assert!(!filter.excludes(kept), "{kept}");
+        }
+        assert!(HistoryRefFilter::default().is_empty());
+        assert!(!HistoryRefFilter::default().excludes("refs/heads/main"));
+        // Order and duplicates do not make two filters different.
+        assert_eq!(
+            HistoryRefFilter::excluding(["b", "a", "a"]),
+            HistoryRefFilter::excluding(["a", "b"])
+        );
+    }
+
+    #[test]
+    fn repository_options_are_refused_by_backends_that_cannot_honor_them() {
+        use super::{ConfiguredBackend, HistoryRefFilter, RepositoryOptions};
+        let options = RepositoryOptions::default()
+            .with_history_ref_filter(HistoryRefFilter::excluding(["refs/pull"]));
+        struct PlainBackend;
+        impl GitBackend for PlainBackend {
+            fn open(&self, workdir: &Path) -> super::Result<Arc<dyn GitRepository>> {
+                Ok(Arc::new(UnconfiguredRepository::new(workdir)))
+            }
+        }
+        let error = PlainBackend
+            .open_with_options(Path::new("/tmp/repo"), &options)
+            .err()
+            .expect("a non-default option is refused");
+        assert!(matches!(error.kind(), ErrorKind::Unsupported(_)));
+        assert!(
+            PlainBackend
+                .open_with_options(Path::new("/tmp/repo"), &RepositoryOptions::default())
+                .is_ok()
+        );
+        // Wrapped, every open carries the options and so is refused too.
+        let configured = ConfiguredBackend::new(Arc::new(PlainBackend), options);
+        assert!(configured.open(Path::new("/tmp/repo")).is_err());
+        let cancel = super::CancellationToken::new();
+        assert!(
+            configured
+                .open_cancellable(Path::new("/tmp/repo"), &cancel)
+                .is_err()
+        );
+    }
 
     /// The default comparison is `diff_range_files`, measured from `from`,
     /// and a merge base comes from `merge_base` when a backend provides one.

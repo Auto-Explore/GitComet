@@ -12,6 +12,8 @@ use std::process::Command;
 use std::sync::Arc;
 #[path = "log_integration/authors.rs"]
 mod authors;
+#[path = "log_integration/ref_filter.rs"]
+mod ref_filter;
 #[path = "log_integration/snapshot_refresh.rs"]
 mod snapshot_refresh;
 
