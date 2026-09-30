@@ -1,0 +1,96 @@
+//! Runs diff-session loads with the same backend readers as the selected
+//! diff, under the session's own token (a child of the repository's).
+
+use super::*;
+use crate::diff_session::{
+    DiffSessionContent, DiffSessionEffect, DiffSessionMsg as Event, DiffSessionWork,
+};
+
+pub(super) fn schedule(
+    executor: &TaskExecutor,
+    repos: &util::RepoMap,
+    msg_tx: StoreWorkerSender,
+    work: DiffSessionEffect,
+    parent: CancellationToken,
+) {
+    let on_missing = work.clone();
+    util::spawn_detached_with_repo_or_else(
+        executor,
+        "diff-session",
+        repos,
+        work.repo_id,
+        msg_tx,
+        move |repo, tx| {
+            let DiffSessionEffect {
+                repo_id,
+                view,
+                lifetime,
+                generation,
+                work,
+                cancellation,
+            } = work;
+            let cancellation = cancellation.with_parent(parent);
+            let send = |content| {
+                util::send_or_log(
+                    &tx,
+                    Msg::DiffSession(Event::Loaded {
+                        repo_id,
+                        view,
+                        lifetime,
+                        generation,
+                        content,
+                    }),
+                );
+            };
+            match work {
+                DiffSessionWork::Content {
+                    target,
+                    encoding,
+                    patch,
+                    file_text,
+                    image,
+                } => {
+                    if patch {
+                        send(DiffSessionContent::Patch(
+                            repo.diff_parsed_with_encoding_cancellable(
+                                &target,
+                                encoding,
+                                &cancellation,
+                            ),
+                        ));
+                    }
+                    if file_text && !cancellation.is_cancelled() {
+                        send(DiffSessionContent::FileText(
+                            repo.diff_file_text_with_encoding_cancellable(
+                                &target,
+                                encoding,
+                                &cancellation,
+                            ),
+                        ));
+                    }
+                    if image && !cancellation.is_cancelled() {
+                        send(DiffSessionContent::Image(
+                            repo.diff_file_image_cancellable(&target, &cancellation),
+                        ));
+                    }
+                }
+                DiffSessionWork::Blame { path, source } => {
+                    if !cancellation.is_cancelled() {
+                        send(DiffSessionContent::Blame(repo_load::load_blame(
+                            repo.as_ref(),
+                            &path,
+                            &source,
+                        )));
+                    }
+                }
+            }
+        },
+        move |tx| {
+            for reply in
+                on_missing.failed(Error::new(ErrorKind::Backend("Repository closed".into())))
+            {
+                util::send_or_log(&tx, Msg::DiffSession(reply));
+            }
+        },
+    );
+}

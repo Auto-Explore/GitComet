@@ -1,6 +1,7 @@
 mod actions_emit_effects;
 mod conflict_interactions;
 mod diff_selection;
+mod diff_session;
 mod effects;
 mod external_and_history;
 mod git_hook_activity;
@@ -2531,6 +2532,7 @@ fn reduce_inner(
             effects::upstream_divergence_loaded(state, repo_id, result)
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
+        Msg::DiffSession(event) => diff_session::reduce(state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,

@@ -193,6 +193,11 @@ pub(super) fn repo_externally_changed(
     if change.worktree {
         repo_state.record_worktree_change(change.paths.clone());
     }
+    let session_reloads = if change.worktree || change.index {
+        super::diff_session::reload_worktree_sessions(repo_state)
+    } else {
+        Vec::new()
+    };
 
     let file_browser_effect = file_browser_refresh_for_external_change(
         repo_state,
@@ -201,7 +206,8 @@ pub(super) fn repo_externally_changed(
     );
 
     // Coalesce refreshes while a refresh is already in flight.
-    let mut effects = if change.git_state {
+    let mut effects = session_reloads;
+    effects.extend(if change.git_state {
         // A git-state watcher event can be produced by the safety fetch that
         // prepared a pending force-push lease. Preserve that offer; the force
         // push command validates the branch and HEAD again before pushing.
@@ -242,7 +248,7 @@ pub(super) fn repo_externally_changed(
             }
         }
         effects
-    };
+    });
 
     effects.extend(file_browser_effect);
     if change.text_attributes || change.verification_context {

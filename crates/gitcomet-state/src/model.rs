@@ -1853,6 +1853,9 @@ pub struct RepoState {
     /// Bumped when the watcher (or the window-focus full refresh) reports a
     /// working-tree write. The view stats the open file when this moves.
     pub worktree_change_rev: u64,
+    /// Hosted diff panes' sessions, apart from History's selected diff.
+    pub diff_sessions:
+        Arc<FxHashMap<crate::diff_session::DiffViewId, crate::diff_session::DiffSession>>,
     /// The worktree paths of the change that set `worktree_change_rev`; see
     /// [`RepoState::worktree_paths_changed_since`].
     pub worktree_changed_paths: crate::msg::ChangedPaths,
@@ -1966,6 +1969,7 @@ impl RepoState {
             ops_rev: 0,
             worktree_change_rev: 0,
             worktree_changed_paths: crate::msg::ChangedPaths::Unknown,
+            diff_sessions: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
             feedback: RepoFeedbackState::default(),

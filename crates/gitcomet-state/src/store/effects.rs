@@ -1,4 +1,5 @@
 mod clone;
+mod diff_session;
 mod history_authors;
 mod indexed_history;
 mod open_repo;
@@ -415,6 +416,11 @@ fn send_unavailable_git_effect_result(
         Effect::IndexedHistory(work) => send(Msg::IndexedHistory(
             work.failed(git_unavailable_error(runtime)),
         )),
+        Effect::DiffSession(work) => {
+            for reply in work.failed(git_unavailable_error(runtime)) {
+                send(Msg::DiffSession(reply));
+            }
+        }
         Effect::HistoryAuthors(work) => send(Msg::HistoryAuthors(
             work.failed(git_unavailable_error(runtime)),
         )),
@@ -1842,6 +1848,13 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 indexed_history::schedule(repo_load_executor, repos, msg_tx, work, cancellation);
+            }
+        }
+        Effect::DiffSession(work) => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
+            {
+                diff_session::schedule(repo_load_executor, repos, msg_tx, work, cancellation);
             }
         }
         Effect::LoadLog {

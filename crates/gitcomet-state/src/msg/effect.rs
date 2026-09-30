@@ -15,6 +15,7 @@ use super::RepoPathList;
 #[derive(Clone, Debug)]
 pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     PersistSession {
         repo_id: Option<RepoId>,

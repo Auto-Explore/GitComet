@@ -1043,6 +1043,19 @@ pub(super) fn schedule_load_file_history(
     });
 }
 
+/// Blame for `path` at `source`: History's and diff sessions' shared reader.
+pub(super) fn load_blame(
+    repo: &dyn GitRepository,
+    path: &Path,
+    source: &gitcomet_core::domain::BlameSource,
+) -> gitcomet_core::services::Result<Vec<gitcomet_core::services::BlameLine>> {
+    use gitcomet_core::domain::BlameSource;
+    match source {
+        BlameSource::Revision(rev) => repo.blame_file(path, rev.as_deref()),
+        BlameSource::WorkingTree(area) => repo.blame_worktree_file(path, *area),
+    }
+}
+
 pub(super) fn schedule_load_blame(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1051,12 +1064,8 @@ pub(super) fn schedule_load_blame(
     path: PathBuf,
     source: gitcomet_core::domain::BlameSource,
 ) {
-    use gitcomet_core::domain::BlameSource;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = match &source {
-            BlameSource::Revision(rev) => repo.blame_file(&path, rev.as_deref()),
-            BlameSource::WorkingTree(area) => repo.blame_worktree_file(&path, *area),
-        };
+        let result = load_blame(repo.as_ref(), &path, &source);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
