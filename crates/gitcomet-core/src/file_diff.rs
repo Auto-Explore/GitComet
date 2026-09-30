@@ -1205,6 +1205,9 @@ impl<'a> PreparedReplacementLine<'a> {
     }
 }
 
+// Calls to `strsim::generic_levenshtein` with these wrappers need explicit type
+// args: on macOS, objc2's recursive `IntoIterator for &Retained<T>` impl
+// overflows inference (E0275).
 #[cfg(feature = "benchmarks")]
 struct CharSlice<'a>(&'a [char]);
 
@@ -2514,11 +2517,11 @@ fn replacement_pair_cost_with_strsim(
     replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
         let old_trimmed_wrapper = CharSlice(old_trimmed);
         let new_trimmed_wrapper = CharSlice(new_trimmed);
-        u32::try_from(strsim::generic_levenshtein(
+        let distance = strsim::generic_levenshtein::<CharSlice<'_>, CharSlice<'_>, char, char>(
             &old_trimmed_wrapper,
             &new_trimmed_wrapper,
-        ))
-        .unwrap_or(u32::MAX)
+        );
+        u32::try_from(distance).unwrap_or(u32::MAX)
     })
 }
 
@@ -4196,7 +4199,10 @@ mod tests {
             let new_wrapper = ByteSlice(new_bytes);
             assert_eq!(
                 scratch.distance(old_bytes, new_bytes),
-                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                strsim::generic_levenshtein::<ByteSlice<'_>, ByteSlice<'_>, u8, u8>(
+                    &old_wrapper,
+                    &new_wrapper
+                ),
                 "ascii mismatch for old={old:?} new={new:?}"
             );
         }
@@ -4208,7 +4214,10 @@ mod tests {
             let new_wrapper = CharSlice(new_chars.as_slice());
             assert_eq!(
                 scratch.distance(old_chars.as_slice(), new_chars.as_slice()),
-                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                strsim::generic_levenshtein::<CharSlice<'_>, CharSlice<'_>, char, char>(
+                    &old_wrapper,
+                    &new_wrapper
+                ),
                 "unicode mismatch for old={old:?} new={new:?}"
             );
         }
@@ -4244,7 +4253,10 @@ mod tests {
             for new in &cases {
                 let old_wrapper = ByteSlice(old.as_slice());
                 let new_wrapper = ByteSlice(new.as_slice());
-                let expected = strsim::generic_levenshtein(&old_wrapper, &new_wrapper);
+                let expected = strsim::generic_levenshtein::<ByteSlice<'_>, ByteSlice<'_>, u8, u8>(
+                    &old_wrapper,
+                    &new_wrapper,
+                );
 
                 assert_eq!(
                     bitparallel_levenshtein_bytes(old.as_slice(), new.as_slice()),

@@ -147,6 +147,7 @@ impl FocusedDiffView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::environment::track_window(window, cx);
         let ui_session = session::load();
         let diff_whitespace_mode = ui_session
             .diff_whitespace_mode
@@ -642,6 +643,8 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
         crate::app::application()
             .with_assets(GitCometAssets)
             .run(move |cx: &mut App| {
+                crate::ui_probe::start_if_enabled(cx);
+                crate::environment::initialize(cx);
                 if let Err(err) = crate::bundled_fonts::register(cx) {
                     eprintln!("Failed to register bundled fonts: {err:#}");
                 }

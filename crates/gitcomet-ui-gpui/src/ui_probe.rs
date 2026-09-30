@@ -240,6 +240,14 @@ pub(crate) fn time_section<R>(label: &str, f: impl FnOnce() -> R) -> R {
     result
 }
 
+pub(crate) fn environment(snapshot: &gitcomet_core::environment::EnvironmentSnapshot) {
+    if LOG.get().is_none() {
+        return;
+    }
+    log_line(&format!("ui-probe environment\n{}", snapshot.summary()));
+    write_json(&[json!({"event": "environment", "environment": snapshot})]);
+}
+
 pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     if !crate::startup_probe::env_flag(ENABLED_ENV) || LOG.get().is_some() {
         return;
