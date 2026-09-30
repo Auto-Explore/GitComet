@@ -384,6 +384,20 @@ impl DiffPane {
     }
 }
 
+/// How a file list arranges its files.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum FileListMode {
+    /// Under their directories.
+    #[default]
+    Tree,
+    /// One row per path.
+    Flat,
+    /// By change kind, each group under a header that stays in view while
+    /// its files scroll.
+    Grouped,
+}
+
 /// Called when the user picks a file, with its diff target.
 pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 
@@ -391,6 +405,7 @@ pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 pub trait FileListImpl {
     fn view(&self) -> AnyView;
     fn set_source(&self, source: ChangeSource, cx: &mut App);
+    fn set_mode(&self, mode: FileListMode, cx: &mut App);
     /// Shows only files whose path contains `query` (case-insensitive).
     fn set_filter(&self, query: SharedString, cx: &mut App);
     /// The files as shown: sorted, filtered.
@@ -417,6 +432,10 @@ impl FileList {
 
     pub fn set_source(&self, source: ChangeSource, cx: &mut App) {
         self.0.set_source(source, cx)
+    }
+
+    pub fn set_mode(&self, mode: FileListMode, cx: &mut App) {
+        self.0.set_mode(mode, cx)
     }
 
     pub fn set_filter(&self, query: impl Into<SharedString>, cx: &mut App) {

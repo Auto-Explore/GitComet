@@ -40,7 +40,7 @@ pub use panes::{
     DiffAnnotation, DiffAnnotations, DiffGutterAction, DiffInset, DiffLegendItem, DiffLineRange,
     DiffLineSide, DiffPane, DiffPaneImpl, DiffPaneOptions, DiffPanePolicy, DiffRowDecor,
     DiffRowDecorProvider, DiffRowStyle, DiffSelectionAction, DiffSelectionRun, DiffSnapshot,
-    FileList, FileListImpl, FileSelected,
+    FileList, FileListImpl, FileListMode, FileSelected,
 };
 pub use registry::{Registrar, RegistrationError, Registry};
 

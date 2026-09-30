@@ -684,3 +684,105 @@ fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
     cx.run_until_parked();
     assert_eq!(*acted.borrow(), vec![expected]);
 }
+
+#[gpui::test]
+fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, app_cx) = open_repository(cx);
+    let root = dir.path();
+    for n in 0..60 {
+        std::fs::write(root.join(format!("m{n:02}.rs")), "before\n").unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "before"]);
+    for n in 0..60 {
+        std::fs::write(root.join(format!("m{n:02}.rs")), "after\n").unwrap();
+        std::fs::write(root.join(format!("a{n:02}.rs")), "new\n").unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "after"]);
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let head = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    let (host, repository) = app_cx.update(|_window, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let list = app_cx.update(|_window, app| {
+        let list = host
+            .create_file_list(
+                &repository,
+                ChangeSource::Commit(gitcomet_core::domain::CommitId(head.into())),
+                |_, _, _| {},
+                app,
+            )
+            .unwrap();
+        list.set_mode(gitcomet_extension_api::FileListMode::Grouped, app);
+        list
+    });
+    settle(app_cx, &view, &store, "the commit's files", |cx| {
+        cx.update(|_window, app| !list.is_loading(app))
+    });
+    let list_view = list
+        .view()
+        .downcast::<crate::view::hosted::file_list::FileListView>()
+        .unwrap_or_else(|_| panic!("a hosted file list"));
+    let view_any = list.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..2 {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+    };
+    draw(cx);
+    let (id, scroll, builds) = cx.update(|_window, app| list_view.read(app).test_parts());
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_group_Added")))
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_sticky_Added")))
+            .is_none(),
+        "nothing to pin before scrolling"
+    );
+
+    // Rows: Added header, 60 files, Modified header, 60 files.
+    scroll.scroll_to_item(90, gpui::ScrollStrategy::Top);
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_sticky_Modified")))
+            .is_some()
+    );
+    scroll.scroll_to_item(30, gpui::ScrollStrategy::Top);
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_sticky_Added")))
+            .is_some()
+    );
+    assert_eq!(
+        cx.update(|_window, app| list_view.read(app).test_parts().2),
+        builds,
+        "scrolling never regroups"
+    );
+
+    // The pinned header collapses its group like the row does.
+    click_debug_selector(cx, selector(format!("hosted_file_list_{id}_sticky_Added")));
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_file_a00.rs")))
+            .is_none()
+    );
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_group_Modified")))
+            .is_some()
+    );
+}

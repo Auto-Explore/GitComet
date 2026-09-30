@@ -309,3 +309,8 @@ Still to do, deliberately kept out of this step:
   build every section for the active repository, each collapsible. With no
   such contribution registered, the details and sidebar panes mount through
   the same cached paths as before (the invalidation guard still checks them).
+- File lists have a `FileListMode` (tree, flat, grouped). Grouped lists
+  keep headers at the file rows' height, so the list stays uniform and
+  virtual, and pin the current group's header with a list decoration that
+  reads precomputed group starts each frame; a UI test scrolls and checks
+  the rows are never regrouped.
