@@ -1,5 +1,6 @@
 use super::log::{
-    CommitStatsScratch, commit_file_line_stats, line_stats_from_bytes, read_commit_stats_blob,
+    CommitStatsScratch, commit_file_line_stats, commit_stats_looks_binary, line_stats_from_bytes,
+    read_commit_stats_blob,
 };
 use crate::util::path_buf_from_git_bytes;
 use gitcomet_core::domain::{FileStatus, FileStatusKind, LineStats, UncommittedLineStats};
@@ -242,6 +243,11 @@ fn unstaged_entry_line_stats(
     if entry.kind != FileStatusKind::Deleted
         && !read_worktree_git_bytes(gix_repo, pipeline, &entry.path, worktree)
     {
+        return LineStats::UNKNOWN;
+    }
+    // Binary on this side means no counts, whatever the index holds: skip
+    // the hash, the index read and the memo.
+    if commit_stats_looks_binary(worktree) {
         return LineStats::UNKNOWN;
     }
 
@@ -648,17 +654,17 @@ mod tests {
         let repo = open_repo(dir);
         take_line_stats_diffs_for_tests();
         let first = scan(&repo);
-        // big + staged, and binary which is never kept.
-        assert_eq!(take_line_stats_diffs_for_tests(), 3);
+        // big + staged; a binary worktree file is never diffed.
+        assert_eq!(take_line_stats_diffs_for_tests(), 2);
 
         // An editor save of unchanged content.
         write_file(dir, "big.txt", &edited(150));
         assert_eq!(scan(&repo), first);
-        assert_eq!(take_line_stats_diffs_for_tests(), 1);
+        assert_eq!(take_line_stats_diffs_for_tests(), 0);
 
         write_file(dir, "big.txt", &edited(100));
         let moved = scan(&repo);
-        assert_eq!(take_line_stats_diffs_for_tests(), 2);
+        assert_eq!(take_line_stats_diffs_for_tests(), 1);
         assert_eq!(moved, scan(&open_repo(dir)));
         assert_eq!(
             moved.unstaged.get(std::path::Path::new("big.txt")),
@@ -672,7 +678,7 @@ mod tests {
         git_success(dir, &["add", "big.txt"]);
         take_line_stats_diffs_for_tests();
         let staged = scan(&repo);
-        assert_eq!(take_line_stats_diffs_for_tests(), 1);
+        assert_eq!(take_line_stats_diffs_for_tests(), 0);
         assert_eq!(staged, scan(&open_repo(dir)));
         assert!(
             !staged
