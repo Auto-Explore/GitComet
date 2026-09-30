@@ -11,8 +11,8 @@ use crate::util::{
     unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
-    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, EMPTY_TREE_ID, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
+    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, HistoryMode, LogCursor,
+    LogPage, RecentCommitMessage, ReflogEntry, StashEntry, is_empty_tree_id,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CancellationToken, LogChunk, Result};

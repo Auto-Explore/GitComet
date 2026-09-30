@@ -638,13 +638,13 @@ impl GixRepo {
         use rustc_hash::FxHasher;
         use std::hash::{Hash as _, Hasher as _};
 
-        let refs = repo
-            .references()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+        let refs =
+            crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
         // Fingerprint pass: names, raw targets and followed symbolic chains
         // only, no object lookups.
-        let head_id = gix_head_id_or_none(repo)?;
+        let head_id = refs.head_oid()?;
         let mut hasher = FxHasher::default();
         head_id.hash(&mut hasher);
         let mut ref_count = 0usize;
@@ -667,7 +667,7 @@ impl GixRepo {
             ref_count += 1;
         }
         // Older stash entries are reflog-only and need explicit tips.
-        let stash_tips = stash_reflog_tips(repo, 50).unwrap_or_default();
+        let stash_tips = stash_reflog_tips(repo, 50)?;
         stash_tips.hash(&mut hasher);
         let fingerprint = hasher.finish();
 
@@ -1052,11 +1052,8 @@ impl GixRepo {
             return Err(reflog_unborn_head_error(&repo));
         }
 
-        let head = repo
-            .head()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
-        let mut platform = head.log_iter();
-        reflog_lines_rev(&mut platform, "HEAD", Some(limit))?
+        crate::refs::view(&repo)?
+            .reflog("HEAD", Some(limit))?
             .into_iter()
             .enumerate()
             .map(|(index, line)| {
@@ -1081,12 +1078,11 @@ fn find_commit_by_id<'repo>(
     id: &CommitId,
 ) -> Result<gix::Commit<'repo>> {
     let spec = id.as_ref();
-    let object = match object_id_from_commit_id(id) {
+    let object = match object_id_from_commit_id(id).filter(|oid| oid.kind() == repo.object_hash()) {
         Some(oid) => repo.find_object(oid).map_err(|e| {
             Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
         })?,
-        None => repo
-            .rev_parse_single(spec)
+        None => crate::refs::resolve_required(repo, spec)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
             .object()
             .map_err(|e| {

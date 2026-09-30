@@ -137,11 +137,20 @@ fn ignored_parent_of_separate_git_dir_keeps_metadata_visible() {
     // Moving .git named only the directory, never these ref files, so startup
     // residue cannot satisfy the waits and no settle is needed.
     let head = fs::read_to_string(git_dir.join("HEAD")).unwrap();
-    let branch = git_dir.join(head.trim().strip_prefix("ref: ").unwrap());
+    let reftable = git_dir.join("reftable").is_dir();
+    let branch = if reftable {
+        git_dir.join("reftable/tables.list")
+    } else {
+        git_dir.join(head.trim().strip_prefix("ref: ").unwrap())
+    };
     let monitor = RunningMonitor::start_for_unique_path(&root);
     let commit = || run_git(&root, &["commit", "--allow-empty", "-m", "External commit"]);
     assert!(monitor.expect_change(&branch, commit).git_state);
-    let other = git_dir.join("refs/heads/other");
+    let other = if reftable {
+        branch.clone()
+    } else {
+        git_dir.join("refs/heads/other")
+    };
     let checkout = || run_git(&root, &["checkout", "-b", "other"]);
     assert!(monitor.expect_change(&other, checkout).git_state);
 }

@@ -261,8 +261,7 @@ pub(crate) fn apply_first_parent_resume_hint(page: &mut LogPage) {
 }
 
 pub(crate) fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
-    let branch = repo
-        .head_name()
+    let branch = crate::refs::head_name(repo)
         .ok()
         .flatten()
         .map(|name| {

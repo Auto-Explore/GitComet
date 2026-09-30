@@ -103,9 +103,9 @@ pub(crate) struct MessageLinkRange {
 /// URLs are found first and claim their whole span, so the hex-looking pieces of
 /// a URL's path — a Gerrit change number, a buildbucket id — never masquerade as
 /// abbreviated commit ids.
-pub(crate) fn commit_message_link_ranges(text: &str) -> Vec<MessageLinkRange> {
+pub(crate) fn commit_message_link_ranges(text: &str, max_id_len: usize) -> Vec<MessageLinkRange> {
     let urls = web_url_ranges(text);
-    let shas = commit_sha_ranges_outside(text, &urls);
+    let shas = commit_sha_ranges_outside(text, &urls, max_id_len);
 
     let mut links = Vec::with_capacity(urls.len() + shas.len());
     links.extend(urls.into_iter().map(|range| MessageLinkRange {
@@ -125,7 +125,7 @@ pub(crate) fn commit_message_link_ranges(text: &str) -> Vec<MessageLinkRange> {
 /// Only the tests need the two kinds apart; the UI always wants both.
 #[cfg(test)]
 fn commit_sha_ranges(text: &str) -> Vec<Range<usize>> {
-    commit_sha_ranges_outside(text, &web_url_ranges(text))
+    commit_sha_ranges_outside(text, &web_url_ranges(text), 40)
 }
 
 /// Bytes that may follow the first character of a URL scheme (RFC 3986).
@@ -232,9 +232,13 @@ fn trim_url_tail(bytes: &[u8], start: usize, floor: usize, mut end: usize) -> us
     end
 }
 
-fn commit_sha_ranges_outside(text: &str, excluded: &[Range<usize>]) -> Vec<Range<usize>> {
+fn commit_sha_ranges_outside(
+    text: &str,
+    excluded: &[Range<usize>],
+    max_id_len: usize,
+) -> Vec<Range<usize>> {
     const MIN_SHA_LEN: usize = 7;
-    const MAX_SHA_LEN: usize = 40;
+    let max_id_len = if max_id_len == 64 { 64 } else { 40 };
 
     let bytes = text.as_bytes();
     let mut ranges = Vec::new();
@@ -252,7 +256,7 @@ fn commit_sha_ranges_outside(text: &str, excluded: &[Range<usize>]) -> Vec<Range
         }
 
         let len = cursor - start;
-        if (MIN_SHA_LEN..=MAX_SHA_LEN).contains(&len)
+        if (MIN_SHA_LEN..=max_id_len).contains(&len)
             && is_whole_word(bytes, start, cursor)
             && has_hex_letter(&bytes[start..cursor])
             && !overlaps_any(start..cursor, excluded)
@@ -346,7 +350,7 @@ Change-Id: I7a5d480873e839444e4e188ffa87f9c635e2fb81
 Reviewed-on: https://chromium-review.googlesource.com/c/chromium/src/+/8186904";
 
     fn spans(text: &str, kind: MessageLinkKind) -> Vec<&str> {
-        commit_message_link_ranges(text)
+        commit_message_link_ranges(text, 40)
             .into_iter()
             .filter(|link| link.kind == kind)
             .map(|link| &text[link.range])
@@ -514,9 +518,20 @@ chrome-mac-7922-1785755104-c2eee60da6765f60eca833b7c5c0d85ddcbc2940-551a1e94b700
     }
 
     #[test]
+    fn message_links_respect_the_repository_hash_width() {
+        let id = "a1b2c3d4".repeat(8);
+        assert!(commit_message_link_ranges(&id, 40).is_empty());
+        let ranges = commit_message_link_ranges(&id, 64);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].range, 0..64);
+        assert_eq!(ranges[0].kind, MessageLinkKind::CommitSha);
+        assert!(commit_message_link_ranges(&format!("{id}a"), 64).is_empty());
+    }
+
+    #[test]
     fn message_links_are_sorted_and_do_not_overlap() {
         let text = "fix deadbee, see https://example.com/c/8186904 and cafebabe1";
-        let links = commit_message_link_ranges(text);
+        let links = commit_message_link_ranges(text, 40);
         assert_eq!(
             links
                 .iter()

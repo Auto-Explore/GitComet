@@ -51,6 +51,11 @@ impl GixRepo {
         let repo = self.repo();
         let oid = gix::ObjectId::from_hex(commit_id.0.as_bytes())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("invalid commit id: {e}"))))?;
+        if oid.kind() != repo.object_hash() {
+            return Err(Error::new(ErrorKind::Backend(
+                "commit id does not match the repository's object format".into(),
+            )));
+        }
         let commit = repo
             .find_commit(oid)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix find_commit: {e}"))))?;

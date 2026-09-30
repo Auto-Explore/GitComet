@@ -264,11 +264,15 @@ fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
         .into_any_element()
 }
 
-fn commit_message_link_highlights(message: &str, theme: AppTheme) -> CommitMessageLinkHighlights {
+fn commit_message_link_highlights(
+    message: &str,
+    theme: AppTheme,
+    max_id_len: usize,
+) -> CommitMessageLinkHighlights {
     use crate::text_selection::MessageLinkKind;
 
     let style = commit_link_style(theme);
-    let found = crate::text_selection::commit_message_link_ranges(message);
+    let found = crate::text_selection::commit_message_link_ranges(message, max_id_len);
     let highlights = found
         .iter()
         .map(|link| (link.range.clone(), style))
@@ -973,11 +977,12 @@ impl DetailsPaneView {
     fn sync_commit_details_message_input(
         &mut self,
         message: &str,
+        max_id_len: usize,
         theme: AppTheme,
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (mut highlights, links) = commit_message_link_highlights(message, theme);
+        let (mut highlights, links) = commit_message_link_highlights(message, theme, max_id_len);
         let mut merged = commit_message_summary_highlights(message, theme, &highlights);
         merged.append(&mut highlights);
         merged.sort_by_key(|(range, _)| range.start);
@@ -1118,7 +1123,7 @@ impl DetailsPaneView {
             .to
             .iter()
             .chain(std::iter::once(&range.from))
-            .filter(|id| id.as_ref() != gitcomet_core::domain::EMPTY_TREE_ID)
+            .filter(|id| !gitcomet_core::domain::is_empty_tree_id(id.as_ref()))
             .cloned()
             .collect()
     }
@@ -2601,6 +2606,7 @@ impl DetailsPaneView {
 
                         self.sync_commit_details_message_input(
                             details.message.as_str(),
+                            details.id.as_ref().len(),
                             theme,
                             repo_id,
                             cx,

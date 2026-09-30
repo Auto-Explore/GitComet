@@ -382,6 +382,22 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
     ));
 }
 
+fn fake_gitlink_id(repo: &Path) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--show-object-format"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let width = match output.stdout.trim_ascii() {
+        b"sha1" => 40,
+        b"sha256" => 64,
+        other => panic!("unknown format: {other:?}"),
+    };
+    "1".repeat(width)
+}
+
 fn staged_deleted_gitlink_fixture() -> (
     tempfile::TempDir,
     FxHashMap<RepoId, Arc<dyn GitRepository>>,
@@ -396,7 +412,7 @@ fn staged_deleted_gitlink_fixture() -> (
             "update-index",
             "--add",
             "--cacheinfo",
-            "160000,1111111111111111111111111111111111111111,vendor/submodule",
+            &format!("160000,{},vendor/submodule", fake_gitlink_id(dir.path())),
         ],
     );
     run_git(dir.path(), &["commit", "-q", "-m", "add submodule gitlink"]);
@@ -754,7 +770,7 @@ fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
             "update-index",
             "--add",
             "--cacheinfo",
-            "160000,1111111111111111111111111111111111111111,vendor/item",
+            &format!("160000,{},vendor/item", fake_gitlink_id(dir.path())),
         ],
     );
     run_git(dir.path(), &["commit", "-q", "-m", "gitlink"]);

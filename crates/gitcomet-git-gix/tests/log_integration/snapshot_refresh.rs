@@ -663,19 +663,22 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
             run_git(dir.path(), &["commit-graph", "write", "--reachable"]);
         }
         let repo = GixBackend.open(dir.path()).unwrap();
-        let index = repo
-            .build_history_index(
-                HistoryMode::AllBranches,
-                None,
-                &CancellationToken::new(),
-                &mut |_| {},
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            index.is_probable_stash(index.position(merge.trim()).unwrap()),
-            !graph
-        );
-        assert!(index.is_probable_stash(index.position(stash.trim()).unwrap()));
+        for author in [None, Some("Alice")] {
+            let index = repo
+                .build_history_index(
+                    HistoryMode::AllBranches,
+                    author,
+                    &CancellationToken::new(),
+                    &mut |_| {},
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                index.is_probable_stash(index.position(merge.trim()).unwrap()),
+                !graph,
+                "graph={graph} author={author:?}"
+            );
+            assert!(index.is_probable_stash(index.position(stash.trim()).unwrap()));
+        }
     }
 }

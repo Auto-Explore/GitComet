@@ -693,7 +693,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     assert_eq!(listed[0].status, SubmoduleStatus::MergeConflict);
     assert_eq!(
         listed[0].recorded_head.as_ref(),
-        "0000000000000000000000000000000000000000"
+        "0".repeat(git_stdout(&parent_repo, &["rev-parse", "HEAD"]).len())
     );
     let summary = opened
         .submodule_diff_summary(&DiffTarget::WorkingTree {
@@ -816,7 +816,7 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
         ],
     );
 
-    let missing_submodule_head = "2222222222222222222222222222222222222222";
+    let missing_submodule_head = "2".repeat(git_stdout(&parent_repo, &["rev-parse", "HEAD"]).len());
     let cacheinfo = format!(
         "160000,{missing_submodule_head},{}",
         submodule_path.display()
@@ -856,7 +856,7 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
     );
     assert_eq!(
         range.to.as_ref().map(|commit| commit.as_ref()),
-        Some(missing_submodule_head)
+        Some(missing_submodule_head.as_str())
     );
     assert!(range.changes.is_empty());
     assert_eq!(
@@ -920,13 +920,16 @@ fn submodule_add_update_remove_round_trip() {
         listed[0].status,
         gitcomet_core::domain::SubmoduleStatus::UpToDate
     );
-    assert_eq!(listed[0].recorded_head.as_ref().len(), 40);
+    assert_eq!(
+        listed[0].recorded_head.as_ref().len(),
+        git_stdout(&parent_repo, &["rev-parse", "HEAD"]).len()
+    );
     assert_eq!(
         listed[0]
             .checked_out_head
             .as_ref()
             .map(|head| head.as_ref().len()),
-        Some(40)
+        Some(git_stdout(&parent_repo, &["rev-parse", "HEAD"]).len())
     );
 
     assert_eq!(

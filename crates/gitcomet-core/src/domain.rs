@@ -583,7 +583,31 @@ pub enum BlameSource {
 /// Git's canonical empty tree object. Usable anywhere a diff wants a base with
 /// no content — comparing against it is how the changes a root commit
 /// *introduces* are expressed, since a root commit has no parent to diff from.
-pub const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub const EMPTY_TREE_ID_SHA1: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub const EMPTY_TREE_ID_SHA256: &str =
+    "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
+
+/// The empty tree in the same object format as a complete hexadecimal ID.
+/// Abbreviations and revision names do not identify an object format.
+pub fn empty_tree_id_like(sibling: &CommitId) -> Option<CommitId> {
+    if !sibling
+        .as_ref()
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let id = match sibling.as_ref().len() {
+        40 => EMPTY_TREE_ID_SHA1,
+        64 => EMPTY_TREE_ID_SHA256,
+        _ => return None,
+    };
+    Some(CommitId(id.into()))
+}
+
+pub fn is_empty_tree_id(id: &str) -> bool {
+    id.eq_ignore_ascii_case(EMPTY_TREE_ID_SHA1) || id.eq_ignore_ascii_case(EMPTY_TREE_ID_SHA256)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiffTarget {
@@ -1535,6 +1559,23 @@ mod tests {
     use std::io::Cursor;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn empty_tree_uses_the_complete_sibling_object_format() {
+        for (len, expected) in [(40, EMPTY_TREE_ID_SHA1), (64, EMPTY_TREE_ID_SHA256)] {
+            assert_eq!(
+                empty_tree_id_like(&CommitId("a".repeat(len).into()))
+                    .unwrap()
+                    .as_ref(),
+                expected
+            );
+            assert!(is_empty_tree_id(expected));
+        }
+        for invalid in ["main", "abc1234", "", &"x".repeat(40)] {
+            assert!(empty_tree_id_like(&CommitId(invalid.into())).is_none());
+            assert!(!is_empty_tree_id(invalid));
+        }
+    }
 
     #[test]
     fn review_truncated_hunk_context_does_not_change_side_encoding() {

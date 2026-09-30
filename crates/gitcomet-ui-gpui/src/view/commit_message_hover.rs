@@ -416,7 +416,8 @@ impl Render for CommitMessageHoverHost {
         // unwrap and no panic path through `render`.
         let body = self.body.get_or_insert_with(|| {
             let message = hover_card_message(&state, loaded.as_ref());
-            let highlights = commit_message_highlights(message.as_ref(), theme);
+            let highlights =
+                commit_message_highlights(message.as_ref(), theme, state.commit_id.as_ref().len());
             CommitMessageHoverBody {
                 commit_id: state.commit_id.clone(),
                 loaded: loaded.is_some(),

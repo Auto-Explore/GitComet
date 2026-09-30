@@ -350,11 +350,11 @@ fn code_commit_base(host: &str, path: &str) -> Option<ForgeWebBase> {
     })
 }
 
-/// Whether a reference is a full 40-hex-digit git commit id. Forges like
+/// Whether a reference is a full 40- or 64-hex-digit git commit id. Forges like
 /// Azure DevOps and Gitea need to distinguish branches from commits in the
 /// URL (`GB`/`GC`, `src/branch`/`src/commit`).
 fn is_full_sha(reference: &str) -> bool {
-    reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
+    matches!(reference.len(), 40 | 64) && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Percent-encode every character outside the RFC 3986 unreserved set (plus
@@ -380,6 +380,16 @@ fn encode_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn full_object_ids_accept_both_hash_formats() {
+        for len in [40, 64] {
+            assert!(super::is_full_sha(&"a".repeat(len)));
+            assert!(!super::is_full_sha(&"g".repeat(len)));
+        }
+        for len in [0, 7, 39, 41, 63, 65] {
+            assert!(!super::is_full_sha(&"a".repeat(len)));
+        }
+    }
     use super::*;
 
     fn remote(name: &str, url: &str) -> Remote {

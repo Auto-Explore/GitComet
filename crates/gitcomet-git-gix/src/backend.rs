@@ -36,6 +36,7 @@ impl GixBackend {
 
         let repo = crate::open::open_worktree_repo(&workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open"))?;
+        crate::refs::validate_open(&repo, cancellation)?;
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }

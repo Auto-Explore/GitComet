@@ -1,7 +1,10 @@
+#[path = "support/source_audit.rs"]
+mod source_audit;
+use source_audit::{has_test_cfg, rust_source_files};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, ExprCall, ExprLit, File, ImplItemFn, ItemFn, ItemImpl, ItemMod, Lit};
+use syn::{Expr, ExprCall, ExprLit, File, ImplItemFn, ItemFn, ItemImpl, ItemMod, Lit};
 
 const GIT_COMMAND_BUDGET: usize = 105;
 
@@ -56,30 +59,6 @@ fn production_git_cli_call_scoreboard_with_budget_gate() {
     );
 }
 
-fn rust_source_files(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    collect_rust_source_files(root, &mut files);
-    files.sort();
-    files
-}
-
-fn collect_rust_source_files(dir: &Path, files: &mut Vec<PathBuf>) {
-    let mut entries = fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("failed to read source directory {}: {err}", dir.display()))
-        .map(|entry| entry.unwrap_or_else(|err| panic!("failed to read dir entry: {err}")))
-        .collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.path());
-
-    for entry in entries {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rust_source_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            files.push(path);
-        }
-    }
-}
-
 #[derive(Default)]
 struct GitCommandCounter {
     count: usize,
@@ -120,22 +99,6 @@ impl<'ast> Visit<'ast> for GitCommandCounter {
         }
         visit::visit_expr_call(self, node);
     }
-}
-
-fn has_test_cfg(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if !attr.path().is_ident("cfg") {
-            return false;
-        }
-        match &attr.meta {
-            syn::Meta::List(list) => list
-                .tokens
-                .to_string()
-                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                .any(|token| token == "test"),
-            _ => false,
-        }
-    })
 }
 
 fn is_git_command_new_call(expr: &ExprCall) -> bool {
