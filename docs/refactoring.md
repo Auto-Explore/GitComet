@@ -372,8 +372,10 @@ Since then:
   status views (`layout/status_view.rs`). At opt-level 0 the sidebar row
   closure's 666 KB frame became a 29 KB dispatcher plus one arm (largest
   91 KB); sidebar tests' stack need went 837 → 671, 885 → 694, and
-  869 → 790 KiB. The largest remaining frames are the status view
-  (~394 KB) and `GitCometView::render` (~255 KB).
+  869 → 790 KiB. The status view is built in per-section pieces (its
+  frame 394 KB → 46 KB). Tests that open a window now bottom out at
+  ~696 KiB on the home-screen path (`GitCometView::render` ~255 KB,
+  `home_screen` ~158 KB, `center_content` ~147 KB), the next split.
 - The commit, worktree, and range lists and hosted lists share one file-row
   and directory-row builder (`rows/file_list/changed_rows.rs`).
 - Auth-prompt recognition and credential staging moved from
