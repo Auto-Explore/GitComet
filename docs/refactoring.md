@@ -337,3 +337,33 @@ Still to do, deliberately kept out of this step:
   onto a hosted pane first needs a unified-patch snapshot source,
   whitespace mode, change navigation, and a pane that runs without a main
   window's extension host.
+
+## Module splits and shared primitives
+
+Moves only, unless noted; every public or crate path still resolves through
+re-exports, and inline tests moved into child modules of their old paths.
+
+| Module | Before | After |
+|---|---:|---|
+| UI application (`app.rs`) | 6,960 | launch, windows, routing, menus, bindings |
+| Core file diff | 4,344 | file-backed text, planning, rows, edits |
+| Backend utilities | 3,131 | process/cancellation, decoding, hook tracing, arguments/paths; one output combiner |
+| Main pane helpers | 3,971 | `helpers/`: state (fields grouped by responsibility with section comments, not regrouped: field order is drop order), line index, conflict projection/segments/provenance, presentation, mergetool |
+| Main pane conflict actions | 4,292 | `conflict_actions/`: sync, bootstrap, resolution, navigation, output, region edits, view mode; `sync_conflict_resolver` became 912 → 417 lines of named steps (extract-function only) |
+| Panel layout | 4,158 | `layout/`: commit details, metadata, form, comparison, worktree changes, file lists, status sections |
+| Sidebar rows | 3,111 | `sidebar/`: branch rows, changed-file rows, badges, branch lookup, search labels |
+| Popover host | 3,588 | `host/`: construction, lifecycle, focus, opening; branch, remote, and repository prompt submission; settings sync |
+| State model | 3,080 | `model/`: repository, history, diff, navigation, loads, operations, app |
+| Store reducer / effects | 4,182 / 3,249 | 1,991 / 1,650; auth and retry, loads, submodule trust, Git operations, settings, watch leases; load tokens and Git-unavailable replies. Both dispatch matches stay exhaustive in place |
+
+- `gitcomet_core::text_utils::line_starts` is the one newline-start index;
+  the markdown preview, three-way deferred starts, conflict previews, and
+  benchmark fixtures call it. Conflict previews keep "no lines for empty
+  text" on top; tree-sitter's convention (no start after a trailing
+  newline) stays separate on purpose.
+
+Left for later: `render_sidebar_rows` (one 1,796-line function) and the tail
+of `commit_details_view` (the status sections) need method extraction, not
+moves; the three changed-file row renderers in `sidebar/file_rows.rs`
+duplicate their directory and file rows and should share one; the
+remaining auth helpers in `reducer/util.rs` belong in `reducer/auth.rs`.
