@@ -46,10 +46,10 @@ fn push_regular_diff_content_mode_state_with_rev(
         fixture_name
     ));
     let _ = std::fs::create_dir_all(&workdir);
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        Some(path.clone()),
+    );
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
     let file_diff =
         gitcomet_core::domain::FileDiffText::new(path.clone(), Some(old_text), Some(new_text));

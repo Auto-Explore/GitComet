@@ -63,7 +63,7 @@ fn cache_selected_deleted_gitlink(
     repo_id: RepoId,
     target: &gitcomet_core::domain::DiffTarget,
 ) {
-    let gitcomet_core::domain::DiffTarget::WorkingTree { path, area } = target else {
+    let gitcomet_core::domain::DiffTarget::WorkingTree { path, area, .. } = target else {
         return;
     };
     if !head_gitlink_lookup_is_worth_it(state, repo_id, *area, path) {
@@ -3132,10 +3132,8 @@ mod nav_history_tests {
     fn opening_a_file_diff_is_recorded_and_back_restores_the_log() {
         let repo_id = RepoId(1);
         let mut state = available_state_with_repo(repo_id);
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged);
 
         dispatch(
             &mut state,
@@ -3170,14 +3168,10 @@ mod nav_history_tests {
         let repo_id = RepoId(1);
         let mut state = available_state_with_repo(repo_id);
         let commit_a = CommitId("aaa".into());
-        let file1 = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
-        };
-        let file2 = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file2.rs")),
-        };
+        let file1 =
+            DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file1.rs")));
+        let file2 =
+            DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file2.rs")));
 
         dispatch(
             &mut state,
@@ -3235,10 +3229,7 @@ mod nav_history_tests {
         // User navigations create a new global back/forward step.
         assert!(is_view_navigation(&Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: std::path::PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged),
         }));
         assert!(is_view_navigation(&Msg::SelectCommit {
             repo_id: RepoId(1),
@@ -3294,10 +3285,8 @@ mod nav_history_tests {
         let mut state = available_state_with_repo(repo_id);
 
         // Seed: select a working tree diff (entries: [origin, diff], cursor=1).
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged);
         dispatch(
             &mut state,
             Msg::SelectDiff {
@@ -3343,10 +3332,7 @@ mod nav_history_tests {
         let repo_id = RepoId(1);
         let mut state = available_state_with_repo(repo_id);
         let commit_a = CommitId("aaa".into());
-        let file = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
-        };
+        let file = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file1.rs")));
 
         dispatch(
             &mut state,
@@ -3395,10 +3381,7 @@ mod nav_history_tests {
         let mut state = available_state_with_repo(repo_id);
         let commit_a = CommitId("aaa".into());
         let commit_b = CommitId("bbb".into());
-        let file = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
-        };
+        let file = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file1.rs")));
 
         dispatch(
             &mut state,
@@ -3448,18 +3431,12 @@ mod nav_history_tests {
         let repo_id = RepoId(1);
         let mut state = available_state_with_repo(repo_id);
         let commit_a = CommitId("aaa".into());
-        let file_a = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/a.rs")),
-        };
-        let file_b = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/b.rs")),
-        };
-        let file_c = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/c.rs")),
-        };
+        let file_a =
+            DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("src/a.rs")));
+        let file_b =
+            DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("src/b.rs")));
+        let file_c =
+            DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("src/c.rs")));
 
         dispatch(
             &mut state,
@@ -3683,13 +3660,10 @@ mod comparison_tests {
             })
             .expect("a range-file load should be issued");
 
-        let files = vec![CommitFileChange {
-            path: std::path::PathBuf::from("a.rs"),
-            kind: FileStatusKind::Modified,
-            is_submodule: false,
-            additions: Some(1),
-            deletions: Some(0),
-        }];
+        let files = vec![
+            CommitFileChange::new(std::path::PathBuf::from("a.rs"), FileStatusKind::Modified)
+                .with_line_counts(Some(1), Some(0)),
+        ];
 
         // A stale result (wrong `from`) is dropped.
         dispatch_effects(

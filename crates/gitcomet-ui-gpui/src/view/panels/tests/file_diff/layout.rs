@@ -16,11 +16,11 @@ fn push_inline_submodule_diff_content_mode_state(
     let submodule_workdir = workdir.join("vendor/submodule");
     let _ = std::fs::create_dir_all(&submodule_workdir);
     let path = PathBuf::from("src/lib.rs");
-    let target = gitcomet_core::domain::DiffTarget::CommitRange {
-        from_commit_id: gitcomet_core::domain::CommitId("aaaa".into()),
-        to_commit_id: Some(gitcomet_core::domain::CommitId("bbbb".into())),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        gitcomet_core::domain::CommitId("aaaa".into()),
+        Some(gitcomet_core::domain::CommitId("bbbb".into())),
+        Some(path.clone()),
+    );
     let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
@@ -41,10 +41,10 @@ index 1111111..2222222 100644
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-                path: PathBuf::from("vendor/submodule"),
-                area: gitcomet_core::domain::DiffArea::Unstaged,
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+                PathBuf::from("vendor/submodule"),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
             repo.diff_state.inline_submodule_diff =
                 Some(gitcomet_state::model::InlineSubmoduleDiffState {
                     origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
@@ -367,10 +367,10 @@ fn diff_content_mode_switches_regular_file_diff_between_patch_and_content(
     ));
     let _ = std::fs::create_dir_all(&workdir);
     let path = PathBuf::from("src/lib.rs");
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        Some(path.clone()),
+    );
     let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644

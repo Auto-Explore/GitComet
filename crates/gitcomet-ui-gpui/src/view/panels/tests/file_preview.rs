@@ -1823,10 +1823,10 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: Some(file_rel.clone()),
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit(
+                commit_id.clone(),
+                Some(file_rel.clone()),
+            ));
             repo.diff_state.diff_state_rev = 1;
             repo.diff_state.diff = gitcomet_state::model::Loadable::Error(
                 "parsed patch diff should not be consulted for committed deleted preview".into(),
@@ -1851,13 +1851,10 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                     committed_at: "2026-04-07T12:00:00Z".to_string(),
                     committed_at_unix: 0,
                     parent_ids: vec![],
-                    files: vec![gitcomet_core::domain::CommitFileChange {
-                        path: file_rel.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Deleted,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    }],
+                    files: vec![gitcomet_core::domain::CommitFileChange::new(
+                        file_rel.clone(),
+                        gitcomet_core::domain::FileStatusKind::Deleted,
+                    )],
                 },
             ));
             repo.history_state.commit_details_rev = 1;

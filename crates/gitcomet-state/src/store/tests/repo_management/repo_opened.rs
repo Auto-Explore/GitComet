@@ -950,10 +950,10 @@ fn repo_action_finished_reissues_selected_commit_diff() {
 
     // A historical commit's diff (a non-WorkingTree target) is open and loading. The old code only
     // re-issued WorkingTree diffs, leaving this one stranded.
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: CommitId("abc123".into()),
-        path: Some(PathBuf::from("src/main.rs")),
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        CommitId("abc123".into()),
+        Some(PathBuf::from("src/main.rs")),
+    ));
     state.repos[0].diff_state.diff = Loadable::Loading;
 
     let effects = reduce(

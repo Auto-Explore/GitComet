@@ -115,10 +115,10 @@ fn open_rendered_markdown_preview(
     let file_rel = std::path::PathBuf::from("docs/preview.md");
     let abs_path = workdir.join(&file_rel);
     let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
@@ -292,10 +292,10 @@ fn open_rendered_markdown_diff(
     let workdir =
         std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
     let file_rel = std::path::PathBuf::from("docs/long.md");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create workdir");

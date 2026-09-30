@@ -25,10 +25,10 @@ fn status_file_right_click_opens_menu_without_opening_diff_or_changing_selection
     let staged = std::path::PathBuf::from("staged.txt");
 
     // The diff panel is parked on a file that none of the right-clicks touch.
-    let initial_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from("parked.txt"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let initial_target = gitcomet_core::domain::DiffTarget::working_tree(
+        std::path::PathBuf::from("parked.txt"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let selection = vec![a.clone(), b.clone()];
 
     cx.update(|_window, app| {

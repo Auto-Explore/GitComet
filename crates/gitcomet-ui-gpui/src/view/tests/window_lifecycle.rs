@@ -779,10 +779,10 @@ fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
     };
     let mut repo_state =
         open_repo_state_with_workdir(repo.to_str().expect("test path should be unicode"));
-    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        area: DiffArea::Unstaged,
-        path: PathBuf::from("src/conflict.txt"),
-    });
+    repo_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/conflict.txt"),
+        DiffArea::Unstaged,
+    ));
     state.repos.push(repo_state);
 
     assert_eq!(
@@ -804,10 +804,10 @@ fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
     };
     let mut repo_state =
         open_repo_state_with_workdir(repo.to_str().expect("test path should be unicode"));
-    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        area: DiffArea::Unstaged,
-        path: PathBuf::from("src/conflict.txt"),
-    });
+    repo_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/conflict.txt"),
+        DiffArea::Unstaged,
+    ));
     repo_state.conflict_state.conflict_file_path = Some(PathBuf::from("src/conflict.txt"));
     repo_state.conflict_state.conflict_file = Loadable::Loading;
     state.repos.push(repo_state);

@@ -143,10 +143,7 @@ pub(super) fn model(
         } else {
             Box::new(ContextMenuAction::SelectDiff {
                 repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path.to_path_buf(),
-                    area,
-                },
+                target: DiffTarget::working_tree(path.to_path_buf(), area),
             })
         },
     });

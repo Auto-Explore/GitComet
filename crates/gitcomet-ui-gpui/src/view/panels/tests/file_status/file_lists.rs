@@ -37,13 +37,10 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
                     parent_ids: vec![gitcomet_core::domain::CommitId(
                         "89abcdef0123456789abcdef0123456789abcdef".into(),
                     )],
-                    files: vec![gitcomet_core::domain::CommitFileChange {
-                        path: added_path.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Added,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    }],
+                    files: vec![gitcomet_core::domain::CommitFileChange::new(
+                        added_path.clone(),
+                        gitcomet_core::domain::FileStatusKind::Added,
+                    )],
                 },
             ));
 
@@ -135,10 +132,10 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
             gitcomet_core::domain::FileStatusKind::Modified,
         ),
     ];
-    let initial_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from("src/current.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let initial_target = gitcomet_core::domain::DiffTarget::working_tree(
+        std::path::PathBuf::from("src/current.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -160,12 +157,8 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
                     )],
                     files: files
                         .iter()
-                        .map(|(path, kind)| gitcomet_core::domain::CommitFileChange {
-                            path: path.clone(),
-                            kind: *kind,
-                            is_submodule: false,
-                            additions: None,
-                            deletions: None,
+                        .map(|(path, kind)| {
+                            gitcomet_core::domain::CommitFileChange::new(path.clone(), *kind)
                         })
                         .collect(),
                 },
@@ -247,12 +240,11 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
     let repo_id = gitcomet_state::model::RepoId(61);
     let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
     let files = (0..48)
-        .map(|ix| gitcomet_core::domain::CommitFileChange {
-            path: std::path::PathBuf::from(format!("src/commit_details/dir_{ix}/file_{ix}.rs")),
-            kind: gitcomet_core::domain::FileStatusKind::Modified,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
+        .map(|ix| {
+            gitcomet_core::domain::CommitFileChange::new(
+                std::path::PathBuf::from(format!("src/commit_details/dir_{ix}/file_{ix}.rs")),
+                gitcomet_core::domain::FileStatusKind::Modified,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -357,41 +349,31 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                     committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![
-                        gitcomet_core::domain::CommitFileChange {
-                            path: "src/modified.rs".into(),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            is_submodule: false,
-                            additions: Some(1),
-                            deletions: Some(2),
-                        },
-                        gitcomet_core::domain::CommitFileChange {
-                            path: "src/removed.rs".into(),
-                            kind: gitcomet_core::domain::FileStatusKind::Deleted,
-                            is_submodule: false,
-                            additions: Some(0),
-                            deletions: Some(4),
-                        },
-                        gitcomet_core::domain::CommitFileChange {
-                            path: "src/added.rs".into(),
-                            kind: gitcomet_core::domain::FileStatusKind::Added,
-                            is_submodule: false,
-                            additions: Some(5),
-                            deletions: Some(0),
-                        },
-                        gitcomet_core::domain::CommitFileChange {
-                            path: "src/renamed.rs".into(),
-                            kind: gitcomet_core::domain::FileStatusKind::Renamed,
-                            is_submodule: false,
-                            additions: Some(0),
-                            deletions: Some(0),
-                        },
-                        gitcomet_core::domain::CommitFileChange {
-                            path: "src/added-small.rs".into(),
-                            kind: gitcomet_core::domain::FileStatusKind::Added,
-                            is_submodule: false,
-                            additions: Some(1),
-                            deletions: Some(0),
-                        },
+                        gitcomet_core::domain::CommitFileChange::new(
+                            "src/modified.rs".into(),
+                            gitcomet_core::domain::FileStatusKind::Modified,
+                        )
+                        .with_line_counts(Some(1), Some(2)),
+                        gitcomet_core::domain::CommitFileChange::new(
+                            "src/removed.rs".into(),
+                            gitcomet_core::domain::FileStatusKind::Deleted,
+                        )
+                        .with_line_counts(Some(0), Some(4)),
+                        gitcomet_core::domain::CommitFileChange::new(
+                            "src/added.rs".into(),
+                            gitcomet_core::domain::FileStatusKind::Added,
+                        )
+                        .with_line_counts(Some(5), Some(0)),
+                        gitcomet_core::domain::CommitFileChange::new(
+                            "src/renamed.rs".into(),
+                            gitcomet_core::domain::FileStatusKind::Renamed,
+                        )
+                        .with_line_counts(Some(0), Some(0)),
+                        gitcomet_core::domain::CommitFileChange::new(
+                            "src/added-small.rs".into(),
+                            gitcomet_core::domain::FileStatusKind::Added,
+                        )
+                        .with_line_counts(Some(1), Some(0)),
                     ],
                 },
             ));
@@ -597,12 +579,11 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
     let repo_id = gitcomet_state::model::RepoId(62);
     let commit_sha = "fedcba9876543210fedcba9876543210fedcba98".to_string();
     let files = (0..48)
-        .map(|ix| gitcomet_core::domain::CommitFileChange {
-            path: std::path::PathBuf::from(format!("src/commit_zoom/dir_{ix}/file_{ix}.rs")),
-            kind: gitcomet_core::domain::FileStatusKind::Modified,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
+        .map(|ix| {
+            gitcomet_core::domain::CommitFileChange::new(
+                std::path::PathBuf::from(format!("src/commit_zoom/dir_{ix}/file_{ix}.rs")),
+                gitcomet_core::domain::FileStatusKind::Modified,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -740,24 +721,12 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                     committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![
-                        gitcomet_core::domain::CommitFileChange {
-                            path: std::path::PathBuf::from(
+                        gitcomet_core::domain::CommitFileChange::new(std::path::PathBuf::from(
                                 "history/really_long_commit_directory_name/files/commit_file_alpha.rs",
-                            ),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            is_submodule: false,
-                            additions: None,
-                            deletions: None,
-                        },
-                        gitcomet_core::domain::CommitFileChange {
-                            path: std::path::PathBuf::from(
+                            ), gitcomet_core::domain::FileStatusKind::Modified),
+                        gitcomet_core::domain::CommitFileChange::new(std::path::PathBuf::from(
                                 "history/dir/another_super_long_commit_directory_name/commit_file_beta.rs",
-                            ),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            is_submodule: false,
-                            additions: None,
-                            deletions: None,
-                        },
+                            ), gitcomet_core::domain::FileStatusKind::Modified),
                     ],
                 },
             ));
@@ -929,14 +898,14 @@ fn worktree_file_inputs_are_derived_once_per_scan_and_keyed_by_worktree(
             );
             assert_eq!(
                 entry.target,
-                gitcomet_core::domain::DiffTarget::WorkingTree {
-                    path: first.files[ix].path.clone(),
-                    area: if staged {
+                gitcomet_core::domain::DiffTarget::working_tree(
+                    first.files[ix].path.clone(),
+                    if staged {
                         gitcomet_core::domain::DiffArea::Staged
                     } else {
                         gitcomet_core::domain::DiffArea::Unstaged
-                    },
-                },
+                    }
+                ),
                 "entry {ix} must diff against the right side of the index"
             );
         }
@@ -976,12 +945,12 @@ fn commit_details_state_with_paths(
             parent_ids: vec![],
             files: paths
                 .iter()
-                .map(|path| gitcomet_core::domain::CommitFileChange {
-                    path: (*path).into(),
-                    kind: gitcomet_core::domain::FileStatusKind::Modified,
-                    is_submodule: false,
-                    additions: Some(1),
-                    deletions: Some(1),
+                .map(|path| {
+                    gitcomet_core::domain::CommitFileChange::new(
+                        (*path).into(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    )
+                    .with_line_counts(Some(1), Some(1))
                 })
                 .collect(),
         }));

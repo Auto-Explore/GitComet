@@ -1402,7 +1402,7 @@ impl DetailsPaneView {
             .map(|entry| {
                 // The entry names its lane, so read the counts from that one.
                 let stats = match &entry.target {
-                    gitcomet_core::domain::DiffTarget::WorkingTree { path, area } => summary
+                    gitcomet_core::domain::DiffTarget::WorkingTree { path, area, .. } => summary
                         .line_stats
                         .for_area(*area)
                         .get(path)
@@ -1410,13 +1410,8 @@ impl DetailsPaneView {
                         .unwrap_or_default(),
                     _ => Default::default(),
                 };
-                gitcomet_core::domain::CommitFileChange {
-                    path: entry.path.clone(),
-                    kind: entry.kind,
-                    is_submodule: false,
-                    additions: stats.additions,
-                    deletions: stats.deletions,
-                }
+                gitcomet_core::domain::CommitFileChange::new(entry.path.clone(), entry.kind)
+                    .with_line_counts(stats.additions, stats.deletions)
             })
             .collect();
 

@@ -199,10 +199,7 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
         },
     );
 
@@ -384,10 +381,7 @@ fn external_index_change_reloads_open_working_tree_diff() {
         &mut state,
         Msg::SelectDiff {
             repo_id,
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Staged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
         },
     );
 
@@ -581,10 +575,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
         },
     );
 
@@ -1069,10 +1060,10 @@ fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(
+                PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs"),
+                DiffArea::Unstaged,
+            ),
         },
     );
 
@@ -1248,10 +1239,10 @@ fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
     ));
     state.active_repo = Some(repo_id);
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
     state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
     state.repos[0].history_state.blame_source = Some(
         gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
@@ -1383,10 +1374,10 @@ fn reload_repo_clears_stale_navigation_history() {
     let commit_a = CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
     let commit_b = CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
     let snap = |c: &CommitId| crate::model::MainViewSnapshot {
-        diff_target: Some(DiffTarget::Commit {
-            commit_id: c.clone(),
-            path: Some(PathBuf::from("src/lib.rs")),
-        }),
+        diff_target: Some(DiffTarget::commit(
+            c.clone(),
+            Some(PathBuf::from("src/lib.rs")),
+        )),
         content_preview: false,
         edit_mode: false,
         selected_commit: Some(c.clone()),
@@ -1410,10 +1401,10 @@ fn reload_repo_clears_stale_navigation_history() {
         });
     // Make the live view match the nav tail so the reduce-wrapper's reconcile is
     // a no-op and the stack survives intact up to the point ReloadRepo runs.
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_b.clone(),
-        path: Some(PathBuf::from("src/lib.rs")),
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        commit_b.clone(),
+        Some(PathBuf::from("src/lib.rs")),
+    ));
     state.repos[0].set_selected_commit(Some(commit_b.clone()));
     assert_eq!(state.repos[0].navigation.main_history.entries.len(), 2);
 
@@ -4368,10 +4359,7 @@ fn open_repo_showing_working_tree_file() -> (
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
         },
     );
     reduce(

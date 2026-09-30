@@ -90,10 +90,10 @@ fn git_op_trace_captures_backend_entry_points_once_per_operation() {
     assert!(branches.iter().any(|branch| branch.name == "feature"));
 
     let diff = opened
-        .diff_parsed(&DiffTarget::WorkingTree {
-            path: PathBuf::from("story.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_parsed(&DiffTarget::working_tree(
+            PathBuf::from("story.txt"),
+            DiffArea::Unstaged,
+        ))
         .expect("diff parsed");
     assert!(!diff.lines.is_empty());
 

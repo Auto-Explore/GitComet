@@ -1489,10 +1489,10 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
         },
     ]));
     state.repos[0].file_browser.bump_rev();
-    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: nested.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        nested.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     state.repos[0].diff_state.content_preview = true;
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
@@ -1608,10 +1608,10 @@ fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppCo
         "the branch-locate action belongs only to Branches"
     );
 
-    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/main.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/main.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     state.repos[0].diff_state.content_preview = true;
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);

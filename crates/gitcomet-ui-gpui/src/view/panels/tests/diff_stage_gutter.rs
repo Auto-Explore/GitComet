@@ -78,10 +78,7 @@ fn worktree_target(area: DiffArea) -> DiffTarget {
 }
 
 fn worktree_target_at(path: &str, area: DiffArea) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from(path),
-        area,
-    }
+    DiffTarget::working_tree(std::path::PathBuf::from(path), area)
 }
 
 /// Open a window showing the fixture diff in the default (whole-file) view and
@@ -347,10 +344,10 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
 fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_stage_gutter_view(
         cx,
-        DiffTarget::Commit {
-            commit_id: CommitId("abcdef00112233bb".into()),
-            path: Some(std::path::PathBuf::from("src/lib.rs")),
-        },
+        DiffTarget::commit(
+            CommitId("abcdef00112233bb".into()),
+            Some(std::path::PathBuf::from("src/lib.rs")),
+        ),
         DiffViewMode::Inline,
     );
 

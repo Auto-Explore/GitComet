@@ -158,16 +158,12 @@ fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestA
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: hunk_path.clone(),
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+        hunk_path.clone(),
+        DiffArea::Unstaged,
+    ));
     repo.diff_state.diff = Loadable::Ready(
-        simple_hunk_diff(DiffTarget::WorkingTree {
-            path: hunk_path,
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        simple_hunk_diff(DiffTarget::working_tree(hunk_path, DiffArea::Unstaged)).into(),
     );
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
@@ -453,11 +449,7 @@ fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     // Without file text the file-diff cache resets on every render, which
     // bumps the projection and would recapture the document regardless.
@@ -562,11 +554,7 @@ fn split_file_diff_search_captures_only_file_rows(cx: &mut gpui::TestAppContext)
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     repo.diff_state.diff_file =
         Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
@@ -669,11 +657,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
@@ -824,11 +808,7 @@ fn open_diff_search_on_two_hunk_diff(
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
@@ -1179,11 +1159,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_diff_search_input(cx, &view);
@@ -1256,11 +1232,7 @@ fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppC
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
 
@@ -1367,11 +1339,7 @@ fn diff_search_preserve_current_scrolls_when_matches_first_appear(cx: &mut gpui:
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
 
@@ -1443,11 +1411,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        searchable_scroll_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        searchable_scroll_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
@@ -1911,11 +1875,7 @@ fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::Tes
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_diff_search_input(cx, &view);
@@ -1978,11 +1938,7 @@ fn diff_search_navigation_after_synchronous_recompute_is_not_lost(cx: &mut gpui:
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_diff_search_input(cx, &view);
@@ -2045,11 +2001,7 @@ fn diff_search_query_edit_keeps_previous_matches_until_the_worker_publishes(
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_diff_search_input(cx, &view);

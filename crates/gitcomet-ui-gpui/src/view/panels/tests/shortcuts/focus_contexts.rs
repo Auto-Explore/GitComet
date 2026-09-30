@@ -33,10 +33,10 @@ fn another_surface_taking_the_selection_clears_the_diff_text_selection(
         "gitcomet_ui_test_{}_diff_selection_ownership",
         std::process::id()
     ));
-    let target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(std::path::PathBuf::from("src/only.rs")),
-    };
+    let target = DiffTarget::commit(
+        commit_id.clone(),
+        Some(std::path::PathBuf::from("src/only.rs")),
+    );
 
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.diff_state.diff_target = Some(target.clone());
@@ -82,14 +82,8 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
     ));
     let first_path = std::path::PathBuf::from("src/commit_details/first.rs");
     let second_path = std::path::PathBuf::from("src/commit_details/second.rs");
-    let first_target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(first_path),
-    };
-    let second_target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(second_path),
-    };
+    let first_target = DiffTarget::commit(commit_id.clone(), Some(first_path));
+    let second_target = DiffTarget::commit(commit_id.clone(), Some(second_path));
 
     let mut first_repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     first_repo.diff_state.diff_target = Some(first_target.clone());
@@ -280,11 +274,7 @@ fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppConte
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     // Wide and tall enough that nothing collapses into an overflow at 200%.
@@ -413,11 +403,7 @@ fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppCont
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
@@ -634,11 +620,7 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
         &first,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: first.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(first.clone(), DiffArea::Unstaged)).into(),
     );
     repo.diff_state.diff_rev = repo.diff_state.diff_rev.wrapping_add(1);
     repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
@@ -773,10 +755,7 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path,
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(path, DiffArea::Unstaged));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_diff_panel(cx, &view);

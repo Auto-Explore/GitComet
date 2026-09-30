@@ -234,10 +234,7 @@ mod tests {
         state.repos.push(repo);
         state.active_repo = Some(RepoId(1));
 
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Staged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Staged);
 
         with_select_diff_sync(&mut state, RepoId(1), target.clone(), |state, effects| {
             assert!(matches!(

@@ -557,10 +557,7 @@ fn simple_worktree_repo(
         }
         .into(),
     );
-    let target = DiffTarget::WorkingTree {
-        path: selected_path.to_path_buf(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(selected_path.to_path_buf(), DiffArea::Unstaged);
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
     repo.diff_state.diff_rev = 1;

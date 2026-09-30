@@ -74,7 +74,7 @@ impl MainPaneView {
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
                 {
-                    DiffTarget::WorkingTree { path, area } => {
+                    DiffTarget::WorkingTree { path, area, .. } => {
                         let kind = if self.is_inline_submodule_diff_active() {
                             self.selected_inline_submodule_diff_entry()
                                 .map(|entry| entry.kind)
@@ -104,7 +104,9 @@ impl MainPaneView {
                         };
                         (Some(icon), color, self.cached_path_display(path))
                     }
-                    DiffTarget::Commit { commit_id: _, path } => match path {
+                    DiffTarget::Commit {
+                        commit_id: _, path, ..
+                    } => match path {
                         Some(path) => (
                             Some("icons/pencil.svg"),
                             theme.colors.foreground.secondary,
@@ -120,6 +122,7 @@ impl MainPaneView {
                         from_commit_id: _,
                         to_commit_id: _,
                         path,
+                        ..
                     } => match path {
                         Some(path) => (
                             Some("icons/swap.svg"),
@@ -201,6 +204,7 @@ impl MainPaneView {
                 DiffTarget::Commit {
                     commit_id,
                     path: Some(path),
+                    ..
                 } => (
                     commit_id
                         .as_ref()

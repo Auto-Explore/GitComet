@@ -253,7 +253,7 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
 
 fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             let Some(entries) = repo_state.status_entries_for_area(*area) else {
                 return false;
             };
@@ -269,6 +269,7 @@ fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> b
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return false;
@@ -292,7 +293,7 @@ fn diff_target_preview_text_side(
     target: &DiffTarget,
 ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             let entries = repo_state.status_entries_for_area(*area)?;
 
             entries.iter().find_map(|entry| {
@@ -312,6 +313,7 @@ fn diff_target_preview_text_side(
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return None;
@@ -527,7 +529,7 @@ pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
 
 fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             let Some(entry) = repo_state.status_entry_for_path(*area, path) else {
                 return false;
             };
@@ -552,6 +554,7 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return false;
@@ -573,7 +576,7 @@ pub(super) fn selected_conflict_target<'a>(
     repo_state: &RepoState,
     target: &'a DiffTarget,
 ) -> Option<SelectedConflictTarget<'a>> {
-    let DiffTarget::WorkingTree { path, area } = target else {
+    let DiffTarget::WorkingTree { path, area, .. } = target else {
         return None;
     };
     if *area != DiffArea::Unstaged {
@@ -2021,10 +2024,7 @@ mod tests {
     fn diff_reload_effects_cover_image_svg_and_non_file_targets() {
         let repo_id = RepoId(7);
         let repo_state = repo_state(repo_id.0);
-        let png = DiffTarget::WorkingTree {
-            path: PathBuf::from("img.PNG"),
-            area: DiffArea::Unstaged,
-        };
+        let png = DiffTarget::working_tree(PathBuf::from("img.PNG"), DiffArea::Unstaged);
         let png_effects = diff_reload_effects(&repo_state, repo_id, png.clone());
         assert!(diff_target_wants_image_preview(&png));
         assert!(!diff_target_is_svg(&png));
@@ -2032,30 +2032,21 @@ mod tests {
         assert!(matches!(png_effects[0], Effect::LoadDiff { .. }));
         assert!(matches!(png_effects[1], Effect::LoadDiffFileImage { .. }));
 
-        let svg = DiffTarget::WorkingTree {
-            path: PathBuf::from("diagram.svg"),
-            area: DiffArea::Unstaged,
-        };
+        let svg = DiffTarget::working_tree(PathBuf::from("diagram.svg"), DiffArea::Unstaged);
         let svg_effects = diff_reload_effects(&repo_state, repo_id, svg.clone());
         assert!(diff_target_wants_image_preview(&svg));
         assert!(diff_target_is_svg(&svg));
         assert_eq!(svg_effects.len(), 3);
         assert!(matches!(svg_effects[2], Effect::LoadDiffFile { .. }));
 
-        let text_no_ext = DiffTarget::WorkingTree {
-            path: PathBuf::from("README"),
-            area: DiffArea::Unstaged,
-        };
+        let text_no_ext = DiffTarget::working_tree(PathBuf::from("README"), DiffArea::Unstaged);
         assert!(!diff_target_wants_image_preview(&text_no_ext));
         assert_eq!(
             diff_reload_effects(&repo_state, repo_id, text_no_ext).len(),
             2
         );
 
-        let commit_without_path = DiffTarget::Commit {
-            commit_id: CommitId("abc123".into()),
-            path: None,
-        };
+        let commit_without_path = DiffTarget::commit(CommitId("abc123".into()), None);
         assert!(!diff_target_wants_image_preview(&commit_without_path));
         assert!(!diff_target_is_svg(&commit_without_path));
         assert_eq!(
@@ -2071,10 +2062,7 @@ mod tests {
 
         // Working-tree content is read from disk: no patch diff, no file text, no
         // preview-text-file load.
-        let worktree = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let worktree = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let plan = selected_diff_load_plan(&repo, &worktree);
         assert!(!plan.load_patch_diff);
         assert!(!plan.load_file_text);
@@ -2082,10 +2070,8 @@ mod tests {
         assert!(!plan.load_file_image);
 
         // Commit content reads the New-side blob via a preview text file.
-        let commit = DiffTarget::Commit {
-            commit_id: CommitId("abc123".into()),
-            path: Some(PathBuf::from("src/lib.rs")),
-        };
+        let commit =
+            DiffTarget::commit(CommitId("abc123".into()), Some(PathBuf::from("src/lib.rs")));
         let plan = selected_diff_load_plan(&repo, &commit);
         assert!(!plan.load_patch_diff);
         assert_eq!(
@@ -2094,10 +2080,7 @@ mod tests {
         );
 
         // An image is still loaded as an image, not as text.
-        let image = DiffTarget::Commit {
-            commit_id: CommitId("abc123".into()),
-            path: Some(PathBuf::from("logo.png")),
-        };
+        let image = DiffTarget::commit(CommitId("abc123".into()), Some(PathBuf::from("logo.png")));
         let plan = selected_diff_load_plan(&repo, &image);
         assert!(plan.load_file_image);
         assert_eq!(plan.preview_text_side, None);
@@ -2133,10 +2116,7 @@ mod tests {
 
         // An untracked SVG has no patch, but its source still has to load: the
         // Code view is the only place an SVG's text is ever shown.
-        let svg = DiffTarget::WorkingTree {
-            path: svg_path,
-            area: DiffArea::Unstaged,
-        };
+        let svg = DiffTarget::working_tree(svg_path, DiffArea::Unstaged);
         let plan = selected_diff_load_plan(&repo, &svg);
         assert!(!plan.load_patch_diff);
         assert!(plan.load_file_text);
@@ -2147,10 +2127,7 @@ mod tests {
         assert_eq!(diff_reload_effect_count(&repo, &svg), 3);
 
         // A non-SVG image has no text view at all.
-        let png = DiffTarget::WorkingTree {
-            path: png_path,
-            area: DiffArea::Unstaged,
-        };
+        let png = DiffTarget::working_tree(png_path, DiffArea::Unstaged);
         let plan = selected_diff_load_plan(&repo, &png);
         assert!(!plan.load_patch_diff);
         assert!(!plan.load_file_text);

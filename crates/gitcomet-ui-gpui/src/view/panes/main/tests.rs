@@ -366,10 +366,7 @@ fn repo_browsing_commit(sha: &str, content_preview: bool) -> RepoState {
 }
 
 fn commit_content_target(sha: &str) -> DiffTarget {
-    DiffTarget::Commit {
-        commit_id: CommitId(sha.into()),
-        path: Some(PathBuf::from("src/main.rs")),
-    }
+    DiffTarget::commit(CommitId(sha.into()), Some(PathBuf::from("src/main.rs")))
 }
 
 #[test]
@@ -404,10 +401,10 @@ fn historical_browse_content_ignores_plain_diffs_and_live_state() {
     assert!(!historical_browse_content(&previewing, None));
     assert!(!historical_browse_content(
         &previewing,
-        Some(&DiffTarget::WorkingTree {
-            path: PathBuf::from("src/main.rs"),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        })
+        Some(&DiffTarget::working_tree(
+            PathBuf::from("src/main.rs"),
+            gitcomet_core::domain::DiffArea::Unstaged
+        ))
     ));
 
     // No browse point at all.

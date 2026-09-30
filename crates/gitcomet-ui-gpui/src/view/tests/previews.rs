@@ -68,28 +68,22 @@ fn preview_path_rendered_kind_detects_supported_preview_kinds() {
 
 #[test]
 fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
-    let svg_target = DiffTarget::WorkingTree {
-        path: PathBuf::from("diagram.svg"),
-        area: DiffArea::Unstaged,
-    };
+    let svg_target = DiffTarget::working_tree(PathBuf::from("diagram.svg"), DiffArea::Unstaged);
     assert_eq!(
         diff_target_rendered_preview_kind(Some(&svg_target)),
         Some(RenderedPreviewKind::Svg)
     );
 
-    let markdown_target = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
-        path: Some(PathBuf::from("README.md")),
-    };
+    let markdown_target = DiffTarget::commit(
+        CommitId("deadbeef".into()),
+        Some(PathBuf::from("README.md")),
+    );
     assert_eq!(
         diff_target_rendered_preview_kind(Some(&markdown_target)),
         Some(RenderedPreviewKind::Markdown)
     );
 
-    let no_path_target = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
-        path: None,
-    };
+    let no_path_target = DiffTarget::commit(CommitId("deadbeef".into()), None);
     assert_eq!(
         diff_target_rendered_preview_kind(Some(&no_path_target)),
         None

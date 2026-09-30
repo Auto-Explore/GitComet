@@ -663,7 +663,7 @@ fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
 
 fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
     let (repo_id, target) = active_diff_target(state)?;
-    let DiffTarget::WorkingTree { path, area } = &target else {
+    let DiffTarget::WorkingTree { path, area, .. } = &target else {
         return None;
     };
     if *area != DiffArea::Unstaged {

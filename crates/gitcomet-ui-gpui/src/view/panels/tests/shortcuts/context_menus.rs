@@ -88,10 +88,7 @@ fn recent_repository_shortcut_does_not_select_diff_content(cx: &mut gpui::TestAp
         std::process::id()
     ));
     let _ = std::fs::create_dir_all(&workdir);
-    let target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some("src/lib.rs".into()),
-    };
+    let target = DiffTarget::commit(commit_id.clone(), Some("src/lib.rs".into()));
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
@@ -767,15 +764,15 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: hunk_path.clone(),
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+        hunk_path.clone(),
+        DiffArea::Unstaged,
+    ));
     repo.diff_state.diff = Loadable::Ready(
-        simple_hunk_diff(DiffTarget::WorkingTree {
-            path: hunk_path.clone(),
-            area: DiffArea::Unstaged,
-        })
+        simple_hunk_diff(DiffTarget::working_tree(
+            hunk_path.clone(),
+            DiffArea::Unstaged,
+        ))
         .into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
@@ -798,7 +795,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             repo_id: rid,
             target: DiffTarget::Commit {
                 commit_id: cid,
-                path: None
+                path: None, ..
             }
         } if *rid == repo_id && cid == &commit_id
     );
@@ -881,7 +878,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             repo_id: rid,
             target: DiffTarget::Commit {
                 commit_id: cid,
-                path: Some(path)
+                path: Some(path), ..
             }
         } if *rid == repo_id && cid == &commit_id && path == &commit_file_path
     );
@@ -918,7 +915,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         "Enter",
         ContextMenuAction::SelectDiff {
             repo_id: rid,
-            target: DiffTarget::WorkingTree { path, area }
+            target: DiffTarget::WorkingTree { path, area, .. }
         } if *rid == repo_id && path == &unstaged_path && *area == DiffArea::Unstaged
     );
     assert_shortcut_action!(
@@ -972,7 +969,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         "Enter",
         ContextMenuAction::SelectDiff {
             repo_id: rid,
-            target: DiffTarget::WorkingTree { path, area }
+            target: DiffTarget::WorkingTree { path, area, .. }
         } if *rid == repo_id && path == &staged_path && *area == DiffArea::Staged
     );
     assert_shortcut_action!(
@@ -1348,11 +1345,7 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));

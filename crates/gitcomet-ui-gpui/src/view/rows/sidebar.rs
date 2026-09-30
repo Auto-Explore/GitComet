@@ -2499,6 +2499,7 @@ impl DetailsPaneView {
                         DiffTarget::Commit {
                             commit_id: t_commit_id,
                             path: Some(t_path),
+                            ..
                         } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
@@ -2584,10 +2585,10 @@ impl DetailsPaneView {
                             if !e.standard_click() {
                                 return;
                             }
-                            let target = DiffTarget::Commit {
-                                commit_id: commit_id_for_click.clone(),
-                                path: Some((*path_for_click).clone()),
-                            };
+                            let target = DiffTarget::commit(
+                                commit_id_for_click.clone(),
+                                Some((*path_for_click).clone()),
+                            );
                             let selected = this.active_repo().is_some_and(|repo| {
                                 repo.id == repo_id
                                     && repo.diff_state.diff_target.as_ref() == Some(&target)
@@ -3001,11 +3002,8 @@ impl DetailsPaneView {
                 // The change kind rides the row wash and a badge on the icon's corner.
                 let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
                 let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
-                let target = DiffTarget::CommitRange {
-                    from_commit_id: from.clone(),
-                    to_commit_id: to.clone(),
-                    path: Some(f.path.clone()),
-                };
+                let target =
+                    DiffTarget::commit_range(from.clone(), to.clone(), Some(f.path.clone()));
                 let selected = repo.diff_state.diff_target.as_ref() == Some(&target);
                 let target_for_click = target.clone();
                 let tooltip = path_label.clone();

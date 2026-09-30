@@ -117,10 +117,10 @@ fn nav_stack_reconcile_seeds_origin_pushes_and_updates_in_place() {
         worktree_selection: None,
     };
     let file_view = MainViewSnapshot {
-        diff_target: Some(DiffTarget::Commit {
-            commit_id: CommitId("aaa".into()),
-            path: Some(PathBuf::from("src/lib.rs")),
-        }),
+        diff_target: Some(DiffTarget::commit(
+            CommitId("aaa".into()),
+            Some(PathBuf::from("src/lib.rs")),
+        )),
         edit_mode: false,
         content_preview: false,
         selected_commit: Some(CommitId("aaa".into())),
@@ -318,10 +318,10 @@ fn reconcile_fold_collapses_consecutive_duplicate() {
         worktree_selection: None,
     };
     let file_diff = MainViewSnapshot {
-        diff_target: Some(DiffTarget::Commit {
-            commit_id: CommitId("aaa".into()),
-            path: Some(PathBuf::from("src/lib.rs")),
-        }),
+        diff_target: Some(DiffTarget::commit(
+            CommitId("aaa".into()),
+            Some(PathBuf::from("src/lib.rs")),
+        )),
         edit_mode: false,
         content_preview: false,
         selected_commit: Some(CommitId("aaa".into())),
@@ -352,10 +352,10 @@ fn reconcile_fold_collapses_consecutive_duplicate() {
 #[test]
 fn reconcile_fold_no_collapse_when_not_adjacent_duplicate() {
     let view_a = MainViewSnapshot {
-        diff_target: Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        }),
+        diff_target: Some(DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        )),
         edit_mode: false,
         content_preview: false,
         selected_commit: None,
@@ -363,10 +363,10 @@ fn reconcile_fold_no_collapse_when_not_adjacent_duplicate() {
         worktree_selection: None,
     };
     let view_b = MainViewSnapshot {
-        diff_target: Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("b.txt"),
-            area: DiffArea::Unstaged,
-        }),
+        diff_target: Some(DiffTarget::working_tree(
+            PathBuf::from("b.txt"),
+            DiffArea::Unstaged,
+        )),
         edit_mode: false,
         content_preview: false,
         selected_commit: None,
@@ -467,10 +467,7 @@ fn app_state_clone_shares_heavy_repo_fields_via_arc() {
         files: Vec::new(),
     }));
     repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
-        target: DiffTarget::Commit {
-            commit_id: CommitId("c1".into()),
-            path: None,
-        },
+        target: DiffTarget::commit(CommitId("c1".into()), None),
         lines: Vec::new(),
     }));
 
@@ -1039,10 +1036,7 @@ fn bump_diff_state_rev_increments() {
 #[test]
 fn set_diff_target_bumps_target_rev_only_on_change() {
     let mut repo = new_repo();
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
 
     repo.set_diff_target(Some(target.clone()));
     assert_eq!(repo.diff_state.diff_target, Some(target.clone()));

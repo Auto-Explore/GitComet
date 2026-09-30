@@ -732,10 +732,10 @@ fn clicking_a_local_markdown_link_offers_open_in_gitcomet(cx: &mut gpui::TestApp
     // The entry dispatches to the store, whose worker reduces it off the gpui
     // executor: poll the store rather than the pane, which the poller feeds in
     // the running app.
-    let expected_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from("docs/other.md"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let expected_target = gitcomet_core::domain::DiffTarget::working_tree(
+        std::path::PathBuf::from("docs/other.md"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         let navigated = cx.update(|_window, app| {
@@ -835,10 +835,10 @@ fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppC
             .and_then(|repo| repo.diff_state.diff_target.clone());
         assert_eq!(
             target,
-            Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-                path: std::path::PathBuf::from("docs/preview.md"),
-                area: gitcomet_core::domain::DiffArea::Unstaged,
-            }),
+            Some(gitcomet_core::domain::DiffTarget::working_tree(
+                std::path::PathBuf::from("docs/preview.md"),
+                gitcomet_core::domain::DiffArea::Unstaged
+            )),
             "nothing to open, so the pane stays on the document"
         );
     });
@@ -876,10 +876,10 @@ fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestA
     );
 
     // As with the menu entry, the store's worker does the navigating.
-    let expected_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from("docs/other.md"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let expected_target = gitcomet_core::domain::DiffTarget::working_tree(
+        std::path::PathBuf::from("docs/other.md"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         let navigated = cx.update(|_window, app| {
@@ -1013,10 +1013,10 @@ fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: Some(std::path::PathBuf::from("docs/preview.md")),
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit(
+                commit_id.clone(),
+                Some(std::path::PathBuf::from("docs/preview.md")),
+            ));
             repo.diff_state.diff_state_rev = 1;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
@@ -1807,10 +1807,7 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
     std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
     let commit_id = gitcomet_core::domain::CommitId("c0ffee".into());
     let path = std::path::PathBuf::from("docs/a.md");
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), Some(path.clone()));
     let old_text = "See [old](old.md) here.\n\nBefore.\n";
     let new_text = "See [old](old.md) here.\n\nAfter.\n";
 
@@ -2072,10 +2069,7 @@ fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
     std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
     let commit_id = gitcomet_core::domain::CommitId("c0ffee".into());
     let path = std::path::PathBuf::from("docs/a.md");
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), Some(path.clone()));
     let old_text = "See [spec](spec.md) and\nthe old ending.\n";
     let new_text = "See [spec](spec.md) and\nthe new ending.\n";
 

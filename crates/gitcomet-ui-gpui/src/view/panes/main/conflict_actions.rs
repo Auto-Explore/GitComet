@@ -781,7 +781,7 @@ impl MainPaneView {
             return;
         };
 
-        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_state.diff_target.as_ref()
+        let Some(DiffTarget::WorkingTree { path, area, .. }) = repo.diff_state.diff_target.as_ref()
         else {
             self.clear_conflict_resolver_state(cx);
             return;

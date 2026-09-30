@@ -374,7 +374,7 @@ impl MainPaneView {
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
             && let Some(diff_target) = repo.diff_state.diff_target.clone()
-            && let DiffTarget::WorkingTree { path, area } = &diff_target
+            && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {
             let path = path.clone();
             let area = *area;
@@ -440,10 +440,7 @@ impl MainPaneView {
                     if let Some(next_path) = next_path_in_section {
                         self.store.dispatch(Msg::SelectDiff {
                             repo_id,
-                            target: DiffTarget::WorkingTree {
-                                path: next_path,
-                                area: DiffArea::Unstaged,
-                            },
+                            target: DiffTarget::working_tree(next_path, DiffArea::Unstaged),
                         });
                     } else {
                         self.clear_diff_selection_or_exit(repo_id, cx);
@@ -457,10 +454,7 @@ impl MainPaneView {
                     if let Some(next_path) = next_path_in_section {
                         self.store.dispatch(Msg::SelectDiff {
                             repo_id,
-                            target: DiffTarget::WorkingTree {
-                                path: next_path,
-                                area: DiffArea::Staged,
-                            },
+                            target: DiffTarget::working_tree(next_path, DiffArea::Staged),
                         });
                     } else {
                         self.clear_diff_selection_or_exit(repo_id, cx);
@@ -513,7 +507,7 @@ impl MainPaneView {
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
             && let Some(diff_target) = repo.diff_state.diff_target.clone()
-            && let DiffTarget::WorkingTree { path, area } = &diff_target
+            && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {
             let path = path.clone();
             let area = *area;
@@ -584,10 +578,7 @@ impl MainPaneView {
                         if let Some(next_path) = next_path_in_section {
                             self.store.dispatch(Msg::SelectDiff {
                                 repo_id,
-                                target: DiffTarget::WorkingTree {
-                                    path: next_path,
-                                    area: DiffArea::Unstaged,
-                                },
+                                target: DiffTarget::working_tree(next_path, DiffArea::Unstaged),
                             });
                         } else {
                             self.clear_diff_selection_or_exit(repo_id, cx);
@@ -650,10 +641,7 @@ impl MainPaneView {
                         if let Some(next_path) = next_path_in_section {
                             self.store.dispatch(Msg::SelectDiff {
                                 repo_id,
-                                target: DiffTarget::WorkingTree {
-                                    path: next_path,
-                                    area: DiffArea::Staged,
-                                },
+                                target: DiffTarget::working_tree(next_path, DiffArea::Staged),
                             });
                         } else {
                             self.clear_diff_selection_or_exit(repo_id, cx);

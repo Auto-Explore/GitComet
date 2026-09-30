@@ -2348,10 +2348,10 @@ fn browse_open_content_path_captures_previews_only() {
     let path = PathBuf::from("src/main.rs");
     let repo = repo_mut(&mut state, repo_id);
     repo.diff_state.content_preview = true;
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(
+        commit_id.clone(),
+        Some(path.clone()),
+    )));
     assert_eq!(
         browse_open_content_path(repo),
         Some(PendingFileBrowserReopen {
@@ -2361,10 +2361,10 @@ fn browse_open_content_path_captures_previews_only() {
     );
 
     // WorkingTree target
-    repo.set_diff_target(Some(DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    }));
+    repo.set_diff_target(Some(DiffTarget::working_tree(
+        path.clone(),
+        DiffArea::Unstaged,
+    )));
     assert_eq!(
         browse_open_content_path(repo).map(|reopen| reopen.path),
         Some(path)
@@ -2376,10 +2376,7 @@ fn browse_open_content_path_captures_previews_only() {
     repo.diff_state.edit_mode = false;
 
     // Commit with path: None → None
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id,
-        path: None,
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(commit_id, None)));
     assert!(browse_open_content_path(repo).is_none());
 
     // diff_target is None → None
@@ -2392,10 +2389,10 @@ fn open_preview_at(state: &mut AppState, repo_id: RepoId, commit: &CommitId, pat
     let repo = repo_mut(state, repo_id);
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = false;
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id: commit.clone(),
-        path: Some(PathBuf::from(path)),
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(
+        commit.clone(),
+        Some(PathBuf::from(path)),
+    )));
 }
 
 fn load_selected_diffs(effects: &[Effect]) -> usize {
@@ -2449,10 +2446,10 @@ fn browse_repository_at_commit_reopens_active_file_once_the_listing_lands() {
     let repo = repo_mut(&mut state, repo_id);
     assert_eq!(
         repo.diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id: commit_b,
-            path: Some(PathBuf::from("src/lib.rs")),
-        })
+        Some(DiffTarget::commit(
+            commit_b,
+            Some(PathBuf::from("src/lib.rs"))
+        ))
     );
     assert!(repo.diff_state.content_preview);
     assert!(repo.file_browser.pending_reopen.is_none());
@@ -2487,10 +2484,10 @@ fn reset_browse_to_live_reopens_active_file_once_the_listing_lands() {
     assert_eq!(load_selected_diffs(&effects), 1);
     assert_eq!(
         repo_mut(&mut state, repo_id).diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("README.md"),
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(
+            PathBuf::from("README.md"),
+            DiffArea::Unstaged
+        ))
     );
 }
 
@@ -2616,10 +2613,10 @@ fn the_editor_is_never_retargeted_by_a_browse() {
         let repo = repo_mut(&mut state, repo_id);
         repo.diff_state.content_preview = true;
         repo.diff_state.edit_mode = true;
-        repo.set_diff_target(Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        }));
+        repo.set_diff_target(Some(DiffTarget::working_tree(
+            PathBuf::from("src/lib.rs"),
+            DiffArea::Unstaged,
+        )));
     }
     let commit_b = CommitId("bbbbbbbb".into());
     browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
@@ -2805,10 +2802,7 @@ fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
         let repo = repo_mut(&mut state, repo_id);
         repo.file_browser.source = FileSource::Commit(commit_id.clone());
         repo.diff_state.content_preview = true;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(file_path),
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::commit(commit_id.clone(), Some(file_path)));
     }
 
     // Browse the SAME commit — source unchanged, no LoadFileBrowser emitted

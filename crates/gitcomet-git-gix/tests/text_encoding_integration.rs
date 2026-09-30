@@ -54,17 +54,11 @@ fn open(repo: &Path) -> Arc<dyn GitRepository> {
 }
 
 fn unstaged(path: &str) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: PathBuf::from(path),
-        area: DiffArea::Unstaged,
-    }
+    DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged)
 }
 
 fn staged(path: &str) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: PathBuf::from(path),
-        area: DiffArea::Staged,
-    }
+    DiffTarget::working_tree(PathBuf::from(path), DiffArea::Staged)
 }
 
 fn file_text(
@@ -234,10 +228,7 @@ fn config_changes_refresh_attributes_and_decoding_without_reopening() {
     fs::write(workdir.join("ru.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4!\n").unwrap();
     let commit = commit_all(workdir, "change");
     let repo = open(workdir);
-    let target = DiffTarget::Commit {
-        commit_id: commit,
-        path: Some("ru.txt".into()),
-    };
+    let target = DiffTarget::commit(commit, Some("ru.txt".into()));
     let original = file_text(&*repo, &target, None);
     assert_eq!(
         original
@@ -528,10 +519,7 @@ fn commit_converting_latin1_to_utf8_decodes_each_side_in_its_own_encoding() {
     let converted = commit_all(repo_dir, "convert to utf-8");
 
     let repo = open(repo_dir);
-    let target = DiffTarget::Commit {
-        commit_id: converted,
-        path: Some(PathBuf::from("readme.txt")),
-    };
+    let target = DiffTarget::commit(converted, Some(PathBuf::from("readme.txt")));
     assert_eq!(
         changed_lines(&patch(&*repo, &target, None)),
         vec![

@@ -880,10 +880,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             checked_out_head: None,
             status: SubmoduleStatus::NotInitialized,
         }]));
-        let target = DiffTarget::WorkingTree {
-            path: command_path.to_path_buf(),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(command_path.to_path_buf(), DiffArea::Unstaged);
         repo.diff_state.diff_target = Some(target.clone());
         repo.diff_state.submodule_summary = Loadable::Ready(Arc::new(SubmoduleDiffSummary {
             path: command_path.to_path_buf(),
@@ -897,10 +894,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             live_staged: Vec::new(),
             live_unstaged: Vec::new(),
         }));
-        let inline_target = DiffTarget::WorkingTree {
-            path: PathBuf::from("inner.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let inline_target = DiffTarget::working_tree(PathBuf::from("inner.rs"), DiffArea::Unstaged);
         repo.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
             origin: crate::model::ForeignDiffOrigin::Submodule,
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/lib"),
@@ -1793,10 +1787,10 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("README.md"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("README.md"),
+        DiffArea::Unstaged,
+    ));
     state.repos[0].diff_state.diff = Loadable::Loading;
     state.repos[0].diff_state.diff_file = Loadable::Loading;
     state.repos[0].diff_state.diff_file_image = Loadable::Loading;
@@ -1855,10 +1849,10 @@ fn repo_command_finished_stage_hunk_triggers_diff_reload_effects() {
         },
     ));
     state.repos[0].local_actions_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1926,10 +1920,10 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
         },
     ));
     state.repos[0].local_actions_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
     state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
     state.repos[0].history_state.blame_source = Some(
         gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
@@ -2015,10 +2009,10 @@ fn repo_command_finished_stage_hunk_with_svg_diff_triggers_text_and_image_reload
         },
     ));
     state.repos[0].local_actions_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.svg"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("icon.svg"),
+        DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -3040,10 +3034,7 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("image.png"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("image.png"), DiffArea::Unstaged);
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -3676,10 +3667,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         let repo = &mut state.repos[0];
         repo.local_actions_in_flight = 1;
         repo.commit_in_flight = 1;
-        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ));
         repo.diff_state.diff = Loadable::Loading;
         repo.diff_state.diff_file = Loadable::Loading;
         repo.diff_state.diff_file_image = Loadable::Loading;
@@ -4692,10 +4683,10 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
-    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("a.txt"),
-        area: DiffArea::Staged,
-    });
+    repo_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("a.txt"),
+        DiffArea::Staged,
+    ));
     repo_state.diff_state.diff = Loadable::Loading;
     repo_state.diff_state.diff_file = Loadable::Loading;
     repo_state.diff_state.diff_file_image = Loadable::Loading;
@@ -4808,10 +4799,10 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
-    let target = DiffTarget::Commit {
-        commit_id: CommitId("abc123".into()),
-        path: Some(PathBuf::from("assets/icon.png")),
-    };
+    let target = DiffTarget::commit(
+        CommitId("abc123".into()),
+        Some(PathBuf::from("assets/icon.png")),
+    );
     let mut repo_state = RepoState::new_opening(
         repo_id,
         RepoSpec {

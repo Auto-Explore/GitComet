@@ -45,10 +45,7 @@ pub(super) fn model(
             disabled: false,
             action: Box::new(ContextMenuAction::SelectDiff {
                 repo_id,
-                target: DiffTarget::Commit {
-                    commit_id: commit_id.clone(),
-                    path: Some(path.to_path_buf()),
-                },
+                target: DiffTarget::commit(commit_id.clone(), Some(path.to_path_buf())),
             }),
         });
         items.push(ContextMenuItem::Entry {
@@ -96,10 +93,7 @@ pub(super) fn model(
         disabled: false,
         action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,
-            target: DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: Some(path.to_path_buf()),
-            },
+            target: DiffTarget::commit(commit_id.clone(), Some(path.to_path_buf())),
         }),
     });
     items.push(ContextMenuItem::Entry {

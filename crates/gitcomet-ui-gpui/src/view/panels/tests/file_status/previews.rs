@@ -17,10 +17,10 @@ fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestA
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let target = gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: gitcomet_core::domain::CommitId("feedface".into()),
-                path: None,
-            };
+            let target = gitcomet_core::domain::DiffTarget::commit(
+                gitcomet_core::domain::CommitId("feedface".into()),
+                None,
+            );
 
             let diff = gitcomet_core::domain::Diff {
                 target: target.clone(),
@@ -616,10 +616,10 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: Some(file_rel.clone()),
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit(
+                commit_id.clone(),
+                Some(file_rel.clone()),
+            ));
             repo.diff_state.diff = gitcomet_state::model::Loadable::Error(
                 "parsed patch diff should not be consulted for deleted file preview".into(),
             );
@@ -648,13 +648,10 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                     committed_at: "2026-04-07T12:00:00Z".to_string(),
                     committed_at_unix: 0,
                     parent_ids: vec![],
-                    files: vec![gitcomet_core::domain::CommitFileChange {
-                        path: file_rel.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Deleted,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    }],
+                    files: vec![gitcomet_core::domain::CommitFileChange::new(
+                        file_rel.clone(),
+                        gitcomet_core::domain::FileStatusKind::Deleted,
+                    )],
                 },
             ));
             repo.history_state.commit_details_rev =
@@ -906,10 +903,10 @@ fn unstaged_deleted_gitlink_preview_does_not_stay_loading(cx: &mut gpui::TestApp
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create workdir");
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let unified = format!(
         "diff --git a/{0} b/{0}\nindex 1234567..0000000 160000\n--- a/{0}\n+++ /dev/null\n@@ -1 +0,0 @@\n-Subproject commit c35be02cd52b18c7b2894dc570825b43c94130ed\n",
         file_rel.display()
@@ -974,10 +971,10 @@ fn unstaged_modified_gitlink_target_uses_unified_diff_mode(cx: &mut gpui::TestAp
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(workdir.join(&file_rel)).expect("create gitlink-like directory");
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let unified = format!(
         "diff --git a/{0} b/{0}\nindex 1234567..89abcde 160000\n--- a/{0}\n+++ b/{0}\n@@ -1 +1 @@\n-Subproject commit 1234567890123456789012345678901234567890\n+Subproject commit 89abcdef0123456789abcdef0123456789abcdef\n",
         file_rel.display()
@@ -1132,10 +1129,10 @@ fn switching_diff_target_clears_stale_worktree_preview_loading(cx: &mut gpui::Te
                     .into(),
                 );
                 repo.diff_state.diff_target =
-                    Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-                        path: target_path,
-                        area: gitcomet_core::domain::DiffArea::Unstaged,
-                    });
+                    Some(gitcomet_core::domain::DiffTarget::working_tree(
+                        target_path,
+                        gitcomet_core::domain::DiffArea::Unstaged,
+                    ));
                 repo.diff_state.diff_state_rev = diff_state_rev;
                 repo
             }],
@@ -1347,10 +1344,10 @@ fn untracked_directory_target_clears_stale_file_loading_state(cx: &mut gpui::Tes
             );
             repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
                 gitcomet_core::domain::Diff::from_unified(
-                    gitcomet_core::domain::DiffTarget::WorkingTree {
-                        path: file_rel.clone(),
-                        area: gitcomet_core::domain::DiffArea::Unstaged,
-                    },
+                    gitcomet_core::domain::DiffTarget::working_tree(
+                        file_rel.clone(),
+                        gitcomet_core::domain::DiffArea::Unstaged,
+                    ),
                     "",
                 ),
             ));
@@ -1411,10 +1408,10 @@ fn directory_target_with_loading_status_clears_stale_file_loading_state(
             let mut repo = opening_repo_state(repo_id, &workdir);
 
             repo.status = gitcomet_state::model::Loadable::Loading;
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-                path: file_rel.clone(),
-                area: gitcomet_core::domain::DiffArea::Unstaged,
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
             repo.diff_state.diff = gitcomet_state::model::Loadable::Loading;
 
             let next_state = app_state_with_repo(repo, repo_id);

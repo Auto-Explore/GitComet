@@ -114,10 +114,10 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: untracked_a.clone(),
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+        untracked_a.clone(),
+        DiffArea::Unstaged,
+    ));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
@@ -177,10 +177,10 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: tracked_a.clone(),
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+        tracked_a.clone(),
+        DiffArea::Unstaged,
+    ));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
@@ -212,12 +212,11 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
         std::process::id()
     ));
     let files = (0..64)
-        .map(|ix| CommitFileChange {
-            path: std::path::PathBuf::from(format!("src/commit_nav/file_{ix:02}.rs")),
-            kind: FileStatusKind::Modified,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
+        .map(|ix| {
+            CommitFileChange::new(
+                std::path::PathBuf::from(format!("src/commit_nav/file_{ix:02}.rs")),
+                FileStatusKind::Modified,
+            )
         })
         .collect::<Vec<_>>();
     let start_ix = 40usize;
@@ -234,10 +233,10 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
         parent_ids: vec![],
         files: files.clone(),
     }));
-    repo.diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(files[start_ix].path.clone()),
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::commit(
+        commit_id.clone(),
+        Some(files[start_ix].path.clone()),
+    ));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(1024.0), px(420.0)));
@@ -291,20 +290,14 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
         std::process::id()
     ));
     let files = vec![
-        CommitFileChange {
-            path: std::path::PathBuf::from("src/commit_details/first.rs"),
-            kind: FileStatusKind::Modified,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
-        },
-        CommitFileChange {
-            path: std::path::PathBuf::from("src/commit_details/second.rs"),
-            kind: FileStatusKind::Modified,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
-        },
+        CommitFileChange::new(
+            std::path::PathBuf::from("src/commit_details/first.rs"),
+            FileStatusKind::Modified,
+        ),
+        CommitFileChange::new(
+            std::path::PathBuf::from("src/commit_details/second.rs"),
+            FileStatusKind::Modified,
+        ),
     ];
 
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
@@ -320,10 +313,10 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
         parent_ids: vec![],
         files: files.clone(),
     }));
-    repo.diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(files[0].path.clone()),
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::commit(
+        commit_id.clone(),
+        Some(files[0].path.clone()),
+    ));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|window, app| {
@@ -388,11 +381,7 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        three_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        three_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
@@ -588,10 +577,7 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: first.clone(),
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(first.clone(), DiffArea::Unstaged));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|window, app| {
@@ -816,11 +802,7 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
-        .into(),
+        two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     repo.diff_state.diff_rev = repo.diff_state.diff_rev.wrapping_add(1);
     repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
@@ -968,10 +950,10 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
         }
         .into(),
     );
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: untracked_a.clone(),
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+        untracked_a.clone(),
+        DiffArea::Unstaged,
+    ));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_diff_panel(cx, &view);

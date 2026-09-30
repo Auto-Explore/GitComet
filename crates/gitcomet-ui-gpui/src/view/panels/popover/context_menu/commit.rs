@@ -340,10 +340,7 @@ fn model_with_header(
         disabled: false,
         action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,
-            target: DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: None,
-            },
+            target: DiffTarget::commit(commit_id.clone(), None),
         }),
     });
     items.push(ContextMenuItem::Entry {

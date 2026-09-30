@@ -231,10 +231,7 @@ mod tests {
             text.push_str(&format!("+line {ix}{suffix}\n"));
         }
         text.push_str("+\tneedle\n");
-        let target = DiffTarget::WorkingTree {
-            path: "a.txt".into(),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree("a.txt".into(), DiffArea::Unstaged);
         let diff = Arc::new(Diff::from_unified(target, &text));
         let provider = Arc::new(PagedPatchDiffRows::new(diff.clone(), 256));
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));

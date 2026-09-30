@@ -1694,10 +1694,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("tracked.txt"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("tracked.txt"), DiffArea::Unstaged);
     let mut state = AppState::test_default();
     let mut repo_state = crate::model::RepoState::new_opening(
         repo_id,

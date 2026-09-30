@@ -73,25 +73,15 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
     let base = resolve_commit("HEAD^");
     for (target, expected) in [
         (
-            DiffTarget::WorkingTree {
-                path: "menu.txt".into(),
-                area: DiffArea::Staged,
-            },
+            DiffTarget::working_tree("menu.txt".into(), DiffArea::Staged),
             "Привет!!\n",
         ),
         (
-            DiffTarget::Commit {
-                commit_id: head.clone(),
-                path: Some("menu.txt".into()),
-            },
+            DiffTarget::commit(head.clone(), Some("menu.txt".into())),
             "Привет!\n",
         ),
         (
-            DiffTarget::CommitRange {
-                from_commit_id: base,
-                to_commit_id: Some(head),
-                path: Some("menu.txt".into()),
-            },
+            DiffTarget::commit_range(base, Some(head), Some("menu.txt".into())),
             "Привет!\n",
         ),
     ] {
@@ -208,10 +198,8 @@ fn saving_attributes_preserves_choices_even_when_the_rule_is_shadowed() {
         let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
         let path = PathBuf::from("sub/menu.txt");
-        repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        });
+        repo_state.diff_state.diff_target =
+            Some(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged));
         repo_state.diff_state.content_preview = true;
         repo_state.diff_state.text_attributes =
             Loadable::Ready(Arc::new(repo.text_attributes(&path).unwrap()));
@@ -331,10 +319,8 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
         let original = repo.text_attributes(&path).unwrap();
         let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
-        repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        });
+        repo_state.diff_state.diff_target =
+            Some(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged));
         // This preview reads from disk and does not otherwise load a diff.
         repo_state.diff_state.content_preview = true;
         repo_state.diff_state.text_attributes = Loadable::Ready(Arc::new(original.clone()));
@@ -389,10 +375,7 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
             &mut state,
             Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
                 repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path.clone(),
-                    area: DiffArea::Unstaged,
-                },
+                target: DiffTarget::working_tree(path.clone(), DiffArea::Unstaged),
                 result: Ok(attributes),
             }),
         );

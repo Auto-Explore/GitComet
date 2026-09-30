@@ -172,13 +172,14 @@ pub(crate) fn commit_file_change_from_diff(
         (None, None)
     };
 
-    Ok(Some(CommitFileChange {
-        path: path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
-        kind,
-        is_submodule,
-        additions,
-        deletions,
-    }))
+    Ok(Some(
+        CommitFileChange::new(
+            path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
+            kind,
+        )
+        .with_submodule(is_submodule)
+        .with_line_counts(additions, deletions),
+    ))
 }
 
 /// Diff two trees (an absent `old_tree` means an empty tree, i.e. every path in

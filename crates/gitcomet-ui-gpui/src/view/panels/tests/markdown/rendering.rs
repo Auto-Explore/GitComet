@@ -162,10 +162,10 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
         "| --- | --- |\n",
         "| add | 3 |\n",
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create commit markdown diff workdir");
@@ -261,10 +261,10 @@ fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppC
     let path = std::path::PathBuf::from("docs/added.md");
     let old_text = "";
     let new_text = "# Added\n\nThis side must stay visible.\n";
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create empty-side markdown diff workdir");
@@ -681,10 +681,10 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
         std::process::id()
     ));
     let preview_path = std::path::PathBuf::from("docs/preview.md");
-    let preview_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: preview_path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let preview_target = gitcomet_core::domain::DiffTarget::working_tree(
+        preview_path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let set_state = |cx: &mut gpui::VisualTestContext,
                      diff_target: Option<gitcomet_core::domain::DiffTarget>,
@@ -1702,10 +1702,10 @@ fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::
         "wrap this paragraph across many rows ".repeat(40)
     );
     let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
@@ -2642,10 +2642,10 @@ fn split_markdown_eof_ignores_trailing_alignment_padding(cx: &mut gpui::TestAppC
         "{old_text}\n{}\n",
         "new-only words that wrap on the other side ".repeat(18)
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let preview = crate::view::markdown_preview::build_markdown_diff_preview(old_text, &new_text)
         .expect("split EOF padding fixture should parse");
     let old_tail_row_ix = preview
@@ -2759,10 +2759,10 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
     let abs_path = workdir.join(&file_rel);
     let source = "# Title\n\nBody paragraph.\n";
     let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
@@ -3205,10 +3205,10 @@ fn the_budget_fallback_to_source_ends_with_the_file_that_needed_it(cx: &mut gpui
     );
 
     seed_file_diff_state(cx, &view, repo_id, &workdir, &small, "# one\n", "# two\n");
-    let small_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: small.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let small_target = gitcomet_core::domain::DiffTarget::working_tree(
+        small.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     wait_for_main_pane_condition(
         cx,
         &view,

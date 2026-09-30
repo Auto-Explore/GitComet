@@ -1024,7 +1024,8 @@ impl MainPaneView {
 
     pub(in crate::view) fn untracked_directory_notice(&self) -> Option<SharedString> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } = repo.diff_state.diff_target.as_ref()?
+        else {
             return None;
         };
         let abs_path = if path.is_absolute() {
@@ -1732,7 +1733,8 @@ impl MainPaneView {
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } = repo.diff_state.diff_target.as_ref()?
+        else {
             return None;
         };
         if *area != DiffArea::Unstaged {
@@ -1758,7 +1760,7 @@ impl MainPaneView {
         let target = repo.diff_state.diff_target.as_ref()?;
 
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 if *area != DiffArea::Staged {
                     return None;
                 }
@@ -1777,6 +1779,7 @@ impl MainPaneView {
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
+                ..
             } => {
                 let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
@@ -1806,7 +1809,7 @@ impl MainPaneView {
         let target = repo.diff_state.diff_target.as_ref()?;
 
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let is_deleted = repo
                     .status_entry_for_path(*area, path.as_path())
                     .is_some_and(|entry| entry.kind == FileStatusKind::Deleted);
@@ -1822,6 +1825,7 @@ impl MainPaneView {
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
+                ..
             } => {
                 let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
@@ -2357,6 +2361,7 @@ impl MainPaneView {
         let DiffTarget::WorkingTree {
             path,
             area: DiffArea::Unstaged,
+            ..
         } = repo.diff_state.diff_target.as_ref()?
         else {
             return None;

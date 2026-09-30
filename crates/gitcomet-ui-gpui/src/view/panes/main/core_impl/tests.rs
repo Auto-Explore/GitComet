@@ -54,10 +54,7 @@ fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
     ));
 
     for area in [DiffArea::Staged, DiffArea::Unstaged] {
-        state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: "a.rs".into(),
-            area,
-        });
+        state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree("a.rs".into(), area));
         let before = MainPaneView::notify_fingerprint_for(&state);
         match area {
             DiffArea::Staged => state.repos[0].staged_line_stats_rev += 1,
@@ -86,10 +83,8 @@ fn notify_fingerprint_tracks_disk_revs_only_for_working_tree_targets() {
         },
     ));
 
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: "a.rs".into(),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target =
+        Some(DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged));
     let before = MainPaneView::notify_fingerprint_for(&state);
     state.repos[0].worktree_change_rev += 1;
     let after_worktree = MainPaneView::notify_fingerprint_for(&state);
@@ -104,10 +99,10 @@ fn notify_fingerprint_tracks_disk_revs_only_for_working_tree_targets() {
         "a finished git command must reach the pane"
     );
 
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId(std::sync::Arc::from("abc")),
-        path: Some("a.rs".into()),
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        gitcomet_core::domain::CommitId(std::sync::Arc::from("abc")),
+        Some("a.rs".into()),
+    ));
     let commit_before = MainPaneView::notify_fingerprint_for(&state);
     state.repos[0].worktree_change_rev += 1;
     state.repos[0].local_worktree_write_rev += 1;

@@ -215,10 +215,7 @@ pub(super) fn open_file_editor(
                     content_preview: repo.diff_state.content_preview,
                 })
         });
-    let target = DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.navigation.view_history.record(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::WorkingDirectory,
@@ -299,14 +296,12 @@ pub(super) fn content_view_target(
     path: std::path::PathBuf,
 ) -> Option<DiffTarget> {
     match source {
-        gitcomet_core::domain::FileSource::WorkingDirectory => Some(DiffTarget::WorkingTree {
-            path,
-            area: DiffArea::Unstaged,
-        }),
-        gitcomet_core::domain::FileSource::Commit(commit_id) => Some(DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-        }),
+        gitcomet_core::domain::FileSource::WorkingDirectory => {
+            Some(DiffTarget::working_tree(path, DiffArea::Unstaged))
+        }
+        gitcomet_core::domain::FileSource::Commit(commit_id) => {
+            Some(DiffTarget::commit(commit_id, Some(path)))
+        }
         // Branch file listing is not wired, so this is unreachable from the UI.
         gitcomet_core::domain::FileSource::Branch(_) => None,
     }
@@ -321,6 +316,7 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => Some(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::Commit(commit_id.clone()),
             path: path.clone(),
@@ -328,6 +324,7 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
         DiffTarget::WorkingTree {
             path,
             area: DiffArea::Unstaged,
+            ..
         } => Some(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::WorkingDirectory,
             path: path.clone(),
@@ -595,10 +592,7 @@ pub(super) fn select_conflict_diff(
     repo_state.diff_state.edit_mode = false;
     repo_state.diff_state.edit_return_view = None;
 
-    let target = DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     repo_state.set_diff_target(Some(target));
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -645,6 +639,7 @@ pub(super) fn clear_diff_selection_after_discard(
         let DiffTarget::WorkingTree {
             path,
             area: DiffArea::Staged,
+            ..
         } = target
         else {
             return None;
@@ -682,7 +677,7 @@ pub(super) fn clear_diff_selection_for_status_action(
     let matches_target = |target: &DiffTarget| {
         matches!(
             target,
-            DiffTarget::WorkingTree { path, area: selected_area }
+            DiffTarget::WorkingTree { path, area: selected_area, .. }
                 if *selected_area == area && (paths.is_empty() || paths.contains(path))
         )
     };

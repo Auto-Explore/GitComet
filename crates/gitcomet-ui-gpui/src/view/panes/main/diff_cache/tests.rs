@@ -6,10 +6,7 @@ use std::path::PathBuf;
 
 fn patch_diff_for_visual_tests(lines: Vec<(DiffLineKind, &str)>) -> gitcomet_core::domain::Diff {
     gitcomet_core::domain::Diff {
-        target: DiffTarget::WorkingTree {
-            path: PathBuf::from("demo.txt"),
-            area: DiffArea::Unstaged,
-        },
+        target: DiffTarget::working_tree(PathBuf::from("demo.txt"), DiffArea::Unstaged),
         lines: lines
             .into_iter()
             .map(|(kind, text)| DiffLine {
@@ -373,10 +370,7 @@ fn build_single_markdown_preview_document_from_deleted_markdown_table_preview_pa
         },
     ];
     let workdir = PathBuf::from("repo");
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("docs/table.md"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("docs/table.md"), DiffArea::Unstaged);
 
     let preview = crate::view::diff_preview::build_deleted_file_preview_from_diff(
         &diff,

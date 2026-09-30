@@ -1015,10 +1015,10 @@ fn set_active_repo_full_refresh_with_sidebar_request_and_selected_diff_does_not_
     repo1_state.set_worktrees(Loadable::NotLoaded);
     repo1_state.set_submodules(Loadable::NotLoaded);
     repo1_state.set_stashes(Loadable::NotLoaded);
-    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
+    repo1_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1079,10 +1079,10 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo1_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1160,10 +1160,7 @@ fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details(
 
     let commit_id = CommitId("submodule-commit".into());
     let path = PathBuf::from("vendor/dependency");
-    let target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let target = DiffTarget::commit(commit_id.clone(), Some(path.clone()));
     let repo1_state = state
         .repos
         .iter_mut()
@@ -1179,13 +1176,7 @@ fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details(
         committed_at: String::new(),
         committed_at_unix: 0,
         parent_ids: Vec::new(),
-        files: vec![CommitFileChange {
-            path,
-            kind: FileStatusKind::Modified,
-            is_submodule: true,
-            additions: None,
-            deletions: None,
-        }],
+        files: vec![CommitFileChange::new(path, FileStatusKind::Modified).with_submodule(true)],
     })));
     repo1_state.set_diff_target(Some(target));
     repo1_state.diff_state.submodule_summary = Loadable::Loading;
@@ -1335,10 +1326,7 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
     open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let worktree = PathBuf::from("/tmp/repo1-linked");
-    let inline_target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let inline_target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     let target = state
         .repos
         .iter_mut()
@@ -1731,10 +1719,10 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.png"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo1_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("icon.png"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1771,10 +1759,10 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("image.png"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo1_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("image.png"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1813,10 +1801,10 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("vector.svg"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo1_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("vector.svg"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1857,10 +1845,10 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
             .iter_mut()
             .find(|r| r.id == repo1)
             .expect("repo1 exists");
-        repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: conflict_path.clone(),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        });
+        repo1_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+            conflict_path.clone(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        ));
         repo1_state.conflict_state.conflict_file_path = Some(conflict_path.clone());
         let content: Arc<str> = Arc::from("conflict contents");
         repo1_state.conflict_state.conflict_file =

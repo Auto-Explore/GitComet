@@ -103,10 +103,10 @@ fn decode_unified_diff_output(bytes: Vec<u8>) -> String {
     };
     let terminated = bytes.ends_with(b"\n");
     let diff = gitcomet_core::domain::Diff::from_unified_bytes(
-        gitcomet_core::domain::DiffTarget::WorkingTree {
-            path: PathBuf::new(),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        },
+        gitcomet_core::domain::DiffTarget::working_tree(
+            PathBuf::new(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        ),
         bytes,
         gitcomet_core::domain::DiffSectionFormats::sniff,
     );

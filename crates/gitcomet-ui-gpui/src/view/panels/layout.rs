@@ -513,7 +513,7 @@ fn active_status_section_action_path(
     diff_target: Option<&DiffTarget>,
     section: StatusSection,
 ) -> Option<std::path::PathBuf> {
-    let DiffTarget::WorkingTree { path, area } = diff_target? else {
+    let DiffTarget::WorkingTree { path, area, .. } = diff_target? else {
         return None;
     };
     if *area != section.diff_area() {

@@ -203,7 +203,8 @@ impl MainPaneView {
         Option<gitcomet_core::domain::FileConflictKind>,
     )> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } = repo.diff_state.diff_target.as_ref()?
+        else {
             return None;
         };
         if *area != DiffArea::Unstaged {

@@ -774,23 +774,25 @@ pub(crate) fn normalize_bootstrap_diff_target(
     target: DiffTarget,
 ) -> DiffTarget {
     match target {
-        DiffTarget::WorkingTree { path, area } => DiffTarget::WorkingTree {
-            path: normalize_bootstrap_target_path(repo_path, path),
-            area,
-        },
-        DiffTarget::Commit { commit_id, path } => DiffTarget::Commit {
+        DiffTarget::WorkingTree { path, area, .. } => {
+            DiffTarget::working_tree(normalize_bootstrap_target_path(repo_path, path), area)
+        }
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => DiffTarget::commit(
             commit_id,
-            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
-        },
+            path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        ),
         DiffTarget::CommitRange {
             from_commit_id,
             to_commit_id,
             path,
-        } => DiffTarget::CommitRange {
+            ..
+        } => DiffTarget::commit_range(
             from_commit_id,
             to_commit_id,
-            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
-        },
+            path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        ),
     }
 }
 
@@ -1117,10 +1119,7 @@ pub(crate) fn focused_mergetool_bootstrap_action(
         return None;
     }
 
-    let target = DiffTarget::WorkingTree {
-        area: DiffArea::Unstaged,
-        path: bootstrap.target_path.clone(),
-    };
+    let target = DiffTarget::working_tree(bootstrap.target_path.clone(), DiffArea::Unstaged);
     if repo.diff_state.diff_target.as_ref() != Some(&target) {
         return Some(FocusedMergetoolBootstrapAction::SelectConflictDiff {
             repo_id: repo.id,

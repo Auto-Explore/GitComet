@@ -81,7 +81,7 @@ impl GixRepo {
         cmd.arg("--no-pager");
 
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 cmd.arg("--no-optional-locks")
                     .arg("-c")
                     .arg("diff.autoRefreshIndex=false");
@@ -96,7 +96,9 @@ impl GixRepo {
                 }
                 cmd.arg("--").arg(path);
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 cmd.arg("show")
                     .arg("--no-ext-diff")
                     .arg("-m")
@@ -111,6 +113,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 cmd.arg("diff")
                     .arg("--no-ext-diff")
@@ -427,7 +430,7 @@ impl GixRepo {
         // Worktree normalization consults config as well as attributes.
         let repo = self.repo_with_current_config()?;
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let full_path = if path.is_absolute() {
                     path.clone()
                 } else {
@@ -504,7 +507,9 @@ impl GixRepo {
 
                 Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 let Some(path) = path else {
                     return Ok(None);
                 };
@@ -533,6 +538,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -575,7 +581,7 @@ impl GixRepo {
     ) -> Result<Option<std::path::PathBuf>> {
         cancellation.check_cancelled()?;
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let full_path = if path.is_absolute() {
                     path.clone()
                 } else {
@@ -622,7 +628,9 @@ impl GixRepo {
                     }
                 }
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 let Some(path) = path else {
                     return Ok(None);
                 };
@@ -652,6 +660,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -730,7 +739,7 @@ impl GixRepo {
     ) -> Result<Option<FileDiffImage>> {
         cancellation.check_cancelled()?;
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let full_path = if path.is_absolute() {
                     path.clone()
                 } else {
@@ -796,7 +805,9 @@ impl GixRepo {
                     new,
                 }))
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 let Some(path) = path else {
                     return Ok(None);
                 };
@@ -823,6 +834,7 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -1129,6 +1141,7 @@ fn commit_path_diff_revisions(
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => Ok(Some((
             path.clone(),
             gix_first_parent_optional(repo, commit_id.as_ref())?,
@@ -1138,6 +1151,7 @@ fn commit_path_diff_revisions(
             from_commit_id,
             to_commit_id: Some(to_commit_id),
             path: Some(path),
+            ..
         } => Ok(Some((
             path.clone(),
             Some(from_commit_id.as_ref().to_string()),
@@ -2269,10 +2283,10 @@ mod tests {
             )
             .unwrap();
         let output = open_repo(root)
-            .build_unified_diff_command(&DiffTarget::WorkingTree {
-                path: "file.txt".into(),
-                area: DiffArea::Unstaged,
-            })
+            .build_unified_diff_command(&DiffTarget::working_tree(
+                "file.txt".into(),
+                DiffArea::Unstaged,
+            ))
             .output()
             .unwrap();
         assert!(output.status.success());
@@ -2745,10 +2759,10 @@ mod tests {
 
         let repo = open_repo(tmp.path());
         let diff = repo
-            .diff_file_text_impl(&DiffTarget::WorkingTree {
-                path: "vendor/sub".into(),
-                area: DiffArea::Staged,
-            })
+            .diff_file_text_impl(&DiffTarget::working_tree(
+                "vendor/sub".into(),
+                DiffArea::Staged,
+            ))
             .expect("gitlink text diff should not error")
             .expect("file diff text object");
 

@@ -1445,11 +1445,11 @@ fn submodule_change_at(
             let (from_commit_id, to_commit_id) = (range.from.as_ref()?, range.to.as_ref()?);
             Some((
                 change,
-                DiffTarget::CommitRange {
-                    from_commit_id: from_commit_id.clone(),
-                    to_commit_id: Some(to_commit_id.clone()),
-                    path: Some(change.path.clone()),
-                },
+                DiffTarget::commit_range(
+                    from_commit_id.clone(),
+                    Some(to_commit_id.clone()),
+                    Some(change.path.clone()),
+                ),
                 InlineSubmoduleDiffSection::Range(range.kind),
             ))
         }
@@ -1463,10 +1463,7 @@ fn submodule_change_at(
             let change = summary.live_staged.get(index)?;
             Some((
                 change,
-                DiffTarget::WorkingTree {
-                    path: change.path.clone(),
-                    area: DiffArea::Staged,
-                },
+                DiffTarget::working_tree(change.path.clone(), DiffArea::Staged),
                 InlineSubmoduleDiffSection::LiveStaged,
             ))
         }
@@ -1474,10 +1471,7 @@ fn submodule_change_at(
             let change = summary.live_unstaged.get(index)?;
             Some((
                 change,
-                DiffTarget::WorkingTree {
-                    path: change.path.clone(),
-                    area: DiffArea::Unstaged,
-                },
+                DiffTarget::working_tree(change.path.clone(), DiffArea::Unstaged),
                 InlineSubmoduleDiffSection::LiveUnstaged,
             ))
         }
@@ -1559,10 +1553,7 @@ pub fn worktree_inline_diff_entries(
         .map(|(file, area)| InlineSubmoduleDiffEntry {
             path: file.path.clone(),
             kind: file.kind,
-            target: DiffTarget::WorkingTree {
-                path: file.path.clone(),
-                area,
-            },
+            target: DiffTarget::working_tree(file.path.clone(), area),
             section: match area {
                 DiffArea::Staged => InlineSubmoduleDiffSection::LiveStaged,
                 _ => InlineSubmoduleDiffSection::LiveUnstaged,

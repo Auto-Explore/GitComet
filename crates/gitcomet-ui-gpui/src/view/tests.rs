@@ -280,10 +280,7 @@ fn state_with_active_diff(path: &str, kind: FileStatusKind) -> AppState {
         conflict: (kind == FileStatusKind::Conflicted)
             .then_some(gitcomet_core::domain::FileConflictKind::BothModified),
     }]));
-    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path,
-        area: DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(path, DiffArea::Unstaged));
     AppState {
         active_repo: Some(repo_id),
         repos: vec![repo],

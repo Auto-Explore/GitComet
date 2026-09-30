@@ -708,10 +708,7 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
         &path,
     );
 
-    repo.diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::commit(commit_id.clone(), Some(path.clone())));
     apply_state(cx, &view, app_state_with_active_repo(repo));
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     focus_diff_panel(cx, &view);
@@ -900,10 +897,7 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
         }
         .into(),
     );
-    let target = DiffTarget::WorkingTree {
-        path: first.clone(),
-        area: DiffArea::Staged,
-    };
+    let target = DiffTarget::working_tree(first.clone(), DiffArea::Staged);
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
     repo.diff_state.diff_rev = 1;

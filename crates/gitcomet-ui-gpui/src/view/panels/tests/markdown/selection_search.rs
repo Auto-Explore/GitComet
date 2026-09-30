@@ -1309,10 +1309,10 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
         "- shared item\n\n",
         "Below new.\n",
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let preview = crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
         .expect("split Markdown gap fixture should parse");
     let above_ix = preview
@@ -2120,10 +2120,10 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
         .join("");
     let old_text = format!("# Long\n\n{body}");
     let new_text = format!("{old_text}\nthe needle entry\n");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create markdown diff search workdir");

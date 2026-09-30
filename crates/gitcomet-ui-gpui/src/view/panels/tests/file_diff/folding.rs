@@ -16,10 +16,10 @@ fn push_collapsed_diff_loading_fixture_state(
     ));
     let _ = std::fs::create_dir_all(&workdir);
     let path = PathBuf::from("src/lib.rs");
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        Some(path.clone()),
+    );
     let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
     let file_diff = gitcomet_core::domain::FileDiffText::new(path, Some(old_text), Some(new_text));

@@ -18,10 +18,10 @@ fn select_diff_sets_loading_and_emits_effect() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let effects = reduce(
         &mut repos,
@@ -63,10 +63,10 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("img.png"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("img.png"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let effects = reduce(
         &mut repos,
@@ -112,10 +112,10 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("app.ico"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("app.ico"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let effects = reduce(
         &mut repos,
@@ -161,10 +161,10 @@ fn select_diff_for_svg_loads_image_and_text() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.svg"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("icon.svg"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let effects = reduce(
         &mut repos,
@@ -205,10 +205,10 @@ fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("report.json"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("report.json"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("report.json"),
@@ -268,10 +268,10 @@ fn select_diff_for_deleted_file_replaced_by_directory_loads_deleted_preview() {
             workdir: dir.path().to_path_buf(),
         },
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("report.json"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("report.json"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("report.json"),
@@ -337,10 +337,10 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
             workdir: dir.path().to_path_buf(),
         },
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: submodule_path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        submodule_path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: std::sync::Arc::new(vec![FileStatus {
             path: submodule_path,
@@ -410,10 +410,10 @@ fn staged_deleted_gitlink_fixture() -> (
         },
     );
     let submodule_path = PathBuf::from("vendor/submodule");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: submodule_path.clone(),
-        area: gitcomet_core::domain::DiffArea::Staged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        submodule_path.clone(),
+        gitcomet_core::domain::DiffArea::Staged,
+    );
     repo_state.set_open(Loadable::Ready(()));
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         staged: std::sync::Arc::new(vec![FileStatus {
@@ -787,10 +787,10 @@ fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Staged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Staged,
+    );
     let id_alloc = AtomicU64::new(2);
 
     reduce(
@@ -870,10 +870,10 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
         },
     );
     let commit_id = CommitId("deadbeef".into());
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(PathBuf::from("report.json")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        commit_id.clone(),
+        Some(PathBuf::from("report.json")),
+    );
     repo_state.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
         id: commit_id,
         message: "remove report".to_string(),
@@ -883,13 +883,10 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
         committed_at: "2026-04-07T12:00:00Z".to_string(),
         committed_at_unix: 0,
         parent_ids: vec![],
-        files: vec![CommitFileChange {
-            path: PathBuf::from("report.json"),
-            kind: FileStatusKind::Deleted,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
-        }],
+        files: vec![CommitFileChange::new(
+            PathBuf::from("report.json"),
+            FileStatusKind::Deleted,
+        )],
     }));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -941,11 +938,11 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::CommitRange {
-        from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: Some(CommitId("bbbb".into())),
-        path: Some(PathBuf::from("src/lib.rs")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        CommitId("aaaa".into()),
+        Some(CommitId("bbbb".into())),
+        Some(PathBuf::from("src/lib.rs")),
+    );
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -1005,10 +1002,10 @@ fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("icons/logo.svg"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("icons/logo.svg"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -1070,11 +1067,11 @@ fn stale_inline_submodule_file_load_is_ignored() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::CommitRange {
-        from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: Some(CommitId("bbbb".into())),
-        path: Some(PathBuf::from("src/lib.rs")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        CommitId("aaaa".into()),
+        Some(CommitId("bbbb".into())),
+        Some(PathBuf::from("src/lib.rs")),
+    );
     reduce(
         &mut repos,
         &id_alloc,
@@ -1136,11 +1133,11 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::CommitRange {
-        from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: Some(CommitId("bbbb".into())),
-        path: Some(PathBuf::from("src/lib.rs")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        CommitId("aaaa".into()),
+        Some(CommitId("bbbb".into())),
+        Some(PathBuf::from("src/lib.rs")),
+    );
     let entry = crate::model::InlineSubmoduleDiffEntry {
         path: PathBuf::from("src/lib.rs"),
         kind: FileStatusKind::Modified,
@@ -1247,14 +1244,8 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
     let parent_path = PathBuf::from("vendor/submodule");
-    let parent_target = DiffTarget::WorkingTree {
-        path: parent_path.clone(),
-        area: DiffArea::Unstaged,
-    };
-    let inline_target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let parent_target = DiffTarget::working_tree(parent_path.clone(), DiffArea::Unstaged);
+    let inline_target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1397,10 +1388,10 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
         },
     );
     let commit_id = CommitId("deadbeef".into());
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(PathBuf::from("report.json")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        commit_id.clone(),
+        Some(PathBuf::from("report.json")),
+    );
     repo_state.set_selected_commit(Some(commit_id.clone()));
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff = Loadable::Loading;
@@ -1424,13 +1415,10 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
                 committed_at: "2026-04-07T12:00:00Z".to_string(),
                 committed_at_unix: 0,
                 parent_ids: vec![],
-                files: vec![CommitFileChange {
-                    path: PathBuf::from("report.json"),
-                    kind: FileStatusKind::Deleted,
-                    is_submodule: false,
-                    additions: None,
-                    deletions: None,
-                }],
+                files: vec![CommitFileChange::new(
+                    PathBuf::from("report.json"),
+                    FileStatusKind::Deleted,
+                )],
             }),
         }),
     );
@@ -1488,10 +1476,10 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("index.html"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("index.html"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("index.html"),
@@ -1559,10 +1547,10 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.svg"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("icon.svg"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("icon.svg"),
@@ -1626,10 +1614,7 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
-        path: None,
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(CommitId("deadbeef".into()), None);
 
     let effects = reduce(
         &mut repos,
@@ -1678,10 +1663,10 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
-        path: Some(PathBuf::from("diagram.svg")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        CommitId("deadbeef".into()),
+        Some(PathBuf::from("diagram.svg")),
+    );
 
     let effects = reduce(
         &mut repos,
@@ -1786,10 +1771,10 @@ fn stage_hunk_command_finished_reloads_current_diff() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("a.txt"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("a.txt"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
     state.repos.push(repo_state);
@@ -1810,7 +1795,7 @@ fn stage_hunk_command_finished_reloads_current_diff() {
     assert!(repo_state.diff_state.diff.is_loading());
     assert!(repo_state.diff_state.diff_file.is_loading());
     assert!(effects.iter().any(|e| {
-        matches!(e, Effect::LoadDiff { repo_id: RepoId(1), target: DiffTarget::WorkingTree { path, area: gitcomet_core::domain::DiffArea::Unstaged } } if path == &PathBuf::from("a.txt"))
+        matches!(e, Effect::LoadDiff { repo_id: RepoId(1), target: DiffTarget::WorkingTree { path, area: gitcomet_core::domain::DiffArea::Unstaged, .. } } if path == &PathBuf::from("a.txt"))
     }));
     assert!(effects.iter().any(|e| matches!(
         e,
@@ -1832,10 +1817,10 @@ fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("a.txt"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(
+        PathBuf::from("a.txt"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
         target: target.clone(),
@@ -1949,10 +1934,10 @@ fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("b.txt"),
-                area: gitcomet_core::domain::DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(
+                PathBuf::from("b.txt"),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ),
         },
     );
 
@@ -2037,10 +2022,7 @@ fn status_actions_close_only_matching_diffs_after_success() {
                 }
                 for (content_preview, edit_mode) in [(false, false), (true, false), (true, true)] {
                     for succeeds in [false, true] {
-                        let target = DiffTarget::WorkingTree {
-                            path: "shown.rs".into(),
-                            area: selected_area,
-                        };
+                        let target = DiffTarget::working_tree("shown.rs".into(), selected_area);
                         let mut state = status_action_state(target.clone());
                         state.repos[0].diff_state.content_preview = content_preview;
                         state.repos[0].diff_state.edit_mode = edit_mode;
@@ -2122,10 +2104,7 @@ fn discarding_staged_files_closes_only_removed_additions() {
     for kind in [FileStatusKind::Added, FileStatusKind::Modified] {
         for has_worktree_changes in [false, true] {
             for paths in [vec![], vec![PathBuf::from("shown.rs")]] {
-                let target = DiffTarget::WorkingTree {
-                    path: "shown.rs".into(),
-                    area: DiffArea::Staged,
-                };
+                let target = DiffTarget::working_tree("shown.rs".into(), DiffArea::Staged);
                 let mut state = status_action_state(target.clone());
                 state.repos[0].staged_status = Loadable::Ready(Arc::new(vec![FileStatus {
                     path: "shown.rs".into(),
@@ -2163,21 +2142,11 @@ fn discarding_staged_files_closes_only_removed_additions() {
 #[test]
 fn status_actions_preserve_historical_and_other_repository_views() {
     use gitcomet_core::domain::DiffArea;
-    let working = DiffTarget::WorkingTree {
-        path: "shown.rs".into(),
-        area: DiffArea::Unstaged,
-    };
+    let working = DiffTarget::working_tree("shown.rs".into(), DiffArea::Unstaged);
     for target in [
         working.clone(),
-        DiffTarget::Commit {
-            commit_id: CommitId("head".into()),
-            path: Some("shown.rs".into()),
-        },
-        DiffTarget::CommitRange {
-            from_commit_id: CommitId("base".into()),
-            to_commit_id: None,
-            path: Some("shown.rs".into()),
-        },
+        DiffTarget::commit(CommitId("head".into()), Some("shown.rs".into())),
+        DiffTarget::commit_range(CommitId("base".into()), None, Some("shown.rs".into())),
     ] {
         let mut state = status_action_state(target.clone());
         let mut other = RepoState::new_opening(
@@ -2221,10 +2190,7 @@ fn status_actions_retire_only_the_affected_editor_return_diff() {
                 vec![PathBuf::from("other.rs")],
             ] {
                 for succeeds in [false, true] {
-                    let origin = DiffTarget::WorkingTree {
-                        path: "shown.rs".into(),
-                        area,
-                    };
+                    let origin = DiffTarget::working_tree("shown.rs".into(), area);
                     let mut state = status_action_state(origin.clone());
                     state.repos[0].diff_state.content_preview = preview;
                     reduce(
@@ -2280,10 +2246,7 @@ fn status_actions_retire_inline_submodule_views_only_with_the_parent_entry() {
             vec![PathBuf::from("inner.rs")],
         ] {
             for succeeds in [false, true] {
-                let target = DiffTarget::WorkingTree {
-                    path: "module".into(),
-                    area,
-                };
+                let target = DiffTarget::working_tree("module".into(), area);
                 let mut state = status_action_state(target.clone());
                 reduce(
                     &mut FxHashMap::default(),
@@ -2297,10 +2260,7 @@ fn status_actions_retire_inline_submodule_views_only_with_the_parent_entry() {
                         entries: vec![crate::model::InlineSubmoduleDiffEntry {
                             path: "inner.rs".into(),
                             kind: FileStatusKind::Modified,
-                            target: DiffTarget::WorkingTree {
-                                path: "inner.rs".into(),
-                                area: DiffArea::Unstaged,
-                            },
+                            target: DiffTarget::working_tree("inner.rs".into(), DiffArea::Unstaged),
                             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
                         }]
                         .into(),
@@ -2334,10 +2294,7 @@ fn status_actions_retire_inline_submodule_views_only_with_the_parent_entry() {
 fn unavailable_git_status_actions_preserve_the_diff() {
     use gitcomet_core::domain::DiffArea;
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
-        let target = DiffTarget::WorkingTree {
-            path: "shown.rs".into(),
-            area,
-        };
+        let target = DiffTarget::working_tree("shown.rs".into(), area);
         let mut state = status_action_state(target.clone());
         state.git_runtime.availability =
             gitcomet_core::process::GitExecutableAvailability::Unavailable {
@@ -2376,10 +2333,10 @@ fn clear_diff_selection_resets_diff_state() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo_state.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     repo_state.diff_state.diff = Loadable::Loading;
     repo_state.diff_state.diff_file = Loadable::Loading;
     state.repos.push(repo_state);
@@ -2413,10 +2370,10 @@ fn diff_loaded_err_records_diagnostic_when_target_matches() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff = Loadable::Loading;
     state.repos.push(repo_state);
@@ -2462,10 +2419,7 @@ fn select_diff_bumps_diff_state_rev() {
 
     let before = state.repos[0].diff_state.diff_state_rev;
 
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     reduce(
         &mut repos,
         &id_alloc,
@@ -2495,14 +2449,8 @@ fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let first = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
-    let second = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/main.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let first = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
+    let second = DiffTarget::working_tree(PathBuf::from("src/main.rs"), DiffArea::Unstaged);
 
     reduce(
         &mut repos,
@@ -2563,10 +2511,7 @@ fn clear_diff_selection_bumps_diff_state_rev() {
     state.active_repo = Some(RepoId(1));
 
     // First select a diff
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     reduce(
         &mut repos,
         &id_alloc,
@@ -2609,10 +2554,7 @@ fn select_diff_does_not_bump_unrelated_revs() {
     let status_before = state.repos[0].status_rev;
     let log_before = state.repos[0].history_state.log_rev;
 
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     reduce(
         &mut repos,
         &id_alloc,
@@ -2634,10 +2576,7 @@ fn select_and_clear_diff_are_noops_for_unknown_repo() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     let select = reduce(
         &mut repos,
         &id_alloc,
@@ -2706,10 +2645,7 @@ fn diff_loaded_ok_sets_ready_when_target_matches() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff = Loadable::Loading;
     state.repos.push(repo_state);
@@ -2777,10 +2713,10 @@ fn state_with_loaded_diff_and_blame(
 
 fn unstaged_diff(line: &str) -> gitcomet_core::domain::Diff {
     gitcomet_core::domain::Diff {
-        target: DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        },
+        target: DiffTarget::working_tree(
+            PathBuf::from("src/lib.rs"),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        ),
         lines: vec![gitcomet_core::domain::DiffLine {
             kind: gitcomet_core::domain::DiffLineKind::Context,
             text: line.into(),
@@ -2915,10 +2851,7 @@ fn state_with_loaded_file_text_and_blame(
     DiffTarget,
     Arc<Vec<gitcomet_core::services::BlameLine>>,
 ) {
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.svg"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("icon.svg"), DiffArea::Unstaged);
     let (mut state, _, blame) = state_with_loaded_diff_and_blame(gitcomet_core::domain::Diff {
         target: target.clone(),
         lines: vec![],
@@ -2995,10 +2928,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.svg"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("icon.svg"), DiffArea::Unstaged);
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff_file = Loadable::Loading;
     repo_state.diff_state.diff_file_image = Loadable::Loading;
@@ -3103,14 +3033,8 @@ fn diff_results_are_ignored_for_non_matching_target() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let selected = DiffTarget::WorkingTree {
-        path: PathBuf::from("selected.txt"),
-        area: DiffArea::Unstaged,
-    };
-    let other = DiffTarget::WorkingTree {
-        path: PathBuf::from("other.txt"),
-        area: DiffArea::Unstaged,
-    };
+    let selected = DiffTarget::working_tree(PathBuf::from("selected.txt"), DiffArea::Unstaged);
+    let other = DiffTarget::working_tree(PathBuf::from("other.txt"), DiffArea::Unstaged);
     repo_state.diff_state.diff_target = Some(selected.clone());
     repo_state.diff_state.diff = Loadable::Loading;
     repo_state.diff_state.diff_file = Loadable::Loading;
@@ -3189,10 +3113,7 @@ fn open_file_content_sets_diff_target_and_content_preview() {
     let repo_state = state.repos.first().expect("repo state to exist");
     assert_eq!(
         repo_state.diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged))
     );
     assert!(repo_state.diff_state.content_preview);
     assert!(effects.iter().any(|e| matches!(
@@ -3220,10 +3141,7 @@ fn open_file_content_sets_diff_target_and_content_preview() {
     let repo_state = state.repos.first().expect("repo state to exist");
     assert_eq!(
         repo_state.diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id,
-            path: Some(commit_path),
-        })
+        Some(DiffTarget::commit(commit_id, Some(commit_path)))
     );
     assert!(repo_state.diff_state.content_preview);
     assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
@@ -3273,10 +3191,7 @@ fn open_file_editor_targets_the_working_tree_from_any_source() {
     let repo_state = state.repos.first().expect("repo state to exist");
     assert_eq!(
         repo_state.diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged))
     );
     assert!(repo_state.diff_state.content_preview);
     assert!(repo_state.diff_state.edit_mode);
@@ -3322,10 +3237,7 @@ fn selecting_another_view_leaves_edit_mode() {
         &mut state,
         Msg::SelectDiff {
             repo_id,
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("other.rs"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("other.rs"), DiffArea::Unstaged),
         },
     );
     assert!(!state.repos[0].diff_state.edit_mode);
@@ -3423,10 +3335,7 @@ fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
 
     let path = PathBuf::from("src/main.rs");
     let commit_id = CommitId("deadbeef".into());
-    let commit_target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let commit_target = DiffTarget::commit(commit_id.clone(), Some(path.clone()));
 
     // A diff remains a diff, including its historical target, after editing
     // the working-tree copy.
@@ -3484,10 +3393,10 @@ fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
     );
     assert_eq!(
         state.repos[0].diff_state.diff_target,
-        Some(DiffTarget::Commit {
+        Some(DiffTarget::commit(
             commit_id,
-            path: Some(PathBuf::from("src/main.rs")),
-        })
+            Some(PathBuf::from("src/main.rs"))
+        ))
     );
     assert!(state.repos[0].diff_state.content_preview);
     assert!(!state.repos[0].diff_state.edit_mode);
@@ -3552,10 +3461,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
         &mut state,
         Msg::SelectDiff {
             repo_id,
-            target: DiffTarget::Commit {
-                commit_id: CommitId("c3".into()),
-                path: None,
-            },
+            target: DiffTarget::commit(CommitId("c3".into()), None),
         },
     );
     assert_eq!(
@@ -3612,10 +3518,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
     // Two back/forward entries for the SAME commit (full diff, then one file), so
     // stepping back keeps `selected_commit` == Y and `select_commit` no-ops.
     let snap = |path: Option<PathBuf>| crate::model::MainViewSnapshot {
-        diff_target: Some(DiffTarget::Commit {
-            commit_id: commit_y.clone(),
-            path,
-        }),
+        diff_target: Some(DiffTarget::commit(commit_y.clone(), path)),
         edit_mode: false,
         content_preview: false,
         selected_commit: Some(commit_y.clone()),
@@ -3629,10 +3532,10 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
         .record(snap(Some(PathBuf::from("src/lib.rs"))));
     // Live view matches the nav tail; commit Y is selected but its details are
     // stuck Loading (the relevant load was cancelled / is for another commit).
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_y.clone(),
-        path: Some(PathBuf::from("src/lib.rs")),
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        commit_y.clone(),
+        Some(PathBuf::from("src/lib.rs")),
+    ));
     state.repos[0].set_selected_commit(Some(commit_y.clone()));
     state.repos[0].set_commit_details(Loadable::Loading);
 
@@ -3788,10 +3691,7 @@ fn open_file_content_skips_conflict_path_during_browse() {
     let repo_state = state.repos.first().expect("repo state to exist");
     assert_eq!(
         repo_state.diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path,
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(path, DiffArea::Unstaged))
     );
     assert!(repo_state.diff_state.content_preview);
     // effects should contain LoadSelectedDiff, NOT conflict-loading effects
@@ -3813,10 +3713,10 @@ fn clear_diff_selection_resets_content_preview_and_ancillary_fields() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
+    repo_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
     repo_state.diff_state.content_preview = true;
     repo_state.diff_state.diff = Loadable::Loading;
     repo_state.diff_state.diff_file = Loadable::Loading;
@@ -3895,10 +3795,7 @@ fn select_conflict_diff_sets_target_and_resets_content_preview() {
     assert!(!repo_state.diff_state.content_preview);
     assert_eq!(
         repo_state.diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path,
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(path, DiffArea::Unstaged))
     );
     assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(
@@ -3937,10 +3834,7 @@ fn diff_file_image_loaded_drops_old_side_when_content_preview() {
         },
     );
     let path = PathBuf::from("img.png");
-    let target = DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     repo_state.diff_state.content_preview = true;
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff_file_image = Loadable::Loading;
@@ -4082,10 +3976,10 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
     let mut state = AppState::test_default();
     let worktree_a = PathBuf::from("/tmp/wt/a");
     let worktree_b = PathBuf::from("/tmp/wt/b");
-    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let inline_target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -4173,14 +4067,14 @@ fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
     let worktree = PathBuf::from("/tmp/wt/a");
-    let commit_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: CommitId("c0".into()),
-        path: Some(PathBuf::from("src/main.rs")),
-    };
-    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let commit_target = gitcomet_core::domain::DiffTarget::commit(
+        CommitId("c0".into()),
+        Some(PathBuf::from("src/main.rs")),
+    );
+    let inline_target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -4880,10 +4774,10 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
     use gitcomet_core::domain::WorktreeDirtySummary;
 
     let worktree = PathBuf::from("/tmp/wt/a");
-    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let inline_target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let state_with_open_worktree_diff = || {
         let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(
@@ -4988,10 +4882,10 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
 #[test]
 fn a_submodule_inline_diff_survives_the_worktree_invariant() {
     let submodule_path = PathBuf::from("/tmp/repo/vendor/submodule");
-    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let inline_target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
@@ -5154,10 +5048,10 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
     assert!(state.repos[0].head_gitlink_paths.contains(&submodule_path));
 
     // 2. Select an ordinary file.
-    let other_target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: other.clone(),
-        area: gitcomet_core::domain::DiffArea::Staged,
-    };
+    let other_target = gitcomet_core::domain::DiffTarget::working_tree(
+        other.clone(),
+        gitcomet_core::domain::DiffArea::Staged,
+    );
     reduce(
         &mut repos,
         &id_alloc,
@@ -5265,11 +5159,11 @@ fn open_inline_submodule_diff_shares_the_callers_entry_list() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::CommitRange {
-        from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: Some(CommitId("bbbb".into())),
-        path: Some(PathBuf::from("src/lib.rs")),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        CommitId("aaaa".into()),
+        Some(CommitId("bbbb".into())),
+        Some(PathBuf::from("src/lib.rs")),
+    );
     let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> = (0..512)
         .map(|ix| crate::model::InlineSubmoduleDiffEntry {
             path: PathBuf::from(format!("src/file_{ix}.rs")),
@@ -5315,10 +5209,7 @@ fn reloading_an_identical_submodule_summary_keeps_the_arc_and_revision() {
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
     let path = PathBuf::from("vendor/submodule");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     let summary = || SubmoduleDiffSummary {
         path: path.clone(),
         mode: SubmoduleDiffSummaryMode::Worktree,
@@ -5422,10 +5313,7 @@ fn reloading_an_identical_submodule_summary_rereads_the_patch_without_rebuilding
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
     let path = PathBuf::from("vendor/submodule");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     let summary = || SubmoduleDiffSummary {
         path: path.clone(),
         mode: SubmoduleDiffSummaryMode::Worktree,
@@ -5574,10 +5462,7 @@ fn reloading_an_identical_submodule_summary_does_not_re_read_a_range_entry() {
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
     let path = PathBuf::from("vendor/submodule");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     let summary = || SubmoduleDiffSummary {
         path: path.clone(),
         mode: SubmoduleDiffSummaryMode::Worktree,
@@ -5680,10 +5565,7 @@ mod text_override {
     use gitcomet_core::text_format::{TextAttributes, TextEncoding, TextOverride};
 
     fn target(path: &str, area: gitcomet_core::domain::DiffArea) -> DiffTarget {
-        DiffTarget::WorkingTree {
-            path: PathBuf::from(path),
-            area,
-        }
+        DiffTarget::working_tree(PathBuf::from(path), area)
     }
 
     fn selected(path: &str) -> (FxHashMap<RepoId, Arc<dyn GitRepository>>, AppState) {
@@ -5762,10 +5644,10 @@ mod text_override {
             ),
         ] {
             let (mut repos, mut state) = selected("a.txt");
-            state.repos[0].set_diff_target(Some(DiffTarget::Commit {
-                commit_id: CommitId("abc123".into()),
-                path: Some("a.txt".into()),
-            }));
+            state.repos[0].set_diff_target(Some(DiffTarget::commit(
+                CommitId("abc123".into()),
+                Some("a.txt".into()),
+            )));
             let effects = reduce(
                 &mut repos,
                 &AtomicU64::new(10),

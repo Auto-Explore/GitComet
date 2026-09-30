@@ -1539,10 +1539,7 @@ fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::Test
     }));
     store_for_assert.dispatch(Msg::SelectDiff {
         repo_id,
-        target: DiffTarget::Commit {
-            commit_id: commit_id("previous"),
-            path: None,
-        },
+        target: DiffTarget::commit(commit_id("previous"), None),
     });
     wait_until(cx, "sidebar repo data", |_cx| {
         let snapshot = store_for_assert.snapshot();

@@ -1022,11 +1022,13 @@ impl RepoSwitchMetrics {
 fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
     fn hash_diff_target(target: &DiffTarget, h: &mut FxHasher) {
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 path.hash(h);
                 (*area as u8).hash(h);
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 commit_id.hash(h);
                 path.hash(h);
             }
@@ -1034,6 +1036,7 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 from_commit_id.hash(h);
                 to_commit_id.hash(h);

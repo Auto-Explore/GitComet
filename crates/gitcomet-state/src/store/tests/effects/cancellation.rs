@@ -450,14 +450,8 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
     let metadata_executor = super::super::executor::TaskExecutor::new(1);
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let target_a = DiffTarget::WorkingTree {
-        path: PathBuf::from("repo-a.txt"),
-        area: DiffArea::Unstaged,
-    };
-    let target_b = DiffTarget::WorkingTree {
-        path: PathBuf::from("repo-b.txt"),
-        area: DiffArea::Unstaged,
-    };
+    let target_a = DiffTarget::working_tree(PathBuf::from("repo-a.txt"), DiffArea::Unstaged);
+    let target_b = DiffTarget::working_tree(PathBuf::from("repo-b.txt"), DiffArea::Unstaged);
     let mut state = AppState::test_default();
     let mut repo_state_a = RepoState::new_opening(
         repo_a,

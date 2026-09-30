@@ -235,7 +235,11 @@ pub struct CommitSignature {
     pub key_id: Option<Arc<str>>,
 }
 
+/// One file a commit or comparison changes. Build it with
+/// [`CommitFileChange::new`]: it is non-exhaustive so fields can be added
+/// without breaking callers.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
@@ -245,6 +249,29 @@ pub struct CommitFileChange {
     pub additions: Option<u32>,
     /// Removed line count; `None` under the same conditions as `additions`.
     pub deletions: Option<u32>,
+}
+
+impl CommitFileChange {
+    pub fn new(path: PathBuf, kind: FileStatusKind) -> Self {
+        Self {
+            path,
+            kind,
+            is_submodule: false,
+            additions: None,
+            deletions: None,
+        }
+    }
+
+    pub fn with_submodule(mut self, is_submodule: bool) -> Self {
+        self.is_submodule = is_submodule;
+        self
+    }
+
+    pub fn with_line_counts(mut self, additions: Option<u32>, deletions: Option<u32>) -> Self {
+        self.additions = additions;
+        self.deletions = deletions;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -585,16 +612,20 @@ pub enum BlameSource {
 /// *introduces* are expressed, since a root commit has no parent to diff from.
 pub const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/// What a diff shows. Build targets with the constructors
+/// ([`DiffTarget::working_tree`], [`DiffTarget::commit`],
+/// [`DiffTarget::commit_range`]): the variants are non-exhaustive so fields
+/// can be added without breaking callers, and patterns end in `..`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiffTarget {
-    WorkingTree {
-        path: PathBuf,
-        area: DiffArea,
-    },
+    #[non_exhaustive]
+    WorkingTree { path: PathBuf, area: DiffArea },
+    #[non_exhaustive]
     Commit {
         commit_id: CommitId,
         path: Option<PathBuf>,
     },
+    #[non_exhaustive]
     CommitRange {
         from_commit_id: CommitId,
         /// The newer side of the comparison. `Some(id)` compares two commits
@@ -606,6 +637,29 @@ pub enum DiffTarget {
 }
 
 impl DiffTarget {
+    /// A working-tree file in `area` (unstaged or staged).
+    pub fn working_tree(path: PathBuf, area: DiffArea) -> Self {
+        Self::WorkingTree { path, area }
+    }
+
+    /// What `commit_id` changed, in one file or all of them.
+    pub fn commit(commit_id: CommitId, path: Option<PathBuf>) -> Self {
+        Self::Commit { commit_id, path }
+    }
+
+    /// `from` to `to`, or to the working tree when `to` is `None`.
+    pub fn commit_range(
+        from_commit_id: CommitId,
+        to_commit_id: Option<CommitId>,
+        path: Option<PathBuf>,
+    ) -> Self {
+        Self::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+        }
+    }
+
     /// The single file this target shows, if it shows one.
     pub fn file_path(&self) -> Option<&std::path::Path> {
         match self {

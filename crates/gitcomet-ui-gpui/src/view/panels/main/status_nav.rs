@@ -84,7 +84,7 @@ pub(super) fn status_navigation_context<'a>(
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
 ) -> Option<StatusNavigationContext<'a>> {
-    let DiffTarget::WorkingTree { path, area } = diff_target else {
+    let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
         return None;
     };
     let section =
@@ -131,7 +131,7 @@ pub(super) fn status_navigation_context_for_repo<'a>(
     change_tracking_view: ChangeTrackingView,
     section_order: Option<&[usize]>,
 ) -> Option<StatusNavigationContext<'a>> {
-    let DiffTarget::WorkingTree { path, area } = diff_target else {
+    let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
         return None;
     };
     let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
@@ -230,6 +230,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo.history_state.commit_details else {
                 return None;
@@ -281,7 +282,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<std::sync::Arc<[usize]>> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } = repo.diff_state.diff_target.as_ref()?
+        else {
             return None;
         };
         let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
@@ -399,7 +401,7 @@ impl MainPaneView {
                 } else {
                     self.store.dispatch(Msg::SelectDiff {
                         repo_id,
-                        target: DiffTarget::WorkingTree { path, area },
+                        target: DiffTarget::working_tree(path, area),
                     });
                 }
             }
@@ -410,10 +412,7 @@ impl MainPaneView {
             } => {
                 self.store.dispatch(Msg::SelectDiff {
                     repo_id,
-                    target: DiffTarget::Commit {
-                        commit_id,
-                        path: Some(path),
-                    },
+                    target: DiffTarget::commit(commit_id, Some(path)),
                 });
                 self.scroll_commit_details_file_to_ix(target_ix, cx);
             }
@@ -485,10 +484,7 @@ mod tests {
                 ),
             ]),
         };
-        let target = DiffTarget::WorkingTree {
-            path: pb("new-a.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(pb("new-a.txt"), DiffArea::Unstaged);
 
         let navigation =
             status_navigation_context(&status, &target, ChangeTrackingView::SplitUntracked)
@@ -526,10 +522,7 @@ mod tests {
                 ),
             ]),
         };
-        let target = DiffTarget::WorkingTree {
-            path: pb("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(pb("src/lib.rs"), DiffArea::Unstaged);
 
         let navigation =
             status_navigation_context(&status, &target, ChangeTrackingView::SplitUntracked)
@@ -568,10 +561,7 @@ mod tests {
                 ),
             ]),
         };
-        let target = DiffTarget::WorkingTree {
-            path: pb("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(pb("src/lib.rs"), DiffArea::Unstaged);
 
         let navigation = status_navigation_context(&status, &target, ChangeTrackingView::Combined)
             .expect("combined navigation");
@@ -601,34 +591,22 @@ mod tests {
                 committed_at_unix: 0,
                 parent_ids: vec![],
                 files: vec![
-                    gitcomet_core::domain::CommitFileChange {
-                        path: file_a.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    },
-                    gitcomet_core::domain::CommitFileChange {
-                        path: file_b.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    },
-                    gitcomet_core::domain::CommitFileChange {
-                        path: file_c.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    },
+                    gitcomet_core::domain::CommitFileChange::new(
+                        file_a.clone(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    ),
+                    gitcomet_core::domain::CommitFileChange::new(
+                        file_b.clone(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    ),
+                    gitcomet_core::domain::CommitFileChange::new(
+                        file_c.clone(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    ),
                 ],
             }));
 
-        let target = DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(file_b.clone()),
-        };
+        let target = DiffTarget::commit(commit_id.clone(), Some(file_b.clone()));
 
         assert_eq!(
             adjacent_diff_file_target_for_repo(
@@ -681,34 +659,22 @@ mod tests {
                 committed_at_unix: 0,
                 parent_ids: vec![],
                 files: vec![
-                    gitcomet_core::domain::CommitFileChange {
-                        path: file_a.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    },
-                    gitcomet_core::domain::CommitFileChange {
-                        path: file_b.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    },
-                    gitcomet_core::domain::CommitFileChange {
-                        path: file_c.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    },
+                    gitcomet_core::domain::CommitFileChange::new(
+                        file_a.clone(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    ),
+                    gitcomet_core::domain::CommitFileChange::new(
+                        file_b.clone(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    ),
+                    gitcomet_core::domain::CommitFileChange::new(
+                        file_c.clone(),
+                        gitcomet_core::domain::FileStatusKind::Modified,
+                    ),
                 ],
             }));
 
-        let target = DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(file_b.clone()),
-        };
+        let target = DiffTarget::commit(commit_id.clone(), Some(file_b.clone()));
         let visible_source_indices = [2, 1];
 
         assert_eq!(
@@ -738,10 +704,7 @@ mod tests {
             None,
         );
 
-        let hidden_target = DiffTarget::Commit {
-            commit_id,
-            path: Some(file_a),
-        };
+        let hidden_target = DiffTarget::commit(commit_id, Some(file_a));
         assert_eq!(
             adjacent_diff_file_target_for_repo(
                 &repo,

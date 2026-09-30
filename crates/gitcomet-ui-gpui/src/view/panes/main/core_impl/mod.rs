@@ -28,12 +28,13 @@ fn blame_path_rev_for_target(
 ) -> Option<(std::path::PathBuf, gitcomet_core::domain::BlameSource)> {
     use gitcomet_core::domain::BlameSource;
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             Some((path.clone(), BlameSource::WorkingTree(*area)))
         }
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => Some((
             path.clone(),
             BlameSource::Revision(Some(commit_id.0.to_string())),
@@ -163,7 +164,7 @@ impl MainPaneView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             match repo.diff_state.diff_target.as_ref() {
-                Some(DiffTarget::WorkingTree { path, area }) => {
+                Some(DiffTarget::WorkingTree { path, area, .. }) => {
                     0u8.hash(&mut hasher);
                     path.hash(&mut hasher);
                     match area {
@@ -171,7 +172,9 @@ impl MainPaneView {
                         DiffArea::Unstaged => 1u8.hash(&mut hasher),
                     }
                 }
-                Some(DiffTarget::Commit { commit_id, path }) => {
+                Some(DiffTarget::Commit {
+                    commit_id, path, ..
+                }) => {
                     1u8.hash(&mut hasher);
                     commit_id.hash(&mut hasher);
                     path.hash(&mut hasher);
@@ -180,6 +183,7 @@ impl MainPaneView {
                     from_commit_id,
                     to_commit_id,
                     path,
+                    ..
                 }) => {
                     2u8.hash(&mut hasher);
                     from_commit_id.hash(&mut hasher);

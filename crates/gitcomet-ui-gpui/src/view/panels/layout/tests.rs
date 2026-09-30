@@ -519,10 +519,7 @@ fn status_section_action_selection_falls_back_to_active_combined_unstaged_row() 
         unstaged: std::sync::Arc::new(vec![file_status("src/lib.rs", FileStatusKind::Modified)]),
         staged: std::sync::Arc::new(Vec::new()),
     });
-    let diff_target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let diff_target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
 
     let selection = status_section_action_selection(
         &repo,
@@ -547,10 +544,7 @@ fn another_sections_selection_does_not_suppress_active_row_fallback() {
         unstaged: std::sync::Arc::new(vec![file_status("a.txt", FileStatusKind::Modified)]),
         staged: std::sync::Arc::new(vec![file_status("b.txt", FileStatusKind::Modified)]),
     });
-    let target = DiffTarget::WorkingTree {
-        path: "a.txt".into(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree("a.txt".into(), DiffArea::Unstaged);
     for staged in [vec!["b.txt".into()], Vec::new()] {
         let selected = StatusMultiSelection {
             explicit_section: Some(StatusSection::Staged),
@@ -577,10 +571,7 @@ fn status_section_action_selection_limits_active_row_to_matching_split_section()
         ]),
         staged: std::sync::Arc::new(Vec::new()),
     });
-    let diff_target = DiffTarget::WorkingTree {
-        path: PathBuf::from("new.txt"),
-        area: DiffArea::Unstaged,
-    };
+    let diff_target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
 
     let untracked =
         status_section_action_selection(&repo, Some(&diff_target), None, StatusSection::Untracked);
@@ -608,10 +599,7 @@ fn status_explicit_empty_selection_does_not_fall_back_to_the_preview() {
             explicit_section: Some(section),
             ..Default::default()
         };
-        let target = DiffTarget::WorkingTree {
-            path: "a.rs".into(),
-            area: section.diff_area(),
-        };
+        let target = DiffTarget::working_tree("a.rs".into(), section.diff_area());
         let action =
             status_section_action_selection(&repo, Some(&target), Some(&selection), section);
         assert!(action.paths.is_empty());
@@ -636,10 +624,7 @@ fn status_section_action_selection_prefers_explicit_selection_over_active_row() 
         ]),
         staged: std::sync::Arc::new(Vec::new()),
     });
-    let diff_target = DiffTarget::WorkingTree {
-        path: PathBuf::from("src/other.rs"),
-        area: DiffArea::Unstaged,
-    };
+    let diff_target = DiffTarget::working_tree(PathBuf::from("src/other.rs"), DiffArea::Unstaged);
     let selection = StatusMultiSelection {
         unstaged: vec![selected_a.clone(), selected_b.clone()],
         ..Default::default()

@@ -2068,13 +2068,13 @@ fn commit_details_reports_root_and_rename_file_changes() {
     assert_eq!(root_details.parent_ids, Vec::<CommitId>::new());
     assert_eq!(
         root_details.files,
-        vec![gitcomet_core::domain::CommitFileChange {
-            path: Path::new("old name.txt").to_path_buf(),
-            kind: FileStatusKind::Added,
-            is_submodule: false,
-            additions: Some(1),
-            deletions: Some(0),
-        }]
+        vec![
+            gitcomet_core::domain::CommitFileChange::new(
+                Path::new("old name.txt").to_path_buf(),
+                FileStatusKind::Added
+            )
+            .with_line_counts(Some(1), Some(0))
+        ]
     );
 
     assert_eq!(rename_details.id, CommitId(rename_id.into()));
@@ -2082,13 +2082,13 @@ fn commit_details_reports_root_and_rename_file_changes() {
     assert_eq!(rename_details.parent_ids.len(), 1);
     assert_eq!(
         rename_details.files,
-        vec![gitcomet_core::domain::CommitFileChange {
-            path: Path::new("new name.txt").to_path_buf(),
-            kind: FileStatusKind::Renamed,
-            is_submodule: false,
-            additions: Some(0),
-            deletions: Some(0),
-        }]
+        vec![
+            gitcomet_core::domain::CommitFileChange::new(
+                Path::new("new name.txt").to_path_buf(),
+                FileStatusKind::Renamed
+            )
+            .with_line_counts(Some(0), Some(0))
+        ]
     );
 }
 

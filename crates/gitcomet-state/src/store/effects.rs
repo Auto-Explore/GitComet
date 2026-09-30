@@ -3058,14 +3058,8 @@ mod tests {
     #[test]
     fn selecting_a_new_diff_cancels_only_the_previous_diff() {
         let mut token = RepoTaskToken::new(1);
-        let a = DiffTarget::WorkingTree {
-            path: "a".into(),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        };
-        let b = DiffTarget::WorkingTree {
-            path: "b".into(),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        };
+        let a = DiffTarget::working_tree("a".into(), gitcomet_core::domain::DiffArea::Unstaged);
+        let b = DiffTarget::working_tree("b".into(), gitcomet_core::domain::DiffArea::Unstaged);
         let first = token.selected_diff_cancellation(&a, 1);
         let same = token.selected_diff_cancellation(&a, 1);
         // Unrelated store messages must not acquire a task's mutex. Holding
@@ -3124,10 +3118,7 @@ mod tests {
             }
         }
 
-        let target = DiffTarget::WorkingTree {
-            path: "a".into(),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree("a".into(), DiffArea::Unstaged);
         let ids = [RepoId(1), RepoId(2), RepoId(3)];
         let repos_state = ids
             .iter()

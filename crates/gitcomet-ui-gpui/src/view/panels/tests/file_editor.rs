@@ -19,10 +19,10 @@ fn editor_state(
     file_rel: &Path,
 ) -> Arc<AppState> {
     let mut repo = opening_repo_state(repo_id, workdir);
-    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.to_path_buf(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.to_path_buf(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = true;
     app_state_with_repo(repo, repo_id)
@@ -36,10 +36,10 @@ fn two_repo_editor_state(
     let make_repo =
         |(repo_id, workdir, file_rel): (gitcomet_state::model::RepoId, &Path, &Path)| {
             let mut repo = opening_repo_state(repo_id, workdir);
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-                path: file_rel.to_path_buf(),
-                area: gitcomet_core::domain::DiffArea::Unstaged,
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+                file_rel.to_path_buf(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
             repo.diff_state.content_preview = true;
             repo.diff_state.edit_mode = true;
             repo

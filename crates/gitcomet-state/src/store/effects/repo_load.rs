@@ -118,10 +118,7 @@ mod selected_diff_guard_tests {
     use gitcomet_core::domain::RepoSpec;
 
     fn target(path: &str) -> DiffTarget {
-        DiffTarget::WorkingTree {
-            path: PathBuf::from(path),
-            area: DiffArea::Unstaged,
-        }
+        DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged)
     }
 
     fn thread_state_with_target(
@@ -875,10 +872,7 @@ pub(super) fn schedule_load_conflict_file(
             match repo.conflict_file_stages(&path) {
                 Ok(v) => Ok(v),
                 Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
-                    .diff_file_text(&DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: DiffArea::Unstaged,
-                    })
+                    .diff_file_text(&DiffTarget::working_tree(path.clone(), DiffArea::Unstaged))
                     .map(|opt| {
                         opt.map(|d| {
                             let ours_bytes = d
@@ -1980,10 +1974,7 @@ pub(super) fn schedule_open_file_at_commit(
         } else {
             Msg::SelectDiff {
                 repo_id,
-                target: gitcomet_core::domain::DiffTarget::Commit {
-                    commit_id,
-                    path: Some(resolved),
-                },
+                target: gitcomet_core::domain::DiffTarget::commit(commit_id, Some(resolved)),
             }
         };
         send_or_log(&msg_tx, message);

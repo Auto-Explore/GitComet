@@ -788,10 +788,7 @@ fn selected_diff_results_after_store_drop_do_not_emit_store_event_failures() {
 
     store.dispatch(Msg::SelectDiff {
         repo_id,
-        target: DiffTarget::WorkingTree {
-            path: PathBuf::from("tracked.txt"),
-            area: DiffArea::Unstaged,
-        },
+        target: DiffTarget::working_tree(PathBuf::from("tracked.txt"), DiffArea::Unstaged),
     });
 
     started_rx

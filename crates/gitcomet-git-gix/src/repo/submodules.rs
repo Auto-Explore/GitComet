@@ -91,6 +91,7 @@ impl GixRepo {
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
+                ..
             } => submodule_commit_diff_summary(&repo, commit_id, path, cancellation),
             _ => Err(Error::new(ErrorKind::Unsupported(
                 "submodule summaries require a submodule working-tree target or committed submodule path",
@@ -1140,13 +1141,9 @@ pub(super) fn diff_commit_to_worktree_files(
         .into_iter()
         .map(|change| {
             let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
-            CommitFileChange {
-                path: change.path,
-                kind: change.kind,
-                is_submodule: change.is_submodule,
-                additions,
-                deletions,
-            }
+            CommitFileChange::new(change.path, change.kind)
+                .with_submodule(change.is_submodule)
+                .with_line_counts(additions, deletions)
         })
         .collect())
 }
@@ -2503,10 +2500,10 @@ mod tests {
 
         let repo = open_repo(tmp.path());
         let summary = repo
-            .submodule_diff_summary_impl(&DiffTarget::WorkingTree {
-                path: submodule_path.into(),
-                area: DiffArea::Staged,
-            })
+            .submodule_diff_summary_impl(&DiffTarget::working_tree(
+                submodule_path.into(),
+                DiffArea::Staged,
+            ))
             .expect("staged submodule removal summary");
         let staged_range = summary
             .ranges
