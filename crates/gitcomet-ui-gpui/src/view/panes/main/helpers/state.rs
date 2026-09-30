@@ -474,6 +474,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) diff_cache_rev: u64,
     pub(in crate::view) diff_cache_content_signature: Option<u64>,
+    /// The last patch `patch_diff_content_signature` hashed and its result.
+    /// Holding the `Arc` keeps its address from being reused by another diff.
+    pub(in crate::view) patch_signature_memo: Option<(Arc<gitcomet_core::domain::Diff>, u64)>,
     pub(in crate::view) diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) diff_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) diff_row_provider:

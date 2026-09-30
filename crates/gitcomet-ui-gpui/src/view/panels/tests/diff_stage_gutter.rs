@@ -948,6 +948,37 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+/// What the main pane's state application spends on its diff caches when
+/// the open diff did not change (a status or line-stats publication after a
+/// save): both checks confirm the cache per call. Ignored: a measurement.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_diff_cache_checks_on_unchanged_diff(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let lines: usize = std::env::var("GITCOMET_PROBE_DIFF_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000);
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70933), lines, DiffViewMode::Inline);
+    let mut best = f64::MAX;
+    for _ in 0..20 {
+        let started = Instant::now();
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.ensure_file_diff_cache(cx);
+                pane.ensure_rendered_patch_diff_cache(cx);
+            });
+        });
+        best = best.min(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("timing diff_cache_checks_on_unchanged_diff lines={lines} best={best:.3}ms");
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 fn a_frame_of_a_text_diff_resolves_what_the_pane_shows_a_bounded_number_of_times(
     cx: &mut gpui::TestAppContext,
