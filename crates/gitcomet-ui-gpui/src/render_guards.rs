@@ -27,7 +27,7 @@ mod tests {
                     "view/settings_window/render.rs",
                     "view/terminal_panel.rs",
                     "view/terminal_panel/viewport.rs",
-                    "view/panels/layout.rs",
+                    "view/panels/layout/commit_details.rs",
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/history/history_panel.rs",
                     "view/rows/diff_text/build.rs",
