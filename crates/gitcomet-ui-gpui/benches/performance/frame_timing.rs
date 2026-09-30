@@ -1,5 +1,8 @@
 use super::common::*;
 
+// Prepared-row work on the benchmark thread, not native frames: nothing here
+// lays out, paints, or presents. Each timed iteration runs the burst alone;
+// the per-frame capture, allocation pass and sidecar write run once afterwards.
 pub(crate) fn bench_frame_timing(c: &mut Criterion) {
     let history_commits = env_usize("GITCOMET_BENCH_FRAME_HISTORY_COMMITS", 50_000);
     let history_local_branches = env_usize("GITCOMET_BENCH_FRAME_HISTORY_LOCAL_BRANCHES", 400);
@@ -28,105 +31,83 @@ pub(crate) fn bench_frame_timing(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter("continuous_scroll_history_list"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (burst_hash, stats, metrics) = capture_frame_timing_scroll_burst(
-                        history_commits,
-                        history_window,
-                        history_scroll_step,
-                        frame_budget_ns,
-                        frames,
-                        |start, window| history_fixture.run_scroll_step(start, window),
-                    );
-                    hash ^= burst_hash;
-                    std::hint::black_box((stats, metrics));
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) = measure_sidecar_allocations(|| {
-                    capture_frame_timing_scroll_burst(
-                        history_commits,
-                        history_window,
-                        history_scroll_step,
-                        frame_budget_ns,
-                        frames,
-                        |start, window| history_fixture.run_scroll_step(start, window),
-                    )
-                });
-                emit_frame_timing_sidecar("continuous_scroll_history_list", &stats, metrics);
-                started.elapsed()
+            b.iter(|| {
+                run_frame_timing_scroll_burst(
+                    history_commits,
+                    history_window,
+                    history_scroll_step,
+                    frames,
+                    |start, window| history_fixture.run_scroll_step(start, window),
+                )
             });
         },
     );
+    if let Some((_hash, stats, metrics)) = measure_sidecar_allocations_if_selected(
+        "frame_timing/continuous_scroll_history_list",
+        || {
+            capture_frame_timing_scroll_burst(
+                history_commits,
+                history_window,
+                history_scroll_step,
+                frame_budget_ns,
+                frames,
+                |start, window| history_fixture.run_scroll_step(start, window),
+            )
+        },
+    ) {
+        emit_frame_timing_sidecar("continuous_scroll_history_list", &stats, metrics);
+    }
 
     group.bench_function(
         BenchmarkId::from_parameter("continuous_scroll_large_diff"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (burst_hash, stats, metrics) = capture_frame_timing_scroll_burst(
-                        diff_lines,
-                        diff_window,
-                        diff_scroll_step,
-                        frame_budget_ns,
-                        frames,
-                        |start, window| diff_fixture.run_scroll_step(start, window),
-                    );
-                    hash ^= burst_hash;
-                    std::hint::black_box((stats, metrics));
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) = measure_sidecar_allocations(|| {
-                    capture_frame_timing_scroll_burst(
-                        diff_lines,
-                        diff_window,
-                        diff_scroll_step,
-                        frame_budget_ns,
-                        frames,
-                        |start, window| diff_fixture.run_scroll_step(start, window),
-                    )
-                });
-                emit_frame_timing_sidecar("continuous_scroll_large_diff", &stats, metrics);
-                started.elapsed()
+            b.iter(|| {
+                run_frame_timing_scroll_burst(
+                    diff_lines,
+                    diff_window,
+                    diff_scroll_step,
+                    frames,
+                    |start, window| diff_fixture.run_scroll_step(start, window),
+                )
             });
         },
     );
+    if let Some((_hash, stats, metrics)) =
+        measure_sidecar_allocations_if_selected("frame_timing/continuous_scroll_large_diff", || {
+            capture_frame_timing_scroll_burst(
+                diff_lines,
+                diff_window,
+                diff_scroll_step,
+                frame_budget_ns,
+                frames,
+                |start, window| diff_fixture.run_scroll_step(start, window),
+            )
+        })
+    {
+        emit_frame_timing_sidecar("continuous_scroll_large_diff", &stats, metrics);
+    }
 
     // --- sidebar_resize_drag_sustained ---
+    // Each burst starts from a fresh fixture; building it is setup, not timed.
     let sidebar_drag_frames = env_usize("GITCOMET_BENCH_FRAME_SIDEBAR_DRAG_FRAMES", 240);
     group.bench_function(
         BenchmarkId::from_parameter("sidebar_resize_drag_sustained"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let mut fixture = SidebarResizeDragSustainedFixture::new(
-                        sidebar_drag_frames,
-                        frame_budget_ns,
-                    );
-                    let (burst_hash, _stats, _metrics) = fixture.run_with_metrics();
-                    hash ^= burst_hash;
-                }
-
-                std::hint::black_box(hash);
-                let mut fixture =
-                    SidebarResizeDragSustainedFixture::new(sidebar_drag_frames, frame_budget_ns);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| fixture.run_with_metrics());
-                emit_sidebar_resize_drag_sustained_sidecar(&stats, metrics);
-                started.elapsed()
-            });
+            b.iter_batched_ref(
+                || SidebarResizeDragSustainedFixture::new(sidebar_drag_frames, frame_budget_ns),
+                |fixture| fixture.run(),
+                BatchSize::PerIteration,
+            );
         },
     );
+    let mut sidebar_sidecar_fixture =
+        SidebarResizeDragSustainedFixture::new(sidebar_drag_frames, frame_budget_ns);
+    if let Some((_hash, stats, metrics)) = measure_sidecar_allocations_if_selected(
+        "frame_timing/sidebar_resize_drag_sustained",
+        || sidebar_sidecar_fixture.run_with_metrics(),
+    ) {
+        emit_sidebar_resize_drag_sustained_sidecar(&stats, metrics);
+    }
 
     // --- rapid_commit_selection_changes ---
     let rapid_commit_count = env_usize("GITCOMET_BENCH_FRAME_RAPID_COMMIT_COUNT", 120);
@@ -135,24 +116,14 @@ pub(crate) fn bench_frame_timing(c: &mut Criterion) {
         RapidCommitSelectionFixture::new(rapid_commit_count, rapid_commit_files, frame_budget_ns);
     group.bench_function(
         BenchmarkId::from_parameter("rapid_commit_selection_changes"),
-        |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (burst_hash, _stats, _metrics) = rapid_commit_fixture.run_with_metrics();
-                    hash ^= burst_hash;
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| rapid_commit_fixture.run_with_metrics());
-                emit_rapid_commit_selection_sidecar(&stats, metrics);
-                started.elapsed()
-            });
-        },
+        |b| b.iter(|| rapid_commit_fixture.run()),
     );
+    if let Some((_hash, stats, metrics)) = measure_sidecar_allocations_if_selected(
+        "frame_timing/rapid_commit_selection_changes",
+        || rapid_commit_fixture.run_with_metrics(),
+    ) {
+        emit_rapid_commit_selection_sidecar(&stats, metrics);
+    }
 
     // --- repo_switch_during_scroll ---
     let switch_every = env_usize("GITCOMET_BENCH_FRAME_SWITCH_EVERY_N_FRAMES", 30);
@@ -168,25 +139,15 @@ pub(crate) fn bench_frame_timing(c: &mut Criterion) {
     );
     group.bench_function(
         BenchmarkId::from_parameter("repo_switch_during_scroll"),
-        |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (burst_hash, _stats, _metrics) =
-                        repo_switch_scroll_fixture.run_with_metrics();
-                    hash ^= burst_hash;
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| repo_switch_scroll_fixture.run_with_metrics());
-                emit_repo_switch_during_scroll_sidecar(&stats, metrics);
-                started.elapsed()
-            });
-        },
+        |b| b.iter(|| repo_switch_scroll_fixture.run()),
     );
+    if let Some((_hash, stats, metrics)) =
+        measure_sidecar_allocations_if_selected("frame_timing/repo_switch_during_scroll", || {
+            repo_switch_scroll_fixture.run_with_metrics()
+        })
+    {
+        emit_repo_switch_during_scroll_sidecar(&stats, metrics);
+    }
 
     group.finish();
 }

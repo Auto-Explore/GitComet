@@ -3183,6 +3183,7 @@ mod tests {
             history_find_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
             session_persist_executor: &executor,
             backend: &backend,
+            publication: &std::sync::atomic::AtomicU64::new(0),
         };
 
         let builds = selection_index_builds_for_test();

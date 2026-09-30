@@ -20,8 +20,9 @@ All other arguments are passed through to scripts/profiling/run-full-perf-suite.
 Reserved passthrough options:
   --criterion-root
   --fresh-reference
+  --run-dir
 
-This wrapper manages those two options itself so the archived report can be
+This wrapper manages those options itself so the archived report can be
 replayed later against the saved artifact tree with the same freshness stamp.
 
 Artifacts written per archived run:
@@ -32,6 +33,8 @@ Artifacts written per archived run:
   budget-report.md      Perf budget report regenerated from archived artifacts
   metadata.txt          Run metadata and exact replay commands
   suite-start.stamp     Freshness reference used for this archived run
+  run/                  Frozen executables, manifest.json (scenario
+                        completeness verdict), per-case logs
   criterion/            Snapshotted Criterion + sidecar artifact tree
 
 Examples:
@@ -84,12 +87,12 @@ strict_report=0
 suite_dry_run=0
 for ((i = 0; i < ${#suite_args[@]}; i++)); do
   case "${suite_args[$i]}" in
-    --criterion-root|--fresh-reference)
+    --criterion-root|--fresh-reference|--run-dir)
       echo "Do not pass ${suite_args[$i]} to archive-perf-run.sh." >&2
       echo "This wrapper owns that option so the saved archive stays self-consistent." >&2
       exit 2
       ;;
-    --criterion-root=*|--fresh-reference=*)
+    --criterion-root=*|--fresh-reference=*|--run-dir=*)
       echo "Do not pass ${suite_args[$i]%%=*} to archive-perf-run.sh." >&2
       echo "This wrapper owns that option so the saved archive stays self-consistent." >&2
       exit 2
@@ -131,11 +134,14 @@ suite_cmd=(
   GITCOMET_PERF_SUMMARY_JSONL="${summary_jsonl}"
   bash scripts/profiling/run-full-perf-suite.sh
   --fresh-reference "${fresh_reference}"
+  --run-dir "${archive_dir}/run"
 )
 suite_cmd+=("${suite_args[@]}")
 
+# Replay with the report binary the suite froze, so the archive stays
+# self-contained after later builds.
 report_cmd=(
-  cargo run -p gitcomet-ui-gpui --bin perf_budget_report --
+  "${archive_dir}/run/bin/perf_budget_report"
   --criterion-root "${archive_criterion_root}"
   --fresh-reference "${fresh_reference}"
 )
@@ -216,6 +222,10 @@ else
   fi
 
   if [[ ${report_status} -eq 0 ]]; then
+    if [[ ! -x "${report_cmd[0]}" ]]; then
+      # --skip-report runs freeze no report binary.
+      report_cmd=(cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- "${report_cmd[@]:1}")
+    fi
     set +e
     "${report_cmd[@]}" 2>&1 | tee "${budget_report}"
     report_status=${PIPESTATUS[0]}

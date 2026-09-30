@@ -13,7 +13,9 @@ pub(super) fn schedule(
     // The index must not occupy either interactive repo-load worker.
     static INDEX_EXECUTOR: OnceLock<TaskExecutor> = OnceLock::new();
     let executor = match &work {
-        Work::Build { .. } => INDEX_EXECUTOR.get_or_init(|| TaskExecutor::new(1)),
+        Work::Build { .. } => {
+            INDEX_EXECUTOR.get_or_init(|| TaskExecutor::named("gitcomet-history-index", 1))
+        }
         Work::Range { .. } => range_executor,
     };
     let repo_id = work.repo_id();

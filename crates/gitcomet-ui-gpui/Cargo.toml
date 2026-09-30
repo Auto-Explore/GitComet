@@ -42,6 +42,7 @@ palette = { workspace = true }
 pulldown-cmark = { workspace = true }
 unicode-normalization = { workspace = true }
 regex = { workspace = true }
+raw-window-handle = { workspace = true }
 rustc-hash = { workspace = true }
 rustfs-mimalloc = { workspace = true }
 resvg = { workspace = true }
@@ -140,6 +141,7 @@ anyhow = { workspace = true }
 rustix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gpui_wgpu = { workspace = true }
 x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -150,7 +152,6 @@ schemars = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gitcomet-win32-window-utils = { path = "../win32-window-utils" }
-raw-window-handle = { workspace = true }
 
 [dev-dependencies]
 # Activate the optional backend for history activation tests with real Git data.

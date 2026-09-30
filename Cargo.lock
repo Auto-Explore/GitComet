@@ -2259,8 +2259,11 @@ dependencies = [
  "process-wrap",
  "regex",
  "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
  "smallvec",
  "strsim",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -2307,6 +2310,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smol",
+ "strum 0.28.0",
  "tempfile",
  "uuid",
 ]
@@ -2338,6 +2342,7 @@ dependencies = [
  "gitcomet-win32-window-utils",
  "gpui-ce",
  "gpui_ce_platform",
+ "gpui_ce_wgpu",
  "image",
  "jiff",
  "lru",

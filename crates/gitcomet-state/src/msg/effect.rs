@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use super::RepoPathList;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),

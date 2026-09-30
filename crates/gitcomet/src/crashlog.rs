@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use gitcomet_core::environment::{self, EnvironmentSnapshot};
 use gitcomet_core::fs_utils::{open_private_append, write_private_file};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
@@ -41,6 +42,7 @@ struct AbnormalExitLog {
     marker_path: PathBuf,
     last_operation_path: PathBuf,
     runtime_error_path: PathBuf,
+    environment_path: PathBuf,
     contents: String,
 }
 
@@ -305,6 +307,7 @@ fn write_runtime_error_log_in_dir(
     writeln!(file, "location={}", single_line_text(location))?;
     writeln!(file, "message={}", single_line_text(message))?;
     writeln!(file, "info={}", single_line_text(info))?;
+    write_cached_environment(&mut file)?;
     writeln!(file, "backtrace:")?;
     writeln!(file, "{backtrace}")?;
     // No `sync_data`: the record only has to outlive this process, which the
@@ -327,12 +330,66 @@ pub fn begin_session() -> std::io::Result<()> {
         return Err(err);
     }
     SESSION_ACTIVE.store(true, Ordering::SeqCst);
+    start_environment_writer(dir)?;
+    Ok(())
+}
+
+fn environment_path_for_pid(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("environment-{pid}.json"))
+}
+
+fn persist_environment(dir: &Path, snapshot: &EnvironmentSnapshot) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(snapshot)?;
+    write_private_file(&environment_path_for_pid(dir, std::process::id()), &bytes)
+}
+
+/// Serial, background persistence prevents stale writes from overtaking newer
+/// snapshots. The lifecycle lock also prevents an in-flight write from
+/// recreating artifacts after clean shutdown has removed them.
+fn start_environment_writer(dir: PathBuf) -> std::io::Result<()> {
+    let updates = environment::subscribe();
+    std::thread::Builder::new()
+        .name("gitcomet-environment".into())
+        .spawn(move || {
+            while let Ok(mut snapshot) = updates.recv() {
+                for next in updates.try_iter() {
+                    snapshot = next;
+                }
+                let _lifecycle = SESSION_LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+                if !SESSION_ACTIVE.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Err(err) = persist_environment(&dir, &snapshot) {
+                    eprintln!("Failed to persist GitComet environment: {err}");
+                }
+            }
+        })?;
+    Ok(())
+}
+
+fn write_environment(
+    writer: &mut impl std::io::Write,
+    snapshot: &EnvironmentSnapshot,
+) -> std::io::Result<()> {
+    writeln!(
+        writer,
+        "environment_json={}",
+        serde_json::to_string(snapshot)?
+    )
+}
+
+fn write_cached_environment(writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    if let Some(snapshot) = environment::try_cached() {
+        write_environment(writer, &snapshot)?;
+    }
     Ok(())
 }
 
 fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
     remove_file_if_exists(&last_operation_path(dir))?;
     remove_file_if_exists(&runtime_error_path(dir))?;
+    // A reused PID must not inherit an earlier process's renderer.
+    persist_environment(dir, &environment::cached())?;
 
     let mut contents = Vec::new();
     writeln!(contents, "=== GitComet abnormal exit candidate ===")?;
@@ -377,7 +434,8 @@ pub fn finish_session() -> std::io::Result<()> {
 fn finish_session_in_dir(dir: &Path) -> std::io::Result<()> {
     remove_file_if_exists(&session_marker_path(dir))?;
     remove_file_if_exists(&last_operation_path(dir))?;
-    remove_file_if_exists(&runtime_error_path(dir))
+    remove_file_if_exists(&runtime_error_path(dir))?;
+    remove_file_if_exists(&environment_path_for_pid(dir, std::process::id()))
 }
 
 /// Records a handled UI launch or event-loop failure for the next startup
@@ -422,6 +480,7 @@ fn record_session_failure_in_dir_with_diagnostics(
         file,
         "info=GitComet could not complete its GPUI launch or event loop."
     )?;
+    write_cached_environment(&mut file)?;
     if let Some(backtrace) = backtrace {
         writeln!(file, "backtrace:")?;
         writeln!(file, "{backtrace}")?;
@@ -512,6 +571,12 @@ fn take_startup_report_from_crash_dir_with_process_check(
                     session_log.runtime_error_path.display()
                 );
             }
+            if let Err(err) = remove_file_if_exists(&session_log.environment_path) {
+                eprintln!(
+                    "Failed to clear recovered GitComet environment {}: {err}",
+                    session_log.environment_path.display()
+                );
+            }
         }
     }
     if let Some(panic_log) = &panic_log {
@@ -556,14 +621,20 @@ fn stale_abnormal_exit_logs(
         .filter_map(|(pid, marker_path)| {
             let last_operation_path = last_operation_path_for_pid(dir, pid);
             let runtime_error_path = runtime_error_path_for_pid(dir, pid);
-            read_abnormal_exit_log(&marker_path, &last_operation_path, &runtime_error_path).map(
-                |contents| AbnormalExitLog {
-                    marker_path,
-                    last_operation_path,
-                    runtime_error_path,
-                    contents,
-                },
+            let environment_path = environment_path_for_pid(dir, pid);
+            read_abnormal_exit_log(
+                &marker_path,
+                &last_operation_path,
+                &runtime_error_path,
+                &environment_path,
             )
+            .map(|contents| AbnormalExitLog {
+                marker_path,
+                last_operation_path,
+                runtime_error_path,
+                environment_path,
+                contents,
+            })
         })
         .collect()
 }
@@ -583,6 +654,7 @@ fn read_abnormal_exit_log(
     marker: &Path,
     last_operation_path: &Path,
     runtime_error_path: &Path,
+    environment_path: &Path,
 ) -> Option<String> {
     let mut session_log = match std::fs::read_to_string(marker) {
         Ok(session_log) => session_log,
@@ -619,6 +691,19 @@ fn read_abnormal_exit_log(
                 "Failed to read GitComet runtime-error diagnostics {}: {err}",
                 runtime_error_path.display()
             );
+        }
+    }
+    // Read the failed PID's file, never the current process cache. An inline
+    // snapshot belongs to the actual error and can be newer than the background
+    // writer's last flush; don't replace it with a stale sidecar. For exits
+    // without an inline snapshot, attach the sidecar after any backtrace.
+    if parse_crash_log(&session_log).environment.is_none()
+        && let Ok(bytes) = std::fs::read(environment_path)
+        && let Ok(snapshot) = serde_json::from_slice::<EnvironmentSnapshot>(&bytes)
+    {
+        let _ = writeln!(session_log, "\n=== GitComet environment ===");
+        if let Ok(json) = serde_json::to_string(&snapshot) {
+            let _ = writeln!(session_log, "environment_json={json}");
         }
     }
     Some(session_log)
@@ -711,6 +796,7 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
         .unwrap_or_else(|| "<non-string panic payload>".to_string());
     let _ = writeln!(file, "message={payload}");
     let _ = writeln!(file, "info={info}");
+    let _ = write_cached_environment(&mut file);
 
     let bt = Backtrace::force_capture();
     let _ = writeln!(file, "backtrace:\n{bt}");
@@ -990,6 +1076,9 @@ fn build_startup_report(crash_log_path: PathBuf, crash_log: &str) -> StartupCras
 
 #[derive(Default)]
 struct ParsedCrashLog {
+    environment: Option<EnvironmentSnapshot>,
+    os: Option<String>,
+    arch: Option<String>,
     failure_kind: Option<String>,
     timestamp_unix_ms: Option<String>,
     crate_name: Option<String>,
@@ -1011,7 +1100,7 @@ fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
     for raw_line in crash_log.lines() {
         let line = raw_line.trim_end_matches('\r');
 
-        if line == "=== GitComet operation context ===" {
+        if line == "=== GitComet operation context ===" || line == "=== GitComet environment ===" {
             in_backtrace = false;
             continue;
         }
@@ -1034,6 +1123,19 @@ fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
         if in_backtrace {
             parsed.backtrace.push_str(line);
             parsed.backtrace.push('\n');
+            continue;
+        }
+
+        if let Some(json) = line.strip_prefix("environment_json=") {
+            parsed.environment = serde_json::from_str(json).ok();
+            continue;
+        }
+        if let Some(os) = line.strip_prefix("os=") {
+            parsed.os = Some(os.into());
+            continue;
+        }
+        if let Some(arch) = line.strip_prefix("arch=") {
+            parsed.arch = Some(arch.into());
             continue;
         }
 
@@ -1111,6 +1213,9 @@ fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
 }
 
 fn reset_parsed_failure(parsed: &mut ParsedCrashLog) {
+    parsed.environment = None;
+    parsed.os = None;
+    parsed.arch = None;
     parsed.failure_kind = None;
     parsed.timestamp_unix_ms = None;
     parsed.crate_name = None;
@@ -1153,8 +1258,14 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
     let crate_version = parsed
         .crate_version
         .as_deref()
+        .or_else(|| {
+            parsed
+                .environment
+                .as_ref()
+                .map(|snapshot| snapshot.app_version.as_str())
+        })
         .filter(|s| !s.is_empty())
-        .unwrap_or(env!("CARGO_PKG_VERSION"));
+        .unwrap_or("Unavailable");
     let timestamp = parsed
         .timestamp_unix_ms
         .as_deref()
@@ -1219,8 +1330,20 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
     let _ = writeln!(body);
     let _ = writeln!(body, "- GitComet crate: `{crate_name}`");
     let _ = writeln!(body, "- GitComet version: `{crate_version}`");
-    let _ = writeln!(body, "- OS: `{}`", std::env::consts::OS);
-    let _ = writeln!(body, "- Arch: `{}`", std::env::consts::ARCH);
+    if let Some(environment) = &parsed.environment {
+        let _ = writeln!(body, "\n```text\n{}```\n", environment.summary());
+    } else {
+        let _ = writeln!(
+            body,
+            "- OS: `{}`",
+            parsed.os.as_deref().unwrap_or("Unavailable")
+        );
+        let _ = writeln!(
+            body,
+            "- Arch: `{}`",
+            parsed.arch.as_deref().unwrap_or("Unavailable")
+        );
+    }
     let _ = writeln!(body, "- Crash timestamp (unix ms): `{timestamp}`");
     let _ = writeln!(body, "- Thread: `{thread}`");
     let _ = writeln!(body, "- Failure kind: `{failure_kind}`");
@@ -1302,6 +1425,10 @@ impl Drop for ResetFlagOnDrop {
         WRITING_CRASH_LOG.store(false, Ordering::SeqCst);
     }
 }
+
+#[cfg(test)]
+#[path = "crashlog_environment_tests.rs"]
+mod environment_tests;
 
 #[cfg(test)]
 mod tests {
