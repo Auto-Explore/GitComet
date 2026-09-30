@@ -46,7 +46,7 @@ def group_of(comm, tid, main_tid):
 def parse(path):
     """Yield (comm, tid, time_s, frames) with frames leaf first."""
     script = subprocess.Popen(["perf", "script", "-i", str(path), "-F", "comm,tid,time,ip,sym,dso",
-                               "--no-demangle"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               "--no-demangle", "--no-inline"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, errors="replace")
     header = re.compile(r"^\s*(?P<comm>.+?)\s+(?P<tid>\d+)\s+(?P<time>\d+\.\d+):")
     current = None

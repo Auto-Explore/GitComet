@@ -484,7 +484,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     for key in ("MIMALLOC_PURGE_DELAY", "MIMALLOC_PURGE_DECOMMITS"):
         if key in os.environ:
             env[key] = os.environ[key]
-    if ping_ms is None and name.startswith("idle"):
+    if ping_ms is None and "idle" in name:
         # The 4 ms wake pinger would dominate idle wakeup counts.
         ping_ms = 1000
     if ping_ms:
@@ -645,7 +645,20 @@ def summarize(directory):
         startup = {"spawn_to_probe_ms": anchor - capture["spawn_unix_ms"],
                    "spawn_to_first_draw_ms": anchor + first_draw["at_ms"] - capture["spawn_unix_ms"] if first_draw else None,
                    "spawn_to_ready_ms": ready["unix_ms"] - capture["spawn_unix_ms"] if ready else None}
+    retention = None
+    if capture["scenario"] == "lifecycle" and all(name in phases for name in
+                                                  ("warmup_cycles", "cycles", "after_cycles")):
+        # Resources must return to a plateau: the 100 measured cycles may not
+        # keep what the 10 warm-up cycles did not.
+        warm, cycles, after = (phases[name]["end_sample"] or {} for name in
+                               ("warmup_cycles", "cycles", "after_cycles"))
+        retention = {key: {"after_warmup": warm.get(key), "after_cycles": cycles.get(key),
+                           "settled": after.get(key),
+                           "growth_per_cycle": (after.get(key) - warm.get(key)) / 100
+                           if after.get(key) is not None and warm.get(key) is not None else None}
+                     for key in ("pss_kib", "rss_kib", "threads", "fds")}
     summary = {"run_id": capture["run_id"], "scenario": capture["scenario"], "startup": startup,
+               "retention": retention,
                "binary_sha256": capture["binary_sha256"], "repository_head": capture["repository_head"],
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
@@ -744,6 +757,9 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "pss_kib": distribution(s["pss_kib"] for s in phase_process),
         "pss_breakdown_kib": next((s["pss_breakdown_kib"] for s in reversed(phase_process)
                                    if s.get("pss_breakdown_kib")), None),
+        # Where the phase ended, for retention across repeated cycles.
+        "end_sample": {key: phase_process[-1].get(key) for key in ("rss_kib", "pss_kib", "threads", "fds")}
+        if phase_process else None,
         "threads": max((s["threads"] for s in phase_process), default=None),
         "fds": max((s["fds"] for s in phase_process), default=None),
         "background_work": dict(background.most_common()),
