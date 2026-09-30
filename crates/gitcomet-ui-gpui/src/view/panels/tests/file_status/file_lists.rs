@@ -1673,3 +1673,56 @@ fn status_navigation_order_matches_the_drawn_rows_in_a_tree(cx: &mut gpui::TestA
         );
     });
 }
+
+/// Frames caused elsewhere must not re-render the cached details pane while
+/// it lists status files. `changed_file_list` refreshed each list view with
+/// an unconditional notify from inside the details render, so after the pane's
+/// first re-render every window frame re-rendered it, and laid out the list's
+/// visible rows again.
+#[gpui::test]
+fn status_file_list_does_not_rerender_the_details_pane_on_unrelated_frames(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(35);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = super::repo_with_unstaged_paths(repo_id, &["a.rs", "b.rs", "c.rs"]);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    // One legitimate re-render, as any status publication causes.
+    cx.update(|_window, app| {
+        let details = view.read(app).details_pane.clone();
+        details.update(app, |_, cx| cx.notify());
+    });
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let render_count = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).details_pane.read(app).render_count)
+    };
+    let before = render_count(cx);
+
+    for _ in 0..5 {
+        cx.update(|_window, app| {
+            let sidebar = view.read(app).sidebar_pane.clone();
+            sidebar.update(app, |_, cx| cx.notify());
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+
+    assert_eq!(
+        render_count(cx),
+        before,
+        "an unrelated frame re-rendered the details pane"
+    );
+}

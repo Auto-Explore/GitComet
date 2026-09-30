@@ -910,9 +910,13 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
     for _ in 0..5 {
         notify_and_draw(cx);
     }
-    const FRAMES: usize = 60;
-    let mut frame_ms = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    // More frames give a profiler enough samples of the steady state.
+    let frames: usize = std::env::var("GITCOMET_PROBE_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(60);
+    let mut frame_ms = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let started = Instant::now();
         notify_and_draw(cx);
         frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
@@ -920,13 +924,13 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
     frame_ms.sort_by(f64::total_cmp);
     println!(
         "timing main_pane_frame_with_large_status entries={extra} p50={:.3}ms p90={:.3}ms",
-        frame_ms[FRAMES / 2],
-        frame_ms[FRAMES * 9 / 10],
+        frame_ms[frames / 2],
+        frame_ms[frames * 9 / 10],
     );
     // The details pane lists the same entries; it re-renders on every status
     // publication and every notify of the commit box (keystrokes, caret blink).
-    let mut details_ms = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut details_ms = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let started = Instant::now();
         cx.update(|window, app| {
             let details = view.read(app).details_pane.clone();
@@ -938,8 +942,8 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
     details_ms.sort_by(f64::total_cmp);
     println!(
         "timing details_pane_frame_with_large_status entries={extra} p50={:.3}ms p90={:.3}ms",
-        details_ms[FRAMES / 2],
-        details_ms[FRAMES * 9 / 10],
+        details_ms[frames / 2],
+        details_ms[frames * 9 / 10],
     );
     let _ = std::fs::remove_dir_all(&workdir);
 }

@@ -38,16 +38,17 @@ impl ChangedFileListView {
         }
     }
 
+    /// Called from the parent's render. The list is mounted uncached, so it
+    /// renders again right after, with the parent's selection, marks and
+    /// theme. No notify: one raised during the draw dirtied the parent again
+    /// on the next frame, so the parent re-rendered on every window frame.
     pub(in crate::view) fn refresh(
         &mut self,
         row_count: Option<usize>,
         decorate: Option<Decorate>,
-        cx: &mut gpui::Context<Self>,
     ) {
         self.row_count = row_count;
         self.decorate = decorate;
-        // Selection, marks and theme may change without changing the row count.
-        cx.notify();
     }
 }
 
@@ -158,7 +159,7 @@ impl DetailsPaneView {
                 )
             })
         });
-        view.update(cx, |view, cx| view.refresh(Some(count), None, cx));
+        view.update(cx, |view, _| view.refresh(Some(count), None));
         view.clone()
     }
 }

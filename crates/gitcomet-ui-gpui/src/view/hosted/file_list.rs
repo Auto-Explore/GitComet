@@ -526,14 +526,13 @@ impl Render for FileListView {
             theme,
             ui_scale: ui_scale::UiScale::current(cx),
         });
-        self.body.update(cx, |body, cx| {
+        self.body.update(cx, |body, _| {
             body.refresh(
                 None,
                 sticky.map(|sticky| {
                     Rc::new(move |list: gpui::UniformList| list.with_decoration(sticky.clone()))
                         as _
                 }),
-                cx,
             )
         });
         div()
