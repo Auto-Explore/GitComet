@@ -264,10 +264,8 @@ pub(super) fn repo_externally_changed(
     // which other lanes the event touched. The loaded list stays until the
     // reload lands: every activation sets the flag, and a reset showed no tags
     // in history for that window and rebuilt its decorations twice.
-    if change.tags {
-        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
-            effects.push(Effect::LoadTags { repo_id });
-        }
+    if change.tags && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+        effects.push(Effect::LoadTags { repo_id });
     }
 
     let should_reload_diff = repo_state
