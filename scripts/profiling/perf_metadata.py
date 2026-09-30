@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PAIR_INVARIANT_FIELDS = (
     "toolchain.rustc", "toolchain.cargo_lock_sha256", "build",
     "machine.cpu_model", "machine.kernel", "machine.cpu_governor", "machine.cpu_boost",
-    "gpu", "display.session_type", "allocator", "git.version",
+    "gpu.cards", "gpu.vulkan", "gpu.nvidia", "display.session_type", "allocator", "git.version",
 )
 
 
@@ -161,8 +161,11 @@ def gpu_info():
                       "driver": driver.resolve().name if driver.exists() else None})
     info = {"cards": cards}
     if shutil.which("nvidia-smi"):
-        info["nvidia"] = run(["nvidia-smi", "--query-gpu=name,driver_version,pstate,clocks.gr,temperature.gpu",
-                              "--format=csv,noheader"])
+        # Model and driver identify the setup; clocks and temperature are
+        # state at capture time and differ between any two captures.
+        info["nvidia"] = run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"])
+        info["nvidia_state"] = run(["nvidia-smi", "--query-gpu=pstate,clocks.gr,temperature.gpu",
+                                    "--format=csv,noheader"])
     if shutil.which("vulkaninfo"):
         summary = run(["vulkaninfo", "--summary"])
         if isinstance(summary, str):
@@ -221,6 +224,9 @@ def collect(binaries=(), fixtures=(), cargo_profile=None, features=None, command
 def lookup(data, dotted):
     for key in dotted.split("."):
         data = data.get(key) if isinstance(data, dict) else None
+    if dotted == "gpu.nvidia" and isinstance(data, str):
+        # Captures before nvidia_state existed appended clocks and temperature.
+        data = ",".join(part.strip() for part in data.split(",")[:2])
     return data
 
 

@@ -800,8 +800,13 @@ METRICS = [
     ("dirty_to_draw_ms.p95", "lower"), ("wake_ms.p99", "lower"),
     ("main_cpu_percent", "lower"), ("process_cpu_cores", "lower"), ("wakeups_per_second", "lower"),
     ("frames_per_second", "info"), ("pss_kib.max", "lower"), ("rss_kib.max", "lower"),
-    ("slow_frames_16ms", "lower"),
+    ("slow_frames_16ms", "lower"), ("inputs.witnessed", "higher"), ("inputs.superseded", "lower"),
+    ("inputs.superseded_task_ms", "lower"),
 ]
+# Percentiles over completed inputs only compare like with like when both
+# variants completed the same inputs; a variant that let most inputs be
+# superseded reports only its cheap survivors.
+COMPLETION_SENSITIVE = ("inputs.input_to_", "inputs.apply_ms", "inputs.dispatch_delay_ms")
 
 
 def lookup(data, dotted):
@@ -843,11 +848,18 @@ def compare(samples, scenarios):
                 values = [(b, c) for b, c in values if b is not None and c is not None]
                 if not values:
                     continue
-                result[name][phase][metric] = {
+                entry = {
                     "direction": direction,
                     "baseline_median": statistics.median(b for b, _ in values),
                     "candidate_median": statistics.median(c for _, c in values),
                     "ratio": bootstrap_ratio(values)}
+                if metric.startswith(COMPLETION_SENSITIVE):
+                    completed = [(lookup(p["baseline"]["summary"]["phases"][phase], "inputs.witnessed"),
+                                  lookup(p["candidate"]["summary"]["phases"].get(phase, {}), "inputs.witnessed"))
+                                 for p in pairs]
+                    if any(b is None or c is None or abs(b - c) > 0.05 * max(b, c, 1) for b, c in completed):
+                        entry["not_comparable"] = "variants completed different inputs; compare inputs.witnessed"
+                result[name][phase][metric] = entry
     return result
 
 
