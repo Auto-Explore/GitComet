@@ -2332,6 +2332,7 @@ dependencies = [
 name = "gitcomet-git-gix"
 version = "0.2.6"
 dependencies = [
+ "filetime",
  "gitcomet-core",
  "gix",
  "lru",

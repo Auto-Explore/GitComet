@@ -472,6 +472,9 @@ pub(crate) struct GixRepo {
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
     line_stats_memo: std::sync::Mutex<line_stats::LineStatsMemo>,
+    /// Stats the worktree walk found stale but content-clean; see
+    /// [`status::StatRefreshedIndex`].
+    stat_refreshed_index: std::sync::Mutex<Option<status::StatRefreshedIndex>>,
     /// Immutable signature formats by oid. `None` means an unsigned commit.
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
@@ -510,6 +513,7 @@ impl GixRepo {
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
             line_stats_memo: std::sync::Mutex::default(),
+            stat_refreshed_index: std::sync::Mutex::new(None),
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),

@@ -102,6 +102,8 @@ ctor = "1.0.13"
 dekobon-tree-sitter-groovy = "0.3.0"
 # Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
 encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
+# Already in the tree via gix-index; the timestamp type of an in-memory index.
+filetime = "0.2.29"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"
