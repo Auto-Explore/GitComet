@@ -126,3 +126,66 @@ Three host guards became two each (kit and host scans), two window-frame tests
 stayed in the host (`window_focus_tests.rs`, `resize_grip_tests.rs`), and the
 asset-registry test split into the kit's icon check and the host's
 brand-over-kit listing check.
+
+## Milestone 3: extensions and host interfaces
+
+`gitcomet-extension-api` is the contract: an `Extension` declares its
+contributions through a `Registrar`; `Registry::build` validates and freezes
+them (namespaced ids, no duplicate contribution ids or asset paths, bindings
+and menu items naming declared commands). A product adds extensions with
+`AppLaunch::extension`; `run_mode` builds the registry after the command line
+parses and before any mode runs, so a broken registration exits with
+`exit_code::ERROR` in every mode (help and version never register).
+
+The host side lives in `view/extension_host.rs`:
+
+- With no extension registered nothing is installed: no global, no
+  `ExtensionWindow`, no router, no palette rows, no key bindings, and every
+  lookup returns early (`without_extensions_the_host_adds_nothing`).
+- Each main window owns an `ExtensionWindow`: a weak `WindowHost` that reads
+  a state snapshot and theme the view publishes, never the view entity, so
+  extension code can use its handles inside host updates (close guards,
+  gates). Handles report `WindowClosed`/`RepositoryClosed`; repository
+  handles carry the repository's lifetime, since `RepoId`s are reused.
+- UI mutations from extensions are deferred: dialogs, notifications, and
+  commands run after the current update.
+- Contributions: repository views (`view/repository_views.rs`, a router that
+  shows History or one extension view per repository; inactive History is not
+  rendered but keeps its state; views are built on first selection and
+  dropped when their repository closes), status items (built once per window
+  after it opens), settings pages (`settings_window/extension_pages.rs`, only
+  the selected page is built), commands (palette rows fixed at construction,
+  `RunExtensionCommand` action for key bindings with app- and window-level
+  handlers, app menu / macOS menu bar / repository tab menu entries), assets
+  (served under `extensions/<id>/` by `GitCometAssets`), hosted dialogs
+  (`PopoverKind::ExtensionDialog`, the popover host's focus restoration), and
+  `on_window_opened` callbacks.
+- Repository entry: every entry passes `extension_host::entry_decision` once,
+  before routing: command-line and forwarded requests, macOS open-URL
+  requests, the chooser (Home, pickers, the open dialog), drops, and
+  workspace restoration (window construction and `adopt_workspace`, which
+  filter the list before any bootstrap is dispatched or deferred). A denial
+  shows a warning in the relevant window. Focused tool windows never install
+  extensions.
+- Closing: the guards moved from `terminal_panel.rs` to `close_guards.rs`
+  and run in one order: unsaved editor buffers, running terminal commands,
+  running Git operations (push, fetch/pull, commit), then extension guards.
+  Resolving a prompt resumes at the next stage, so no guard asks twice. Every
+  repository close (tab button, Cmd+W, the tab menu's Close / Close others /
+  Close to the right) goes through `request_close_repos`; the tab menu used to
+  bypass the terminal guard.
+- Persistence: an extension's session-wide and per-workspace namespaces
+  (kept verbatim through host updates, 64 KiB each) are reached through
+  `storage` and `WindowHost::{workspace_state, set_workspace_state}`.
+
+`gitcomet-extension-example` registers one of every contribution
+(`review.rs`), and the host runs it in `view/tests/extensions.rs`: two
+windows with separate state, workspace persistence and restoration,
+notifications, commands through the palette and a key binding, the router,
+hosted dialogs, entry gates, close guards, and teardown when a window closes.
+`comet-example` runs it.
+
+Test inventory (`inventory.py compare`, the CI workspace selection): all
+7,688 tests from Milestone 2 map unchanged; 19 are new (session namespaces,
+extension hosting, the extension settings page and shortcut labels, and one
+shared render guard). The close-guard move changed no test paths.

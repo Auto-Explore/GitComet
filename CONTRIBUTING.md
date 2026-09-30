@@ -6,10 +6,11 @@
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
 - `crates/gitcomet-ui-kit`: GPUI foundations reusable without the app: runtime policy (`ui_runtime`, installed live by the app at launch, deterministic otherwise), appearance, UI scale, themes, fonts, interaction primitives, text inputs, tooltips, icons, and components (buttons, pickers, menus, settings rows, navigation tabs, interstitials). No dependency on state, the application, or the UI host.
-- `crates/gitcomet-ui-gpui`: the GitComet window: views, panes, panels (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window.
+- `crates/gitcomet-extension-api`: the contract for compiled-in extensions: contributions (repository views, status items, settings pages, commands, key bindings, menu entries, assets, entry gates, close guards), weak window and repository handles, and per-extension session/workspace storage. Depends on core, state, and the UI kit, never on the UI host.
+- `crates/gitcomet-ui-gpui`: the GitComet window: views, panes, panels (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window and hosts extensions (`view/extension_host.rs`). With none registered it installs nothing.
 - `crates/gitcomet-app`: process launch (`AppLaunch`): identity install, crash reporting, CLI (clap), browser-instance broker, difftool/mergetool/setup/uninstall modes. GUI dependencies are optional (`ui-gpui` feature).
 - `crates/gitcomet`: the executable: allocator, platform resources, packaging, and instrumentation binaries.
-- `crates/gitcomet-extension-example` and `-app`: a neutral example product built only on public upstream interfaces; CI builds it in its own context.
+- `crates/gitcomet-extension-example` and `-app`: a neutral example product built only on public upstream interfaces, with an extension registering one of every contribution; the UI host's tests run it (`view/tests/extensions.rs`), and CI builds the product in its own context.
 
 Product names, identifiers, and links come from `gitcomet_core::identity`, never
 from string literals: `scripts/ci/identity_literals.py` fails on new ones.

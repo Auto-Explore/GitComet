@@ -1,6 +1,7 @@
 use super::*;
 use crate::view::components::ControlInteractionExt;
 use gitcomet_core::services::InteractiveRebaseAction;
+use std::rc::Rc;
 
 mod add_repo_menu;
 mod add_to_gitignore_prompt;
@@ -11,6 +12,7 @@ mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
 mod clone_repo;
+mod close_guard_confirm;
 mod commit_mainline;
 mod commit_prompt;
 pub(in super::super) mod context_menu;
@@ -20,6 +22,7 @@ mod delete_branches_confirm;
 mod delete_remote_branch_confirm;
 mod discard_changes_confirm;
 mod error_details;
+mod extension_dialog;
 mod file_history;
 mod fingerprint;
 mod force_delete_branch_confirm;
@@ -162,6 +165,7 @@ impl DialogFocus {
 
 pub(in super::super) struct PopoverHost {
     store: Arc<AppStore>,
+    extension_dialog: Option<extension_dialog::ExtensionDialog>,
     state: Arc<AppState>,
     theme: AppTheme,
     theme_mode: ThemeMode,
@@ -267,6 +271,10 @@ pub(in super::super) struct PopoverHost {
     /// rows remain stable for the duration of one keyboard interaction.
     cached_workspaces: Vec<session::Workspace>,
     cached_workspace_id: Option<session::WorkspaceId>,
+    /// Extension commands in the app menu, fixed at construction.
+    extension_app_menu: Rc<[crate::view::extension_host::ExtensionMenuEntry]>,
+    /// Extension commands in a repository tab's menu, fixed at construction.
+    extension_repo_tab_menu: Rc<[crate::view::extension_host::ExtensionMenuEntry]>,
     /// Storage keys of the repository picker sections the user folded away.
     cached_collapsed_picker_sections: std::collections::BTreeSet<String>,
     repo_picker_sort: repo_picker::RepoPickerSort,
@@ -577,6 +585,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::TerminalShutdownConfirm(_)
             | PopoverKind::UnsavedFileEditsConfirm(_)
+            | PopoverKind::CloseGuardConfirm(_)
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::RemoveConfirm { .. }),
                 ..
@@ -984,9 +993,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::TerminalShutdownConfirm(_) | PopoverKind::UnsavedFileEditsConfirm(_) => {
-            Some(DIALOG_440_WIDTH)
-        }
+        PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::UnsavedFileEditsConfirm(_)
+        | PopoverKind::CloseGuardConfirm(_) => Some(DIALOG_440_WIDTH),
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
@@ -1052,7 +1061,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ConflictResolverChunkMenu { .. } => Some(CONFLICT_CHUNK_MENU_WIDTH),
         PopoverKind::ConflictResolverOutputMenu { .. } => Some(CONFLICT_OUTPUT_MENU_WIDTH),
         PopoverKind::StashMenu { .. } => Some(STASH_MENU_WIDTH),
-        PopoverKind::RebaseReword { .. } => Some(DIALOG_440_WIDTH),
+        PopoverKind::RebaseReword { .. } | PopoverKind::ExtensionDialog { .. } => {
+            Some(DIALOG_440_WIDTH)
+        }
         PopoverKind::InteractiveRebaseActionMenu { .. } => Some(REBASE_ACTION_MENU_WIDTH),
         PopoverKind::InteractiveRebaseAutosquashMenu => Some(REBASE_AUTOSQUASH_MENU_WIDTH),
     }

@@ -82,6 +82,9 @@ pub(in super::super) struct BottomStatusBarView {
     active_context_menu_invoker: Option<SharedString>,
     minimized_hook_activity_repos: rustc_hash::FxHashSet<RepoId>,
     pro_launch_label: SharedString,
+    /// Extension status items in registration order, built once the window
+    /// has opened. Empty without extensions.
+    extension_items: Vec<gpui::AnyView>,
 }
 
 impl BottomStatusBarView {
@@ -110,7 +113,22 @@ impl BottomStatusBarView {
             minimized_hook_activity_repos: Default::default(),
             // Use local calendar days and keep the startup label for this window.
             pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
+            extension_items: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn extension_item_count(&self) -> usize {
+        self.extension_items.len()
+    }
+
+    pub(in super::super) fn set_extension_items(
+        &mut self,
+        items: Vec<gpui::AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_items = items;
+        cx.notify();
     }
 
     fn hook_activity_summary(state: &AppState) -> (Option<RepoId>, usize, bool) {
@@ -503,6 +521,9 @@ impl Render for BottomStatusBarView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(2.0))
+                    // Extension indicators sit with the host's own status
+                    // controls, never between the branding chips.
+                    .children(self.extension_items.iter().cloned())
                     .child(details_toggle)
                     .child(hook_activity_button)
                     .child(

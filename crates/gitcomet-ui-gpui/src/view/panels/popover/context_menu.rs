@@ -833,6 +833,13 @@ impl PopoverHost {
                 app_menu::activate(self, action, window, cx);
                 return;
             }
+            ContextMenuAction::RunExtensionCommand { id, repo_id } => {
+                self.close_popover_and_restore_focus(window, cx);
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.run_extension_command_for(&id, Some(repo_id), cx);
+                });
+                return;
+            }
             ContextMenuAction::AddRepoMenu(action) => {
                 add_repo_menu::activate(self, action, window, cx);
                 return;
@@ -1075,7 +1082,13 @@ impl PopoverHost {
                 if let Some(workdir) = self.workdir_for_repo(repo_id) {
                     session::promote_recent_repo(&mut self.cached_recent_repos, &workdir);
                 }
-                self.store.dispatch(Msg::CloseRepo { repo_id });
+                // Deferred: the guards may open a prompt in this host.
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_close_repos(vec![repo_id], None, cx);
+                    });
+                });
             }
             ContextMenuAction::MoveRepoToWorkspace {
                 repo_id,
@@ -1134,9 +1147,11 @@ impl PopoverHost {
                 repo_ids,
                 activate_after,
             } => {
-                self.store.dispatch(Msg::CloseRepos {
-                    repo_ids,
-                    activate_after,
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_close_repos(repo_ids, activate_after, cx);
+                    });
                 });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {

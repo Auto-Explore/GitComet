@@ -2,7 +2,8 @@ use gitcomet_core::platform::dirs;
 
 fn main() {
     let launch = gitcomet_app::AppLaunch::new(gitcomet_extension_example::identity())
-        .about("An example product built on unmodified GitComet crates");
+        .about("An example product built on unmodified GitComet crates")
+        .extension(gitcomet_extension_example::review::ReviewExtension);
 
     // Lets the integration tests see which directories the identity selects
     // without opening a window.

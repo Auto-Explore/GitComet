@@ -1031,6 +1031,10 @@ pub struct GitCometView {
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
     pub(super) action_bar: Entity<ActionBarView>,
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
+    /// Present only when an extension is registered.
+    pub(super) extension_window: Option<super::extension_host::ExtensionWindow>,
+    /// Present only when an extension registers a repository view.
+    pub(super) repository_views: Option<super::repository_views::RepositoryViewRouter>,
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
@@ -1154,6 +1158,7 @@ pub struct GitCometView {
 
     pub(super) last_mouse_pos: Point<Pixels>,
     pub(super) pending_terminal_shutdown_prompt: Option<TerminalShutdownPrompt>,
+    pub(super) pending_close_guard_prompt: Option<CloseGuardPrompt>,
     pub(super) pending_unsaved_file_edits_prompt: Option<UnsavedFileEditsPrompt>,
     /// Waits for the dispatched writes to drain before the close/quit it was
     /// asked to retry.

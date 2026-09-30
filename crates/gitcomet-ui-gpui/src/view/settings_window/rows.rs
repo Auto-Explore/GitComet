@@ -1193,13 +1193,22 @@ impl SettingsWindowView {
             .gap(px(1.0));
 
         let mut any_match = false;
+        let extension_selected = self.extension_page.is_some();
         for category in SettingsCategory::ALL.iter().copied() {
             if !category.matches_query(&query) {
                 continue;
             }
             any_match = true;
-            list = list.child(self.settings_nav_item(category, category == active, theme, cx));
+            list = list.child(self.settings_nav_item(
+                category,
+                !extension_selected && category == active,
+                theme,
+                cx,
+            ));
         }
+        let extension_items = self.extension_nav_items(&query, theme, cx);
+        any_match |= !extension_items.is_empty();
+        list = list.children(extension_items);
 
         if !any_match {
             list = list.child(

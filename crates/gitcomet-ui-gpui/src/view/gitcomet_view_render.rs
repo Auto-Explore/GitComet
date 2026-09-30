@@ -91,6 +91,14 @@ impl Render for GitCometView {
             );
         }
 
+        if let Some(prompt) = self.pending_close_guard_prompt.take() {
+            let anchor = point(
+                self.last_window_size.width / 2.0,
+                self.last_window_size.height / 2.0,
+            );
+            self.open_popover_at(PopoverKind::CloseGuardConfirm(prompt), anchor, window, cx);
+        }
+
         if let Some(prompt) = self.pending_terminal_shutdown_prompt.take() {
             let anchor = point(
                 self.last_window_size.width / 2.0,
@@ -490,6 +498,12 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(
+                |this, action: &super::extension_host::RunExtensionCommand, _window, cx| {
+                    this.run_extension_command(&action.id, cx);
+                    cx.stop_propagation();
+                },
+            ))
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
                 if !command_palette_available(this.view_mode) {
                     cx.stop_propagation();

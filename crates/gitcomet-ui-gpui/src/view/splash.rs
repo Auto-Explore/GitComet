@@ -840,7 +840,10 @@ impl GitCometView {
         if renders_full_chrome(self.view_mode) {
             // Terminal and/or reflog — see `render_bottom_panel` for which.
             let bottom_panel = self.render_bottom_panel(theme, window, cx);
-            let has_bottom_panel = bottom_panel.is_some();
+            let bottom_panel_resize_handle = bottom_panel
+                .is_some()
+                .then(|| self.terminal_panel_resize_handle(theme, cx));
+            let main_content = self.repository_main_content(cx);
             let content = div()
                 .flex()
                 .flex_col()
@@ -929,17 +932,21 @@ impl GitCometView {
                                         .min_w(px(0.0))
                                         .min_h(px(0.0))
                                         .overflow_hidden()
-                                        .when_some(bottom_panel, |d, bottom_panel| {
-                                            d.flex()
-                                                .flex_col()
-                                                .child(div().flex_1().min_h(px(0.0)).child(
-                                                    stable_cached_fill_view(self.main_pane.clone()),
-                                                ))
-                                                .child(self.terminal_panel_resize_handle(theme, cx))
-                                                .child(bottom_panel)
-                                        })
-                                        .when(!has_bottom_panel, |d| {
-                                            d.child(stable_cached_fill_view(self.main_pane.clone()))
+                                        .map(|d| {
+                                            match (bottom_panel, bottom_panel_resize_handle) {
+                                                (Some(bottom_panel), Some(resize_handle)) => d
+                                                    .flex()
+                                                    .flex_col()
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_h(px(0.0))
+                                                            .child(main_content),
+                                                    )
+                                                    .child(resize_handle)
+                                                    .child(bottom_panel),
+                                                _ => d.child(main_content),
+                                            }
                                         }),
                                 )
                                 .child(

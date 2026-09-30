@@ -1,0 +1,460 @@
+//! Extension hosting: the example product's extension against the real host.
+
+use super::*;
+use crate::view::extension_host;
+use gitcomet_extension_api::{HostError, Registry};
+use gitcomet_extension_example::review::{self, ReviewExtension};
+
+const MARK_REVIEWED: &str = "com.example.review/mark-reviewed";
+const SHOW_SUMMARY: &str = "com.example.review/show-summary";
+
+fn install_example(app: &mut gpui::App) {
+    let registry = Registry::build(&[Box::new(ReviewExtension)]).expect("valid registration");
+    extension_host::install(registry, app);
+}
+
+fn state_with_repo(repo_id: RepoId, workdir: &Path) -> Arc<AppState> {
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    };
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: workdir.to_path_buf(),
+        },
+    ));
+    Arc::new(state)
+}
+
+fn empty_state() -> Arc<AppState> {
+    Arc::new(AppState {
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    })
+}
+
+/// Named, so the empty window keeps it until its repository arrives.
+fn named_workspace(name: &str) -> gitcomet_state::session::Workspace {
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some(name.into());
+    workspace
+}
+
+fn open_window_with_repo(
+    cx: &mut gpui::TestAppContext,
+    workspace: gitcomet_state::session::Workspace,
+    workdir: &Path,
+) -> gpui::WindowHandle<GitCometView> {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let handle = cx.add_window(|window, cx| GitCometView::new(store, events, None, window, cx));
+    handle
+        .update(cx, |view, _window, cx| {
+            view.adopt_workspace(workspace, cx);
+            test_support::push_test_state(view, state_with_repo(RepoId(1), workdir), cx);
+        })
+        .expect("window is open");
+    let view = handle.root(cx).expect("root view");
+    cx.update(|app| extension_host::window_opened(&view, app));
+    cx.run_until_parked();
+    // Drawn through the untyped handle: a typed update leases the root view.
+    cx.update_window(handle.into(), |_, window, app| {
+        let _ = window.draw(app);
+    })
+    .expect("window is open");
+    handle
+}
+
+#[gpui::test]
+fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, state_with_repo(RepoId(1), Path::new("/tmp/x")), cx)
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("repository_view_strip").is_none());
+    cx.update(|_window, app| {
+        let view = view.read(app);
+        assert!(extension_host::registry(app).is_none());
+        assert!(view.extension_window.is_none());
+        assert!(view.repository_views.is_none());
+        assert!(extension_host::palette_entries(app).is_empty());
+        assert_eq!(view.bottom_status_bar.read(app).extension_item_count(), 0);
+    });
+}
+
+#[gpui::test]
+fn contributions_run_per_window_persist_and_forget_closed_windows(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let first_workspace = named_workspace("First");
+    let second_workspace = named_workspace("Second");
+    cx.update(|app| {
+        crate::workspaces::initialize_for_test(
+            app,
+            vec![first_workspace.clone(), second_workspace.clone()],
+        );
+        install_example(app);
+    });
+    let first_repo = PathBuf::from("/tmp/extension-review-first");
+    let second_repo = PathBuf::from("/tmp/extension-review-second");
+    let first = open_window_with_repo(cx, first_workspace.clone(), &first_repo);
+    let second = open_window_with_repo(cx, second_workspace.clone(), &second_repo);
+
+    for handle in [first, second] {
+        handle
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    view.bottom_status_bar.read(cx).extension_item_count(),
+                    1,
+                    "each window builds its own status item"
+                );
+            })
+            .unwrap();
+    }
+
+    let first_host = first
+        .update(cx, |view, _, _| {
+            view.extension_window.as_ref().unwrap().host()
+        })
+        .unwrap();
+    first
+        .update(cx, |view, _, cx| {
+            assert!(view.run_extension_command(MARK_REVIEWED, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let first_id = first_host.id();
+    let second_id = second.update(cx, |_, window, _| window.window_handle().window_id());
+    let second_id = second_id.unwrap();
+    cx.update(|app| {
+        let reviews = review::reviews(app);
+        let reviews = reviews.read(app);
+        assert_eq!(reviews.count(first_id, &first_repo), 1);
+        assert_eq!(reviews.count(second_id, &second_repo), 0);
+        assert_eq!(reviews.windows(), 2);
+        let saved = crate::workspaces::workspace(app, first_workspace.id)
+            .and_then(|workspace| workspace.extensions.get(review::EXTENSION_ID).cloned());
+        assert_eq!(
+            saved,
+            Some(serde_json::json!({ "reviews": { first_repo.to_str().unwrap(): 1 } })),
+            "the count is saved in the window's workspace"
+        );
+    });
+    first
+        .update(cx, |view, _, cx| {
+            let toasts = view.toast_host.read(cx).toasts_for_tests(cx);
+            assert!(
+                toasts
+                    .iter()
+                    .any(|(_, text)| text == "Marked extension-review-first reviewed"),
+                "{toasts:?}"
+            );
+        })
+        .unwrap();
+
+    first
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|app| {
+        assert_eq!(review::reviews(app).read(app).windows(), 1);
+        assert!(!first_host.is_open(app));
+        assert_eq!(
+            first_host.active_repository(app),
+            Err(HostError::WindowClosed)
+        );
+    });
+}
+
+#[gpui::test]
+fn saved_workspace_state_is_restored_when_a_window_opens(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let repo = PathBuf::from("/tmp/extension-review-restored");
+    let mut workspace = named_workspace("Restored");
+    workspace
+        .extensions
+        .set(
+            review::EXTENSION_ID,
+            Some(serde_json::json!({ "reviews": { repo.to_str().unwrap(): 3 } })),
+        )
+        .unwrap();
+    cx.update(|app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
+        install_example(app);
+    });
+    let window = open_window_with_repo(cx, workspace, &repo);
+    let window_id = window
+        .update(cx, |_, window, _| window.window_handle().window_id())
+        .unwrap();
+    cx.update(|app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 3));
+}
+
+#[gpui::test]
+fn repository_views_switch_with_history_and_are_kept(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(
+                this,
+                state_with_repo(RepoId(1), Path::new("/tmp/extension-review-router")),
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("repository_view_strip").is_some());
+    assert!(cx.debug_bounds("example_review_view").is_none());
+
+    click_debug_selector(cx, "repository_view_0");
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("example_review_view").is_some(),
+        "the extension view replaces History"
+    );
+    let built = cx.update(|_window, app| {
+        let router = view.read(app).repository_views.as_ref().unwrap();
+        let repo = view.read(app).active_repo().unwrap();
+        router.active_view(repo).unwrap().entity_id()
+    });
+
+    click_debug_selector(cx, "repository_view_history");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_view").is_none());
+
+    click_debug_selector(cx, "repository_view_0");
+    test_support::redraw(cx);
+    let again = cx.update(|_window, app| {
+        let router = view.read(app).repository_views.as_ref().unwrap();
+        let repo = view.read(app).active_repo().unwrap();
+        router.active_view(repo).unwrap().entity_id()
+    });
+    assert_eq!(built, again, "the view is built once and kept");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, empty_state(), cx)
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        let router = view.read(app).repository_views.as_ref().unwrap();
+        let repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/extension-review-router"),
+            },
+        );
+        assert!(
+            router.active_view(&repo).is_none(),
+            "a closed repository's view is dropped"
+        );
+    });
+}
+
+#[gpui::test]
+fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo = PathBuf::from("/tmp/extension-review-commands");
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, state_with_repo(RepoId(1), &repo), cx)
+        });
+        window.activate_window();
+    });
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        let ids: Vec<&str> = extension_host::palette_entries(app)
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "extension:com.example.review/mark-reviewed",
+                "extension:com.example.review/show-summary"
+            ]
+        );
+        let app_menu =
+            extension_host::menu_entries(gitcomet_extension_api::MenuLocation::Application, app);
+        assert_eq!(app_menu.len(), 1);
+        assert_eq!(app_menu[0].id.as_ref(), SHOW_SUMMARY);
+    });
+
+    // The palette row runs the command in this window.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command(
+                "extension:com.example.review/mark-reviewed",
+                Some(window),
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
+    cx.update(|_window, app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 1));
+
+    // So does its key binding, with nothing focused in the window.
+    cx.simulate_keystrokes("secondary-alt-r");
+    cx.run_until_parked();
+    cx.update(|_window, app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 2));
+}
+
+#[gpui::test]
+fn hosted_dialogs_open_in_the_popover_host_and_close(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(this.run_extension_command(SHOW_SUMMARY, cx))
+        })
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("extension_dialog_content").is_some());
+    assert!(cx.update(|_window, app| test_support::popover_is_open(view.read(app), app)));
+
+    click_debug_selector(cx, "extension_dialog_close");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("extension_dialog_content").is_none());
+    assert!(!cx.update(|_window, app| test_support::popover_is_open(view.read(app), app)));
+}
+
+#[gpui::test]
+fn entry_gates_refuse_marked_repositories_with_a_notice(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let marked = tempfile::tempdir().unwrap();
+    std::fs::write(marked.path().join(review::DENY_MARKER), "").unwrap();
+    let plain = tempfile::tempdir().unwrap();
+    cx.update(|app| {
+        use gitcomet_extension_api::{EntryOrigin, GateDecision};
+        assert!(matches!(
+            extension_host::entry_decision(marked.path(), EntryOrigin::Chooser, app),
+            GateDecision::Deny { .. }
+        ));
+        assert_eq!(
+            extension_host::entry_decision(plain.path(), EntryOrigin::Chooser, app),
+            GateDecision::Allow
+        );
+        let (allowed, denied) = extension_host::filter_entries(
+            vec![marked.path().to_path_buf(), plain.path().to_path_buf()],
+            EntryOrigin::CommandLine,
+            app,
+        );
+        assert_eq!(allowed, vec![plain.path().to_path_buf()]);
+        assert_eq!(denied.len(), 1);
+    });
+
+    // A window asked to open the marked repository opens nothing and says why.
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let marked_path = marked.path().to_path_buf();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new(store, events, Some(marked_path), window, cx)
+    });
+    cx.run_until_parked();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(store_for_assert.snapshot().repos.is_empty());
+    cx.update(|_window, app| {
+        let toasts = view.read(app).toast_host.read(app).toasts_for_tests(app);
+        assert!(
+            toasts
+                .iter()
+                .any(|(kind, text)| *kind == components::ToastKind::Warning
+                    && text.contains(review::DENY_MARKER)),
+            "{toasts:?}"
+        );
+    });
+}
+
+#[gpui::test]
+fn close_guards_ask_once_after_the_host_guards(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo = PathBuf::from("/tmp/extension-review-close");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, state_with_repo(RepoId(1), &repo), cx)
+        });
+        review::reviews(app).update(app, |reviews, _| reviews.confirm_close_unreviewed = true);
+    });
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_repos(vec![RepoId(1)], None, cx);
+            let prompt = this
+                .pending_close_guard_prompt
+                .clone()
+                .expect("the extension asks before closing an unreviewed repository");
+            assert_eq!(
+                prompt.action,
+                TerminalShutdownAction::CloseRepo { repo_id: RepoId(1) }
+            );
+            assert_eq!(prompt.reasons.len(), 1);
+            assert!(prompt.reasons[0].contains("has not been reviewed"));
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("close_guard_reasons").is_some());
+
+    // Confirming closes without asking again.
+    click_debug_selector(cx, "close_guard_confirm");
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert!(view.read(app).pending_close_guard_prompt.is_none());
+        assert!(!test_support::popover_is_open(view.read(app), app));
+    });
+}
+
+#[gpui::test]
+fn running_git_operations_ask_before_the_window_closes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = (*state_with_repo(RepoId(1), Path::new("/tmp/pushing-repo"))).clone();
+    state.repos[0].push_in_flight = 1;
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|window, app| {
+        let window_id = window.window_handle().window_id();
+        view.update(app, |this, cx| {
+            assert!(this.request_close_window_or_warn(window_id, cx));
+            let prompt = this.pending_close_guard_prompt.clone().unwrap();
+            assert_eq!(prompt.action, TerminalShutdownAction::CloseWindow);
+            assert_eq!(
+                prompt.reasons,
+                vec![SharedString::from("pushing-repo is still running a push.")]
+            );
+        });
+    });
+}

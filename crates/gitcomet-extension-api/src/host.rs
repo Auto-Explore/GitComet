@@ -6,6 +6,7 @@ use crate::storage::StorageError;
 use gitcomet_state::model::{AppState, RepoId};
 use gitcomet_state::msg::Msg;
 use gitcomet_ui_kit::gpui::{AnyView, App, SharedString, Window, WindowId};
+use gitcomet_ui_kit::theme::AppTheme;
 use std::fmt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -108,6 +109,9 @@ pub trait WindowHostImpl {
     /// The window's current state snapshot (revision-pinned).
     fn state(&self, cx: &App) -> Result<Arc<AppState>, HostError>;
 
+    /// The window's theme; read it while rendering so views follow changes.
+    fn theme(&self, cx: &App) -> AppTheme;
+
     /// Whether `repository` is still the repository it named when issued.
     fn is_current(&self, repository: &RepositoryHandle, cx: &App) -> bool;
 
@@ -165,6 +169,11 @@ impl WindowHost {
 
     pub fn state(&self, cx: &App) -> Result<Arc<AppState>, HostError> {
         self.0.state(cx)
+    }
+
+    /// The window's theme, or its last one once the window has closed.
+    pub fn theme(&self, cx: &App) -> AppTheme {
+        self.0.theme(cx)
     }
 
     /// Fails with [`HostError::RepositoryClosed`] when `repository` no longer

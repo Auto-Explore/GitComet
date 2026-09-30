@@ -24,8 +24,8 @@ pub mod storage;
 pub use contributions::{
     CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext, CommandDescriptor,
     CommandHandler, EntryOrigin, GateDecision, MenuLocation, RepositoryEntryGate,
-    RepositoryEntryRequest, RepositoryViewDescriptor, SettingsPageDescriptor, StatusItemDescriptor,
-    ViewBuilder,
+    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor,
+    SettingsPageDescriptor, StatusItemDescriptor, ViewBuilder,
 };
 pub use host::{
     DialogContent, DialogHandle, HostError, RepositoryHandle, WindowHost, WindowHostImpl,

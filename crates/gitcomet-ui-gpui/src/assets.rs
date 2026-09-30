@@ -14,10 +14,28 @@ const BRAND_ASSETS: [&str; 3] = [
 ];
 
 /// GitComet's artwork (replaceable through the product identity) over the UI
-/// kit's icon set.
-pub struct GitCometAssets;
+/// kit's icon set, plus any extension assets under `extensions/<id>/`.
+#[derive(Default)]
+pub struct GitCometAssets {
+    extensions: Vec<(SharedString, &'static [u8])>,
+}
 
 impl GitCometAssets {
+    pub(crate) fn with_extensions(assets: &[(String, &'static [u8])]) -> Self {
+        Self {
+            extensions: assets
+                .iter()
+                .map(|(path, bytes)| (SharedString::from(path.clone()), *bytes))
+                .collect(),
+        }
+    }
+
+    fn extension_asset(&self, path: &str) -> Option<Cow<'static, [u8]>> {
+        self.extensions
+            .iter()
+            .find_map(|(asset, bytes)| (asset == path).then_some(Cow::Borrowed(*bytes)))
+    }
+
     fn load_static(path: &str) -> Option<Cow<'static, [u8]>> {
         // A product's own artwork replaces GitComet's under the same names.
         let branding = gitcomet_core::identity::current().branding();
@@ -65,11 +83,24 @@ impl GitCometAssets {
 
 impl AssetSource for GitCometAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path.starts_with("extensions/") {
+            return Ok(self.extension_asset(path));
+        }
         Ok(Self::load_static(path))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(Self::list_static(path))
+        let mut listed = Self::list_static(path);
+        let dir = path.trim_end_matches('/');
+        if dir.is_empty() || dir == "extensions" || dir.starts_with("extensions/") {
+            listed.extend(
+                self.extensions
+                    .iter()
+                    .filter(|(asset, _)| dir.is_empty() || asset.starts_with(&format!("{dir}/")))
+                    .map(|(asset, _)| asset.clone()),
+            );
+        }
+        Ok(listed)
     }
 }
 
@@ -88,7 +119,9 @@ mod tests {
 
     #[test]
     fn root_listing_contains_every_asset_once() {
-        let listed = GitCometAssets.list("").expect("list root assets");
+        let listed = GitCometAssets::default()
+            .list("")
+            .expect("list root assets");
         let paths: BTreeSet<&str> = listed.iter().map(|path| path.as_ref()).collect();
 
         assert_eq!(paths.len(), listed.len(), "duplicate root asset paths");
@@ -103,9 +136,9 @@ mod tests {
     fn gpui_registry_preserves_every_asset() {
         // Exercise the same conversion as Application::with_assets. Checking
         // GitCometAssets::load alone misses paths omitted from the root listing.
-        let registry = AssetRegistry::from(GitCometAssets);
+        let registry = AssetRegistry::from(GitCometAssets::default());
         for path in expected_asset_paths() {
-            let expected = GitCometAssets
+            let expected = GitCometAssets::default()
                 .load(path)
                 .expect("load embedded asset")
                 .unwrap_or_else(|| panic!("missing embedded asset: {path}"));
@@ -122,7 +155,7 @@ mod tests {
 
     #[test]
     fn registered_svgs_render_visible_pixels() {
-        let registry = Arc::new(AssetRegistry::from(GitCometAssets));
+        let registry = Arc::new(AssetRegistry::from(GitCometAssets::default()));
         let renderer = SvgRenderer::new(Arc::clone(&registry));
         for path in expected_asset_paths().filter(|path| path.ends_with(".svg")) {
             let bytes = registry

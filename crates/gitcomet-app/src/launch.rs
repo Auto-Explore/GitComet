@@ -125,7 +125,22 @@ fn should_launch_focused_diff_gui(
 }
 
 /// Runs a parsed mode to completion and returns its exit code.
-pub(crate) fn run_mode(mode: AppMode) -> i32 {
+pub(crate) fn run_mode(mode: AppMode, extensions: crate::Extensions) -> i32 {
+    // Validated in every mode, so a broken product fails the same way
+    // whichever mode it is started in.
+    #[cfg(feature = "ui-gpui-runtime")]
+    let extensions = match gitcomet_extension_api::Registry::build(&extensions) {
+        Ok(registry) => registry,
+        Err(errors) => {
+            for error in errors {
+                eprintln!("Extension registration failed: {error}");
+            }
+            return exit_code::ERROR;
+        }
+    };
+    #[cfg(not(feature = "ui-gpui-runtime"))]
+    let () = extensions;
+
     install_configured_git_executable_preference(&mode);
 
     #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
@@ -172,7 +187,7 @@ pub(crate) fn run_mode(mode: AppMode) -> i32 {
         AppMode::Browser { path } => {
             #[cfg(feature = "ui-gpui-runtime")]
             {
-                run_browser(path)
+                run_browser(path, extensions)
             }
 
             #[cfg(not(feature = "ui-gpui-runtime"))]
@@ -220,7 +235,10 @@ pub(crate) fn run_mode(mode: AppMode) -> i32 {
 }
 
 #[cfg(feature = "ui-gpui-runtime")]
-fn run_browser(path: Option<std::path::PathBuf>) -> i32 {
+fn run_browser(
+    path: Option<std::path::PathBuf>,
+    extensions: gitcomet_extension_api::Registry,
+) -> i32 {
     let name = identity::current().display_name();
 
     #[cfg(target_os = "macos")]
@@ -269,6 +287,7 @@ fn run_browser(path: Option<std::path::PathBuf>) -> i32 {
         crash_log_path: report.crash_log_path,
     });
     let run_result = gitcomet_ui_gpui::UiLaunch::new(build_backend())
+        .extensions(extensions)
         .initial_request(initial_browser_request)
         .startup_crash_report(startup_report)
         .on_shutdown(move || {

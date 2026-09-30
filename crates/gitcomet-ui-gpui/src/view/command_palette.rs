@@ -789,9 +789,20 @@ impl std::ops::Deref for CommandMatch {
 /// two raw scores are.
 const KEYWORD_MATCH_PENALTY: i32 = 100_000;
 
+#[cfg(test)]
 pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<CommandMatch> {
+    filtered_commands_with(&[], has_active_repo, query)
+}
+
+/// The built-in commands followed by `extensions`, filtered and ranked.
+pub(crate) fn filtered_commands_with(
+    extensions: &'static [CommandEntry],
+    has_active_repo: bool,
+    query: &str,
+) -> Vec<CommandMatch> {
     let available = COMMANDS
         .iter()
+        .chain(extensions)
         .filter(|cmd| !cmd.requires_repo || has_active_repo);
 
     if query.is_empty() {
@@ -868,6 +879,8 @@ pub(crate) struct CommandPaletteView {
     pub(crate) restore_focus: Option<FocusHandle>,
     fallback_focus: Option<FocusHandle>,
     root_view: WeakEntity<GitCometView>,
+    /// Extension commands, fixed when the window is built.
+    extension_commands: &'static [CommandEntry],
     theme: AppTheme,
     context: PaletteContext,
     open: bool,
@@ -910,6 +923,7 @@ impl CommandPaletteView {
             restore_focus: None,
             fallback_focus: None,
             root_view,
+            extension_commands: super::extension_host::palette_entries(cx),
             theme,
             context: PaletteContext {
                 has_active_repo,
@@ -1003,7 +1017,11 @@ impl CommandPaletteView {
     }
 
     fn rebuild_cached_results(&mut self) {
-        self.matches = filtered_commands(self.context.has_active_repo, self.query.as_ref());
+        self.matches = filtered_commands_with(
+            self.extension_commands,
+            self.context.has_active_repo,
+            self.query.as_ref(),
+        );
         self.rows.clear();
         self.command_row_indices.clear();
 

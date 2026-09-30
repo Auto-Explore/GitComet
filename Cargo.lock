@@ -2245,6 +2245,7 @@ dependencies = [
  "clap",
  "fs2",
  "gitcomet-core",
+ "gitcomet-extension-api",
  "gitcomet-git-gix",
  "gitcomet-state",
  "gitcomet-ui-gpui",
@@ -2294,8 +2295,11 @@ name = "gitcomet-extension-example"
 version = "0.1.0"
 dependencies = [
  "gitcomet-core",
+ "gitcomet-extension-api",
  "gitcomet-ui-kit",
  "gpui-ce",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2375,6 +2379,8 @@ dependencies = [
  "fontdb 0.24.0",
  "futures",
  "gitcomet-core",
+ "gitcomet-extension-api",
+ "gitcomet-extension-example",
  "gitcomet-git-gix",
  "gitcomet-state",
  "gitcomet-tree-sitter-alloc",

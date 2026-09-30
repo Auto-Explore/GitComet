@@ -234,6 +234,7 @@ pub(crate) fn install_live_kit_policy() {
 /// A browser-window launch: configure it, then [`run`](Self::run) it.
 pub struct UiLaunch {
     backend: Arc<dyn GitBackend>,
+    extensions: gitcomet_extension_api::Registry,
     initial_request: BrowserOpenRequest,
     startup_crash_report: Option<StartupCrashReport>,
     on_shutdown: Option<ShutdownCallback>,
@@ -244,6 +245,7 @@ impl UiLaunch {
     pub fn new(backend: Arc<dyn GitBackend>) -> Self {
         Self {
             backend,
+            extensions: gitcomet_extension_api::Registry::default(),
             initial_request: BrowserOpenRequest {
                 path: None,
                 target: BrowserOpenTarget::ExistingWindow,
@@ -252,6 +254,13 @@ impl UiLaunch {
             on_shutdown: None,
             browser_requests: None,
         }
+    }
+
+    /// The compiled-in extensions, validated and frozen. Installed before the
+    /// first window opens; an empty registry adds no work anywhere.
+    pub fn extensions(mut self, registry: gitcomet_extension_api::Registry) -> Self {
+        self.extensions = registry;
+        self
     }
 
     /// The process's own open request. Its routing preference matters on a
@@ -290,6 +299,7 @@ impl UiLaunch {
         install_live_kit_policy();
         let Self {
             backend,
+            extensions,
             initial_request,
             startup_crash_report,
             on_shutdown,
@@ -301,6 +311,7 @@ impl UiLaunch {
         run_with_panic_guard("main GPUI window launch", move || {
             run_windowed_app(
                 backend,
+                extensions,
                 launch,
                 CleanShutdownTracker::default(),
                 on_shutdown,
@@ -399,7 +410,14 @@ pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMerget
     let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
     let launch = focused_mergetool_launch_config(&config, Some(exit_code.clone()));
     if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
-        run_windowed_app(backend, launch, CleanShutdownTracker::default(), None, None)
+        run_windowed_app(
+            backend,
+            gitcomet_extension_api::Registry::default(),
+            launch,
+            CleanShutdownTracker::default(),
+            None,
+            None,
+        )
     }) {
         eprintln!("Failed to launch focused mergetool window: {err}");
         return FOCUSED_MERGETOOL_EXIT_ERROR;
@@ -648,6 +666,7 @@ pub(crate) fn window_system_menu_request(
 
 fn run_windowed_app(
     backend: Arc<dyn GitBackend>,
+    extensions: gitcomet_extension_api::Registry,
     launch: WindowLaunchConfig,
     clean_shutdown_tracker: CleanShutdownTracker,
     on_shutdown: Option<ShutdownCallback>,
@@ -657,7 +676,7 @@ fn run_windowed_app(
     // Without this, `gpui` keeps its null client and every request — the
     // update check, and images a markdown preview points at — fails silently.
     let application = application()
-        .with_assets(GitCometAssets)
+        .with_assets(GitCometAssets::with_extensions(extensions.assets()))
         .with_http_client(crate::http::client());
 
     #[cfg(target_os = "macos")]
@@ -709,6 +728,8 @@ fn run_windowed_app(
         }
 
         if launch.view_config.view_mode == GitCometViewMode::Normal {
+            // Before the host's keys, so a chord both claim stays the host's.
+            crate::view::extension_host::install(extensions, cx);
             bind_app_keys(cx);
             install_app_actions(cx, Arc::clone(&backend));
             if let Some(browser_requests) = browser_requests {
@@ -1146,6 +1167,9 @@ fn open_gitcomet_window(
     if intercept_native_close {
         refresh_macos_app_menus(cx);
     }
+    if intercept_native_close && let Ok(view) = window.update(cx, |_, _, cx| cx.entity()) {
+        crate::view::extension_host::window_opened(&view, cx);
+    }
 
     window
 }
@@ -1543,10 +1567,22 @@ pub(crate) fn refresh_external_editor_app_surfaces_for_setting(
 
 #[cfg(target_os = "macos")]
 fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
-    macos_app_menus_with_options(
+    let mut menus = macos_app_menus_with_options(
         crate::external_editor::configured_setting().is_some(),
         find_normal_gitcomet_window(cx).is_some(),
-    )
+    );
+    let extension_items = crate::view::extension_host::macos_menu_items(cx);
+    if !extension_items.is_empty()
+        && let Some(file) = menus.get_mut(1)
+    {
+        // Above the Close group (separator, Close, Close Window), which stays last.
+        let at = file.items.len().saturating_sub(3);
+        file.items.splice(
+            at..at,
+            std::iter::once(MenuItem::separator()).chain(extension_items),
+        );
+    }
+    menus
 }
 
 /// The menus as they look with a normal window open, so the tests that care
@@ -1704,6 +1740,17 @@ fn register_macos_open_request_handler(
 
             let backend = Arc::clone(&backend);
             cx.update(move |cx| {
+                let paths = paths
+                    .into_iter()
+                    .filter(|path| {
+                        repository_entry_allowed(
+                            cx,
+                            path,
+                            gitcomet_extension_api::EntryOrigin::CommandLine,
+                            None,
+                        )
+                    })
+                    .collect();
                 open_repositories_in_existing_or_new_window(cx, backend, paths);
             });
         }
@@ -1984,7 +2031,7 @@ fn update_active_normal_gitcomet_window<R>(
     window.view.update(cx, f).ok()
 }
 
-fn update_active_or_existing_normal_gitcomet_window<R>(
+pub(crate) fn update_active_or_existing_normal_gitcomet_window<R>(
     cx: &mut App,
     f: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) -> R,
 ) -> Option<R> {
@@ -2230,10 +2277,27 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
         }
     }
 
+    // Running Git operations and extension guards, gathered from every
+    // window; asked after the terminal prompt when there is one.
+    let mut late_reasons: Vec<gpui::SharedString> = Vec::new();
     if running_command_count == 0 {
-        mark_clean_shutdown(cx);
-        cx.quit();
-        return;
+        for entry in &entries {
+            if let Ok(reasons) = entry
+                .view
+                .read_with(cx, |view, cx| view.quit_close_guard_reasons(cx))
+            {
+                for reason in reasons {
+                    if !late_reasons.contains(&reason) {
+                        late_reasons.push(reason);
+                    }
+                }
+            }
+        }
+        if late_reasons.is_empty() {
+            mark_clean_shutdown(cx);
+            cx.quit();
+            return;
+        }
     }
 
     let active_window_id = cx.active_window().map(|window| window.window_id());
@@ -2248,15 +2312,22 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
 
     if let Some(entry) = prompt_entry {
         let all_views: Vec<_> = entries.iter().map(|e| e.view.clone()).collect();
-        let _ = entry.view.update(cx, |view, cx| {
-            view.request_quit_or_warn(
-                terminal_count,
-                running_command_count,
-                repo_names,
-                all_views,
-                cx,
-            );
-        });
+        if late_reasons.is_empty() {
+            let _ = entry.view.update(cx, |view, cx| {
+                view.request_quit_or_warn(
+                    terminal_count,
+                    running_command_count,
+                    repo_names,
+                    all_views,
+                    cx,
+                );
+            });
+        } else {
+            let _ = entry.view.update(cx, |view, cx| {
+                view.request_quit_close_guards(late_reasons, all_views, cx);
+            });
+            activate_gitcomet_window(cx, entry.handle);
+        }
     } else {
         mark_clean_shutdown(cx);
         cx.quit();
@@ -2573,6 +2644,32 @@ pub(crate) fn notify_workspace_changed_from_view<T>(
     });
 }
 
+/// Runs the repository-entry gates for an app-level open. A denial is shown
+/// in `window` (else any normal window) and the open stops there.
+fn repository_entry_allowed(
+    cx: &mut App,
+    path: &Path,
+    origin: gitcomet_extension_api::EntryOrigin,
+    window: Option<gpui::WindowId>,
+) -> bool {
+    let gitcomet_extension_api::GateDecision::Deny { reason } =
+        crate::view::extension_host::entry_decision(path, origin, cx)
+    else {
+        return true;
+    };
+    let target = window
+        .and_then(|id| normal_gitcomet_window_by_id(cx, id))
+        .or_else(|| find_normal_gitcomet_window(cx));
+    if let Some(target) = target {
+        let _ = target.view.update(cx, |view, cx| {
+            view.show_repository_entry_denial(reason, cx);
+        });
+    } else {
+        eprintln!("{reason}");
+    }
+    false
+}
+
 pub(crate) fn open_repository_from_view<T>(
     cx: &mut gpui::Context<T>,
     source_window_id: gpui::WindowId,
@@ -2582,6 +2679,14 @@ pub(crate) fn open_repository_from_view<T>(
 {
     cx.defer(move |cx| {
         let path = normalize_repository_open_path(path);
+        if !repository_entry_allowed(
+            cx,
+            &path,
+            gitcomet_extension_api::EntryOrigin::Chooser,
+            Some(source_window_id),
+        ) {
+            return;
+        }
         let source = normal_gitcomet_window_by_id(cx, source_window_id)
             .or_else(|| find_normal_gitcomet_window(cx));
         if let Some(source) = source {
@@ -2603,8 +2708,14 @@ pub(crate) fn open_dropped_repository_from_view<T>(
         let path = normalize_repository_open_path(path);
         if let Some(source) = normal_gitcomet_window_by_id(cx, source_window_id) {
             if entry_contains_repo_path(&source, &path) {
+                // Already open here: a focus change, not an entry.
                 focus_existing_repository_window(cx, &source, &path);
-            } else {
+            } else if repository_entry_allowed(
+                cx,
+                &path,
+                gitcomet_extension_api::EntryOrigin::Drop,
+                Some(source_window_id),
+            ) {
                 let _ = source
                     .view
                     .update(cx, |view, cx| view.open_dropped_repo_locally(path, cx));
@@ -2991,7 +3102,26 @@ fn handle_browser_open_request_and_activate(
     // platform call so tests can verify it independently of window focus.
     activate: impl FnOnce(&App, bool),
 ) {
-    match request.path.map(normalize_repository_open_path) {
+    // A denied path still brings a window forward, as an empty request does,
+    // and that window shows why.
+    let mut denial = None;
+    let path = request
+        .path
+        .map(normalize_repository_open_path)
+        .filter(|path| {
+            match crate::view::extension_host::entry_decision(
+                path,
+                gitcomet_extension_api::EntryOrigin::CommandLine,
+                cx,
+            ) {
+                gitcomet_extension_api::GateDecision::Allow => true,
+                gitcomet_extension_api::GateDecision::Deny { reason } => {
+                    denial = Some(reason);
+                    false
+                }
+            }
+        });
+    match path {
         None => {
             if let Some(window) = find_normal_gitcomet_window(cx) {
                 activate_gitcomet_window(cx, window.handle);
@@ -3017,6 +3147,15 @@ fn handle_browser_open_request_and_activate(
                 activate_gitcomet_window(cx, window.into());
             }
         },
+    }
+    if let Some(reason) = denial
+        && let Some(window) = preferred_window
+            .and_then(|id| normal_gitcomet_window_by_id(cx, id))
+            .or_else(|| find_normal_gitcomet_window(cx))
+    {
+        let _ = window.view.update(cx, |view, cx| {
+            view.show_repository_entry_denial(reason, cx);
+        });
     }
     // On macOS, making a window key does not unhide or foreground the app.
     activate(cx, true);
@@ -3057,10 +3196,19 @@ fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
         };
 
         cx.update(move |cx| {
+            let path = normalize_repository_open_path(path);
+            if !repository_entry_allowed(
+                cx,
+                &path,
+                gitcomet_extension_api::EntryOrigin::Chooser,
+                source_window_id,
+            ) {
+                return;
+            }
             if let Some(window) =
                 source_window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id))
             {
-                open_repository_in_window(cx, &window, normalize_repository_open_path(path));
+                open_repository_in_window(cx, &window, path);
             } else {
                 open_repository_in_existing_or_new_window(cx, Arc::clone(&backend), path);
             }

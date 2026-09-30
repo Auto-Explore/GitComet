@@ -3941,3 +3941,37 @@ fn settings_window_renders_every_category_within_a_bounded_stack() {
         .join()
         .unwrap();
 }
+
+#[gpui::test]
+fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| {
+        let registry = gitcomet_extension_api::Registry::build(&[Box::new(
+            gitcomet_extension_example::review::ReviewExtension,
+        )])
+        .expect("valid registration");
+        crate::view::extension_host::install(registry, app);
+    });
+    let (_settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    crate::view::test_support::redraw(cx);
+    let nav = "settings_window_nav_extension_com.example.review/review-settings";
+    assert!(cx.debug_bounds(nav).is_some(), "the page is listed");
+    assert!(
+        cx.debug_bounds("example_review_settings").is_none(),
+        "an unselected page is not built"
+    );
+
+    let center = cx.debug_bounds(nav).unwrap().center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_settings").is_some());
+
+    let general = cx
+        .debug_bounds("settings_window_nav_general")
+        .unwrap()
+        .center();
+    cx.simulate_click(general, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_settings").is_none());
+    assert!(cx.debug_bounds("settings_window_general").is_some());
+}

@@ -35,6 +35,10 @@ pub(in crate::view) enum AppMenuAction {
     InstallDesktopIntegration,
     Quit,
     CloseWindow,
+    /// An extension command, by contribution id.
+    ExtensionCommand {
+        id: SharedString,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -52,6 +56,11 @@ pub(in crate::view) enum HistoryMenuRef {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    /// An extension command for one repository tab.
+    RunExtensionCommand {
+        id: SharedString,
+        repo_id: RepoId,
+    },
     /// Read the open file in this encoding; `None` goes back to attributes
     /// and detection.
     SetTextEncoding {

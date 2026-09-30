@@ -18,6 +18,10 @@ impl ReviewCounter {
     pub fn reviews(&self) -> usize {
         self.reviews
     }
+
+    pub fn set_reviews(&mut self, reviews: usize) {
+        self.reviews = reviews;
+    }
 }
 
 impl Render for ReviewCounter {

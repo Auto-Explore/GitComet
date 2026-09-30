@@ -410,6 +410,11 @@ impl Registry {
         self.assets.iter().map(|(path, _)| path.as_str())
     }
 
+    /// Every asset as `(path, bytes)`, in registration order.
+    pub fn assets(&self) -> &[(String, &'static [u8])] {
+        &self.assets
+    }
+
     pub fn entry_gates(&self) -> &[(ContributionId, RepositoryEntryGate)] {
         &self.entry_gates
     }

@@ -7,6 +7,7 @@
 
 use crate::host::{RepositoryHandle, WindowHost};
 use gitcomet_ui_kit::gpui::{AnyView, App, SharedString, Window};
+use gitcomet_ui_kit::theme::AppTheme;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -16,6 +17,13 @@ pub type ViewBuilder<C> = Rc<dyn Fn(C, &mut Window, &mut App) -> AnyView>;
 /// Runs a command.
 pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
 
+/// What a repository view is built for: its window and repository.
+#[derive(Clone, Debug)]
+pub struct RepositoryViewContext {
+    pub window: WindowHost,
+    pub repository: RepositoryHandle,
+}
+
 /// A view of a repository, selectable next to History in the repository's
 /// navigation. The view is built when first selected in a window and kept
 /// while the repository stays open there.
@@ -23,7 +31,7 @@ pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
 pub struct RepositoryViewDescriptor {
     pub title: SharedString,
     pub icon: SharedString,
-    pub build: ViewBuilder<RepositoryHandle>,
+    pub build: ViewBuilder<RepositoryViewContext>,
 }
 
 /// An item in the window's status bar, built once per window.
@@ -32,14 +40,15 @@ pub struct StatusItemDescriptor {
     pub build: ViewBuilder<WindowHost>,
 }
 
-/// A page in the Settings window. Settings builds only the selected page.
+/// A page in the Settings window. Settings builds only the selected page,
+/// each time it is selected, with the window's theme at that moment.
 #[derive(Clone)]
 pub struct SettingsPageDescriptor {
     pub title: SharedString,
     pub icon: SharedString,
     /// Extra search terms matched by the Settings search.
     pub keywords: SharedString,
-    pub build: ViewBuilder<()>,
+    pub build: ViewBuilder<AppTheme>,
 }
 
 /// Where a command runs: the window, and its active repository if any.

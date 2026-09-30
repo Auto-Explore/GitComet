@@ -825,7 +825,11 @@ impl GitCometView {
                     self.store.dispatch(Msg::GlobalNavForward { repo_id });
                 }
             }
-            _ => {}
+            other => {
+                if let Some(id) = super::extension_host::command_id_from_palette(other) {
+                    self.run_extension_command(id, cx);
+                }
+            }
         }
     }
 
@@ -1063,6 +1067,36 @@ impl GitCometView {
                 )
             }
         };
+        // Every repository this window would open passes the entry gates
+        // here, before any bootstrap is dispatched or deferred.
+        let mut entry_denials = Vec::new();
+        if view_mode == GitCometViewMode::Normal {
+            if let Some(path) = initial_path.as_ref()
+                && let gitcomet_extension_api::GateDecision::Deny { reason } =
+                    super::extension_host::entry_decision(
+                        path,
+                        gitcomet_extension_api::EntryOrigin::CommandLine,
+                        cx,
+                    )
+            {
+                entry_denials.push(reason);
+                initial_path = None;
+            }
+            let (allowed, denied) = super::extension_host::filter_entries(
+                std::mem::take(&mut ui_session.open_repos),
+                gitcomet_extension_api::EntryOrigin::WorkspaceRestore,
+                cx,
+            );
+            ui_session.open_repos = allowed;
+            entry_denials.extend(denied);
+            if ui_session
+                .active_repo
+                .as_ref()
+                .is_some_and(|active| !ui_session.open_repos.contains(active))
+            {
+                ui_session.active_repo = None;
+            }
+        }
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
@@ -1206,6 +1240,13 @@ impl GitCometView {
         }
 
         let initial_state = store.snapshot();
+        let extension_window = super::extension_host::ExtensionWindow::new(
+            window,
+            &store,
+            Arc::clone(&initial_state),
+            initial_theme,
+            cx,
+        );
         if !initial_state.repos.is_empty() {
             startup_repo_bootstrap_pending = false;
         }
@@ -1664,6 +1705,8 @@ impl GitCometView {
             repo_tabs_bar,
             action_bar,
             bottom_status_bar,
+            extension_window,
+            repository_views: super::repository_views::RepositoryViewRouter::for_window(cx),
             tooltip_host,
             toast_host,
             history_refs_hover_host,
@@ -1761,6 +1804,7 @@ impl GitCometView {
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_terminal_shutdown_prompt: None,
+            pending_close_guard_prompt: None,
             pending_unsaved_file_edits_prompt: None,
             pending_unsaved_file_edits_flush: None,
             pending_file_edits_action: None,
@@ -1787,6 +1831,9 @@ impl GitCometView {
 
         view.set_theme(initial_theme, cx);
         view.sync_action_bar_terminal_target(cx);
+        for reason in entry_denials {
+            view.push_toast(components::ToastKind::Warning, reason.to_string(), cx);
+        }
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
@@ -1815,6 +1862,9 @@ impl GitCometView {
         let theme = theme.with_appearance(crate::appearance::current(cx));
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
+        if let Some(extension_window) = self.extension_window.as_ref() {
+            extension_window.set_theme(theme);
+        }
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
                 instance.viewport.update(cx, |viewport, cx| {

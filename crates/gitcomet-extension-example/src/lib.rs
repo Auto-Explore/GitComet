@@ -5,6 +5,7 @@
 
 use gitcomet_core::identity::{ProductIdentity, ProductLinks};
 
+pub mod review;
 pub mod review_counter;
 
 /// The example product's name, used for its windows, paths, and Git tools.

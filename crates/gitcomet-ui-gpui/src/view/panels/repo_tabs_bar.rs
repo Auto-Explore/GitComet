@@ -367,12 +367,9 @@ impl RepoTabsBarView {
     fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.hovered_repo_tab = None;
         self.pressed_repo_tab = None;
-        if let Ok(true) = self.root_view.update(cx, |root, cx| {
-            root.request_terminal_shutdown_action(TerminalShutdownAction::CloseRepo { repo_id }, cx)
-        }) {
-            return;
-        }
-        self.store.dispatch(Msg::CloseRepo { repo_id });
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.request_close_repos(vec![repo_id], None, cx);
+        });
         cx.notify();
     }
 

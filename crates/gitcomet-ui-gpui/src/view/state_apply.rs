@@ -545,6 +545,12 @@ impl GitCometView {
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
         self.state = next;
+        if let Some(extension_window) = self.extension_window.as_ref() {
+            extension_window.set_state(&self.state);
+        }
+        if let Some(router) = self.repository_views.as_mut() {
+            router.retain_open(&self.state);
+        }
         if repos_closed {
             // A closed repo's errors name what no longer exists.
             let repos = Arc::clone(&self.state);

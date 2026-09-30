@@ -816,6 +816,7 @@ impl PopoverHost {
 
         Self {
             store,
+            extension_dialog: None,
             state,
             theme,
             theme_mode,
@@ -890,6 +891,14 @@ impl PopoverHost {
             cached_pinned_repos: Vec::new(),
             cached_workspaces: Vec::new(),
             cached_workspace_id: None,
+            extension_app_menu: crate::view::extension_host::menu_entries(
+                gitcomet_extension_api::MenuLocation::Application,
+                cx,
+            ),
+            extension_repo_tab_menu: crate::view::extension_host::menu_entries(
+                gitcomet_extension_api::MenuLocation::RepositoryTab,
+                cx,
+            ),
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
@@ -1284,6 +1293,7 @@ impl PopoverHost {
         }
         self.error_details_selected = None;
         self.error_details_text = Default::default();
+        self.extension_dialog = None;
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);

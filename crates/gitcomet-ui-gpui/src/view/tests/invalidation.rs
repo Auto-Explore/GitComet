@@ -97,12 +97,20 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         normalized.contains("self.bottom_status_bar.clone(),"),
         "expected bottom status bar to mount directly"
     );
+    // The full-chrome main pane mounts through the repository-view router,
+    // which keeps History behind the same boundary.
+    let router_source: String = include_str!("../repository_views.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     assert!(
-        normalized
-            .matches("stable_cached_fill_view(self.main_pane.clone())")
-            .count()
-            >= 2,
-        "expected both full-chrome main pane mount sites to stay cached"
+        normalized.contains("letmain_content=self.repository_main_content(cx);")
+            && router_source.contains("stable_cached_fill_view(self.main_pane.clone())"),
+        "expected the full-chrome main pane to mount through the router, cached"
+    );
+    assert!(
+        normalized.contains("stable_cached_fill_view(self.main_pane.clone())"),
+        "expected the focused-layout main pane mount to stay cached"
     );
     assert!(
         normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),

@@ -15,6 +15,7 @@ default = ["ui-gpui", "gix"]
 # The windowed modes. Without it the library builds headless: the command-line
 # difftool/mergetool, Git tool setup, and fixture extraction still work.
 ui-gpui-runtime = [
+    "dep:gitcomet-extension-api",
     "dep:gitcomet-ui-gpui",
     "dep:gitcomet-win32-window-utils",
     "dep:sysinfo",
@@ -26,6 +27,7 @@ gix = ["dep:gitcomet-git-gix"]
 clap = { workspace = true }
 fs2 = { workspace = true }
 gitcomet-core = { workspace = true }
+gitcomet-extension-api = { workspace = true, optional = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }

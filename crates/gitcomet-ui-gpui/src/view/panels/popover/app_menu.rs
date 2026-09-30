@@ -153,6 +153,27 @@ pub(super) fn model_with_update_checks_disabled(
     );
     items.push(ContextMenuItem::Separator);
 
+    if !this.extension_app_menu.is_empty() {
+        for entry in this.extension_app_menu.iter() {
+            debug_selectors.insert(
+                items.len(),
+                format!("app_menu_extension_{}", entry.id).into(),
+            );
+            items.push(ContextMenuItem::Entry {
+                label: entry.label.clone(),
+                icon: None,
+                shortcut: None,
+                disabled: entry.requires_repository && active_repo_id.is_none(),
+                action: Box::new(ContextMenuAction::AppMenu(
+                    AppMenuAction::ExtensionCommand {
+                        id: entry.id.clone(),
+                    },
+                )),
+            });
+        }
+        items.push(ContextMenuItem::Separator);
+    }
+
     for (debug_selector, label, shortcut, action) in [
         ("app_menu_zoom_in", "Zoom In", "=", AppMenuAction::ZoomIn),
         ("app_menu_zoom_out", "Zoom Out", "-", AppMenuAction::ZoomOut),
@@ -316,6 +337,12 @@ pub(super) fn activate(
             // dialog is open. This callback still owns PopoverHost's update
             // lease, so let it unwind before the scan can read this host.
             cx.defer(crate::app::quit_app_or_warn);
+        }
+        AppMenuAction::ExtensionCommand { id } => {
+            this.close_popover_and_restore_focus(window, cx);
+            let _ = this.root_view.update(cx, |root, cx| {
+                root.run_extension_command(&id, cx);
+            });
         }
         AppMenuAction::CloseWindow => {
             this.close_popover_and_restore_focus(window, cx);

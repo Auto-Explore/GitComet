@@ -16,6 +16,7 @@ pub(super) fn panel(
         TerminalShutdownAction::CloseWindow => "Close window?".to_string(),
         TerminalShutdownAction::DeleteWorkspace { .. } => "Delete workspace?".to_string(),
         TerminalShutdownAction::MoveRepo { .. } => "Move repository?".to_string(),
+        TerminalShutdownAction::CloseRepos { .. } => "Close terminals?".to_string(),
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?".to_string(),
@@ -25,6 +26,7 @@ pub(super) fn panel(
         TerminalShutdownAction::CloseWindow => "Terminate and close",
         TerminalShutdownAction::DeleteWorkspace { .. } => "Terminate and delete",
         TerminalShutdownAction::MoveRepo { .. } => "Terminate and move",
+        TerminalShutdownAction::CloseRepos { .. } => "Terminate and close",
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Terminate and close",
@@ -43,6 +45,7 @@ pub(super) fn panel(
         && matches!(
             prompt.action,
             TerminalShutdownAction::CloseWindow
+                | TerminalShutdownAction::CloseRepos { .. }
                 | TerminalShutdownAction::DeleteWorkspace { .. }
                 | TerminalShutdownAction::QuitApp
         );

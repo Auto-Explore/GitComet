@@ -102,6 +102,10 @@ pub(crate) enum TextFormatMenuSection {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
+    /// A dialog an extension opened; its content lives on the popover host.
+    ExtensionDialog {
+        id: u64,
+    },
     HookActivity {
         repo_id: RepoId,
         operation_id: Option<GitOperationId>,
@@ -284,6 +288,8 @@ pub(crate) enum PopoverKind {
     AddRepoMenu,
     TerminalShutdownConfirm(TerminalShutdownPrompt),
     UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
+    /// Running Git operations or an extension asked before a close.
+    CloseGuardConfirm(CloseGuardPrompt),
     TerminalMenu {
         repo_id: RepoId,
         session_seq: u64,
@@ -976,6 +982,11 @@ pub(in crate::view) enum TerminalShutdownAction {
     CloseRepo {
         repo_id: RepoId,
     },
+    /// Several tabs at once (close others / to the right).
+    CloseRepos {
+        repo_ids: Vec<RepoId>,
+        activate_after: Option<RepoId>,
+    },
     MoveRepo {
         repo_id: RepoId,
         path: std::path::PathBuf,
@@ -994,6 +1005,14 @@ pub(in crate::view) enum TerminalShutdownAction {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
     QuitApp,
+}
+
+/// A close the Git-operation or extension guards asked about. Confirming it
+/// performs the close: every earlier guard has already passed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CloseGuardPrompt {
+    pub(in crate::view) action: TerminalShutdownAction,
+    pub(in crate::view) reasons: Vec<SharedString>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

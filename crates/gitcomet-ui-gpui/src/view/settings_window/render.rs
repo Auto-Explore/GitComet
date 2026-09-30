@@ -396,7 +396,15 @@ impl SettingsWindowView {
             .expanded_section
             .map(SettingsSection::category)
             .unwrap_or(self.selected_category);
-        let active_card = self.category_card(active_category, theme, cx);
+        let active_card = match self
+            .expanded_section
+            .is_none()
+            .then(|| self.extension_page_card(theme))
+            .flatten()
+        {
+            Some(card) => card,
+            None => self.category_card(active_category, theme, cx),
+        };
 
         let scroll_surface = restrict_scroll_to_vertical_axis(
             div()

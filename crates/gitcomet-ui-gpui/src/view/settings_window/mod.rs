@@ -626,6 +626,10 @@ pub(crate) struct SettingsWindowView {
     prune_deleted_remote_branches_on_fetch: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
+    /// Extension pages, fixed when the window opens; empty without extensions.
+    extension_pages: extension_pages::ExtensionPages,
+    /// The selected extension page and its view, replacing the category page.
+    extension_page: Option<(usize, gpui::AnyView)>,
     search_query: String,
     search_input: Entity<components::TextInput>,
     nav_scroll: ScrollHandle,
@@ -1213,9 +1217,18 @@ impl SettingsWindowView {
                 return;
             }
             this.search_query = next;
+            if let Some((index, _)) = &this.extension_page
+                && !extension_pages::page_matches_query(
+                    &this.extension_pages[*index].1,
+                    &this.search_query,
+                )
+            {
+                this.extension_page = None;
+            }
             // Keep the visible page in the filtered set: if the current
             // category no longer matches, jump to the first one that does.
-            if !this.selected_category.matches_query(&this.search_query)
+            if this.extension_page.is_none()
+                && !this.selected_category.matches_query(&this.search_query)
                 && let Some(first) = SettingsCategory::ALL
                     .iter()
                     .copied()
@@ -1346,6 +1359,8 @@ impl SettingsWindowView {
             prune_deleted_remote_branches_on_fetch,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
+            extension_pages: extension_pages::extension_pages(cx),
+            extension_page: None,
             search_query: String::new(),
             search_input,
             nav_scroll: ScrollHandle::default(),
@@ -1386,9 +1401,10 @@ impl SettingsWindowView {
     }
 
     fn select_category(&mut self, category: SettingsCategory, cx: &mut gpui::Context<Self>) {
-        if self.selected_category == category {
+        if self.selected_category == category && self.extension_page.is_none() {
             return;
         }
+        self.extension_page = None;
         self.selected_category = category;
         if category == SettingsCategory::GitExecutable {
             super::runtime_probe::request(cx, true);
@@ -1477,6 +1493,7 @@ impl SettingsWindowView {
 }
 
 mod cards;
+mod extension_pages;
 mod prefs;
 mod render;
 mod rows;

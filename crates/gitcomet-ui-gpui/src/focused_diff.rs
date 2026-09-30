@@ -640,7 +640,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
 
     if let Err(err) = run_with_panic_guard("focused diff GPUI launch", move || {
         crate::app::application()
-            .with_assets(GitCometAssets)
+            .with_assets(GitCometAssets::default())
             .run(move |cx: &mut App| {
                 if let Err(err) = crate::bundled_fonts::register(cx) {
                     eprintln!("Failed to register bundled fonts: {err:#}");

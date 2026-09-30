@@ -25,6 +25,10 @@ mod setup_mode;
 
 pub use cli::{AppMode, CliOutcome, exit_code};
 pub use gitcomet_core::identity::ProductIdentity;
+/// The extension API this launch accepts, re-exported so a product names
+/// one revision of it.
+#[cfg(feature = "ui-gpui-runtime")]
+pub use gitcomet_extension_api as extension_api;
 
 pub(crate) use gitcomet_core::hex::encode as hex_encode;
 
@@ -33,11 +37,18 @@ use std::io::Write;
 
 type PrepareHook = Box<dyn FnOnce(&AppMode) -> Result<(), String>>;
 
+/// The compiled-in extensions, in registration order.
+#[cfg(feature = "ui-gpui-runtime")]
+pub(crate) type Extensions = Vec<Box<dyn gitcomet_extension_api::Extension>>;
+#[cfg(not(feature = "ui-gpui-runtime"))]
+pub(crate) type Extensions = ();
+
 /// Everything a product decides about its process launch.
 pub struct AppLaunch {
     identity: ProductIdentity,
     about: String,
     on_prepare: Option<PrepareHook>,
+    extensions: Extensions,
 }
 
 impl AppLaunch {
@@ -46,6 +57,7 @@ impl AppLaunch {
             identity,
             about: cli::DEFAULT_ABOUT.to_string(),
             on_prepare: None,
+            extensions: Extensions::default(),
         }
     }
 
@@ -71,6 +83,15 @@ impl AppLaunch {
         self
     }
 
+    /// Compiles in `extension`. Extensions register in the order added; the
+    /// set is validated once the command line has parsed, before any window
+    /// opens, and a registration error exits with [`exit_code::ERROR`].
+    #[cfg(feature = "ui-gpui-runtime")]
+    pub fn extension(mut self, extension: impl gitcomet_extension_api::Extension) -> Self {
+        self.extensions.push(Box::new(extension));
+        self
+    }
+
     /// Runs with the process arguments and returns the exit code.
     pub fn run(self) -> i32 {
         self.run_with_args(std::env::args_os().collect())
@@ -82,6 +103,7 @@ impl AppLaunch {
             identity,
             about,
             on_prepare,
+            extensions,
         } = self;
         if let Err(message) = install_identity(identity) {
             eprintln!("{message}");
@@ -91,7 +113,9 @@ impl AppLaunch {
         #[cfg(feature = "ui-gpui-runtime")]
         crashlog::install();
 
-        dispatch(cli::parse_cli(args, &about), on_prepare, launch::run_mode)
+        dispatch(cli::parse_cli(args, &about), on_prepare, move |mode| {
+            launch::run_mode(mode, extensions)
+        })
     }
 }
 
