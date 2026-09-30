@@ -219,6 +219,21 @@ impl TaskExecutor {
         }
     }
 
+    /// Closes the queue and waits for the workers, so a test process never
+    /// exits with store workers still running.
+    #[cfg(test)]
+    pub(super) fn join(self) {
+        let Self {
+            tx,
+            _threads: threads,
+            ..
+        } = self;
+        drop(tx);
+        for thread in threads {
+            thread.join().expect("store executor worker panicked");
+        }
+    }
+
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
         self.try_spawn(task);
     }

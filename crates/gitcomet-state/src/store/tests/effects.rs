@@ -5271,14 +5271,6 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
     );
 }
 
-fn recv_n_msgs(msg_rx: &std::sync::mpsc::Receiver<Msg>, n: usize) {
-    for _ in 0..n {
-        msg_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("expected effect scheduler message");
-    }
-}
-
 #[test]
 fn open_repo_effect_emits_repo_opened_ok() {
     struct Backend {
@@ -6301,7 +6293,6 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
 
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let executor = super::executor::TaskExecutor::new(1);
-    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     let target = DiffTarget::WorkingTree {
         path: PathBuf::from("tracked.txt"),
@@ -6415,7 +6406,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 load_submodule_summary: false,
                 preview_text_side: None,
             },
-            2,
+            3,
         ),
         (
             Effect::LoadConflictFile {
@@ -6928,18 +6919,56 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (Effect::DropStash { repo_id, index: 0 }, 2),
     ];
 
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
+        // No find effect below, so this never starts a worker.
+        history_find_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
+    };
     for (effect, expected_messages) in effect_specs {
-        schedule_effect_with_state_for_test(
-            &executor,
-            &executor,
+        let kind: &'static str = (&effect).into();
+        let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state.clone())));
+        let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+        super::effects::schedule_effect(
+            executors,
+            &thread_state,
             &backend,
             &repos,
-            state.clone(),
-            msg_tx.clone(),
+            &mut FxHashMap::default(),
+            super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx),
             effect,
         );
-        recv_n_msgs(&msg_rx, expected_messages);
+        // Every task owns a sender clone, so disconnection means this effect's
+        // work is done and no message can leak into the next effect's count.
+        let mut received = 0;
+        loop {
+            match msg_rx.recv_timeout(Duration::from_secs(10)) {
+                // The Git-operation envelope, skipped as in `recv_effect_message`.
+                Ok(Msg::Internal(
+                    crate::msg::InternalMsg::GitOperationStarted { .. }
+                    | crate::msg::InternalMsg::GitOperationEvent { .. },
+                )) => {}
+                Ok(_) => received += 1,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("{kind}: work still running after 10s")
+                }
+            }
+        }
+        assert_eq!(received, expected_messages, "{kind}");
     }
+    // Workers still running while the process exits crashed the macOS runner
+    // with SIGSEGV after this test had passed.
+    executor.join();
+    repo_load_executor.join();
+    metadata_executor.join();
 }
 
 struct RecordingWorktreeBackend {
