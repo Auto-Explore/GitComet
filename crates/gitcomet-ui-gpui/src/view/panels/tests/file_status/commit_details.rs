@@ -1539,9 +1539,7 @@ fn commit_details_pane_ignores_unrelated_frames(cx: &mut gpui::TestAppContext) {
 /// anchor never resolved and each frame's layout notified the pane again
 /// (5 -> 15 renders over these 10 frames).
 #[gpui::test]
-fn commit_file_list_with_truncated_paths_ignores_unrelated_frames(
-    cx: &mut gpui::TestAppContext,
-) {
+fn commit_file_list_with_truncated_paths_ignores_unrelated_frames(cx: &mut gpui::TestAppContext) {
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1549,9 +1547,8 @@ fn commit_file_list_with_truncated_paths_ignores_unrelated_frames(
     });
     cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
     let repo_id = gitcomet_state::model::RepoId(36);
-    let commit_id = gitcomet_core::domain::CommitId(
-        "0123456789abcdef0123456789abcdef01234567".into(),
-    );
+    let commit_id =
+        gitcomet_core::domain::CommitId("0123456789abcdef0123456789abcdef01234567".into());
     let file = |path: &str, stats: Option<(u32, u32)>| {
         let mut change = gitcomet_core::domain::CommitFileChange::new(
             path.into(),
