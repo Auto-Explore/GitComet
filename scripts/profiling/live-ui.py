@@ -169,7 +169,7 @@ def lifecycle_cycle(secondary):
             {"do": "wait_ready", "timeout_ms": 60_000}]
 
 
-def scenario(name, repository, save_file=SAVE_FILE, secondary=None):
+def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
     ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
     if name == "lifecycle":
@@ -180,7 +180,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None):
                 + [{"do": "phase", "name": "warmup_cycles"}]
                 + [step for _ in range(10) for step in lifecycle_cycle(secondary)]
                 + [{"do": "phase", "name": "cycles"}]
-                + [step for _ in range(100) for step in lifecycle_cycle(secondary)]
+                + [step for _ in range(cycles) for step in lifecycle_cycle(secondary)]
                 + [{"do": "phase", "name": "after_cycles"}, {"do": "settle", "ms": 10_000}]}
     if name == "status-burst":
         # A 50-file save burst (formatter, branch switch), restored each round.
@@ -484,7 +484,8 @@ class HeadlessCompositor:
 
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
-             ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None):
+             ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None,
+             cycles=100):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -492,7 +493,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     env = seed_profile(output, repository)
     scenario_file = output / "scenario.json"
     secondary = secondary.resolve() if secondary else None
-    scenario_file.write_text(json.dumps(scenario(name, repository, save_file, secondary), indent=2),
+    scenario_file.write_text(json.dumps(scenario(name, repository, save_file, secondary, cycles), indent=2),
                              encoding="utf-8")
     frames = output / "frames.jsonl"
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
@@ -976,6 +977,8 @@ def main():
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
     single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    single.add_argument("--cycles", type=int, default=100,
+                        help="measured lifecycle cycles; comparing two counts isolates per-cycle retention")
     single.add_argument("--cold-gpu-cache", action="store_true",
                         help="a private, empty GPU shader cache: measures a first launch")
     paired = commands.add_parser("measure")
@@ -1002,7 +1005,7 @@ def main():
         result = run_once(args.binary, args.repository, args.scenario, args.output, args.timeout,
                           display=args.display, ping_ms=args.ping_ms, save_file=args.save_file,
                           wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
-                          secondary=args.secondary_repository)
+                          secondary=args.secondary_repository, cycles=args.cycles)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)

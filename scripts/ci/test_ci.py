@@ -293,6 +293,12 @@ class LiveUiMeasurementTests(unittest.TestCase):
         self.assertIn("not_comparable", result["inputs.input_to_witness_ms.p95"])
         self.assertNotIn("not_comparable", result["draw_ms.p95"])
 
+    def test_lifecycle_cycle_count_sets_only_the_measured_phase(self):
+        steps = live_ui.scenario("lifecycle", Path("/repo"), secondary=Path("/other"), cycles=3)["steps"]
+        phases = [ix for ix, step in enumerate(steps) if step["do"] == "phase"]
+        opens = lambda start, end: sum(step["do"] == "open_repo" for step in steps[start:end])  # noqa: E731
+        self.assertEqual((opens(phases[0], phases[1]), opens(phases[1], phases[2])), (10, 3))
+
     def test_process_sample_survives_a_thread_exiting_mid_read(self):
         real = Path.read_text
 
