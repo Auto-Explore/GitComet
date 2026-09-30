@@ -4693,6 +4693,86 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     );
 }
 
+/// Every save runs a background refresh that is busy for a few milliseconds.
+/// Only the tab spinner shows busy, and only after its delay, so a refresh
+/// shorter than that must not redraw the tab strip or the action bar.
+#[gpui::test]
+fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui::TestAppContext) {
+    use gitcomet_state::model::RepoLoadsInFlight;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/busy-chrome"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    let idle = Arc::new(AppState {
+        active_repo: Some(repo_id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    });
+    let mut busy = (*idle).clone();
+    busy.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+    let busy = Arc::new(busy);
+    let publish = |state: &Arc<AppState>, cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                test_support::push_test_state(this, Arc::clone(state), cx)
+            })
+        });
+    };
+    let spinner = |cx: &mut gpui::VisualTestContext| {
+        test_support::redraw(cx);
+        cx.debug_bounds("repo_tab_busy_spinner_1").is_some()
+    };
+
+    cx.update(|_window, app| {
+        let tabs = view.read(app).repo_tabs_bar.clone();
+        tabs.update(app, |tabs, _| tabs.use_spinner_delay_for_tests());
+    });
+    publish(&idle, cx);
+    test_support::redraw(cx);
+    let tabs_notified = Rc::new(Cell::new(0usize));
+    let actions_notified = Rc::new(Cell::new(0usize));
+    let _subscriptions = cx.update(|_window, app| {
+        let tabs = view.read(app).repo_tabs_bar.clone();
+        let actions = view.read(app).action_bar.clone();
+        let (tabs_count, actions_count) = (tabs_notified.clone(), actions_notified.clone());
+        [
+            app.observe(&tabs, move |_, _| tabs_count.set(tabs_count.get() + 1)),
+            app.observe(&actions, move |_, _| {
+                actions_count.set(actions_count.get() + 1)
+            }),
+        ]
+    });
+
+    publish(&busy, cx);
+    publish(&idle, cx);
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert_eq!((tabs_notified.get(), actions_notified.get()), (0, 0));
+    assert!(!spinner(cx));
+
+    // Control: a refresh outlasting the delay shows the spinner, then hides it.
+    publish(&busy, cx);
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert!(spinner(cx));
+    publish(&idle, cx);
+    assert!(!spinner(cx));
+    assert_eq!((tabs_notified.get(), actions_notified.get()), (2, 0));
+}
+
 #[gpui::test]
 fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
