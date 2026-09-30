@@ -600,11 +600,11 @@ run_case() {
   local log="${run_dir}/logs/${section}-${slug}.log"
   local started_ms ended_ms status=0
   started_ms="$(date +%s%3N)"
+  # One stream through one tee: two writers on one file overwrite each other.
   set +e
-  "$@" > >(tee "${log}") 2> >(tee -a "${log}" >&2)
-  status=$?
+  "$@" 2>&1 | tee "${log}"
+  status=${PIPESTATUS[0]}
   set -e
-  wait
   ended_ms="$(date +%s%3N)"
   jq -nc \
     --arg section "${section}" --arg bench "${bench}" --arg log "${log}" \
@@ -618,7 +618,6 @@ run_case() {
 }
 
 case_failed_or_stop() {
-  failed_cases=$((failed_cases + 1))
   if [[ ${fail_fast} -eq 1 ]]; then
     return 1
   fi
@@ -777,7 +776,6 @@ profile="full"
 cargo_profile="release"
 run_dir=""
 fail_fast=0
-failed_cases=0
 incomplete_run_exit_code=4
 frozen_bench=""
 frozen_idle=""
@@ -1109,7 +1107,7 @@ if [[ ${run_launch} -eq 1 ]]; then
 fi
 
 if [[ ${run_launch} -eq 1 ]]; then
-  verify_launch_sidecars
+  verify_launch_sidecars || case_failed_or_stop || exit $?
 fi
 
 if [[ ${run_report} -eq 1 ]]; then
@@ -1122,13 +1120,13 @@ fi
 if [[ ${dry_run} -ne 1 ]]; then
   if write_manifest_and_verify; then
     echo "Run complete: every selected scenario produced fresh results (${run_dir}/manifest.json)."
+  elif [[ ${launch_suite_environment_blocked} -eq 1 ]]; then
+    # A blocked launch suite is incomplete by construction; its own exit
+    # code tells callers to fix the environment rather than the build.
+    echo "App launch suite did not complete because perf-app-launch reported an environment blocker; returning exit ${app_launch_environment_blocker_exit_code} after report completion (${run_dir}/manifest.json)." >&2
+    exit "${app_launch_environment_blocker_exit_code}"
   else
     echo "Run INCOMPLETE: see ${run_dir}/manifest.json. Do not accept results from this run." >&2
     exit "${incomplete_run_exit_code}"
   fi
-fi
-
-if [[ ${dry_run} -ne 1 && ${run_launch} -eq 1 && ${launch_suite_environment_blocked} -eq 1 ]]; then
-  echo "App launch suite did not complete because perf-app-launch reported an environment blocker; returning exit ${app_launch_environment_blocker_exit_code} after report completion." >&2
-  exit "${app_launch_environment_blocker_exit_code}"
 fi
