@@ -555,7 +555,8 @@ impl HistoryWhenVm {
     }
 }
 
-const HISTORY_SHORT_SHA_LEN: usize = 8;
+/// Characters of a commit id the history list shows.
+pub(in crate::view) const HISTORY_SHORT_SHA_LEN: usize = 8;
 
 #[derive(Clone, Debug)]
 pub(in crate::view) struct HistoryShortShaVm {

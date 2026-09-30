@@ -817,14 +817,16 @@ fn row_highlights_show_why_the_row_matched() {
         }),
         "every match in the summary and the author"
     );
-    assert_eq!(
-        highlights(query("ABCD1234FF"), "Fix login fix"),
-        Some(HistoryFindHighlights {
-            sha: 8,
-            ..HistoryFindHighlights::default()
-        }),
-        "a SHA prefix lights up the SHA shown, never past its end"
-    );
+    for prefix in ["abcd", "ABCD1234FF"] {
+        assert_eq!(
+            highlights(query(prefix), "Fix login fix"),
+            Some(HistoryFindHighlights {
+                sha: 8,
+                ..HistoryFindHighlights::default()
+            }),
+            "a SHA prefix ({prefix}) lights up the whole SHA shown, never past its end"
+        );
+    }
     assert_eq!(
         highlights(query("login"), "stash message").map(|found| found.summary),
         None,
@@ -832,6 +834,167 @@ fn row_highlights_show_why_the_row_matched() {
     );
     assert_eq!(highlights(query("zzz"), "Fix login fix"), None);
     assert_eq!(highlights(None, "Fix login fix"), None);
+}
+
+#[test]
+fn detail_highlights_follow_the_fields_a_row_matches_on() {
+    use crate::view::panes::history::find::{
+        CommitDetailsFindHighlights, history_find_detail_highlights,
+    };
+
+    let query = |text: &str| HistoryFindQuery::new(text, TextSearchOptions::default());
+    let id = "abcd1234ffff0000111122223333444455556666";
+    let message = "Fix login fix\n\nThe fix is in the body.";
+    let highlights = |query: Option<HistoryFindQuery>| {
+        history_find_detail_highlights(query.as_ref(), id, message, "Alice Fixer")
+    };
+
+    assert_eq!(
+        highlights(query("fix")),
+        Some(CommitDetailsFindHighlights {
+            summary: vec![0..3, 10..13],
+            author: vec![6..9],
+            ..CommitDetailsFindHighlights::default()
+        }),
+        "the summary line and the author, never the body"
+    );
+    assert_eq!(highlights(query("body")), None, "the body is not searched");
+    assert_eq!(
+        highlights(query("ABCD")),
+        Some(CommitDetailsFindHighlights {
+            sha: true,
+            short_sha_len: Some(8),
+            ..CommitDetailsFindHighlights::default()
+        }),
+        "an abbreviation lights up the whole SHA and shows the list's short form"
+    );
+    assert_eq!(
+        highlights(query("abcd1234ffff")).and_then(|found| found.short_sha_len),
+        Some(12),
+        "a longer abbreviation is shown as typed"
+    );
+    assert_eq!(
+        highlights(query(id)),
+        Some(CommitDetailsFindHighlights {
+            sha: true,
+            ..CommitDetailsFindHighlights::default()
+        }),
+        "the full id needs no short form"
+    );
+    let regex = TextSearchOptions {
+        regex: true,
+        ..TextSearchOptions::default()
+    };
+    assert_eq!(
+        highlights(HistoryFindQuery::new("abcd", regex)),
+        None,
+        "a regex never matches the SHA"
+    );
+    assert_eq!(highlights(None), None);
+}
+
+/// Mounts the find fixture with its top row selected and that commit's
+/// details loaded. The selection is the first match of every query the
+/// details tests type, so the bar's jump to it keeps the loaded details.
+fn mount_details_find_fixture(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    String,
+) {
+    let id = format!("aaaa0000{}", "1".repeat(32));
+    let mut commits = find_fixture_commits();
+    commits[0] = authored(&id, "Fix login bug", "Alice Fixer");
+    let mut repo = find_fixture_repo(commits);
+    repo.history_state.selected_commit = Some(CommitId(id.clone().into()));
+    repo.history_state.selected_commit_rev = 1;
+    repo.history_state.commit_details =
+        Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+            id: CommitId(id.clone().into()),
+            message: "Fix login bug\n\nThe fix needs a test.".to_string(),
+            author_name: "Alice Fixer".to_string(),
+            author_email: "alice@fix.example".to_string(),
+            authored_at_unix: 0,
+            committed_at: String::new(),
+            committed_at_unix: 0,
+            parent_ids: Vec::new(),
+            files: Vec::new(),
+        }));
+    repo.history_state.commit_details_rev = 1;
+    let (view, _store, cx) = mount_find_fixture(cx, repo);
+    (view, cx, id)
+}
+
+/// Ranges of the details message (or SHA) field washed as find matches.
+fn details_find_washes(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    sha: bool,
+) -> Vec<std::ops::Range<usize>> {
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let input = if sha {
+            pane.commit_details_sha_input.clone()
+        } else {
+            pane.commit_details_message_input.clone()
+        };
+        input.update(app, |input, _| {
+            let len = input.text().len();
+            input
+                .debug_effective_highlights_for_range(0..len)
+                .into_iter()
+                .filter(|(_, style)| style.background_color.is_some())
+                .map(|(range, _)| range)
+                .collect()
+        })
+    })
+}
+
+/// The details pane follows the find bar: the summary match, the whole SHA
+/// for an abbreviation (shown beside it) or the full id, and nothing once the
+/// bar closes.
+#[gpui::test]
+fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, cx, id) = mount_details_find_fixture(cx);
+    let short_shown = |cx: &mut gpui::VisualTestContext| {
+        cx.debug_bounds("commit_details_sha_find_short").is_some()
+    };
+    assert!(details_find_washes(cx, &view, false).is_empty());
+    assert!(details_find_washes(cx, &view, true).is_empty());
+
+    open_find_with_shortcut(cx, &view);
+    type_query(cx, "fix");
+    assert_eq!(
+        details_find_washes(cx, &view, false),
+        vec![0..3],
+        "the summary match, not the body's"
+    );
+    assert!(details_find_washes(cx, &view, true).is_empty());
+    assert!(!short_shown(cx));
+
+    retype_query(cx, "AAAA0000");
+    assert_eq!(
+        details_find_washes(cx, &view, true),
+        vec![0..40],
+        "an abbreviation washes the whole id"
+    );
+    assert!(details_find_washes(cx, &view, false).is_empty());
+    assert!(short_shown(cx), "the abbreviation shows beside the full id");
+
+    retype_query(cx, &id);
+    assert_eq!(details_find_washes(cx, &view, true), vec![0..40]);
+    assert!(!short_shown(cx), "the full id needs no short form");
+
+    cx.simulate_keystrokes("escape");
+    draw_and_park(cx);
+    assert!(!find_is_open(cx, &view));
+    assert!(
+        details_find_washes(cx, &view, true).is_empty(),
+        "closing the bar clears the wash"
+    );
+    assert!(!short_shown(cx));
 }
 
 // ---------------------------------------------------------------------------

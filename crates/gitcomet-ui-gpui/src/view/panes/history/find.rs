@@ -118,7 +118,8 @@ const HISTORY_FIND_MAX_HIGHLIGHTS: usize = 16;
 pub(in crate::view) struct HistoryFindHighlights {
     pub(in crate::view) summary: Vec<std::ops::Range<usize>>,
     pub(in crate::view) author: Vec<std::ops::Range<usize>>,
-    /// Leading bytes of the short SHA matched as a SHA prefix.
+    /// Bytes of the short SHA to light up: all of it when the query matched
+    /// the id as a prefix, since it names the commit rather than some text.
     pub(in crate::view) sha: usize,
 }
 
@@ -136,7 +137,7 @@ pub(in crate::view) fn history_find_highlights(
     let mut highlights = HistoryFindHighlights {
         sha: query
             .sha_prefix_len(commit.id.as_ref())
-            .map_or(0, |len| len.min(short_sha.len())),
+            .map_or(0, |_| short_sha.len()),
         ..HistoryFindHighlights::default()
     };
     query.text_ranges_into(
@@ -146,6 +147,50 @@ pub(in crate::view) fn history_find_highlights(
     );
     query.text_ranges_into(author, &mut highlights.author, HISTORY_FIND_MAX_HIGHLIGHTS);
     (!highlights.summary.is_empty() || !highlights.author.is_empty() || highlights.sha > 0)
+        .then_some(highlights)
+}
+
+/// What the find query matched in the commit details pane: the same fields a
+/// row is matched on, so the pane shows why the selected commit matched.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::view) struct CommitDetailsFindHighlights {
+    /// Ranges in the message's summary line, which starts the message.
+    pub(in crate::view) summary: Vec<std::ops::Range<usize>>,
+    /// Ranges in the author name as the pane shows it.
+    pub(in crate::view) author: Vec<std::ops::Range<usize>>,
+    /// The query matched the id as a prefix; the whole SHA lights up.
+    pub(in crate::view) sha: bool,
+    /// Length of the abbreviated SHA shown beside the full one when the query
+    /// was an abbreviation: the list's short SHA, or longer if more was typed.
+    pub(in crate::view) short_sha_len: Option<usize>,
+}
+
+/// Highlights for the details of commit `id`. `None` without a query or when
+/// nothing shown matches.
+pub(in crate::view) fn history_find_detail_highlights(
+    query: Option<&HistoryFindQuery>,
+    id: &str,
+    message: &str,
+    author: &str,
+) -> Option<CommitDetailsFindHighlights> {
+    let query = query?;
+    let prefix = query.sha_prefix_len(id);
+    let mut highlights = CommitDetailsFindHighlights {
+        sha: prefix.is_some(),
+        short_sha_len: prefix.filter(|&len| len < id.len()).map(|len| {
+            len.max(crate::view::caches::HISTORY_SHORT_SHA_LEN)
+                .min(id.len())
+        }),
+        ..CommitDetailsFindHighlights::default()
+    };
+    let summary = &message[..message.find('\n').unwrap_or(message.len())];
+    query.text_ranges_into(
+        summary,
+        &mut highlights.summary,
+        HISTORY_FIND_MAX_HIGHLIGHTS,
+    );
+    query.text_ranges_into(author, &mut highlights.author, HISTORY_FIND_MAX_HIGHLIGHTS);
+    (!highlights.summary.is_empty() || !highlights.author.is_empty() || highlights.sha)
         .then_some(highlights)
 }
 
