@@ -1,5 +1,76 @@
 use super::*;
 
+fn file_slice_lines(path: &Arc<PathBuf>, text: &str) -> Vec<FileDiffLineText> {
+    let mut start = 0;
+    text.split_inclusive('\n')
+        .map(|line| {
+            let range = start..start + line.trim_end_matches('\n').len();
+            start += line.len();
+            FileDiffLineText::file_slice(Arc::clone(path), range, line.is_ascii(), false)
+        })
+        .collect()
+}
+
+/// Search reads every row of a source-backed side. Batched, it must see
+/// exactly what per-line reads see, opening the file once rather than
+/// once per line, and keep nothing once the batch ends.
+#[test]
+fn batched_slice_reads_match_per_line_reads_and_open_each_file_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = Arc::new(dir.path().join("side.txt"));
+    let text = "plain ascii line\nβeta γamma δelta\n\ttabbed\nlast line without newline";
+    std::fs::write(&*path, text).expect("write side");
+    let read_all = |lines: &[FileDiffLineText]| {
+        lines
+            .iter()
+            .map(|line| {
+                let len = line.len();
+                (
+                    line.slice_bytes(0..len).map(|b| b.into_owned()),
+                    line.slice_text_resolved(1..len.min(7))
+                        .map(|(text, range)| (text.into_owned(), range)),
+                    line.as_str().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let _ = take_file_slice_opens_for_tests();
+    let unbatched = read_all(&file_slice_lines(&path, text));
+    assert!(take_file_slice_opens_for_tests() >= 4);
+
+    let batched = {
+        let _batch = batch_file_slice_reads();
+        let _nested = batch_file_slice_reads();
+        read_all(&file_slice_lines(&path, text))
+    };
+    assert_eq!(batched, unbatched);
+    assert_eq!(take_file_slice_opens_for_tests(), 1);
+
+    // A sparse batch reads the same slices through one handle, and only
+    // the bytes asked for; the outermost guard picks the mode.
+    let _ = take_file_slice_bytes_read_for_tests();
+    let sparse = {
+        let _batch = batch_file_slice_handles();
+        let _nested = batch_file_slice_reads();
+        file_slice_lines(&path, text)[0].as_str().to_owned()
+    };
+    assert_eq!(sparse, "plain ascii line");
+    assert_eq!(take_file_slice_opens_for_tests(), 1);
+    assert_eq!(take_file_slice_bytes_read_for_tests(), sparse.len());
+
+    // The batch ended: a changed file is read afresh, not from a copy.
+    std::fs::write(&*path, text.replace("plain", "PLAIN")).expect("rewrite side");
+    let after = file_slice_lines(&path, text);
+    assert_eq!(after[0].as_str(), "PLAIN ascii line");
+    assert_eq!(take_file_slice_opens_for_tests(), 1);
+
+    // Out-of-range slices fail the same way with or without a batch.
+    let missing = FileDiffLineText::file_slice(Arc::clone(&path), 10_000..10_010, true, false);
+    let _batch = batch_file_slice_reads();
+    assert!(missing.slice_bytes(0..10).is_none());
+}
+
 fn remove_row(old_line: u32, old: &str) -> FileDiffRow {
     FileDiffRow {
         kind: FileDiffRowKind::Remove,
@@ -968,7 +1039,10 @@ fn levenshtein_scratch_matches_strsim_generic() {
         let new_wrapper = ByteSlice(new_bytes);
         assert_eq!(
             scratch.distance(old_bytes, new_bytes),
-            strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+            strsim::generic_levenshtein::<ByteSlice<'_>, ByteSlice<'_>, u8, u8>(
+                &old_wrapper,
+                &new_wrapper
+            ),
             "ascii mismatch for old={old:?} new={new:?}"
         );
     }
@@ -980,7 +1054,10 @@ fn levenshtein_scratch_matches_strsim_generic() {
         let new_wrapper = CharSlice(new_chars.as_slice());
         assert_eq!(
             scratch.distance(old_chars.as_slice(), new_chars.as_slice()),
-            strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+            strsim::generic_levenshtein::<CharSlice<'_>, CharSlice<'_>, char, char>(
+                &old_wrapper,
+                &new_wrapper
+            ),
             "unicode mismatch for old={old:?} new={new:?}"
         );
     }
@@ -1016,7 +1093,10 @@ fn bitparallel_ascii_levenshtein_matches_strsim_generic() {
         for new in &cases {
             let old_wrapper = ByteSlice(old.as_slice());
             let new_wrapper = ByteSlice(new.as_slice());
-            let expected = strsim::generic_levenshtein(&old_wrapper, &new_wrapper);
+            let expected = strsim::generic_levenshtein::<ByteSlice<'_>, ByteSlice<'_>, u8, u8>(
+                &old_wrapper,
+                &new_wrapper,
+            );
 
             assert_eq!(
                 bitparallel_levenshtein_bytes(old.as_slice(), new.as_slice()),

@@ -11,6 +11,7 @@ pub(crate) use gitcomet_ui_kit::{
     window_focus,
 };
 mod assets;
+mod environment;
 mod external_editor;
 pub mod http;
 mod launch_guard;

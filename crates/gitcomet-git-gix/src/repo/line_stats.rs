@@ -1,5 +1,6 @@
 use super::log::{
-    CommitStatsScratch, commit_file_line_stats, line_stats_from_bytes, read_commit_stats_blob,
+    CommitStatsScratch, commit_file_line_stats, commit_stats_looks_binary, line_stats_from_bytes,
+    read_commit_stats_blob,
 };
 use crate::util::path_buf_from_git_bytes;
 use gitcomet_core::domain::{FileStatus, FileStatusKind, LineStats, UncommittedLineStats};
@@ -11,6 +12,51 @@ use std::path::PathBuf;
 
 /// Mirrors the blob-side cap in `commit_stats`.
 const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Counts keyed by both sides' content ids (`None` is no content), kept from
+/// the last scan so a refresh re-diffs only files whose content moved.
+pub(super) type LineStatsMemo =
+    FxHashMap<(Option<gix::ObjectId>, Option<gix::ObjectId>), LineStats>;
+
+/// One scan's view of the memo: hits carry over into `next`, which replaces
+/// the memo, so it only ever holds the current changes.
+#[derive(Default)]
+struct MemoScan {
+    previous: LineStatsMemo,
+    next: LineStatsMemo,
+}
+
+impl MemoScan {
+    fn counts(
+        &mut self,
+        key: (Option<gix::ObjectId>, Option<gix::ObjectId>),
+        diff: impl FnOnce() -> LineStats,
+    ) -> LineStats {
+        if let Some(&stats) = self.previous.get(&key).or_else(|| self.next.get(&key)) {
+            self.next.insert(key, stats);
+            return stats;
+        }
+        #[cfg(test)]
+        LINE_STATS_DIFFS.with(|diffs| diffs.set(diffs.get() + 1));
+        let stats = diff();
+        // Unknown is cheap to rediscover (size cap, binary sniff) or may be
+        // transient (an unreadable object), so it is never kept.
+        if stats.additions.is_some() {
+            self.next.insert(key, stats);
+        }
+        stats
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static LINE_STATS_DIFFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn take_line_stats_diffs_for_tests() -> usize {
+    LINE_STATS_DIFFS.with(|diffs| diffs.replace(0))
+}
 
 impl super::GixRepo {
     pub(super) fn uncommitted_line_stats_impl(
@@ -28,17 +74,39 @@ impl super::GixRepo {
     ) -> Result<UncommittedLineStats> {
         cancellation.check_cancelled()?;
         let repo = self.repo();
-        let staged = staged_line_stats(&repo, cancellation)?;
-        cancellation.check_cancelled()?;
-        let unstaged = unstaged_line_stats(self, &repo, entries, cancellation)?;
-        Ok(UncommittedLineStats { staged, unstaged })
+        // Taken, not held: a concurrent scan starts cold instead of waiting.
+        let mut scan = MemoScan {
+            previous: std::mem::take(&mut *self.line_stats_memo()),
+            next: LineStatsMemo::default(),
+        };
+        let result = staged_line_stats(&repo, &mut scan, cancellation).and_then(|staged| {
+            cancellation.check_cancelled()?;
+            let unstaged = unstaged_line_stats(self, &repo, entries, &mut scan, cancellation)?;
+            Ok(UncommittedLineStats { staged, unstaged })
+        });
+        let MemoScan { mut previous, next } = scan;
+        // A cancelled scan saw only part of the changes; keep both.
+        *self.line_stats_memo() = if result.is_ok() {
+            next
+        } else {
+            previous.extend(next);
+            previous
+        };
+        result
+    }
+
+    fn line_stats_memo(&self) -> std::sync::MutexGuard<'_, LineStatsMemo> {
+        self.line_stats_memo
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
 /// HEAD tree vs index. The walk hands us both blob ids, so this costs two
-/// object reads per changed file and no worktree traversal.
+/// object reads per changed pair the memo lacks and no worktree traversal.
 fn staged_line_stats(
     repo: &gix::Repository,
+    memo: &mut MemoScan,
     cancellation: &CancellationToken,
 ) -> Result<FxHashMap<PathBuf, LineStats>> {
     let mut out = FxHashMap::default();
@@ -88,10 +156,10 @@ fn staged_line_stats(
             };
             let path = path_buf_from_git_bytes(location.as_ref(), "gix staged line stats path")
                 .or_erased()?;
-            out.insert(
-                path,
-                commit_file_line_stats(repo, old_id, new_id, &mut scratch).into(),
-            );
+            let stats = memo.counts((old_id, new_id), || {
+                commit_file_line_stats(repo, old_id, new_id, &mut scratch).into()
+            });
+            out.insert(path, stats);
             Ok(std::ops::ControlFlow::Continue(()))
         },
     );
@@ -112,6 +180,7 @@ fn unstaged_line_stats(
     gix_repo: &super::GixRepo,
     repo: &gix::Repository,
     entries: &[FileStatus],
+    memo: &mut MemoScan,
     cancellation: &CancellationToken,
 ) -> Result<FxHashMap<PathBuf, LineStats>> {
     let mut out = FxHashMap::default();
@@ -146,6 +215,7 @@ fn unstaged_line_stats(
             &mut index_blob,
             &mut worktree,
             pipeline.as_mut(),
+            memo,
         );
         out.insert(entry.path.clone(), stats);
     }
@@ -164,13 +234,10 @@ fn unstaged_entry_line_stats(
         gix::filter::Pipeline<'_>,
         gix::worktree::IndexPersistedOrInMemory,
     )>,
+    memo: &mut MemoScan,
 ) -> LineStats {
     let rel = gix::path::into_bstr(entry.path.as_path());
     let index_id = index.entry_by_path(rel.as_ref()).map(|found| found.id);
-
-    if !read_commit_stats_blob(repo, index_id, index_blob) {
-        return LineStats::UNKNOWN;
-    }
 
     worktree.clear();
     if entry.kind != FileStatusKind::Deleted
@@ -178,8 +245,23 @@ fn unstaged_entry_line_stats(
     {
         return LineStats::UNKNOWN;
     }
+    // Binary on this side means no counts, whatever the index holds: skip
+    // the hash, the index read and the memo.
+    if commit_stats_looks_binary(worktree) {
+        return LineStats::UNKNOWN;
+    }
 
-    line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice()).into()
+    let mut diff = || {
+        if !read_commit_stats_blob(repo, index_id, index_blob) {
+            return LineStats::UNKNOWN;
+        }
+        line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice()).into()
+    };
+    // Hashing costs a fraction of the diff an unchanged file then skips.
+    match gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, worktree) {
+        Ok(worktree_id) => memo.counts((index_id, Some(worktree_id)), diff),
+        Err(_) => diff(),
+    }
 }
 
 /// Reads a worktree file as git would store it. `false` means over the size
@@ -549,6 +631,63 @@ mod tests {
     }
 
     #[test]
+    fn rescans_diff_only_pairs_whose_content_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "big.txt", &lines("base", 200));
+        write_file(dir, "staged.txt", &lines("base", 20));
+        std::fs::write(dir.join("blob.bin"), b"\0before").unwrap();
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        let edited = |from: usize| lines("base", from) + &lines("edited", 200 - from);
+        write_file(dir, "big.txt", &edited(150));
+        write_file(dir, "staged.txt", &lines("base", 25));
+        git_success(dir, &["add", "staged.txt"]);
+        std::fs::write(dir.join("blob.bin"), b"\0after").unwrap();
+
+        let token = CancellationToken::new();
+        let scan = |repo: &super::super::GixRepo| {
+            let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+            repo.line_stats_for_entries_impl(&entries, &token).unwrap()
+        };
+        let repo = open_repo(dir);
+        take_line_stats_diffs_for_tests();
+        let first = scan(&repo);
+        // big + staged; a binary worktree file is never diffed.
+        assert_eq!(take_line_stats_diffs_for_tests(), 2);
+
+        // An editor save of unchanged content.
+        write_file(dir, "big.txt", &edited(150));
+        assert_eq!(scan(&repo), first);
+        assert_eq!(take_line_stats_diffs_for_tests(), 0);
+
+        write_file(dir, "big.txt", &edited(100));
+        let moved = scan(&repo);
+        assert_eq!(take_line_stats_diffs_for_tests(), 1);
+        assert_eq!(moved, scan(&open_repo(dir)));
+        assert_eq!(
+            moved.unstaged.get(std::path::Path::new("big.txt")),
+            Some(&LineStats {
+                additions: Some(100),
+                deletions: Some(100),
+            })
+        );
+
+        // Staging moves big's pair, same ids, into the other lane: no diff.
+        git_success(dir, &["add", "big.txt"]);
+        take_line_stats_diffs_for_tests();
+        let staged = scan(&repo);
+        assert_eq!(take_line_stats_diffs_for_tests(), 0);
+        assert_eq!(staged, scan(&open_repo(dir)));
+        assert!(
+            !staged
+                .unstaged
+                .contains_key(std::path::Path::new("big.txt"))
+        );
+    }
+
+    #[test]
     fn staged_walk_preserves_cancellation() {
         let tmp = tempfile::tempdir().expect("tempdir");
         init_test_repo(tmp.path());
@@ -558,10 +697,11 @@ mod tests {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let repo = open_repo(tmp.path()).repo();
-        let err = staged_line_stats(&repo, &cancellation).expect_err("cancelled staged walk");
+        let err = staged_line_stats(&repo, &mut MemoScan::default(), &cancellation)
+            .expect_err("cancelled staged walk");
         assert!(matches!(err.kind(), ErrorKind::Cancelled), "{err:?}");
         assert_eq!(
-            staged_line_stats(&repo, &CancellationToken::new())
+            staged_line_stats(&repo, &mut MemoScan::default(), &CancellationToken::new())
                 .expect("uncancelled staged walk")
                 .len(),
             1

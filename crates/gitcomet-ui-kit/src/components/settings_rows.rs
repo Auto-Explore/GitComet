@@ -102,13 +102,7 @@ fn row_label(id: &SharedString, label: SharedString, theme: AppTheme) -> Div {
         )
 }
 
-/// A titled group of rows.
-pub fn settings_card(
-    id: impl Into<SharedString>,
-    title: impl Into<SharedString>,
-    theme: AppTheme,
-) -> Stateful<Div> {
-    let id = id.into();
+fn card_shell(id: SharedString) -> Stateful<Div> {
     let debug = id.to_string();
     div()
         .id(id)
@@ -118,15 +112,51 @@ pub fn settings_card(
         .flex()
         .flex_col()
         .gap_2()
-        .child(
-            div()
-                .px_2()
-                .pb_2()
-                .text_size(theme.ui_text(18.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(theme.colors.foreground.primary)
-                .child(title.into()),
-        )
+}
+
+fn card_title(title: SharedString, theme: AppTheme) -> Div {
+    div()
+        .px_2()
+        .text_size(theme.ui_text(18.0))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.colors.foreground.primary)
+        .child(title)
+}
+
+/// A titled group of rows.
+pub fn settings_card(
+    id: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+    theme: AppTheme,
+) -> Stateful<Div> {
+    card_shell(id.into()).child(card_title(title.into(), theme).pb_2())
+}
+
+/// A card whose title row ends in one compact action.
+pub fn settings_card_with_action(
+    id: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+    action: impl IntoElement,
+    theme: AppTheme,
+) -> Stateful<Div> {
+    card_shell(id.into()).child(
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .pb_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                card_title(title.into(), theme)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .overflow_hidden(),
+            )
+            .child(div().flex_none().pr_2().child(action)),
+    )
 }
 
 pub fn settings_subsection_heading(
@@ -268,11 +298,12 @@ pub fn settings_toggle_row(
         )
 }
 
-/// A read-only row: a label and a monospace value.
+/// A read-only row: a label and a monospace value, text or an element such
+/// as a selectable read-only input.
 pub fn settings_info_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    value: impl Into<SharedString>,
+    value: impl IntoElement,
     theme: AppTheme,
 ) -> Stateful<Div> {
     let id = id.into();
@@ -289,13 +320,14 @@ pub fn settings_info_row(
                 .child(
                     div()
                         .min_w(px(0.0))
+                        .max_w_full()
                         .text_size(theme.ui_text(14.0))
                         .font_family(crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY)
                         .text_color(theme.colors.foreground.secondary)
                         .line_clamp(1)
                         .whitespace_nowrap()
                         .overflow_hidden()
-                        .child(value.into()),
+                        .child(value),
                 ),
         )
 }

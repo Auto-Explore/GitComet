@@ -502,7 +502,9 @@ impl SettingsCategory {
                 "executables git executable custom path system path version gpg gnupg \
                  openpgp x.509 ssh-keygen openssh commit signature verification verified trust key guide"
             }
-            Self::Environment => "environment build operating system app version",
+            Self::Environment => {
+                "environment build operating system app version cpu memory gpu graphics driver renderer hardware software kernel wayland x11"
+            }
             Self::Links => {
                 "links theme guide github license open source licenses professional edition \
                  waitlist"
@@ -639,6 +641,8 @@ pub(crate) struct SettingsWindowView {
     nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    /// Read-only fields behind the Environment values, keyed by row id.
+    environment_value_inputs: FxHashMap<SharedString, Entity<components::TextInput>>,
     signing_tools_probe: Option<gpui::Task<()>>,
     signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
@@ -1020,6 +1024,13 @@ fn initial_external_editor_setting(
 
 impl SettingsWindowView {
     pub(in crate::view) fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
+        crate::environment::track_window(window, cx);
+        cx.observe_global::<crate::environment::Environment>(|this, cx| {
+            this.runtime_info.environment =
+                cx.global::<crate::environment::Environment>().0.clone();
+            cx.notify();
+        })
+        .detach();
         window.set_window_title(&settings_window_title());
 
         let ui_session = session::load();
@@ -1091,7 +1102,8 @@ impl SettingsWindowView {
                 _ => (String::new(), String::new()),
             };
         let theme = theme_mode.resolve_theme(window.appearance());
-        let runtime_info = SettingsRuntimeInfo::detect();
+        let mut runtime_info = SettingsRuntimeInfo::detect();
+        runtime_info.environment = cx.global::<crate::environment::Environment>().0.clone();
         let signing_tools_probe = None;
         let git_executable_mode =
             GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
@@ -1287,6 +1299,9 @@ impl SettingsWindowView {
             {
                 this.selected_category = first;
                 this.expanded_section = None;
+                if first == SettingsCategory::Environment {
+                    crate::environment::request_refresh(cx);
+                }
             }
             cx.notify();
         });
@@ -1421,6 +1436,7 @@ impl SettingsWindowView {
             nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            environment_value_inputs: FxHashMap::default(),
             signing_tools_probe,
             signing_tools_cancellation: Default::default(),
             git_executable_mode,
@@ -1456,6 +1472,9 @@ impl SettingsWindowView {
     }
 
     fn select_category(&mut self, category: SettingsCategory, cx: &mut gpui::Context<Self>) {
+        if category == SettingsCategory::Environment {
+            crate::environment::request_refresh(cx);
+        }
         if self.selected_category == category && self.extension_page.is_none() {
             return;
         }

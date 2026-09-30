@@ -471,6 +471,7 @@ pub(crate) struct GixRepo {
         std::sync::Mutex<rustc_hash::FxHashMap<u64, text_decode::TextFormatMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
+    line_stats_memo: std::sync::Mutex<line_stats::LineStatsMemo>,
     /// Immutable signature formats by oid. `None` means an unsigned commit.
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
@@ -508,6 +509,7 @@ impl GixRepo {
             text_format_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
+            line_stats_memo: std::sync::Mutex::default(),
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),

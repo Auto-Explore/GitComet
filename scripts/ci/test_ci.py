@@ -41,6 +41,10 @@ local_spec.loader.exec_module(local_performance)
 ui_spec = importlib.util.spec_from_file_location("ui_responsiveness", Path(__file__).resolve().parents[1] / "profiling/ui-responsiveness.py")
 ui_responsiveness = importlib.util.module_from_spec(ui_spec)
 ui_spec.loader.exec_module(ui_responsiveness)
+live_spec = importlib.util.spec_from_file_location("live_ui", Path(__file__).resolve().parents[1] / "profiling/live-ui.py")
+live_ui = importlib.util.module_from_spec(live_spec)
+live_spec.loader.exec_module(live_ui)
+perf_metadata = live_ui.perf_metadata
 lfs_spec = importlib.util.spec_from_file_location("lfs_performance", Path(__file__).resolve().parents[1] / "profiling/lfs-performance.py")
 lfs_performance = importlib.util.module_from_spec(lfs_spec)
 lfs_spec.loader.exec_module(lfs_performance)
@@ -167,6 +171,226 @@ class UiMeasurementTests(unittest.TestCase):
             (root / "session.json").write_text(json.dumps(session), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "completed sessions"):
                 ui_responsiveness.report_sessions([root])
+
+
+class LiveUiMeasurementTests(unittest.TestCase):
+    """The Linux live harness must reject runs whose numbers cannot be trusted."""
+
+    RUN_ID = "run-1"
+
+    def write_run(self, root, records=None, capture=None, process=None):
+        capture = {"run_id": self.RUN_ID, "scenario": "history-select", "binary_sha256": "abc",
+                   "repository_head": "head", "outcome": "passed", "exit_code": 0, "crash_reports": [],
+                   **(capture or {})}
+        (root / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+        if records is None:
+            records = self.records()
+        (root / "frames.jsonl").write_text("\n".join(map(json.dumps, records)) + "\n", encoding="utf-8")
+        process = process or [
+            {"unix_ms": 10_000 + 1000, "rss_kib": 100, "pss_kib": 90, "threads": 10, "fds": 20,
+             "cpu_s": 1.0, "children_cpu_s": 0, "voluntary_switches": 100},
+            {"unix_ms": 10_000 + 3000, "rss_kib": 120, "pss_kib": 95, "threads": 10, "fds": 20,
+             "cpu_s": 1.5, "children_cpu_s": 0, "voluntary_switches": 300}]
+        (root / "process.jsonl").write_text("".join(json.dumps(p) + "\n" for p in process), encoding="utf-8")
+
+    def records(self):
+        stage = lambda at, op, name, a=0, b=0, label="x": {  # noqa: E731
+            "event": "stage", "at_ms": at, "op": op, "stage": name, "label": label, "a": a, "b": b,
+            "thread": 1}
+        return [
+            {"event": "start", "unix_ms": 10_000, "run_id": self.RUN_ID, "main_tid": 7},
+            {"event": "scenario_ready", "at_ms": 900, "unix_ms": 10_900, "detail": {}},
+            {"event": "scenario_phase", "at_ms": 1000, "detail": {"name": "select", "state": "begin"}},
+            # Scheduled at 1000 ms, dispatched 0.5 ms late, witnessed at 1012.
+            stage(1000.5, 5, "input", a=1000 * 1e6, b=1),
+            stage(1001.0, 5, "input_handled", a=0.2e6, b=1),
+            stage(1002.0, 5, "received", a=0.1e6, label="SelectCommit"),
+            stage(1003.0, 5, "reduced", a=0.05e6, b=41, label="reduce"),
+            stage(1004.0, 0, "applied", a=41, b=0.3e6, label="set_state"),
+            stage(1012.0, 5, "witness", a=1, label="commit_details"),
+            {"event": "draw", "window": "w", "start_ms": 1013.0, "at_ms": 1016.0,
+             "duration_ms": 3.0, "dirty_ms": 1012.5, "invalidations": 1},
+            {"event": "submit", "window": "w", "start_ms": 1016.0, "at_ms": 1017.0, "duration_ms": 1.0},
+            {"event": "interval", "at_ms": 2000, "wall_ms": 1000, "wake_ms": [0.1, 0.4],
+             "main_cpu_percent": 5.0, "records_dropped": 0, "stage_records_dropped": 0},
+            {"event": "scenario_phase", "at_ms": 3000, "detail": {"name": "select", "state": "end"}},
+            {"event": "scenario_end", "at_ms": 3000, "detail": {"outcome": "passed", "errors": []}},
+        ]
+
+    def test_a_complete_run_reports_every_stage_of_its_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root)
+            summary = live_ui.summarize(root)
+            self.assertTrue(summary["valid"], summary["problems"])
+            inputs = summary["phases"]["select"]["inputs"]
+            self.assertEqual((inputs["count"], inputs["witnessed"], inputs["superseded"]), (1, 1, 0))
+            self.assertAlmostEqual(inputs["dispatch_delay_ms"]["p50"], 0.5)
+            self.assertAlmostEqual(inputs["input_to_witness_ms"]["p50"], 12.0)
+            self.assertAlmostEqual(inputs["input_to_draw_ms"]["p50"], 16.0)
+            self.assertAlmostEqual(inputs["input_to_submit_ms"]["p50"], 17.0)
+            self.assertAlmostEqual(inputs["apply_ms"]["p50"], 0.3)
+            self.assertAlmostEqual(summary["phases"]["select"]["process_cpu_cores"], 0.25)
+
+    def test_runs_missing_witnesses_losing_records_or_stalling_are_rejected(self):
+        cases = {
+            "expected a witness": lambda r: [x for x in r if x.get("stage") != "witness"],
+            "dropped records": lambda r: [dict(x, records_dropped=3) if x["event"] == "interval" else x for x in r],
+            "another run": lambda r: [dict(x, run_id="other") if x["event"] == "start" else x for x in r],
+            "waited over 1 s": lambda r: r + [{"event": "draw", "window": "w", "start_ms": 2500.0,
+                                               "at_ms": 2501.0, "duration_ms": 1.0, "dirty_ms": 1200.0}],
+            "did not finish": lambda r: [x for x in r if x["event"] != "scenario_end"],
+        }
+        for problem, mutate in cases.items():
+            with self.subTest(problem), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.write_run(root, mutate(self.records()))
+                summary = live_ui.summarize(root)
+                self.assertFalse(summary["valid"])
+                self.assertTrue(any(problem in p for p in summary["problems"]), summary["problems"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, capture={"outcome": "failed", "exit_code": 101})
+            self.assertIn("application exited 101", live_ui.summarize(root)["problems"])
+
+    def test_corrupted_records_are_an_error_not_a_shorter_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root)
+            with open(root / "frames.jsonl", "a", encoding="utf-8") as stream:
+                stream.write('{"event": "draw", "start_ms"\n')
+            with self.assertRaisesRegex(ValueError, "corrupt record"):
+                live_ui.summarize(root)
+
+    def test_sessions_must_be_complete_independent_and_alike(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "a", Path(directory) / "b"
+            first.mkdir()
+            second.mkdir()
+            environment = perf_metadata.collect()
+            session = {"measurement_id": "one", "complete": True, "session": "first", "pairs": 1,
+                       "hashes": {"baseline": "b", "candidate": "c"}, "scenarios": ["idle"],
+                       "repository_head": "h", "display": "headless", "environment": environment,
+                       "samples": []}
+            (first / "session.json").write_text(json.dumps(session), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "copied session"):
+                live_ui.report([first, first])
+            (second / "session.json").write_text(json.dumps(dict(session, measurement_id="two",
+                                                                 hashes={"baseline": "x", "candidate": "c"})),
+                                                  encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "disagree on hashes"):
+                live_ui.report([first, second])
+            (second / "session.json").write_text(json.dumps(dict(session, measurement_id="two",
+                                                                 complete=False)), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "complete sessions"):
+                live_ui.report([first, second])
+            # Same binaries, but the candidate ran with other runtime settings.
+            (second / "session.json").write_text(json.dumps(dict(
+                session, measurement_id="two",
+                candidate_runtime={"wrap": None, "env": {"MIMALLOC_ALLOW_THP": "0"}})), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "disagree on candidate_runtime"):
+                live_ui.report([first, second])
+
+    def test_latency_over_different_completed_inputs_is_flagged(self):
+        def sample(variant, witnessed, p95):
+            phase = {"inputs": {"witnessed": witnessed, "input_to_witness_ms": {"p95": p95}},
+                     "draw_ms": {"p95": 3.0}}
+            return {"session": "s", "pair": 1, "scenario": "diff-search", "variant": variant,
+                    "summary": {"phases": {"typing": phase}}}
+        result = live_ui.compare([sample("baseline", 40, 6.0), sample("candidate", 240, 19.0)],
+                                 ["diff-search"])["diff-search"]["typing"]
+        self.assertIn("not_comparable", result["inputs.input_to_witness_ms.p95"])
+        self.assertNotIn("not_comparable", result["draw_ms.p95"])
+
+    def test_lifecycle_cycle_count_sets_only_the_measured_phase(self):
+        secondary = Path("/other")
+        steps = live_ui.scenario("lifecycle", Path("/repo"), secondary=secondary, cycles=3)["steps"]
+        phases = [ix for ix, step in enumerate(steps) if step["do"] == "phase"]
+        opens = lambda start, end: sum(step["do"] == "open_repo" for step in steps[start:end])  # noqa: E731
+        self.assertEqual((opens(phases[0], phases[1]), opens(phases[1], phases[2])), (10, 3))
+        # Each open waits for the history before selecting in it.
+        for ix, step in enumerate(steps):
+            if step["do"] == "open_repo":
+                self.assertEqual([s["do"] for s in steps[ix + 1:ix + 3]], ["wait_ready", "focus"])
+            if step["do"] == "command":
+                self.assertEqual(step["witness"], {"kind": "repo_closed", "path": str(secondary)})
+
+    def test_status_touch_rewrites_the_save_file_with_its_own_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            (repository / "x.txt").write_bytes(b"one\r\ntwo\n")
+            steps = live_ui.scenario("status-touch", repository, save_file="x.txt")["steps"]
+            write = next(step for step in steps if step["do"] == "write_files")
+            self.assertEqual((write["paths"], write["contents"]), (["x.txt"], "one\r\ntwo\n"))
+            # A missing file would be created untracked and deleted each round.
+            with self.assertRaises(ValueError):
+                live_ui.scenario("status-touch", repository, save_file="missing.txt")
+
+    def test_lifecycle_growth_is_per_measured_cycle(self):
+        phase = lambda at, name, state: {"event": "scenario_phase", "at_ms": at,  # noqa: E731
+                                         "detail": {"name": name, "state": state}}
+        records = [{"event": "start", "unix_ms": 10_000, "run_id": self.RUN_ID, "main_tid": 7},
+                   {"event": "scenario_ready", "at_ms": 900, "unix_ms": 10_900, "detail": {}},
+                   phase(1000, "warmup_cycles", "begin"), phase(2000, "warmup_cycles", "end"),
+                   phase(2000, "cycles", "begin"), phase(4000, "cycles", "end"),
+                   phase(4000, "after_cycles", "begin"), phase(5000, "after_cycles", "end"),
+                   {"event": "scenario_end", "at_ms": 5000, "detail": {"outcome": "passed", "errors": []}}]
+        sample = lambda at, pss: {"unix_ms": 10_000 + at, "rss_kib": pss, "pss_kib": pss,  # noqa: E731
+                                  "threads": 10, "fds": 20, "cpu_s": 1.0, "children_cpu_s": 0,
+                                  "voluntary_switches": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, records=records, capture={"scenario": "lifecycle", "cycles": 20},
+                           process=[sample(1500, 1000), sample(3500, 2000), sample(4500, 3000)])
+            retention = live_ui.summarize(root)["retention"]
+        self.assertEqual(retention["pss_kib"]["growth_per_cycle"], 100)
+
+    def test_launch_times_are_compared_per_run(self):
+        def sample(variant, pair, ready):
+            return {"session": "s", "pair": pair, "scenario": "startup", "variant": variant,
+                    "summary": {"phases": {}, "startup": {"spawn_to_ready_ms": ready,
+                                                           "spawn_to_first_draw_ms": ready - 30}}}
+        samples = [sample(v, pair, 220 + pair + (20 if v == "candidate" else 0))
+                   for pair in range(1, 4) for v in ("baseline", "candidate")]
+        launch = live_ui.compare(samples, ["startup"])["startup"]["launch"]
+        self.assertEqual((launch["spawn_to_ready_ms"]["baseline_median"],
+                          launch["spawn_to_ready_ms"]["candidate_median"]), (222, 242))
+        self.assertGreater(launch["spawn_to_first_draw_ms"]["ratio"]["ci95"][0], 1.0)
+
+    def test_quiet_gate_waits_for_the_load_to_drop(self):
+        loads = iter([["9.0", "5", "5"], ["4.0", "5", "5"], ["1.5", "5", "5"]])
+        with patch.object(live_ui, "load_average", lambda: next(loads)), \
+                patch.object(live_ui.time, "sleep", lambda _: None):
+            live_ui.wait_for_quiet(2.0)
+        with self.assertRaises(StopIteration):
+            next(loads)
+        with patch.object(live_ui, "load_average", lambda: ["9.0", "5", "5"]), \
+                patch.object(live_ui.time, "sleep", lambda _: None), \
+                self.assertRaises(TimeoutError):
+            live_ui.wait_for_quiet(2.0, timeout_s=0)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc")
+    def test_process_sample_survives_a_thread_exiting_mid_read(self):
+        real = Path.read_text
+
+        def exited(path, *args, **kwargs):
+            if "/task/" in str(path):
+                raise ProcessLookupError(3, "No such process")
+            return real(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", exited):
+            sample = live_ui.read_proc(os.getpid())
+        self.assertIsNotNone(sample)
+        self.assertEqual(sample["voluntary_switches"], 0)
+
+    def test_live_gpu_state_does_not_split_a_pair_but_the_driver_does(self):
+        gpu = lambda driver, state: {"gpu": {"cards": [], "vulkan": [],  # noqa: E731
+                                             "nvidia": f"RTX, {driver}", "nvidia_state": state}}
+        base = gpu("580.1", "P8, 210 MHz, 40")
+        warm = gpu("580.1", "P0, 1800 MHz, 55")
+        newer = gpu("590.2", "P8, 210 MHz, 40")
+        self.assertNotIn("gpu.nvidia", perf_metadata.compare(base, warm)["invalidating"])
+        self.assertIn("gpu.nvidia", perf_metadata.compare(base, newer)["invalidating"])
 
 
 class CacheTests(unittest.TestCase):

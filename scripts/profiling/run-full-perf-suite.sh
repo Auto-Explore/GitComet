@@ -8,13 +8,26 @@ usage() {
 Usage: scripts/profiling/run-full-perf-suite.sh [options]
 
 Runs the full local performance suite:
+  0. Build every measuring executable, then freeze copies of them
   1. Criterion benchmark suite
   2. Idle resource harness cases
   3. App launch harness cases
   4. Performance budget report
+  5. Completeness check against the run's scenario manifest
+
+Measurements run the frozen copies directly; nothing compiles between cases.
 
 Options:
-  --profile NAME           Perf profile to run.
+  --cargo-profile NAME     Cargo profile for every measuring executable.
+                           Default: release (the shipping settings). Use
+                           release-with-debug only for symbolized diagnostics.
+  --run-dir PATH           Directory for frozen binaries, the scenario
+                           manifest, per-case logs and environment metadata.
+                           Default: target/perf-runs/<UTC timestamp>
+  --fail-fast              Stop at the first failed case. By default every
+                           selected case runs and failures are reported at the
+                           end.
+  --profile NAME           Workload profile to run.
                            full (default): current full suite.
                            balanced: shorter local iteration mode that
                            trims Criterion measurement time and skips the
@@ -54,9 +67,11 @@ Environment:
     .runner.runner_class. Set it before measured runs if artifacts may later
     be compared across sessions or machines.
   MIMALLOC_PURGE_DELAY
-    Defaults to 0 in this script unless already set.
+    Defaults to 1000 (ms) unless already set: mimalloc 3.5's built-in
+    default, so harness processes purge like the shipped application.
   MIMALLOC_PURGE_DECOMMITS
-    Defaults to 1 in this script unless already set.
+    Defaults to 1 unless already set, also the built-in default. Every
+    MIMALLOC_* value in effect is recorded in the manifest and in sidecars.
   GITCOMET_BENCH_HISTORY_HEAVY_COMMITS
     Defaults to 10000 in this script unless already set.
   GITCOMET_PERF_PRINT_BENCH_SUMMARY
@@ -68,6 +83,12 @@ Environment:
     case with parsed Criterion estimates and sidecar metrics when available.
 
 Notes:
+  - Each sidecar's .measurement.kind says what it timed; see
+    scripts/profiling/README.md before reading timings as user latency.
+  - The run is accepted only when every selected scenario exited 0 and left
+    fresh artifacts: Criterion estimates newer than the suite start, and
+    sidecars stamped with this run's id. manifest.json records the verdict;
+    an incomplete run exits 4.
   - The main Criterion suite is sharded into one benchmark per process to keep
     RSS bounded under the benchmark RAM guard.
   - The idle resource harness includes 10-minute cases and can take a long time.
@@ -373,6 +394,9 @@ build_report_args() {
   local root=""
 
   report_args=("${report_mode[@]}")
+  if [[ ${dry_run} -ne 1 ]]; then
+    report_args+=(--summary-json "${budget_summary}")
+  fi
   report_criterion_roots=()
   append_unique_report_root "${criterion_root}"
   if crate_local_root="$(crate_local_criterion_root 2>/dev/null)"; then
@@ -391,8 +415,7 @@ build_report_args() {
 }
 
 discover_main_benchmarks() {
-  env GITCOMET_PERF_SUPPRESS_MISSING_REAL_REPO_NOTICE=1 \
-    cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- --list --format terse |
+  run_bench_binary --list --format terse |
     while IFS= read -r line; do
       [[ "${line}" == *": benchmark" ]] || continue
       local bench_name="${line%: benchmark}"
@@ -419,7 +442,7 @@ run_launch_case() {
   if [[ ${dry_run} -eq 1 ]]; then
     run_section \
       "App launch: ${bench}" \
-      cargo run -p gitcomet --bin perf-app-launch -- \
+      "${frozen_launch}" \
       --bench "${bench}" \
       --timeout-ms "${launch_timeout_ms}"
     return 0
@@ -428,37 +451,26 @@ run_launch_case() {
   echo
   echo "==> App launch: ${bench}"
 
-  local launch_output=""
   local launch_status=0
-  if launch_output="$(
-    cargo run -p gitcomet --bin perf-app-launch -- \
-      --bench "${bench}" \
-      --timeout-ms "${launch_timeout_ms}" \
-      2>&1
-  )"; then
-    if [[ -n "${launch_output}" ]]; then
-      printf '%s\n' "${launch_output}"
-    fi
+  run_case launch "${bench}" \
+    "${frozen_launch}" --bench "${bench}" --timeout-ms "${launch_timeout_ms}" || launch_status=$?
+  if [[ ${launch_status} -eq 0 ]]; then
     emit_bench_summary "${bench}" "launch"
     return 0
-  else
-    launch_status=$?
-    printf '%s\n' "${launch_output}" >&2
-    if [[ ${launch_status} -eq ${app_launch_environment_blocker_exit_code} ]]; then
-      launch_suite_environment_blocked=1
-      echo "Skipping remaining app-launch cases because perf-app-launch reported an environment blocker during ${bench}." >&2
-      return 0
-    fi
-
-    return "${launch_status}"
   fi
+  if [[ ${launch_status} -eq ${app_launch_environment_blocker_exit_code} ]]; then
+    launch_suite_environment_blocked=1
+    echo "Skipping remaining app-launch cases because perf-app-launch reported an environment blocker during ${bench}." >&2
+    return 0
+  fi
+  return "${launch_status}"
 }
 
 run_launch_suite() {
   local bench=""
 
   for bench in "${launch_benches[@]}"; do
-    run_launch_case "${bench}" || return $?
+    run_launch_case "${bench}" || case_failed_or_stop || return $?
     if [[ ${launch_suite_environment_blocked} -eq 1 ]]; then
       return 0
     fi
@@ -527,10 +539,8 @@ run_main_suite() {
   if [[ ${dry_run} -eq 1 ]]; then
     echo
     echo "==> Criterion benchmark suite (sharded)"
-    run_cmd env GITCOMET_PERF_SUPPRESS_MISSING_REAL_REPO_NOTICE=1 \
-      cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- --list --format terse
-    run_cmd env GITCOMET_PERF_SUPPRESS_MISSING_REAL_REPO_NOTICE=1 \
-      cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- --noplot \
+    run_cmd "${frozen_bench}" --bench --list --format terse
+    run_cmd "${frozen_bench}" --bench --noplot \
       "${main_criterion_args[@]}" --exact "<benchmark-name>"
     if [[ -n "${main_filter}" ]]; then
       echo "Main suite filter: ${main_filter}"
@@ -561,17 +571,218 @@ run_main_suite() {
 
   echo
   echo "Discovered ${#main_benches[@]} Criterion benchmarks; running one benchmark per process to bound RSS."
+  printf '%s\n' "${main_benches[@]}" > "${run_dir}/criterion-benches.txt"
   for bench in "${main_benches[@]}"; do
-    run_section \
-      "Criterion: ${bench}" \
-      env GITCOMET_PERF_SUPPRESS_MISSING_REAL_REPO_NOTICE=1 \
-      cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- --noplot \
-      "${main_criterion_args[@]}" --exact "${bench}"
-    emit_bench_summary "${bench}" "criterion"
+    echo
+    echo "==> Criterion: ${bench}"
+    if run_case criterion "${bench}" \
+      run_bench_binary --noplot "${main_criterion_args[@]}" --exact "${bench}"; then
+      emit_bench_summary "${bench}" "criterion"
+    else
+      case_failed_or_stop || return $?
+    fi
   done
 }
 
+run_bench_binary() {
+  # `cargo bench` runs the harness from the package directory with --bench.
+  (cd "${repo_root}/crates/gitcomet-ui-gpui" &&
+    env GITCOMET_PERF_SUPPRESS_MISSING_REAL_REPO_NOTICE=1 "${frozen_bench}" --bench "$@")
+}
+
+# Runs one measured case, logging its output and recording its outcome in
+# cases.jsonl. A crash or non-zero exit is recorded, never skipped silently.
+run_case() {
+  local section="$1"
+  local bench="$2"
+  shift 2
+  local slug="${bench//\//__}"
+  local log="${run_dir}/logs/${section}-${slug}.log"
+  local started_ms ended_ms status=0
+  started_ms="$(date +%s%3N)"
+  # One stream through one tee: two writers on one file overwrite each other.
+  set +e
+  "$@" 2>&1 | tee "${log}"
+  status=${PIPESTATUS[0]}
+  set -e
+  ended_ms="$(date +%s%3N)"
+  jq -nc \
+    --arg section "${section}" --arg bench "${bench}" --arg log "${log}" \
+    --argjson status "${status}" --argjson started_ms "${started_ms}" --argjson ended_ms "${ended_ms}" \
+    '{section: $section, bench: $bench, exit_status: $status, started_unix_ms: $started_ms,
+      ended_unix_ms: $ended_ms, log: $log}' >> "${run_dir}/cases.jsonl"
+  if [[ ${status} -ne 0 ]]; then
+    echo "Case failed with exit ${status}: ${section} ${bench} (log: ${log})" >&2
+  fi
+  return "${status}"
+}
+
+case_failed_or_stop() {
+  if [[ ${fail_fast} -eq 1 ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# Builds one Cargo target with the selected profile and copies the executable
+# into the run directory, so later edits or builds cannot change what runs.
+build_and_freeze() {
+  local name="$1"
+  shift
+  local frozen="${run_dir}/bin/${name}"
+  if [[ ${dry_run} -eq 1 ]]; then
+    run_cmd cargo build --locked --profile "${cargo_profile}" "$@" >&2
+    printf '%s\n' "${frozen}"
+    return 0
+  fi
+  local messages="${run_dir}/logs/build-${name}.jsonl"
+  echo "==> Build ${name} (${cargo_profile}): cargo build --locked --profile ${cargo_profile} $*" >&2
+  cargo build --locked --profile "${cargo_profile}" --message-format=json-render-diagnostics "$@" \
+    > "${messages}"
+  local built
+  built="$(jq -r --arg name "${name}" \
+    'select(.reason == "compiler-artifact" and .target.name == $name and .executable != null)
+     | .executable' "${messages}" | tail -n 1)"
+  if [[ -z "${built}" || ! -x "${built}" ]]; then
+    echo "Could not find the built executable for ${name} in ${messages}" >&2
+    return 1
+  fi
+  cp -p "${built}" "${frozen}"
+  jq -nc --arg name "${name}" --arg source "${built}" --arg frozen "${frozen}" \
+    --arg sha256 "$(sha256sum "${frozen}" | cut -d' ' -f1)" \
+    --arg cargo_args "$*" \
+    '{name: $name, source: $source, frozen: $frozen, sha256: $sha256, cargo_args: $cargo_args}' \
+    >> "${run_dir}/binaries.jsonl"
+  printf '%s\n' "${frozen}"
+}
+
+build_measurement_binaries() {
+  echo
+  echo "==> Build and freeze measuring executables (profile: ${cargo_profile})"
+  if [[ ${dry_run} -ne 1 ]]; then
+    mkdir -p "${run_dir}/bin" "${run_dir}/logs"
+    : > "${run_dir}/binaries.jsonl"
+  fi
+  if [[ ${run_main} -eq 1 ]]; then
+    frozen_bench="$(build_and_freeze performance \
+      -p gitcomet-ui-gpui --features benchmarks --bench performance)"
+  fi
+  if [[ ${run_idle} -eq 1 ]]; then
+    frozen_idle="$(build_and_freeze perf_idle_resource \
+      -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource)"
+  fi
+  if [[ ${run_launch} -eq 1 ]]; then
+    frozen_launch="$(build_and_freeze perf-app-launch -p gitcomet --bin perf-app-launch)"
+  fi
+  if [[ ${run_report} -eq 1 ]]; then
+    frozen_report="$(build_and_freeze perf_budget_report \
+      -p gitcomet-ui-gpui --bin perf_budget_report)"
+  fi
+}
+
+# Every selected scenario must have exited 0 and left fresh artifacts: a
+# Criterion estimate newer than the suite start, or a sidecar stamped with this
+# run's id. Anything else makes the run incomplete.
+write_manifest_and_verify() {
+  local selected="${run_dir}/selected.jsonl"
+  : > "${selected}"
+  local bench
+  if [[ ${run_main} -eq 1 && -f "${run_dir}/criterion-benches.txt" ]]; then
+    while IFS= read -r bench; do
+      jq -nc --arg bench "${bench}" --arg path "${criterion_root}/${bench}/new/estimates.json" \
+        '{section: "criterion", bench: $bench, artifact: $path}' >> "${selected}"
+    done < "${run_dir}/criterion-benches.txt"
+  fi
+  if [[ ${run_idle} -eq 1 ]]; then
+    for bench in "${idle_benches[@]}"; do
+      should_run_idle_bench "${bench}" || continue
+      jq -nc --arg bench "${bench}" --arg path "$(launch_sidecar_path "${bench}")" \
+        '{section: "idle", bench: $bench, artifact: $path}' >> "${selected}"
+    done
+  fi
+  if [[ ${run_launch} -eq 1 ]]; then
+    for bench in "${launch_benches[@]}"; do
+      jq -nc --arg bench "${bench}" --arg path "$(launch_sidecar_path "${bench}")" \
+        '{section: "launch", bench: $bench, artifact: $path}' >> "${selected}"
+    done
+  fi
+
+  local checked="${run_dir}/checked.jsonl"
+  : > "${checked}"
+  local line section artifact status problem
+  while IFS= read -r line; do
+    section="$(jq -r .section <<< "${line}")"
+    bench="$(jq -r .bench <<< "${line}")"
+    artifact="$(jq -r .artifact <<< "${line}")"
+    status="$(jq -r --arg section "${section}" --arg bench "${bench}" \
+      'select(.section == $section and .bench == $bench) | .exit_status' \
+      "${run_dir}/cases.jsonl" 2>/dev/null | tail -n 1)"
+    problem=""
+    if [[ -z "${status}" ]]; then
+      problem="not run"
+    elif [[ "${status}" != "0" ]]; then
+      problem="exited ${status}"
+    elif [[ ! -f "${artifact}" ]]; then
+      problem="missing artifact"
+    elif [[ "${artifact}" -ot "${run_start_stamp}" ]]; then
+      problem="stale artifact (older than suite start)"
+    elif [[ "${section}" != "criterion" ]] &&
+      ! jq -e --arg run "${GITCOMET_PERF_RUN_ID}" '.measurement.run_id == $run' "${artifact}" >/dev/null; then
+      problem="sidecar from another run"
+    elif [[ -f "${budget_summary}" ]]; then
+      # Structural budgets are deterministic witnesses of the work done
+      # (rows built, calls made); a failed one voids the timing beside it.
+      problem="$(jq -r --arg bench "${bench}" \
+        '[.structural[] | select(.bench == $bench and .status == "alert")
+          | "failed witness \(.metric) \(.expectation), observed \(.observed)"] | join("; ")' \
+        "${budget_summary}")"
+    fi
+    jq -c --arg problem "${problem}" '. + {problem: (if $problem == "" then null else $problem end)}' \
+      <<< "${line}" >> "${checked}"
+  done < "${selected}"
+
+  local complete
+  complete="$(jq -s 'length > 0 and all(.problem == null)' "${checked}")"
+  jq -n \
+    --arg run_id "${GITCOMET_PERF_RUN_ID}" \
+    --arg workload_profile "${profile}" \
+    --arg cargo_profile "${cargo_profile}" \
+    --arg source_revision "$(git -C "${repo_root}" rev-parse HEAD)" \
+    --arg patch_sha256 "$(git -C "${repo_root}" diff HEAD --binary | sha256sum | cut -d' ' -f1)" \
+    --arg criterion_root "${criterion_root}" \
+    --arg fresh_reference "${run_start_stamp}" \
+    --arg command "${suite_command}" \
+    --argjson complete "${complete}" \
+    --argjson launch_blocked "${launch_suite_environment_blocked}" \
+    --arg budget_summary "$([[ -f "${budget_summary}" ]] && echo "${budget_summary}")" \
+    --slurpfile binaries "${run_dir}/binaries.jsonl" \
+    --slurpfile scenarios "${checked}" \
+    --slurpfile cases "${run_dir}/cases.jsonl" \
+    '{version: 1, run_id: $run_id, workload_profile: $workload_profile,
+      cargo_profile: $cargo_profile, source_revision: $source_revision,
+      patch_sha256: $patch_sha256, criterion_root: $criterion_root,
+      fresh_reference: $fresh_reference, command: $command,
+      binaries: $binaries, scenarios: $scenarios, cases: $cases,
+      launch_environment_blocked: ($launch_blocked == 1),
+      budget_summary: $budget_summary,
+      complete: $complete}' > "${run_dir}/manifest.json"
+
+  manifest_written=1
+  jq -r 'select(.problem != null) | "  \(.section) \(.bench): \(.problem)"' "${checked}" >&2
+  [[ "${complete}" == "true" ]]
+}
+
 profile="full"
+cargo_profile="release"
+run_dir=""
+fail_fast=0
+incomplete_run_exit_code=4
+frozen_bench=""
+frozen_idle=""
+frozen_launch=""
+frozen_report=""
+budget_summary=""
+suite_command="$0 $*"
 criterion_root="target/criterion"
 fresh_reference=""
 launch_timeout_ms="30000"
@@ -605,6 +816,18 @@ while [[ $# -gt 0 ]]; do
     --profile)
       profile="$2"
       shift 2
+      ;;
+    --cargo-profile)
+      cargo_profile="$2"
+      shift 2
+      ;;
+    --run-dir)
+      run_dir="$2"
+      shift 2
+      ;;
+    --fail-fast)
+      fail_fast=1
+      shift
       ;;
     --criterion-root)
       criterion_root="$2"
@@ -694,7 +917,31 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
+# Absolute, so Criterion estimates and sidecars land in the same tree no
+# matter which directory a harness runs from.
+if [[ "${criterion_root}" != /* ]]; then
+  criterion_root="${repo_root}/${criterion_root}"
+fi
 export GITCOMET_PERF_CRITERION_ROOT="${criterion_root}"
+export CRITERION_HOME="${criterion_root}"
+if [[ -z "${run_dir}" ]]; then
+  run_dir="target/perf-runs/$(date -u +%Y%m%d-%H%M%SZ)"
+fi
+if [[ "${run_dir}" != /* ]]; then
+  run_dir="${repo_root}/${run_dir}"
+fi
+if [[ ${dry_run} -ne 1 ]]; then
+  if [[ -e "${run_dir}" ]]; then
+    echo "Run directory already exists; use a fresh one: ${run_dir}" >&2
+    exit 2
+  fi
+  mkdir -p "${run_dir}/logs"
+  : > "${run_dir}/cases.jsonl"
+  require_jq || exit 2
+fi
+budget_summary="${run_dir}/budget-summary.json"
+export GITCOMET_PERF_RUN_ID="${GITCOMET_PERF_RUN_ID:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N)}"
+export GITCOMET_PERF_CARGO_PROFILE="${cargo_profile}"
 
 if [[ -n "${summary_log_path}" ]]; then
   mkdir -p "$(dirname "${summary_log_path}")"
@@ -751,8 +998,46 @@ if [[ ${run_report} -eq 1 ]]; then
   build_report_args
 fi
 
+manifest_written=0
+finish_run() {
+  local status="${1:-$?}"
+  if [[ ${dry_run} -ne 1 && ${manifest_written} -eq 0 && -d "${run_dir}" ]]; then
+    write_manifest_and_verify || true
+    echo "Run stopped early (exit ${status}); manifest marks it incomplete: ${run_dir}/manifest.json" >&2
+  fi
+  return "${status}"
+}
+if [[ ${dry_run} -ne 1 ]]; then
+  run_start_stamp="${run_dir}/suite-start.stamp"
+  : > "${run_start_stamp}"
+  trap finish_run EXIT
+fi
+
+build_measurement_binaries
+
+record_environment() {
+  local output="$1"
+  local -a metadata_args=(--output "${output}" --cargo-profile "${cargo_profile}"
+    --features benchmarks --command "${suite_command}")
+  local name frozen
+  while IFS=$'\t' read -r name frozen; do
+    metadata_args+=(--binary "${name}=${frozen}")
+  done < <(jq -r '[.name, .frozen] | @tsv' "${run_dir}/binaries.jsonl")
+  python3 "${repo_root}/scripts/profiling/perf_metadata.py" "${metadata_args[@]}" ||
+    echo "warning: could not record ${output}" >&2
+}
+if [[ ${dry_run} -ne 1 ]]; then
+  # Machine state before and after: load, thermals and swap drift over a
+  # multi-hour suite, and a busy start is reason enough to rerun.
+  record_environment "${run_dir}/environment.json"
+  trap 'suite_exit=$?; record_environment "${run_dir}/environment-end.json"; finish_run "${suite_exit}"' EXIT
+fi
+
 echo "Running full performance suite from: ${repo_root}"
-echo "Perf profile: ${profile}"
+echo "Workload profile: ${profile}"
+echo "Cargo profile: ${cargo_profile}"
+echo "Run directory: ${run_dir}"
+echo "Run id: ${GITCOMET_PERF_RUN_ID}"
 echo "Using primary Criterion sidecar root: ${GITCOMET_PERF_CRITERION_ROOT}"
 if [[ ${run_report} -eq 1 ]]; then
   echo "Budget report search roots: ${report_criterion_roots[*]}"
@@ -803,11 +1088,17 @@ if [[ ${run_idle} -eq 1 ]]; then
     if ! should_run_idle_bench "${bench}"; then
       continue
     fi
-    run_section \
-      "Idle resource: ${bench}" \
-      cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- \
-      --bench "${bench}"
-    emit_bench_summary "${bench}" "idle"
+    if [[ ${dry_run} -eq 1 ]]; then
+      run_section "Idle resource: ${bench}" "${frozen_idle}" --bench "${bench}"
+      continue
+    fi
+    echo
+    echo "==> Idle resource: ${bench}"
+    if run_case idle "${bench}" "${frozen_idle}" --bench "${bench}"; then
+      emit_bench_summary "${bench}" "idle"
+    else
+      case_failed_or_stop || exit $?
+    fi
   done
 fi
 
@@ -816,17 +1107,26 @@ if [[ ${run_launch} -eq 1 ]]; then
 fi
 
 if [[ ${run_launch} -eq 1 ]]; then
-  verify_launch_sidecars
+  verify_launch_sidecars || case_failed_or_stop || exit $?
 fi
 
 if [[ ${run_report} -eq 1 ]]; then
   run_section \
     "Performance budget report" \
-    cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- \
+    "${frozen_report}" \
     "${report_args[@]}"
 fi
 
-if [[ ${dry_run} -ne 1 && ${run_launch} -eq 1 && ${launch_suite_environment_blocked} -eq 1 ]]; then
-  echo "App launch suite did not complete because perf-app-launch reported an environment blocker; returning exit ${app_launch_environment_blocker_exit_code} after report completion." >&2
-  exit "${app_launch_environment_blocker_exit_code}"
+if [[ ${dry_run} -ne 1 ]]; then
+  if write_manifest_and_verify; then
+    echo "Run complete: every selected scenario produced fresh results (${run_dir}/manifest.json)."
+  elif [[ ${launch_suite_environment_blocked} -eq 1 ]]; then
+    # A blocked launch suite is incomplete by construction; its own exit
+    # code tells callers to fix the environment rather than the build.
+    echo "App launch suite did not complete because perf-app-launch reported an environment blocker; returning exit ${app_launch_environment_blocker_exit_code} after report completion (${run_dir}/manifest.json)." >&2
+    exit "${app_launch_environment_blocker_exit_code}"
+  else
+    echo "Run INCOMPLETE: see ${run_dir}/manifest.json. Do not accept results from this run." >&2
+    exit "${incomplete_run_exit_code}"
+  fi
 fi

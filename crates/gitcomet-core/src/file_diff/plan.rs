@@ -275,6 +275,9 @@ impl<'a> PreparedReplacementLine<'a> {
     }
 }
 
+// Calls to `strsim::generic_levenshtein` with these wrappers need explicit type
+// args: on macOS, objc2's recursive `IntoIterator for &Retained<T>` impl
+// overflows inference (E0275).
 #[cfg(feature = "benchmarks")]
 pub(super) struct CharSlice<'a>(pub(super) &'a [char]);
 
@@ -1345,11 +1348,11 @@ pub(super) fn replacement_pair_cost_with_strsim(
     replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
         let old_trimmed_wrapper = CharSlice(old_trimmed);
         let new_trimmed_wrapper = CharSlice(new_trimmed);
-        u32::try_from(strsim::generic_levenshtein(
+        let distance = strsim::generic_levenshtein::<CharSlice<'_>, CharSlice<'_>, char, char>(
             &old_trimmed_wrapper,
             &new_trimmed_wrapper,
-        ))
-        .unwrap_or(u32::MAX)
+        );
+        u32::try_from(distance).unwrap_or(u32::MAX)
     })
 }
 

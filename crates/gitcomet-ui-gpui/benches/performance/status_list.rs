@@ -24,15 +24,23 @@ pub(crate) fn bench_status_list(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
     group.bench_function(BenchmarkId::from_parameter("unstaged_large"), |b| {
-        b.iter(|| {
-            unstaged_large.reset_runtime_state();
-            unstaged_large.run_window_step(0, window)
+        b.iter_custom(|iters| {
+            time_iterations_with_reset(
+                iters,
+                &mut unstaged_large,
+                StatusListFixture::reset_runtime_state,
+                |fixture| fixture.run_window_step(0, window),
+            )
         })
     });
     group.bench_function(BenchmarkId::from_parameter("staged_large"), |b| {
-        b.iter(|| {
-            staged_large.reset_runtime_state();
-            staged_large.run_window_step(0, window)
+        b.iter_custom(|iters| {
+            time_iterations_with_reset(
+                iters,
+                &mut staged_large,
+                StatusListFixture::reset_runtime_state,
+                |fixture| fixture.run_window_step(0, window),
+            )
         })
     });
     group.bench_function(

@@ -40,6 +40,7 @@ pub mod text_selection;
 pub mod text_selection_owner;
 pub mod text_truncation;
 pub mod theme;
+mod thread_cpu;
 pub mod tooltip;
 pub mod tooltip_host;
 pub mod ui_probe;

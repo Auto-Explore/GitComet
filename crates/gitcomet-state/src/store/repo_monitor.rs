@@ -372,19 +372,24 @@ impl RepoMonitorManager {
         let monitor_enabled_for_thread = Arc::clone(&monitor_enabled);
         let config = MonitorConfig::default();
         let leased = Arc::clone(&config.leased);
-        let join = thread::spawn(move || {
-            repo_monitor_thread(
-                repo_id,
-                workdir,
-                msg_tx,
-                monitor_rx,
-                monitor_tx_for_notify,
-                active_repo_id,
-                monitor_enabled_for_thread,
-                backend,
-                config,
-            )
-        });
+        // Named, or it shows under its creator's name (the store worker) in
+        // profiles and per-thread CPU samples.
+        let join = thread::Builder::new()
+            .name("gitcomet-watch".into())
+            .spawn(move || {
+                repo_monitor_thread(
+                    repo_id,
+                    workdir,
+                    msg_tx,
+                    monitor_rx,
+                    monitor_tx_for_notify,
+                    active_repo_id,
+                    monitor_enabled_for_thread,
+                    backend,
+                    config,
+                )
+            })
+            .expect("spawn repo monitor thread");
         entry.insert(RepoMonitorHandle {
             msg_tx: monitor_tx,
             join,
@@ -459,6 +464,12 @@ impl RepoMonitorManager {
         if let Some(handle) = self.handles.get(&repo_id) {
             handle.leased.store(leased, Ordering::Relaxed);
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn thread_name_for_test(&self, repo_id: RepoId) -> Option<String> {
+        let handle = self.handles.get(&repo_id)?;
+        handle.join.thread().name().map(str::to_owned)
     }
 
     #[cfg(test)]

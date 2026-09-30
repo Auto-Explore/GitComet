@@ -263,6 +263,7 @@ mod repo_open;
 mod repository_views;
 mod reveal_commit;
 pub(crate) mod rows;
+pub(crate) mod scenario_driver;
 pub(crate) mod settings_window;
 mod shell_policy;
 pub(crate) mod shortcut_labels;

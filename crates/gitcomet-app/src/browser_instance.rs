@@ -887,8 +887,10 @@ mod tests {
         assert!(!descriptor_path.exists());
 
         drop(claim);
+        // Not ZERO: a child spawned by a concurrent test inherits the lock fd
+        // until exec, so the released flock can briefly still read contended.
         let StartResult::Primary(primary) =
-            start_or_forward_at(&descriptor_path, request, Duration::ZERO)
+            start_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
                 .expect("reclaim released lock")
         else {
             panic!("no primary exists to forward to");

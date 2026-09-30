@@ -26,6 +26,7 @@ where
     let mut strict = strict_from_env();
     let mut skip_missing = false;
     let mut fresh_reference = None;
+    let mut summary_json = None;
 
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -48,6 +49,12 @@ where
                     .ok_or_else(|| "--fresh-reference requires a path argument".to_string())?;
                 fresh_reference = Some(PathBuf::from(value));
             }
+            "--summary-json" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--summary-json requires a path argument".to_string())?;
+                summary_json = Some(PathBuf::from(value));
+            }
             "--help" | "-h" => {
                 return Ok((
                     CliParseResult::Help,
@@ -56,6 +63,7 @@ where
                         strict,
                         skip_missing,
                         fresh_reference,
+                        summary_json,
                     },
                 ));
             }
@@ -70,6 +78,7 @@ where
             strict,
             skip_missing,
             fresh_reference,
+            summary_json,
         },
     ))
 }
@@ -87,5 +96,5 @@ pub(crate) fn is_truthy(value: &str) -> bool {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- [--criterion-root PATH]... [--strict] [--skip-missing] [--fresh-reference PATH]"
+    "Usage: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- [--criterion-root PATH]... [--strict] [--skip-missing] [--fresh-reference PATH] [--summary-json PATH]"
 }

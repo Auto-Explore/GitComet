@@ -333,6 +333,7 @@ impl DetailsPaneView {
         });
 
         let commit_message_scroll = ScrollHandle::new();
+        let commit_scroll = ScrollHandle::new();
         let commit_message_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
@@ -349,11 +350,16 @@ impl DetailsPaneView {
         });
 
         let commit_details_message_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions::selectable_multiline(),
                 window,
                 cx,
-            )
+            );
+            // The message scrolls inside a capped container. Without its
+            // handle the input treats all of its height as visible and shapes
+            // every line of a long message when a commit is selected.
+            input.set_vertical_scroll_handle(Some(commit_scroll.clone()));
+            input
         });
         let commit_details_message_link_menu = cx.new(|_cx| {
             components::CommitLinkMenu::new(
@@ -456,7 +462,7 @@ impl DetailsPaneView {
             range_files_scroll: UniformListScrollHandle::default(),
             worktree_files_scroll: UniformListScrollHandle::default(),
             commit_message_scroll,
-            commit_scroll: ScrollHandle::new(),
+            commit_scroll,
             commit_message_input,
             commit_details_message_input,
             commit_details_message_link_menu,

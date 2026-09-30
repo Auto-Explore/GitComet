@@ -4,8 +4,8 @@
 # internal names, or GitComet's own identity. Never raise a count to admit new
 # product text: read it from the identity instead.
 crates/gitcomet-app/src/cli/compat.rs identifier 3 argv encoding markers and scratch directory shared with git tool shims
-crates/gitcomet-app/src/crashlog.rs display-name 6 crash log section headers are a parsed file format
-crates/gitcomet-app/src/crashlog.rs identifier 3 crash report path encoding markers and issue template file name
+crates/gitcomet-app/src/crashlog.rs display-name 8 crash log section headers are a parsed file format
+crates/gitcomet-app/src/crashlog.rs identifier 4 crash report path encoding markers, issue template file name, and thread name
 crates/gitcomet-app/src/difftool_mode.rs identifier 1 temporary file prefix
 crates/gitcomet-app/src/launch.rs identifier 1 GitComet's default app icon, used unless the identity supplies one
 crates/gitcomet-core/src/auth/askpass.rs identifier 7 askpass helper script and prompt file names
@@ -27,9 +27,12 @@ crates/gitcomet-git-gix/src/repo/submodules.rs identifier 1 shared per-repo subm
 crates/gitcomet-git-gix/src/repo/text_decode.rs identifier 1 temporary file prefix
 crates/gitcomet-git-gix/src/util/trace2.rs identifier 1 Git trace2 temporary file prefix
 crates/gitcomet-state/src/session/mod.rs identifier 2 session path encoding markers (file format)
-crates/gitcomet-state/src/store/executor.rs identifier 5 worker thread names and diagnostic prefix
+crates/gitcomet-state/src/store/effects/history_authors.rs identifier 1 worker thread name (profiler attribution)
+crates/gitcomet-state/src/store/effects/indexed_history.rs identifier 1 worker thread name (profiler attribution)
+crates/gitcomet-state/src/store/executor.rs identifier 6 worker thread names and diagnostic prefix
+crates/gitcomet-state/src/store/mod.rs identifier 2 store and repo-load worker thread names (profiler attribution)
 crates/gitcomet-state/src/store/repo_load_trace.rs identifier 1 diagnostic prefix
-crates/gitcomet-state/src/store/repo_monitor.rs identifier 2 diagnostic prefix and thread name
+crates/gitcomet-state/src/store/repo_monitor.rs identifier 3 diagnostic prefix and thread names
 crates/gitcomet-state/src/store/send_diagnostics.rs identifier 2 diagnostic prefixes
 crates/gitcomet-ui-gpui/src/assets.rs identifier 8 asset keys of the branding artwork, which the identity may replace
 crates/gitcomet-ui-gpui/src/bin/perf_budget_report/cli.rs identifier 1 benchmark tool name

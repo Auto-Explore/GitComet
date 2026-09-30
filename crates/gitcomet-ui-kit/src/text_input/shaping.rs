@@ -220,6 +220,17 @@ pub fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64,
     hash_shaping_slice(text, max_bytes)
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static WRAPPED_LINES_SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Soft-wrapped lines this thread shaped since the last call.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn take_wrapped_lines_shaped_for_tests() -> usize {
+    WRAPPED_LINES_SHAPED.with(|shaped| shaped.replace(0))
+}
+
 /// Shape one soft-wrapped source line.
 ///
 /// Unlike the plain path there is no cache here: `WrappedLine` shaping is
@@ -233,6 +244,8 @@ pub(super) fn shape_wrapped_line(
     tab_size: usize,
     window: &mut Window,
 ) -> WrappedLine {
+    #[cfg(any(test, feature = "test-support"))]
+    WRAPPED_LINES_SHAPED.with(|shaped| shaped.set(shaped.get() + 1));
     let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
     let owned_runs;
     let runs = if let Some(precomputed_runs) = precomputed_runs {

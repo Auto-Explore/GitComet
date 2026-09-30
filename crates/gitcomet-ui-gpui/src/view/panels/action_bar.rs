@@ -268,7 +268,6 @@ impl ActionBarView {
             repo.status_cache_rev().hash(&mut hasher);
             // The historical-browse badge keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
-            repo.loads_in_flight.any_in_flight().hash(&mut hasher);
             // Global back/forward buttons enable/disable with nav stack position.
             repo.navigation.main_history.cursor.hash(&mut hasher);
             repo.navigation.main_history.entries.len().hash(&mut hasher);

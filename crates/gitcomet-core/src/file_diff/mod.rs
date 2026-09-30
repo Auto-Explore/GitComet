@@ -1,10 +1,11 @@
 use crate::domain::SharedLineText;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
+use std::marker::PhantomData;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;

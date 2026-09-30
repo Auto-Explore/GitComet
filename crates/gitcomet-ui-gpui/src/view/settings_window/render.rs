@@ -68,7 +68,7 @@ impl Render for SettingsWindowView {
         let content = if let Some(gate) = gate {
             div().flex_1().min_h(px(0.0)).child(gate).into_any_element()
         } else if show_overflow_probe {
-            self.overflow_probe_content(theme).into_any_element()
+            self.overflow_probe_content(theme, cx).into_any_element()
         } else {
             match self.current_view {
                 SettingsView::Root => self.root_page(theme, cx),

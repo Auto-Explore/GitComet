@@ -13,6 +13,7 @@ pub enum CopySource {
     HookActivity,
     ErrorDetails,
     ContextMenu,
+    EnvironmentDetails,
 }
 
 impl CopySource {
@@ -32,6 +33,7 @@ impl CopySource {
             Self::HookActivity => "hook-activity",
             Self::ErrorDetails => "error-details",
             Self::ContextMenu => "context-menu",
+            Self::EnvironmentDetails => "environment-details",
         }
     }
 }

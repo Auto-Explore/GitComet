@@ -446,6 +446,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
 
     let store = AppStore {
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
+        publication: Default::default(),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -469,6 +470,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
     );
     let store = AppStore {
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
+        publication: Default::default(),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -500,7 +502,8 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         super::worker_channel::StoreWorkerCommand::Repository { .. } => {
             panic!("expected shutdown command, got repository read")
         }
-        super::worker_channel::StoreWorkerCommand::Msg(_) => {
+        super::worker_channel::StoreWorkerCommand::Msg(_)
+        | super::worker_channel::StoreWorkerCommand::Traced(..) => {
             panic!("expected shutdown command, got message command")
         }
         #[cfg(any(test, feature = "test-support"))]

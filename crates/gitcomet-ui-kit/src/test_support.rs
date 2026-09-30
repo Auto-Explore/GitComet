@@ -17,6 +17,11 @@ pub fn redraw(cx: &mut gpui::VisualTestContext) {
     });
 }
 
+/// Soft-wrapped text-input lines this thread shaped since the last call.
+pub fn take_wrapped_lines_shaped() -> usize {
+    crate::text_input::take_wrapped_lines_shaped_for_tests()
+}
+
 pub fn lock_clipboard_test() -> std::sync::MutexGuard<'static, ()> {
     static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -211,9 +216,9 @@ pub mod source_guards {
             let is_test_source = relative
                 .components()
                 .any(|component| component.as_os_str() == "tests")
-                || relative
-                    .file_name()
-                    .is_some_and(|name| name == "smoke_tests.rs" || name == "test_support.rs");
+                || relative.file_name().is_some_and(|name| {
+                    name == "tests.rs" || name == "smoke_tests.rs" || name == "test_support.rs"
+                });
             if allowed.contains(&relative_str.as_str()) || is_test_source {
                 continue;
             }
