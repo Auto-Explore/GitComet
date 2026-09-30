@@ -221,6 +221,25 @@ impl CommandOutput {
         }
     }
 
+    /// One successful output for several steps run as one command: each
+    /// stream is the non-empty steps' output, in order, one per line.
+    pub fn combine(command: impl Into<String>, outputs: &[CommandOutput]) -> Self {
+        let join = |stream: fn(&CommandOutput) -> &str| {
+            outputs
+                .iter()
+                .map(|output| stream(output).trim_end())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        Self {
+            command: command.into(),
+            stdout: join(|output| &output.stdout),
+            stderr: join(|output| &output.stderr),
+            exit_code: Some(0),
+        }
+    }
+
     pub fn combined(&self) -> String {
         let mut out = String::new();
         if !self.stdout.trim().is_empty() {
@@ -2272,6 +2291,24 @@ mod tests {
     use crate::test_support::UnconfiguredRepository;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn combined_steps_join_non_empty_streams_in_order() {
+        let step = |stdout: &str, stderr: &str| CommandOutput {
+            command: "step".into(),
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+            exit_code: Some(0),
+        };
+        let combined = CommandOutput::combine(
+            "both",
+            &[step("one\n", ""), step("", "warn\n"), step("two", "  \n")],
+        );
+        assert_eq!(combined.command, "both");
+        assert_eq!(combined.stdout, "one\ntwo");
+        assert_eq!(combined.stderr, "warn");
+        assert_eq!(combined.exit_code, Some(0));
+    }
 
     #[test]
     fn history_ref_filters_match_names_prefixes_and_globs() {

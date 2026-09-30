@@ -274,9 +274,9 @@ impl GixRepo {
                 path.display()
             )))
         } else {
-            Ok(combine_command_outputs(
+            Ok(CommandOutput::combine(
                 format!("Load submodule {}", path.display()),
-                outputs,
+                &outputs,
             ))
         }
     }
@@ -323,9 +323,9 @@ impl GixRepo {
         let stage_output =
             run_git_with_output(stage_cmd, &format!("git add -- {}", path.display()))?;
 
-        Ok(combine_command_outputs(
+        Ok(CommandOutput::combine(
             format!("Change submodule pointer {}", path.display()),
-            vec![checkout_output, stage_output],
+            &[checkout_output, stage_output],
         ))
     }
 
@@ -1838,29 +1838,7 @@ fn untrusted_local_submodule_error(source: &SubmoduleTrustTarget, action: &str) 
 }
 
 fn combine_submodule_update_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
-    combine_command_outputs(
-        "git submodule update --init --recursive".to_string(),
-        outputs,
-    )
-}
-
-fn combine_command_outputs(command: String, outputs: Vec<CommandOutput>) -> CommandOutput {
-    CommandOutput {
-        command,
-        stdout: outputs
-            .iter()
-            .map(|output| output.stdout.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        stderr: outputs
-            .iter()
-            .map(|output| output.stderr.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        exit_code: Some(0),
-    }
+    CommandOutput::combine("git submodule update --init --recursive", &outputs)
 }
 
 fn repo_workdir_for_submodule_trust(repo: &gix::Repository) -> &Path {
