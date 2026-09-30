@@ -42,9 +42,9 @@ pub(crate) fn build_report_markdown(
         let _ = writeln!(markdown, "### Timing Budgets");
         let _ = writeln!(
             markdown,
-            "| Benchmark | Threshold | Mean | Mean 95% upper | Status |"
+            "| Benchmark | Kind | Threshold | Mean | Mean 95% upper | Status |"
         );
-        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- |");
+        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- | --- |");
 
         for result in timing_results {
             let mean = result
@@ -57,8 +57,9 @@ pub(crate) fn build_report_markdown(
                 .unwrap_or_else(|| "n/a".to_string());
             let _ = writeln!(
                 markdown,
-                "| `{}` | <= {} | {} | {} | {} {} |",
+                "| `{}` | {} | <= {} | {} | {} | {} {} |",
                 result.spec.label,
+                measurement_kind_for_bench(result.spec.label).as_str(),
                 format_duration_ns(result.spec.threshold_ns),
                 mean,
                 mean_upper,
@@ -73,9 +74,9 @@ pub(crate) fn build_report_markdown(
         let _ = writeln!(markdown, "### Structural Budgets");
         let _ = writeln!(
             markdown,
-            "| Benchmark | Metric | Expectation | Observed | Status |"
+            "| Benchmark | Kind | Metric | Expectation | Observed | Status |"
         );
-        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- |");
+        let _ = writeln!(markdown, "| --- | --- | --- | --- | --- | --- |");
 
         for result in structural_results {
             let observed = result
@@ -84,8 +85,9 @@ pub(crate) fn build_report_markdown(
                 .unwrap_or_else(|| "n/a".to_string());
             let _ = writeln!(
                 markdown,
-                "| `{}` | `{}` | {} | {} | {} {} |",
+                "| `{}` | {} | `{}` | {} | {} | {} {} |",
                 result.spec.bench,
+                measurement_kind_for_bench(result.spec.bench).as_str(),
                 result.spec.metric,
                 result
                     .spec
@@ -194,4 +196,30 @@ pub(crate) fn append_github_summary(markdown: &str) -> Result<(), String> {
 
 pub(crate) fn emit_github_warning(message: &str) {
     println!("::warning title=View performance budget::{message}");
+}
+
+/// Structural verdicts (deterministic work witnesses) as JSON, so suite
+/// drivers can refuse runs where one failed.
+pub(crate) fn write_summary_json(
+    path: &Path,
+    structural_results: &[StructuralBudgetResult],
+) -> Result<(), String> {
+    let status = |status: BudgetStatus| match status {
+        BudgetStatus::WithinBudget => "ok",
+        BudgetStatus::Alert => "alert",
+        BudgetStatus::Skipped => "skipped",
+    };
+    let summary = serde_json::json!({
+        "structural": structural_results.iter().map(|result| serde_json::json!({
+            "bench": result.spec.bench,
+            "metric": result.spec.metric,
+            "status": status(result.status),
+            "expectation": result.spec.comparator.format_expectation(result.spec.threshold),
+            "observed": result.observed,
+        })).collect::<Vec<_>>(),
+    });
+    let mut content = serde_json::to_vec_pretty(&summary)
+        .map_err(|err| format!("failed to serialize budget summary: {err}"))?;
+    content.push(b'\n');
+    fs::write(path, content).map_err(|err| format!("failed to write {}: {err}", path.display()))
 }

@@ -224,7 +224,8 @@ you misspell is still an error — the file is rejected rather than half-applied
 - `diff`: `added`, `removed`, `modified`; each contains `foreground`,
   `background`, `word_background`, and `focused_background`
 - `tooltip`: `background`, `foreground`
-- `scrollbar`: `thumb`, `thumb_hover`, `thumb_pressed`
+- `scrollbar`: `thumb`, `thumb_hover`, `thumb_pressed` (accepted for compatibility;
+  dragged thumbs use `accent.foreground`)
 - `notice`: `background`, `border`, `foreground`, `secondary` — inline notices
   that ask for a decision, such as "File changed on disk". `foreground` colors
   the title and `secondary` the explanation beside it

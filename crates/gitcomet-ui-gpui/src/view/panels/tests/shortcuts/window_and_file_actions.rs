@@ -1,65 +1,7 @@
 use super::*;
 
 #[gpui::test]
-fn ui_scale_picker_selection_updates_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = RepoId(707);
-    let commit_id = CommitId("1122334455667788".into());
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_ui_scale_picker",
-        std::process::id()
-    ));
-    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
-
-    apply_state(cx, &view, app_state_with_active_repo(repo));
-    cx.update(|window, app| {
-        view.update(app, |this, cx| {
-            this.popover_host.update(cx, |host, cx| {
-                host.open_popover_at(
-                    PopoverKind::UiScalePicker,
-                    point(px(72.0), px(72.0)),
-                    window,
-                    cx,
-                );
-            });
-        });
-    });
-    draw_and_drain_test_window(cx);
-
-    assert!(
-        popover_is_open(cx, &view),
-        "expected opening the UI scale picker to show a popover"
-    );
-    assert!(
-        cx.debug_bounds("context_menu_125").is_some(),
-        "expected the UI scale picker to expose a 125% menu item"
-    );
-
-    let zoom_125_bounds = cx
-        .debug_bounds("context_menu_125")
-        .expect("expected the 125% zoom entry to be rendered");
-    cx.simulate_click(zoom_125_bounds.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
-
-    let zoom_percent = cx.update(|_window, app| view.read(app).ui_scale_percent);
-    assert_eq!(
-        zoom_percent, 125,
-        "expected selecting 125% from the zoom picker to update the UI scale"
-    );
-    assert!(
-        !popover_is_open(cx, &view),
-        "expected the UI scale picker to close after selecting a zoom level"
-    );
-}
-
-#[gpui::test]
-fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
-    cx: &mut gpui::TestAppContext,
-) {
+fn bottom_status_bar_omits_global_zoom_control(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -76,54 +18,8 @@ fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
 
-    assert!(
-        cx.debug_bounds("bottom_status_bar_zoom_icon").is_some(),
-        "expected the bottom status bar zoom icon to be visible at the default scale"
-    );
-
-    let default_button_width = debug_width(cx, "bottom_status_bar_zoom");
-    assert!(
-        default_button_width < 40.0,
-        "expected the default zoom button to stay icon-only (width={default_button_width})"
-    );
-
-    let zoom_button_bounds = cx
-        .debug_bounds("bottom_status_bar_zoom")
-        .expect("expected bottom status bar zoom button bounds");
-    cx.simulate_click(zoom_button_bounds.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
-
-    assert!(
-        popover_is_open(cx, &view),
-        "expected clicking the bottom status bar zoom button to open the UI scale picker"
-    );
-    assert_context_menu_entry_fills_popover_width(cx, "context_menu_125");
-
-    let zoom_125_bounds = cx
-        .debug_bounds("context_menu_125")
-        .expect("expected the 125% zoom entry to be rendered");
-    cx.simulate_click(zoom_125_bounds.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
-
-    let zoom_percent = cx.update(|_window, app| view.read(app).ui_scale_percent);
-    assert_eq!(
-        zoom_percent, 125,
-        "expected selecting 125% from the zoom button picker to update the UI scale"
-    );
-    assert!(
-        !popover_is_open(cx, &view),
-        "expected the UI scale picker to close after selecting a zoom level from the bottom bar"
-    );
-    assert!(
-        cx.debug_bounds("bottom_status_bar_zoom_icon").is_some(),
-        "expected the bottom status bar zoom icon to remain visible after changing zoom"
-    );
-
-    let zoomed_button_width = debug_width(cx, "bottom_status_bar_zoom");
-    assert!(
-        zoomed_button_width > default_button_width + 10.0,
-        "expected the non-default zoom button to grow to include its percent label (default={default_button_width}, zoomed={zoomed_button_width})"
-    );
+    assert!(cx.debug_bounds("bottom_status_bar_zoom").is_none());
+    assert!(cx.debug_bounds("bottom_status_bar_zoom_icon").is_none());
 }
 
 /// The bottom bar only exists in full chrome, so every branding test needs an

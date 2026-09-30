@@ -11,8 +11,7 @@ pub(super) struct SettingsRuntimeInfo {
     pub(super) git: GitRuntimeInfo,
     /// `None` until the background probe finishes.
     pub(super) signing_tools: Option<SigningToolsState>,
-    pub(super) app_version_display: SharedString,
-    pub(super) operating_system: SharedString,
+    pub(super) environment: gitcomet_core::environment::EnvironmentSnapshot,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +49,21 @@ pub(super) enum TerminalProgramInputTarget {
 }
 
 impl SettingsWindowView {
+    pub(super) fn copy_environment_details(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        crate::environment::refresh_current(window, cx);
+        self.runtime_info.environment = cx.global::<crate::environment::Environment>().0.clone();
+        crate::clipboard::write_text(
+            cx,
+            self.runtime_info.environment.summary(),
+            crate::clipboard::CopySource::EnvironmentDetails,
+        );
+        cx.notify();
+    }
+
     pub(super) fn selected_git_executable_path(&self) -> Option<std::path::PathBuf> {
         match self.git_executable_mode {
             GitExecutableMode::SystemPath => None,
@@ -83,9 +97,8 @@ impl SettingsWindowView {
             }
         }
 
-        let signing_tools = self.runtime_info.signing_tools.take();
-        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime.clone());
-        self.runtime_info.signing_tools = signing_tools;
+        self.runtime_info.update_git(runtime.clone());
+        crate::environment::refresh_git(cx);
         // A different Git resolves gpg and ssh-keygen with a different PATH.
         self.cancel_signing_tools_probe();
         self.persist_preferences(cx);
@@ -123,7 +136,7 @@ impl SettingsWindowView {
         runtime: GitRuntimeState,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime);
+        self.runtime_info.update_git(runtime);
         self.refresh_signing_tools(cx);
         cx.notify();
     }
@@ -163,34 +176,23 @@ impl SettingsWindowView {
 }
 
 impl SettingsRuntimeInfo {
+    pub(super) fn update_git(&mut self, runtime: GitRuntimeState) {
+        self.environment.git_version = runtime.version_output().map(str::to_owned);
+        self.git = git_runtime_info_from_state(runtime);
+    }
+
     pub(super) fn detect() -> Self {
         Self::from_runtime(current_git_runtime())
     }
 
     pub(super) fn from_runtime(runtime: GitRuntimeState) -> Self {
+        let mut environment = gitcomet_core::environment::cached();
+        environment.git_version = runtime.version_output().map(str::to_owned);
         Self {
             git: git_runtime_info_from_state(runtime),
             signing_tools: Some(SigningToolsState::default()),
-            app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
-            operating_system: format!(
-                "{} ({})",
-                os_display_name(std::env::consts::OS),
-                std::env::consts::ARCH
-            )
-            .into(),
+            environment,
         }
-    }
-}
-
-/// Human-readable OS name for the Environment card ("windows" reads like a
-/// debug dump; "Windows" reads like a product).
-pub(super) fn os_display_name(os: &str) -> &str {
-    match os {
-        "windows" => "Windows",
-        "macos" => "macOS",
-        "linux" => "Linux",
-        "freebsd" => "FreeBSD",
-        other => other,
     }
 }
 

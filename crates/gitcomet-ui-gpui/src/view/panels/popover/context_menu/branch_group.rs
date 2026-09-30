@@ -41,6 +41,18 @@ pub(super) fn model(
     ));
     items.push(ContextMenuItem::Separator);
 
+    let pinned = this.is_sidebar_item_pinned(repo_id, &collapse_key);
+    items.push(ContextMenuItem::Entry {
+        label: if pinned { "Unpin group" } else { "Pin group" }.into(),
+        icon: Some("icons/pin.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ToggleBranchGroupPin {
+            repo_id,
+            group_key: collapse_key.clone(),
+        }),
+    });
+
     items.push(ContextMenuItem::Entry {
         label: if collapsed { "Expand" } else { "Collapse" }.into(),
         icon: Some(
@@ -170,7 +182,7 @@ fn for_each_member(
         return;
     };
     let needle = format!("{path}/");
-    let filter = this.active_branch_filter().unwrap_or_default();
+    let search = &this.branch_search;
 
     match section {
         BranchSection::Local => {
@@ -178,8 +190,7 @@ fn for_each_member(
                 return;
             };
             for branch in branches.iter() {
-                if is_group_member(&branch.name, path, &needle)
-                    && branch_sidebar::branch_matches_raw_filter(&branch.name, filter)
+                if is_group_member(&branch.name, path, &needle) && search.matches_ref(&branch.name)
                 {
                     visit(&branch.name);
                 }
@@ -195,11 +206,7 @@ fn for_each_member(
             for branch in branches.iter() {
                 if branch.remote == remote
                     && is_group_member(&branch.name, path, &needle)
-                    && branch_sidebar::remote_branch_matches_raw_filter(
-                        remote,
-                        &branch.name,
-                        filter,
-                    )
+                    && search.matches_remote(remote, &branch.name)
                 {
                     visit(&branch.name);
                 }

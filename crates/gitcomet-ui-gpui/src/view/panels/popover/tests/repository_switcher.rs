@@ -55,7 +55,12 @@ fn repository_switcher_opens_the_repo_picker_with_a_fresh_search_input(
         ));
 
         let host = popover_host.read(app);
-        assert!(matches!(host.popover, Some(PopoverKind::RepoPicker)));
+        assert!(matches!(
+            host.popover,
+            Some(PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All
+            })
+        ));
 
         let input = host
             .repo_picker_search_input

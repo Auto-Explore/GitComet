@@ -11,6 +11,182 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
+#[test]
+fn git_reprobe_preserves_system_and_graphics_environment() {
+    use gitcomet_core::environment::{GraphicsDetails, Rendering};
+    let mut info = SettingsRuntimeInfo::from_runtime(GitRuntimeState {
+        preference: GitExecutablePreference::SystemPath,
+        availability: GitExecutableAvailability::Checking,
+    });
+    info.environment.system.cpu_model = Some("Recorded CPU".into());
+    info.environment.graphics.insert(
+        1,
+        GraphicsDetails {
+            device_name: Some("llvmpipe".into()),
+            rendering: Rendering::Software,
+            ..Default::default()
+        },
+    );
+    let system = info.environment.system.clone();
+    let graphics = info.environment.graphics.clone();
+    for availability in [
+        GitExecutableAvailability::Checking,
+        GitExecutableAvailability::Available {
+            version_output: "git version 2.51.0".into(),
+        },
+        GitExecutableAvailability::Unavailable {
+            detail: "not found".into(),
+        },
+    ] {
+        let runtime = GitRuntimeState {
+            preference: GitExecutablePreference::SystemPath,
+            availability,
+        };
+        info.update_git(runtime.clone());
+        assert_eq!(info.environment.system, system);
+        assert_eq!(info.environment.graphics, graphics);
+        assert_eq!(
+            info.environment.git_version.as_deref(),
+            runtime.version_output()
+        );
+    }
+}
+
+#[gpui::test]
+fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    view.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::Environment, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        view.update(cx, |settings, cx| {
+            // Simulate a stale cache; copying must capture the open window.
+            settings.runtime_info.environment.graphics.clear();
+            settings.copy_environment_details(window, cx);
+            assert_eq!(settings.runtime_info.environment.graphics.len(), 1);
+            assert_eq!(
+                crate::clipboard::read_text(cx),
+                Some(settings.runtime_info.environment.summary())
+            );
+        });
+        let _ = window.draw(cx);
+    });
+    for row in [
+        "settings_window_build",
+        "settings_window_git",
+        "settings_window_os",
+        "settings_window_kernel",
+        "settings_window_architecture",
+        "settings_window_cpu",
+        "settings_window_processors",
+        "settings_window_memory",
+        "settings_window_gpu_1",
+        "settings_window_backend_1",
+        "settings_window_rendering_1",
+    ] {
+        assert!(cx.debug_bounds(row).is_some(), "missing {row} row");
+    }
+}
+
+fn open_environment_page(
+    cx: &mut gpui::TestAppContext,
+) -> (Entity<SettingsWindowView>, &mut gpui::VisualTestContext) {
+    let (view, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    cx.update(|_, app| {
+        let mut environment = app.global::<crate::environment::Environment>().0.clone();
+        environment.system.cpu_model = Some("Recorded CPU 9000".into());
+        app.set_global(crate::environment::Environment(environment));
+    });
+    view.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::Environment, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    (view, cx)
+}
+
+fn clipboard_text(cx: &mut gpui::VisualTestContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui::test]
+fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (_view, cx) = open_environment_page(cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+
+    let drag = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let value = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` bounds"));
+        let start = point(value.left() + px(1.0), value.center().y);
+        let end = point(value.right() - px(1.0), value.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+    };
+
+    drag(cx, "settings_window_cpu_value");
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("Recorded CPU 9000"));
+
+    // Rows in the graphics sections carry an index suffix.
+    drag(cx, "settings_window_rendering_1_value");
+    cx.simulate_keystrokes("secondary-c");
+    let rendering = clipboard_text(cx).expect("copied rendering value");
+    assert!(
+        !rendering.is_empty() && rendering != "Recorded CPU 9000",
+        "{rendering:?}"
+    );
+}
+
+#[gpui::test]
+fn environment_copy_button_sits_compact_in_the_card_header(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (view, cx) = open_environment_page(cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+
+    let bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` bounds"))
+    };
+    let card = bounds(cx, "settings_window_environment");
+    let button = bounds(cx, "settings_window_copy_environment");
+    let first_row = bounds(cx, "settings_window_build");
+    assert!(
+        button.size.width < card.size.width / 4.0,
+        "button spans the card: button={button:?}, card={card:?}"
+    );
+    assert!(
+        button.right() <= card.right() && card.right() - button.right() < px(16.0),
+        "button is not at the trailing edge: button={button:?}, card={card:?}"
+    );
+    assert!(
+        button.top() - card.top() < px(8.0) && button.bottom() <= first_row.top(),
+        "button is not in the header: button={button:?}, card={card:?}, row={first_row:?}"
+    );
+
+    cx.simulate_mouse_move(button.center(), None, Modifiers::default());
+    cx.simulate_click(button.center(), Modifiers::default());
+    cx.run_until_parked();
+    let summary = view.update(cx, |settings, _| {
+        settings.runtime_info.environment.summary()
+    });
+    assert_eq!(clipboard_text(cx), Some(summary));
+}
+
 fn wait_for_store(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
@@ -1589,10 +1765,11 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
         settings.ui_font_family = crate::bundled_fonts::LILEX_FONT_FAMILY.to_string();
-        settings.runtime_info.app_version_display =
+        settings.runtime_info.environment.app_version =
             "GitComet v0.0.0-overflow-regression-build".into();
-        settings.runtime_info.operating_system =
-            "linux (gnu-linux-overflow-regression-platform, x86_64-extra-build-metadata)".into();
+        settings.runtime_info.environment.system.operating_system = Some(
+            "linux (gnu-linux-overflow-regression-platform, x86_64-extra-build-metadata)".into(),
+        );
         settings.runtime_info.git.version_display =
             "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
         settings.runtime_info.git.compatibility = GitCompatibility::Supported;
@@ -1729,11 +1906,11 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
         settings.ui_font_family = synthetic_fonts[0].clone();
         settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
         settings.git_executable_mode = GitExecutableMode::Custom;
-        settings.runtime_info.app_version_display =
+        settings.runtime_info.environment.app_version =
             "GitComet v0.0.0-overflow-regression-build-with-extra-layout-metadata".into();
-        settings.runtime_info.operating_system =
-            "linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
-                .into();
+        settings.runtime_info.environment.system.operating_system =
+            Some("linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
+                .into());
         settings.runtime_info.git.version_display =
             "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
         settings.runtime_info.git.compatibility = GitCompatibility::Unknown;
@@ -1853,6 +2030,40 @@ fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestA
             "expected `{selector}` in debug bounds"
         );
     }
+}
+
+#[gpui::test]
+fn hidden_window_controls_keep_only_close_in_settings_chrome(cx: &mut gpui::TestAppContext) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        crate::window_controls::set_current(app, crate::window_controls::WindowControlsMode::Hide);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(settings_cx.debug_bounds("settings_window_min").is_none());
+    assert!(settings_cx.debug_bounds("settings_window_max").is_none());
+    assert!(settings_cx.debug_bounds("settings_window_close").is_some());
 }
 
 #[gpui::test]
@@ -3051,9 +3262,30 @@ fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::
         let _ = window.draw(app);
     });
 
-    let list_bounds = settings_cx
+    let initial_list_bounds = settings_cx
         .debug_bounds("settings_window_ui_font_list_container")
         .expect("expected UI font list bounds");
+    let scroll_bounds = settings_cx
+        .debug_bounds("settings_window_scroll")
+        .expect("expected settings scroll bounds");
+    let list_center = initial_list_bounds.center();
+    if list_center.y >= scroll_bounds.bottom() {
+        let scroll_delta = list_center.y - scroll_bounds.bottom() + px(24.0);
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            let current = settings.settings_window_scroll.offset();
+            settings
+                .settings_window_scroll
+                .set_offset(point(current.x, current.y - scroll_delta));
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let list_bounds = settings_cx
+        .debug_bounds("settings_window_ui_font_list_container")
+        .expect("expected visible UI font list bounds");
 
     let (outer_before, inner_before, outer_max, inner_max) = settings_window
         .update(&mut settings_cx, |settings, _window, _cx| {
@@ -3514,4 +3746,372 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
     settings_cx.run_until_parked();
 
     assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
+}
+
+#[test]
+fn workspaces_category_is_listed_after_general_and_matches_its_search_terms() {
+    assert_eq!(SettingsCategory::ALL[1], SettingsCategory::Workspaces);
+    for query in ["workspace", "title bar color", "rename"] {
+        assert!(
+            SettingsCategory::Workspaces.matches_query(query),
+            "{query} should find the Workspaces page"
+        );
+    }
+    assert_eq!(
+        SettingsSection::WorkspaceTheme.category(),
+        SettingsCategory::Workspaces
+    );
+}
+
+#[gpui::test]
+fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-a")]);
+    workspace.last_activation_order = 5;
+    let id = workspace.id;
+    let other =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-b")]);
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace, other]);
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1400.0)));
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+    });
+    let redraw = |settings_cx: &mut gpui::VisualTestContext| {
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    let click = |settings_cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = settings_cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        settings_cx.simulate_click(bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    redraw(&mut settings_cx);
+
+    let selected = settings_window
+        .read_with(&settings_cx, |settings, _| settings.selected_workspace)
+        .expect("settings window");
+    assert_eq!(
+        selected,
+        Some(id),
+        "the most recently used workspace is preselected"
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_workspaces_intro")
+            .is_some(),
+        "the page explains how to start a new workspace"
+    );
+    let row: &'static str = format!("settings_window_workspace_{id}").leak();
+    assert!(settings_cx.debug_bounds(row).is_some());
+    let dot: &'static str = format!("settings_window_workspace_dot_{id}").leak();
+    assert!(
+        settings_cx.debug_bounds(dot).is_some(),
+        "rows are the picker's workspace rows, colour dot included"
+    );
+    let open = settings_cx
+        .debug_bounds("settings_window_workspace_open")
+        .expect("open action");
+    let delete = settings_cx
+        .debug_bounds("settings_window_workspace_delete")
+        .expect("delete button");
+    assert!(
+        delete.top() > open.bottom(),
+        "delete sits apart, below open"
+    );
+
+    click(&mut settings_cx, "settings_window_workspace_color_blue");
+    let read = |settings_cx: &mut gpui::VisualTestContext| {
+        settings_cx.update(|_window, app| crate::workspaces::workspace(app, id))
+    };
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.color),
+        Some(gitcomet_state::session::WorkspaceColor::Blue)
+    );
+
+    click(&mut settings_cx, "settings_window_workspace_theme");
+    click(
+        &mut settings_cx,
+        "settings_window_workspace_theme_tokyo_night",
+    );
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
+        Some("tokyo_night".to_string())
+    );
+    click(&mut settings_cx, "settings_window_workspace_theme");
+    click(
+        &mut settings_cx,
+        "settings_window_workspace_theme_follow_app",
+    );
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
+        None
+    );
+
+    // Typing alone does not save; the Save button beside the field does.
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings
+            .workspace_name_input
+            .update(cx, |input, cx| input.set_text("  Client work ", cx));
+    });
+    redraw(&mut settings_cx);
+    assert_eq!(read(&mut settings_cx).and_then(|w| w.custom_name), None);
+    click(&mut settings_cx, "settings_window_workspace_name_save");
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.custom_name),
+        Some("Client work".to_string())
+    );
+
+    click(&mut settings_cx, "settings_window_workspace_delete");
+    assert!(
+        read(&mut settings_cx).is_some(),
+        "delete asks for confirmation first"
+    );
+    click(&mut settings_cx, "settings_window_workspace_delete_cancel");
+    assert!(read(&mut settings_cx).is_some());
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_workspace_delete")
+            .is_some(),
+        "cancel brings the delete button back"
+    );
+    click(&mut settings_cx, "settings_window_workspace_delete");
+    click(&mut settings_cx, "settings_window_workspace_delete_confirm");
+    assert!(read(&mut settings_cx).is_none());
+    let selected = settings_window
+        .read_with(&settings_cx, |settings, _| settings.selected_workspace)
+        .expect("settings window");
+    assert!(
+        selected.is_some_and(|selected| selected != id),
+        "the selection moves to a remaining workspace"
+    );
+}
+
+/// Deleting the workspace of an open window closes that window rather than
+/// leaving it to re-create the workspace on its next sync.
+#[gpui::test]
+fn deleting_an_open_workspace_from_settings_closes_its_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
+    workspace.custom_name = Some("Doomed".into());
+    let id = workspace.id;
+    let backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend> =
+        std::sync::Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(std::sync::Arc::clone(&backend));
+    let (main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let main_window = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
+        crate::app::install_app_shortcuts_for_test(app, backend);
+        let _ = window.draw(app);
+        window.window_handle().window_id()
+    });
+    cx.update(|_window, app| {
+        main_view.update(app, |view, cx| view.adopt_workspace(workspace, cx));
+    });
+    cx.run_until_parked();
+    // A second main window, so the deleted one closes instead of going Home.
+    cx.update(|_window, app| crate::app::open_new_empty_window(app));
+    cx.update(|_window, app| open_settings_window(app));
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1400.0)));
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+        settings.select_workspace(id, cx);
+    });
+    let click = |settings_cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let bounds = settings_cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        settings_cx.simulate_click(bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+    };
+    click(&mut settings_cx, "settings_window_workspace_delete");
+    click(&mut settings_cx, "settings_window_workspace_delete_confirm");
+
+    settings_cx.update(|_window, app| {
+        assert!(crate::workspaces::workspace(app, id).is_none());
+        assert!(
+            app.windows()
+                .iter()
+                .all(|window| window.window_id() != main_window),
+            "the workspace's window closes"
+        );
+        assert_eq!(
+            app.windows()
+                .iter()
+                .filter(|window| window.downcast::<GitCometView>().is_some())
+                .count(),
+            1,
+            "the other main window stays"
+        );
+    });
+}
+
+#[gpui::test]
+fn opening_settings_to_a_workspace_selects_its_page_and_row(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let first = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/ws-link-a")]);
+    let second = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/ws-link-b")]);
+    let (first_id, second_id) = (first.id, second.id);
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![first, second]);
+        let _ = window.draw(app);
+    });
+
+    let selection = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let window = app
+                .windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window");
+            window
+                .read_with(app, |view, _| {
+                    (view.selected_category, view.selected_workspace)
+                })
+                .expect("readable settings window")
+        })
+    };
+
+    cx.update(|_window, app| open_settings_window_to_workspace(app, second_id));
+    cx.run_until_parked();
+    assert_eq!(
+        selection(cx),
+        (SettingsCategory::Workspaces, Some(second_id))
+    );
+
+    // Already open on another page: the link still lands on the workspace.
+    cx.update(|_window, app| {
+        let window = app
+            .windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window");
+        let _ = window.update(app, |view, _window, cx| {
+            view.select_category(SettingsCategory::Diff, cx);
+        });
+        open_settings_window_to_workspace(app, first_id);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        selection(cx),
+        (SettingsCategory::Workspaces, Some(first_id))
+    );
+}
+
+#[gpui::test]
+fn new_workspace_button_opens_an_empty_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, std::sync::Arc::new(TestBackend));
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let count_views = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .filter(|window| window.downcast::<GitCometView>().is_some())
+                .count()
+        })
+    };
+    let before = count_views(&mut settings_cx);
+
+    let button = settings_cx
+        .debug_bounds("settings_window_workspace_new")
+        .expect("New Workspace button");
+    settings_cx.simulate_click(button.center(), Modifiers::default());
+    settings_cx.run_until_parked();
+
+    assert_eq!(count_views(&mut settings_cx), before + 1);
+}
+
+/// Unoptimized CI builds give every builder temporary its own stack slot, so
+/// the old single-function render needed ~2 MiB and overflowed the 2 MiB
+/// Windows test thread. Now ~670 KiB; an overflow here aborts the binary.
+#[test]
+fn settings_window_renders_every_category_within_a_bounded_stack() {
+    std::thread::Builder::new()
+        .name("settings_render_stack_budget".into())
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let _visual_guard = lock_visual_test();
+            let mut app = gpui::TestAppContext::single();
+            app.update(open_settings_window);
+            let window = app.update(|app| {
+                app.windows()
+                    .into_iter()
+                    .find_map(|window| window.downcast::<SettingsWindowView>())
+                    .expect("settings window should be open")
+            });
+            let view = window.root(&mut app).unwrap();
+            let cx = &mut gpui::VisualTestContext::from_window(*window.deref(), &mut app);
+            for &category in SettingsCategory::ALL {
+                view.update(cx, |view, cx| {
+                    view.expanded_section = None;
+                    view.select_category(category, cx);
+                });
+                crate::test_support::refresh_and_draw(cx);
+            }
+            view.update(cx, |view, cx| view.show_open_source_licenses(cx));
+            crate::test_support::refresh_and_draw(cx);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

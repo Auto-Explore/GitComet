@@ -1350,7 +1350,7 @@ impl MainPaneView {
     /// A worker result for the current query is still to come. A worker whose
     /// sequence was superseded (e.g. by a synchronous recompute) publishes
     /// nothing, so it must not hold back navigation.
-    fn diff_search_result_pending(&self) -> bool {
+    pub(in crate::view) fn diff_search_result_pending(&self) -> bool {
         self.diff_search_pending_previous_query.is_some()
             || self.diff_search_worker_running
                 && self.diff_search_worker_seq == self.diff_search_debounce_seq

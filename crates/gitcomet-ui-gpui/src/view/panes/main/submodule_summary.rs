@@ -534,11 +534,13 @@ impl MainPaneView {
                                 components::Button::new("submodule_summary_open", "Open submodule")
                                     .style(components::ButtonStyle::Outlined)
                                     .disabled(!can_open)
-                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                                    .on_click(theme, cx, move |_this, _e, window, cx| {
                                         if can_open {
-                                            this.store.dispatch(Msg::OpenRepo(
+                                            crate::app::open_repository_from_view(
+                                                cx,
+                                                window.window_handle().window_id(),
                                                 open_path.as_ref().clone(),
-                                            ));
+                                            );
                                             cx.notify();
                                         }
                                     }),

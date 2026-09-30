@@ -110,6 +110,45 @@ fn close_repo_records_the_closed_repository_as_recent() {
     assert!(recent_repo_effect_workdirs(&effects).is_empty());
 }
 
+#[test]
+fn moving_repo_out_removes_it_without_recording_a_recent_close() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+
+    for name in ["repo1", "repo2"] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(std::env::temp_dir().join(name)),
+        );
+    }
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::MoveRepoOut { repo_id: RepoId(2) },
+    );
+
+    assert!(recent_repo_effect_workdirs(&effects).is_empty());
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .map(|repo| repo.spec.workdir.clone())
+            .collect::<Vec<_>>(),
+        vec![std::env::temp_dir().join("repo1")]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
+    );
+}
+
 /// Bulk closes walk the tab strip left to right rather than the `FxHashSet` of
 /// ids, so the Recently Closed order they leave behind is the same on every run.
 #[test]

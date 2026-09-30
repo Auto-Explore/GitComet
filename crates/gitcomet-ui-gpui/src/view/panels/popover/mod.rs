@@ -28,7 +28,7 @@ mod force_remove_worktree_confirm;
 mod hook_activity;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
-mod picker_nav;
+pub(in crate::view) mod picker_nav;
 mod picker_row_menu;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
@@ -56,8 +56,8 @@ mod tag_push;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
-mod workspace_picker;
 mod worktree_add_prompt;
+mod worktree_badge_picker;
 mod worktree_picker;
 mod worktree_remove_confirm;
 
@@ -182,7 +182,7 @@ pub(in super::super) struct PopoverHost {
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _upstream_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
-    _workspace_picker_search_input_subscription: Option<gpui::Subscription>,
+    _worktree_badge_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
     _history_author_filter_search_input_subscription: Option<gpui::Subscription>,
@@ -213,6 +213,7 @@ pub(in super::super) struct PopoverHost {
         std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
     /// Mirror of the sidebar's branch filter, for the same reason.
     branch_filter_query: String,
+    branch_search: crate::view::sidebar_search::SidebarSearch,
 
     tag_push_preview_key: Option<u64>,
     tag_push_cancellations: Vec<gitcomet_core::services::CancellationToken>,
@@ -247,6 +248,8 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     context_menu_scroll: ScrollHandle,
+    pin_menu_entries: Option<(RepoId, bool, PinMenuEntries)>,
+    pin_menu_scroll: UniformListScrollHandle,
     context_menu_scroll_anchors: Vec<gpui::ScrollAnchor>,
     expanded_history_ref: Option<HistoryMenuRef>,
     repo_picker_selected_index: Option<usize>,
@@ -260,6 +263,10 @@ pub(in super::super) struct PopoverHost {
     /// Session pins snapshotted alongside `cached_recent_repos`. Held apart from
     /// the recents so a pin outlives the recents cap.
     cached_pinned_repos: Vec<std::path::PathBuf>,
+    /// Durable workspaces snapshotted with the repository picker so its
+    /// rows remain stable for the duration of one keyboard interaction.
+    cached_workspaces: Vec<session::Workspace>,
+    cached_workspace_id: Option<session::WorkspaceId>,
     /// Storage keys of the repository picker sections the user folded away.
     cached_collapsed_picker_sections: std::collections::BTreeSet<String>,
     repo_picker_sort: repo_picker::RepoPickerSort,
@@ -270,7 +277,7 @@ pub(in super::super) struct PopoverHost {
     branch_picker_selected_index: Option<usize>,
     upstream_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
-    workspace_picker_selected_index: Option<usize>,
+    worktree_badge_picker_selected_index: Option<usize>,
     /// Path/reference the workspace badge's create row hands to the Add-worktree
     /// dialog. Consumed (and cleared) when that dialog opens, so a later
     /// open from elsewhere still starts blank.
@@ -286,7 +293,8 @@ pub(in super::super) struct PopoverHost {
     /// this whole view.
     branch_picker_rows_cache: rows_cache::RowsCache<branch_picker::BranchPickerNavTarget>,
     upstream_picker_rows_cache: rows_cache::RowsCache<upstream_picker::UpstreamTarget>,
-    workspace_picker_rows_cache: rows_cache::RowsCache<workspace_picker::WorkspaceRow>,
+    worktree_badge_picker_rows_cache:
+        rows_cache::RowsCache<worktree_badge_picker::WorktreeBadgeRow>,
     repo_picker_rows_cache: rows_cache::RowsCache<repo_picker::RepoPickerEntry>,
     stash_picker_rows_cache: rows_cache::RowsCache<stash_picker_prompt::StashRow>,
     file_history_rows_cache: rows_cache::RowsCache<CommitId>,
@@ -300,7 +308,7 @@ pub(in super::super) struct PopoverHost {
     file_history_search_input: Option<Entity<components::TextInput>>,
     history_author_filter_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
-    workspace_picker_search_input: Option<Entity<components::TextInput>>,
+    worktree_badge_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
     picker_prompt_scroll: ScrollHandle,
 
@@ -392,6 +400,8 @@ pub(in super::super) struct PopoverHost {
     rebase_reword_description_scroll: ScrollHandle,
 }
 
+type PinMenuEntries = std::rc::Rc<[(SharedString, SharedString)]>;
+
 pub(in crate::view) struct PopoverHostInit {
     pub(in crate::view) theme: AppTheme,
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
@@ -426,7 +436,7 @@ pub(in crate::view) fn benchmark_workspace_rows(
     repo: &RepoState,
     query: &str,
 ) -> Vec<components::PickerPromptItem> {
-    workspace_picker::rows(repo, query).items
+    worktree_badge_picker::rows(repo, query).items
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {
@@ -502,7 +512,6 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::TextFormatMenu { .. }
             | PopoverKind::CommitFileSortMenu { .. }
             | PopoverKind::ChangeTrackingSettings
-            | PopoverKind::UiScalePicker
             | PopoverKind::TerminalMenu { .. }
             | PopoverKind::DiffHunkMenu { .. }
             | PopoverKind::DiffEditorMenu { .. }
@@ -539,7 +548,8 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::FileBrowserFileMenu { .. }
             | PopoverKind::FileBrowserFolderMenu { .. }
             | PopoverKind::BranchGroupMenu { .. }
-            | PopoverKind::PinnedSectionMenu { .. }
+            | PopoverKind::SidebarPinnedOverflow { .. }
+            | PopoverKind::SidebarAncestorMenu { .. }
             | PopoverKind::BrowseHistoryMenu { .. }
     )
 }
@@ -869,8 +879,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::TerminalMenu { .. }
-        | PopoverKind::UiScalePicker => Anchor::TopRight,
+        | PopoverKind::TerminalMenu { .. } => Anchor::TopRight,
         // The strip sits at the bottom edge; open upwards.
         PopoverKind::TextFormatMenu { .. } => Anchor::BottomRight,
         _ => Anchor::TopLeft,
@@ -879,7 +888,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
-        PopoverKind::RepoPicker
+        PopoverKind::RepoPicker { .. }
         | PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
         } => Some(PICKER_WIDTH),
@@ -1022,7 +1031,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }
-        | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::SidebarPinnedOverflow { .. }
+        | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
@@ -1033,7 +1043,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::TextFormatMenu { .. } => Some(TEXT_FORMAT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),

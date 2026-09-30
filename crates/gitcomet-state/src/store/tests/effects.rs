@@ -400,6 +400,64 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
 }
 
 #[test]
+fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(1);
+    let repos = [(
+        repo_id,
+        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+            directory.path(),
+        )) as Arc<dyn GitRepository>,
+    )]
+    .into_iter()
+    .collect();
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    for (path, succeeds) in [("file.txt", true), ("../outside.txt", false)] {
+        let (release, wait) = std::sync::mpsc::channel();
+        executor.spawn(move || {
+            let _ = wait.recv();
+        });
+        let (completion, received) = smol::channel::bounded(1);
+        let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        schedule_effect_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            msg_tx,
+            Effect::SaveWorktreeFile {
+                repo_id,
+                path: PathBuf::from(path),
+                contents: "saved contents".to_string().into(),
+                stage: false,
+                completion: Some(completion),
+            },
+        );
+        assert_eq!(received.try_recv(), Err(smol::channel::TryRecvError::Empty));
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Ok(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                result, ..
+            })) = recv_effect_message(&msg_rx, Duration::from_millis(50))
+            {
+                assert_eq!(result.is_ok(), succeeds);
+                break;
+            }
+            assert!(Instant::now() < deadline, "save completion");
+        }
+        assert_eq!(received.try_recv(), Ok(succeeds));
+        if succeeds {
+            assert_eq!(
+                std::fs::read_to_string(directory.path().join(path)).unwrap(),
+                "saved contents"
+            );
+        }
+    }
+}
+
+#[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
     for cancel_repo_loads in [false, true] {
         let primary = super::executor::TaskExecutor::new(1);
@@ -2341,6 +2399,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             path: rel.clone(),
             contents: contents.to_string().into(),
             stage: true,
+            completion: None,
         },
     );
 
@@ -2399,6 +2458,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             path: escaped_path,
             contents: "escape".to_string().into(),
             stage: false,
+            completion: None,
         },
     );
 
@@ -5522,6 +5582,45 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
 }
 
 #[test]
+fn pr530_slow_repository_loads_do_not_block_another_window() {
+    struct Backend {
+        started: std::sync::mpsc::Sender<PathBuf>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+    impl GitBackend for Backend {
+        fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            self.started.send(path.to_path_buf()).unwrap();
+            wait_for_release_signal(&self.release);
+            Err(Error::new(ErrorKind::NotARepository))
+        }
+    }
+    let (started, received) = std::sync::mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend { started, release });
+    let (first, _events) = AppStore::new_test(Arc::clone(&backend));
+    for index in 0..super::executor::repo_load_worker_threads() {
+        first.dispatch(Msg::OpenRepo(unique_temp_path(&format!(
+            "pr530-busy-{index}"
+        ))));
+        received
+            .recv_timeout(Duration::from_secs(3))
+            .expect("first window load started");
+    }
+    let (second, _events) = AppStore::new_test(backend);
+    let path = unique_temp_path("pr530-independent-window");
+    second.dispatch(Msg::OpenRepo(path.clone()));
+    assert_eq!(
+        received
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the second window must load while the first window's workers are busy"),
+        path
+    );
+}
+
+#[test]
 fn worktree_and_submodule_effects_report_missing_repo_handle() {
     struct Backend;
     impl GitBackend for Backend {
@@ -6315,6 +6414,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 path: PathBuf::from("nested/new.txt"),
                 contents: "content".to_string().into(),
                 stage: true,
+                completion: None,
             },
             1,
         ),

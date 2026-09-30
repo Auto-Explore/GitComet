@@ -23,6 +23,8 @@ impl SettingsWindowView {
             repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.ui_scale_percent),
+            window_controls_mode: Some(self.window_controls_mode.key().to_string()),
+            browser_open_target: Some(self.browser_open_target.key().to_string()),
             ui_density: Some(self.appearance_metrics.density.key().to_string()),
             ui_font_size_px: Some(self.appearance_metrics.ui_font_size_px),
             editor_font_size_px: Some(self.appearance_metrics.editor_font_size_px),
@@ -522,6 +524,38 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_window_controls_mode(
+        &mut self,
+        mode: crate::window_controls::WindowControlsMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.window_controls_mode == mode {
+            return;
+        }
+
+        self.window_controls_mode = mode;
+        self.expanded_section = None;
+        crate::window_controls::set_current(cx, mode);
+        self.persist_preferences(cx);
+        cx.defer(|cx| cx.refresh_windows());
+        cx.notify();
+    }
+
+    pub(super) fn set_browser_open_target(
+        &mut self,
+        target: crate::app::BrowserOpenTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.browser_open_target == target {
+            return;
+        }
+
+        self.browser_open_target = target;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        cx.notify();
+    }
+
     pub(super) fn set_theme_mode(
         &mut self,
         mode: ThemeMode,
@@ -539,9 +573,7 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_theme_mode(mode.clone(), root_window.appearance(), cx);
-            });
+            view.set_theme_mode(mode.clone(), root_window.appearance(), cx);
         });
         cx.notify();
     }

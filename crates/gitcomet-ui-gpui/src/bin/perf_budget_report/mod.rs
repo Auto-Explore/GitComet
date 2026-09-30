@@ -1,5 +1,5 @@
 pub(crate) use gitcomet_ui_gpui::perf_sidecar::{
-    PerfSidecarReport, criterion_sidecar_path, read_sidecar,
+    PerfSidecarReport, criterion_sidecar_path, measurement_kind_for_bench, read_sidecar,
 };
 pub(crate) use serde::Deserialize;
 pub(crate) use std::env;
@@ -84,6 +84,9 @@ fn run_report(cli: CliArgs) -> Result<(), String> {
     );
     println!("{markdown}");
     append_github_summary(&markdown)?;
+    if let Some(path) = cli.summary_json.as_deref() {
+        write_summary_json(path, &structural_results)?;
+    }
 
     let mut has_alert = false;
     for result in &timing_results {

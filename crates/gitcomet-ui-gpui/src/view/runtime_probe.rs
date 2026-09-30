@@ -19,6 +19,7 @@ pub(super) fn request(cx: &mut gpui::App, force: bool) {
             if current_git_runtime() != runtime {
                 return;
             }
+            crate::environment::refresh_git(cx);
             for handle in cx.windows() {
                 if let Some(handle) = handle.downcast::<GitCometView>() {
                     let _ = handle.update(cx, |view, _, cx| {

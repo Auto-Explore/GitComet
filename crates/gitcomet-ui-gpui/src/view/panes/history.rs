@@ -1201,7 +1201,21 @@ impl HistoryView {
         }
     }
 
-    fn history_scroll_position(&self) -> f64 {
+    /// Window-space bounds of the active repository's history list once it
+    /// has been laid out, for scripted input that must land on it.
+    pub(in crate::view) fn history_viewport_bounds(&self) -> Option<Bounds<Pixels>> {
+        let active = self.active_repo_id()?;
+        if self.indexed.presentation.is_some() {
+            let (repo_id, bounds) = self.scroll_interaction.borrow().viewport_bounds?;
+            return (repo_id == active).then_some(bounds);
+        }
+        // The list's bounds outlive a repository switch; its cache does not.
+        let cache_repo = self.history_cache.as_ref()?.base.request.repo_id;
+        let bounds = self.history_scroll.0.borrow().base_handle.bounds();
+        (cache_repo == active && bounds.size.height > px(0.0)).then_some(bounds)
+    }
+
+    pub(in crate::view) fn history_scroll_position(&self) -> f64 {
         self.scroll_interaction
             .borrow()
             .logical

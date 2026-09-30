@@ -129,161 +129,106 @@ impl FsEventFixture {
     }
 
     pub fn run(&self) -> u64 {
-        self.execute().0
+        self.run_with_metrics().0
     }
 
     pub fn run_with_metrics(&self) -> (u64, FsEventMetrics) {
-        self.execute()
+        let mutation = self.apply_mutation();
+        let result = self.refresh_status(&mutation);
+        self.restore(mutation);
+        result
     }
 
-    fn execute(&self) -> (u64, FsEventMetrics) {
-        let mut metrics = FsEventMetrics {
-            tracked_files: u64::try_from(self.tracked_files).unwrap_or(u64::MAX),
-            ..FsEventMetrics::default()
+    /// Setup: the scenario's disk writes. The editor or checkout makes them,
+    /// not GitComet, so benchmarks keep them outside the timed status refresh.
+    pub fn apply_mutation(&self) -> FsEventMutation {
+        let (files, reverted) = match &self.scenario {
+            FsEventScenario::SingleFileSave { .. } => (1, false),
+            FsEventScenario::GitCheckoutBatch { checkout_files, .. } => (*checkout_files, false),
+            FsEventScenario::RapidSavesDebounceCoalesce { save_count, .. } => (*save_count, false),
+            FsEventScenario::FalsePositiveUnderChurn { churn_files, .. } => (*churn_files, true),
         };
-
-        match &self.scenario {
-            FsEventScenario::SingleFileSave { .. } => {
-                // 1. Mutate one file (simulates save).
-                let target = git_ops_status_relative_path(0);
-                let full_path = self.repo_path.join(&target);
-                let original = fs::read(&full_path).expect("read original file");
-                fs::write(&full_path, b"fs-event-mutation\n").expect("write fs_event dirty file");
-                metrics.mutation_files = 1;
-
-                // 2. Run git status.
-                let (status, status_calls, status_ms) =
-                    measure_split_repo_status(self.repo.as_ref(), "fs_event single_file_save");
-                metrics.status_ms = status_ms;
-                metrics.status_calls = status_calls;
-
-                let dirty = status.staged.len().saturating_add(status.unstaged.len());
-                metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
-                metrics.status_entries_total = metrics.dirty_files_detected;
-
-                let hash = hash_repo_status(&status);
-
-                // 3. Restore.
-                fs::write(&full_path, &original).expect("restore original file");
-
-                (hash, metrics)
-            }
-            FsEventScenario::GitCheckoutBatch { checkout_files, .. } => {
-                let checkout_files = *checkout_files;
-
-                // 1. Mutate checkout_files files.
-                let mut originals = Vec::with_capacity(checkout_files);
-                for index in 0..checkout_files {
-                    let target = git_ops_status_relative_path(index);
-                    let full_path = self.repo_path.join(&target);
-                    originals.push((
-                        full_path.clone(),
-                        fs::read(&full_path).expect("read original"),
-                    ));
-                    fs::write(&full_path, format!("checkout-mutation-{index:05}\n"))
-                        .expect("write fs_event checkout file");
+        let mut originals = Vec::with_capacity(files);
+        for index in 0..files {
+            let full_path = self.repo_path.join(git_ops_status_relative_path(index));
+            let original = fs::read(&full_path).expect("read fs_event original file");
+            let contents = match &self.scenario {
+                FsEventScenario::SingleFileSave { .. } => "fs-event-mutation\n".to_string(),
+                FsEventScenario::GitCheckoutBatch { .. } => {
+                    format!("checkout-mutation-{index:05}\n")
                 }
-                metrics.mutation_files = u64::try_from(checkout_files).unwrap_or(u64::MAX);
-
-                // 2. Run git status.
-                let (status, status_calls, status_ms) =
-                    measure_split_repo_status(self.repo.as_ref(), "fs_event git_checkout_batch");
-                metrics.status_ms = status_ms;
-                metrics.status_calls = status_calls;
-
-                let dirty = status.staged.len().saturating_add(status.unstaged.len());
-                metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
-                metrics.status_entries_total = metrics.dirty_files_detected;
-
-                let hash = hash_repo_status(&status);
-
-                // 3. Restore all files.
-                for (path, original) in &originals {
-                    fs::write(path, original).expect("restore checkout file");
+                FsEventScenario::RapidSavesDebounceCoalesce { .. } => {
+                    format!("rapid-save-{index:05}\n")
                 }
-
-                (hash, metrics)
-            }
-            FsEventScenario::RapidSavesDebounceCoalesce { save_count, .. } => {
-                let save_count = *save_count;
-
-                // 1. Rapidly dirty save_count files (simulating rapid saves before debounce fires).
-                let mut originals = Vec::with_capacity(save_count);
-                for index in 0..save_count {
-                    let target = git_ops_status_relative_path(index);
-                    let full_path = self.repo_path.join(&target);
-                    originals.push((
-                        full_path.clone(),
-                        fs::read(&full_path).expect("read original"),
-                    ));
-                    fs::write(&full_path, format!("rapid-save-{index:05}\n"))
-                        .expect("write fs_event rapid save file");
-                }
-                metrics.mutation_files = u64::try_from(save_count).unwrap_or(u64::MAX);
-                metrics.coalesced_saves = metrics.mutation_files;
-
-                // 2. Single coalesced status call (debounce model).
-                let (status, status_calls, status_ms) =
-                    measure_split_repo_status(self.repo.as_ref(), "fs_event rapid_saves_debounce");
-                metrics.status_ms = status_ms;
-                metrics.status_calls = status_calls;
-
-                let dirty = status.staged.len().saturating_add(status.unstaged.len());
-                metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
-                metrics.status_entries_total = metrics.dirty_files_detected;
-
-                let hash = hash_repo_status(&status);
-
-                // 3. Restore.
-                for (path, original) in &originals {
-                    fs::write(path, original).expect("restore rapid save file");
-                }
-
-                (hash, metrics)
-            }
-            FsEventScenario::FalsePositiveUnderChurn { churn_files, .. } => {
-                let churn_files = *churn_files;
-
-                // 1. Dirty churn_files files.
-                let mut originals = Vec::with_capacity(churn_files);
-                for index in 0..churn_files {
-                    let target = git_ops_status_relative_path(index);
-                    let full_path = self.repo_path.join(&target);
-                    let original = fs::read(&full_path).expect("read original");
-                    originals.push((full_path.clone(), original));
-                    fs::write(&full_path, format!("churn-{index:05}\n"))
-                        .expect("write fs_event churn file");
-                }
-
-                // 2. Revert all files to original content (simulating churn that settles).
-                for (path, original) in &originals {
-                    fs::write(path, original).expect("revert churn file");
-                }
-                metrics.mutation_files = u64::try_from(churn_files).unwrap_or(u64::MAX);
-
-                // 3. Status should find 0 dirty files — the FS events were false positives.
-                let (status, status_calls, status_ms) = measure_split_repo_status(
-                    self.repo.as_ref(),
-                    "fs_event false_positive_under_churn",
-                );
-                metrics.status_ms = status_ms;
-                metrics.status_calls = status_calls;
-
-                let dirty = status.staged.len().saturating_add(status.unstaged.len());
-                metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
-                metrics.status_entries_total = metrics.dirty_files_detected;
-                // Every churn file triggered an FS event but resulted in 0 dirty files.
-                metrics.false_positives = if dirty == 0 {
-                    metrics.mutation_files
-                } else {
-                    0
-                };
-
-                let hash = hash_repo_status(&status);
-                (hash, metrics)
+                FsEventScenario::FalsePositiveUnderChurn { .. } => format!("churn-{index:05}\n"),
+            };
+            fs::write(&full_path, contents).expect("write fs_event mutation");
+            originals.push((full_path, original));
+        }
+        if reverted {
+            // Churn that settles: every file is back to its original bytes
+            // before status runs, so each event was a false positive.
+            for (path, original) in originals.drain(..) {
+                fs::write(path, original).expect("revert fs_event churn file");
             }
         }
+        FsEventMutation {
+            originals,
+            mutation_files: u64::try_from(files).unwrap_or(u64::MAX),
+        }
     }
+
+    /// The measured work: the status refresh that follows the disk events.
+    pub fn refresh_status(&self, mutation: &FsEventMutation) -> (u64, FsEventMetrics) {
+        let context = match &self.scenario {
+            FsEventScenario::SingleFileSave { .. } => "fs_event single_file_save",
+            FsEventScenario::GitCheckoutBatch { .. } => "fs_event git_checkout_batch",
+            FsEventScenario::RapidSavesDebounceCoalesce { .. } => "fs_event rapid_saves_debounce",
+            FsEventScenario::FalsePositiveUnderChurn { .. } => {
+                "fs_event false_positive_under_churn"
+            }
+        };
+        let (status, status_calls, status_ms) =
+            measure_split_repo_status(self.repo.as_ref(), context);
+        let dirty = status.staged.len().saturating_add(status.unstaged.len());
+        let dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
+        let mut metrics = FsEventMetrics {
+            tracked_files: u64::try_from(self.tracked_files).unwrap_or(u64::MAX),
+            mutation_files: mutation.mutation_files,
+            dirty_files_detected,
+            status_entries_total: dirty_files_detected,
+            status_calls,
+            status_ms,
+            ..FsEventMetrics::default()
+        };
+        match &self.scenario {
+            // One coalesced status call for the whole burst (debounce model).
+            FsEventScenario::RapidSavesDebounceCoalesce { .. } => {
+                metrics.coalesced_saves = mutation.mutation_files;
+            }
+            // Every churn file triggered an event but ended up clean.
+            FsEventScenario::FalsePositiveUnderChurn { .. } if dirty == 0 => {
+                metrics.false_positives = mutation.mutation_files;
+            }
+            _ => {}
+        }
+        (hash_repo_status(&status), metrics)
+    }
+
+    /// Restoration after a measured refresh; not part of the measured work.
+    pub fn restore(&self, mutation: FsEventMutation) {
+        for (path, original) in mutation.originals {
+            fs::write(path, original).expect("restore fs_event mutated file");
+        }
+    }
+}
+
+/// Disk changes applied by [`FsEventFixture::apply_mutation`], kept for restoration.
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Default)]
+pub struct FsEventMutation {
+    originals: Vec<(std::path::PathBuf, Vec<u8>)>,
+    mutation_files: u64,
 }
 
 // ---------------------------------------------------------------------------

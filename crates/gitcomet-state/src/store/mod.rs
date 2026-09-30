@@ -22,7 +22,6 @@ mod worker_channel;
 
 use effects::RepoTaskToken;
 use effects::{EffectExecutors, schedule_effect};
-#[cfg(any(test, feature = "test-support"))]
 use executor::StoreExecutorPool;
 use executor::{
     TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
@@ -62,6 +61,7 @@ fn is_control_msg(msg: &Msg) -> bool {
         Msg::OpenRepo(_)
             | Msg::OpenRepoFromExternalDrop(_)
             | Msg::CloseRepo { .. }
+            | Msg::MoveRepoOut { .. }
             | Msg::CloseRepos { .. }
             | Msg::CancelGitOperation { .. }
             | Msg::SetActiveRepo { .. }
@@ -71,7 +71,7 @@ fn is_control_msg(msg: &Msg) -> bool {
 
 fn is_control_command(command: &StoreWorkerCommand) -> bool {
     match command {
-        StoreWorkerCommand::Msg(msg) => is_control_msg(msg),
+        StoreWorkerCommand::Msg(msg) | StoreWorkerCommand::Traced(msg, _) => is_control_msg(msg),
         StoreWorkerCommand::Shutdown => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
@@ -79,10 +79,7 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
 }
 
 fn can_control_command_overtake(command: &StoreWorkerCommand) -> bool {
-    matches!(
-        command,
-        StoreWorkerCommand::Msg(msg) if matches!(msg.as_ref(), Msg::Internal(_))
-    )
+    matches!(command.msg(), Some(Msg::Internal(_)))
 }
 
 fn first_control_command_before_order_barrier(
@@ -174,6 +171,7 @@ struct WorkerLoopContext<'a> {
     signature_executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
+    publication: &'a AtomicU64,
 }
 
 impl WorkerLoopContext<'_> {
@@ -196,14 +194,29 @@ impl WorkerLoopContext<'_> {
     ) where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
-        let (effects, state) = {
+        let (effects, state, reduce_duration, publication) = {
             let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
             let mutable = make_mut_state_with_diagnostics(&mut app_state);
             let reduce_started = Instant::now();
             let effects = reduce_with(mutable, repos, id_alloc);
-            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-            (effects, Arc::clone(&app_state))
+            let reduce_duration = reduce_started.elapsed();
+            reducer_diagnostics::record_reducer_pass(reduce_duration);
+            // Bumped under the write lock, so a reader holding the read lock
+            // sees the sequence number of exactly the state it cloned.
+            let publication = self.publication.fetch_add(1, Ordering::Relaxed) + 1;
+            (
+                effects,
+                Arc::clone(&app_state),
+                reduce_duration,
+                publication,
+            )
         };
+        gitcomet_core::op_trace::record_current(
+            gitcomet_core::op_trace::Stage::Reduced,
+            "reduce",
+            gitcomet_core::op_trace::duration_ns(reduce_duration),
+            publication,
+        );
         // Cancel changed/cleared selections before dispatching their effects,
         // outside the state write lock. Index selections once, including absent
         // repos as cleared selections, instead of scanning all repos per token.
@@ -293,6 +306,12 @@ impl WorkerLoopContext<'_> {
         }
 
         for effect in effects {
+            gitcomet_core::op_trace::record_current(
+                gitcomet_core::op_trace::Stage::EffectQueued,
+                repo_load_trace::effect_name(&effect),
+                0,
+                0,
+            );
             if repo_load_trace::enabled() {
                 let effect_repo_id = repo_load_trace::effect_repo_id(&effect);
                 let (load_epoch, workdir) = effect_repo_id.map_or((None, None), |repo_id| {
@@ -316,6 +335,8 @@ impl WorkerLoopContext<'_> {
                         .unwrap_or("<non-utf8>"))
                 );
             }
+            let _label =
+                gitcomet_core::op_trace::label_scope(repo_load_trace::effect_name(&effect));
             schedule_effect(
                 EffectExecutors {
                     executor: self.executor,
@@ -337,6 +358,9 @@ impl WorkerLoopContext<'_> {
 
 pub struct AppStore {
     state: Arc<RwLock<Arc<AppState>>>,
+    /// Count of reducer passes that published state; see
+    /// [`AppStore::snapshot_with_publication`].
+    publication: Arc<AtomicU64>,
     msg_tx: StoreWorkerSender,
     public_lifetime: Arc<StorePublicLifetime>,
 }
@@ -361,6 +385,7 @@ impl Clone for AppStore {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+            publication: Arc::clone(&self.publication),
             msg_tx: self.msg_tx.clone(),
             public_lifetime: Arc::clone(&self.public_lifetime),
         }
@@ -395,43 +420,27 @@ impl AppStore {
 
         let thread_state = Arc::clone(&state);
         let thread_msg_tx = msg_tx.clone();
+        let publication = Arc::new(AtomicU64::new(0));
+        let thread_publication = Arc::clone(&publication);
 
-        thread::spawn(move || {
-            #[cfg(any(test, feature = "test-support"))]
+        let worker = thread::Builder::new().name("gitcomet-store".into()).spawn(move || {
+            // General effects share process-wide workers. Repository loads
+            // need a bounded pool per window: blocking opens and filesystem
+            // scans in one window must not consume another window's capacity.
             let executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Primary,
                 default_worker_threads(),
             );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let executor = TaskExecutor::new(default_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
-            let repo_load_executor = TaskExecutor::shared_for_store(
-                StoreExecutorPool::RepoLoad,
-                repo_load_worker_threads(),
-            );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let repo_load_executor = TaskExecutor::new(repo_load_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
+            let repo_load_executor =
+                TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
                 metadata_worker_threads(),
             );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let metadata_executor = TaskExecutor::new(metadata_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
             let signature_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1);
-            #[cfg(not(any(test, feature = "test-support")))]
-            let signature_executor = TaskExecutor::new(1);
-
-            #[cfg(any(test, feature = "test-support"))]
             let session_persist_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
-            #[cfg(not(any(test, feature = "test-support")))]
-            let session_persist_executor = TaskExecutor::new(1);
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
@@ -440,8 +449,9 @@ impl AppStore {
             let mut deferred_commands = VecDeque::new();
 
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
-                let msg = match command {
-                    StoreWorkerCommand::Msg(msg) => *msg,
+                let (msg, stamp) = match command {
+                    StoreWorkerCommand::Msg(msg) => (*msg, None),
+                    StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
                     StoreWorkerCommand::Shutdown => break,
                     #[cfg(any(test, feature = "test-support"))]
                     StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {
@@ -453,6 +463,19 @@ impl AppStore {
                 if !thread_msg_tx.is_alive() {
                     continue;
                 }
+
+                // Effects scheduled while handling this message inherit its
+                // operation, and so do the messages their tasks send back.
+                let _op_scope = stamp.map(|stamp| {
+                    gitcomet_core::op_trace::record(
+                        gitcomet_core::op_trace::Stage::Received,
+                        stamp.op,
+                        repo_load_trace::stage_label(&msg),
+                        stamp.waited_ns(),
+                        0,
+                    );
+                    gitcomet_core::op_trace::scope(stamp.op)
+                });
 
                 if repo_load_trace::enabled() {
                     let msg_repo_id = repo_load_trace::msg_repo_id(&msg);
@@ -487,7 +510,7 @@ impl AppStore {
                         }
                         repo_task_tokens.clear();
                     }
-                    Msg::CloseRepo { repo_id } => {
+                    Msg::CloseRepo { repo_id } | Msg::MoveRepoOut { repo_id } => {
                         repo_monitors.stop(*repo_id);
                         if let Some(token) = repo_task_tokens.remove(repo_id) {
                             repo_load_trace::trace!(
@@ -552,6 +575,7 @@ impl AppStore {
                     signature_executor: &signature_executor,
                     session_persist_executor: &session_persist_executor,
                     backend: &backend,
+                    publication: &thread_publication,
                 };
 
                 match msg {
@@ -681,10 +705,12 @@ impl AppStore {
             }
             repo_monitors.stop_all();
         });
+        worker.expect("spawn store worker thread");
 
         (
             Self {
                 state,
+                publication,
                 msg_tx: msg_tx.clone(),
                 public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
             },
@@ -712,6 +738,23 @@ impl AppStore {
             }
             Err(std::sync::TryLockError::WouldBlock) => None,
         }
+    }
+
+    /// [`Self::try_snapshot`] plus the publication sequence number of that
+    /// exact state, for correlating UI application with reducer passes.
+    pub fn try_snapshot_with_publication(&self) -> Option<(Arc<AppState>, u64)> {
+        let state = match self.state.try_read() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        Some((Arc::clone(&state), self.publication.load(Ordering::Relaxed)))
+    }
+
+    /// [`Self::snapshot`] plus its publication sequence number.
+    pub fn snapshot_with_publication(&self) -> (Arc<AppState>, u64) {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        (Arc::clone(&state), self.publication.load(Ordering::Relaxed))
     }
 
     #[cfg(any(test, feature = "test-support"))]

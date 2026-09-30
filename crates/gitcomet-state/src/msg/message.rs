@@ -215,7 +215,7 @@ pub enum RepoWatchDegradedReason {
 // Dispatch keeps internal messages inline so the hot reducer path does not
 // require an additional allocation for every effect completion.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
+#[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
@@ -224,11 +224,22 @@ pub enum Msg {
     /// The candidate is not persisted until the backend has opened it
     /// successfully, and any open failure discards its temporary tab.
     OpenRepoFromExternalDrop(PathBuf),
+    /// Release failure receipts already observed by the window, retaining any
+    /// newer failures that arrived while the acknowledgement was queued.
+    AcknowledgeRepoOpenFailures {
+        through_revision: u64,
+    },
     RestoreSession {
         open_repos: Vec<PathBuf>,
         active_repo: Option<PathBuf>,
     },
     CloseRepo {
+        repo_id: RepoId,
+    },
+    /// Remove a repository from this store because ownership moved to another
+    /// window. Unlike a close, this must not add the still-open repository to
+    /// the Recently Closed list.
+    MoveRepoOut {
         repo_id: RepoId,
     },
     CloseRepos {
@@ -776,6 +787,9 @@ pub enum Msg {
         path: PathBuf,
         contents: ContentBytes,
         stage: bool,
+        /// Reports whether this exact write succeeded. A closed channel also
+        /// means failure; callers must not infer success from an idle queue.
+        completion: Option<smol::channel::Sender<bool>>,
     },
     /// Append patterns to the repository-root `.gitignore`, creating it when
     /// absent. Patterns already present are skipped, so re-running is a no-op.
@@ -1118,6 +1132,7 @@ pub enum Msg {
     Internal(InternalMsg),
 }
 
+#[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
     TagPushPreviewLoaded {
         repo_id: RepoId,

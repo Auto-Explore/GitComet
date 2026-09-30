@@ -98,7 +98,7 @@ pub(super) fn activate(
     let Some(base) = repo_for(this, repo_id).map(|repo| repo.spec.workdir.clone()) else {
         return;
     };
-    this.store.dispatch(Msg::OpenRepo(base.join(path)));
+    crate::app::open_repository_from_view(cx, window.window_handle().window_id(), base.join(path));
     this.close_popover(cx);
 }
 

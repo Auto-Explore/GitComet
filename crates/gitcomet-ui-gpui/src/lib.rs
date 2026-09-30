@@ -3,6 +3,7 @@ mod appearance;
 mod assets;
 mod bundled_fonts;
 mod clipboard;
+mod environment;
 mod external_editor;
 pub mod focused_diff;
 mod font_preferences;
@@ -23,16 +24,22 @@ mod text_runs;
 mod text_selection;
 mod text_selection_owner;
 mod theme;
+mod thread_cpu;
 mod ui_probe;
 mod ui_runtime;
 mod ui_scale;
 mod view;
+mod window_controls;
 mod window_focus;
 mod window_root_hook;
+mod workspaces;
 
 pub use app::{
-    FocusedMergetoolConfig, UiRunOutcome, run, run_focused_mergetool,
-    run_with_startup_crash_report, run_with_startup_crash_report_and_shutdown_callback,
+    BrowserOpenRequest, BrowserOpenTarget, FocusedMergetoolConfig, UiRunOutcome, run,
+    run_focused_mergetool, run_with_startup_crash_report,
+    run_with_startup_crash_report_and_shutdown_callback,
+    run_with_startup_crash_report_shutdown_callback_and_browser_requests,
+    run_with_startup_crash_report_shutdown_callback_and_initial_browser_request,
 };
 pub use focused_diff::{FocusedDiffConfig, run_focused_diff};
 pub use launch_guard::UiLaunchError;

@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
-const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 720.0;
-const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 620.0;
+const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 880.0;
+const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 720.0;
 const SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX: f32 = 224.0;
 const SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
@@ -285,6 +285,8 @@ fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
 enum SettingsSection {
     Theme,
     UiScale,
+    WindowControls,
+    BrowserOpenTarget,
     UiFont,
     EditorFont,
     ExternalCodeEditor,
@@ -304,6 +306,7 @@ enum SettingsSection {
     GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
+    WorkspaceTheme,
 }
 
 impl SettingsSection {
@@ -314,6 +317,8 @@ impl SettingsSection {
         match self {
             Self::Theme
             | Self::UiScale
+            | Self::WindowControls
+            | Self::BrowserOpenTarget
             | Self::UiFont
             | Self::EditorFont
             | Self::ExternalCodeEditor
@@ -332,6 +337,7 @@ impl SettingsSection {
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
+            Self::WorkspaceTheme => SettingsCategory::Workspaces,
         }
     }
 }
@@ -341,6 +347,7 @@ impl SettingsSection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsCategory {
     General,
+    Workspaces,
     SecurityPrivacy,
     Terminal,
     ChangeTracking,
@@ -357,6 +364,7 @@ enum SettingsCategory {
 impl SettingsCategory {
     const ALL: &'static [SettingsCategory] = &[
         SettingsCategory::General,
+        SettingsCategory::Workspaces,
         SettingsCategory::SecurityPrivacy,
         SettingsCategory::Terminal,
         SettingsCategory::ChangeTracking,
@@ -373,6 +381,7 @@ impl SettingsCategory {
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::Workspaces => "Workspaces",
             Self::SecurityPrivacy => "Security / Privacy",
             Self::Terminal => "Terminal",
             Self::ChangeTracking => "Change tracking",
@@ -390,6 +399,7 @@ impl SettingsCategory {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "icons/cog.svg",
+            Self::Workspaces => "icons/folder.svg",
             Self::SecurityPrivacy => "icons/file_icons/lock.svg",
             Self::Terminal => "icons/terminal.svg",
             Self::ChangeTracking => "icons/file.svg",
@@ -407,6 +417,7 @@ impl SettingsCategory {
     fn nav_id(self) -> &'static str {
         match self {
             Self::General => "settings_window_nav_general",
+            Self::Workspaces => "settings_window_nav_workspaces",
             Self::SecurityPrivacy => "settings_window_nav_security_privacy",
             Self::Terminal => "settings_window_nav_terminal",
             Self::ChangeTracking => "settings_window_nav_change_tracking",
@@ -427,8 +438,13 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance density compact comfortable spacious \
+                 external code editor date timezone appearance window controls title bar \
+                 minimize maximize tiling command line cli gitcomet open repository window density compact comfortable spacious \
                  font size markdown preview"
+            }
+            Self::Workspaces => {
+                "workspaces workspace window group rename name title bar color colour theme \
+                 override delete open repositories"
             }
             Self::SecurityPrivacy => {
                 "security privacy allowed remote protocols https http ssh git file ftp ftps \
@@ -455,7 +471,9 @@ impl SettingsCategory {
                 "executables git executable custom path system path version gpg gnupg \
                  openpgp x.509 ssh-keygen openssh commit signature verification verified trust key guide"
             }
-            Self::Environment => "environment build operating system app version",
+            Self::Environment => {
+                "environment build operating system app version cpu memory gpu graphics driver renderer hardware software kernel wayland x11"
+            }
             Self::Links => {
                 "links theme guide github license open source licenses professional edition \
                  waitlist"
@@ -515,6 +533,8 @@ pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
+    pub(super) window_controls_mode: crate::window_controls::WindowControlsMode,
+    pub(super) browser_open_target: crate::app::BrowserOpenTarget,
     appearance_metrics: Appearance,
     font_size_inputs: [Entity<components::TextInput>; 3],
     _font_size_subscriptions: Vec<gpui::Subscription>,
@@ -582,6 +602,8 @@ pub(crate) struct SettingsWindowView {
     nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    /// Read-only fields behind the Environment values, keyed by row id.
+    environment_value_inputs: FxHashMap<SharedString, Entity<components::TextInput>>,
     signing_tools_probe: Option<gpui::Task<()>>,
     signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
@@ -593,6 +615,10 @@ pub(crate) struct SettingsWindowView {
     external_editor_custom_path_input: Entity<components::TextInput>,
     external_editor_custom_arguments_input: Entity<components::TextInput>,
     expanded_section: Option<SettingsSection>,
+    selected_workspace: Option<gitcomet_state::session::WorkspaceId>,
+    workspace_name_draft: String,
+    workspace_name_input: Entity<components::TextInput>,
+    workspace_delete_confirm: Option<gitcomet_state::session::WorkspaceId>,
     hover_resize_edge: Option<ResizeEdge>,
     title_drag_state: chrome::TitleBarDragState,
     _git_executable_input_subscription: gpui::Subscription,
@@ -601,6 +627,10 @@ pub(crate) struct SettingsWindowView {
     _appearance_subscription: gpui::Subscription,
     _activation_subscription: gpui::Subscription,
     _search_input_subscription: gpui::Subscription,
+    _workspace_name_input_subscription: gpui::Subscription,
+    // Safe only because workspace reads no longer lease the global (a leasing
+    // read would notify this observer from every title-bar render).
+    _workspaces_observer: gpui::Subscription,
     #[cfg(test)]
     overflow_probe: bool,
     #[cfg(test)]
@@ -624,7 +654,11 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     let bounds = Bounds::centered(
         None,
-        settings_window_default_size_for_percent(ui_scale.percent),
+        crate::app::fit_default_window_size(
+            settings_window_default_size_for_percent(ui_scale.percent),
+            settings_window_min_size_for_percent(ui_scale.percent),
+            cx,
+        ),
         cx,
     );
     let ui_scale_percent = ui_scale.percent;
@@ -643,6 +677,27 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     .expect("failed to open settings window");
 
     cx.activate(true);
+}
+
+/// Open (or raise) Settings on the Workspaces page with `workspace_id` selected.
+pub(crate) fn open_settings_window_to_workspace(
+    cx: &mut App,
+    workspace_id: gitcomet_state::session::WorkspaceId,
+) {
+    open_settings_window(cx);
+    let Some(window) = cx
+        .windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<SettingsWindowView>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |view, _window, cx| {
+        view.current_view = SettingsView::Root;
+        view.select_category(SettingsCategory::Workspaces, cx);
+        view.select_workspace(workspace_id, cx);
+        cx.notify();
+    });
 }
 
 fn settings_window_min_size_for_percent(percent: u32) -> gpui::Size<Pixels> {
@@ -915,12 +970,26 @@ fn initial_external_editor_setting(
 
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
+        crate::environment::track_window(window, cx);
+        cx.observe_global::<crate::environment::Environment>(|this, cx| {
+            this.runtime_info.environment =
+                cx.global::<crate::environment::Environment>().0.clone();
+            cx.notify();
+        })
+        .detach();
         window.set_window_title(SETTINGS_WINDOW_TITLE);
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);
         crate::appearance::initialize(&ui_session, cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        let window_controls =
+            crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+        let browser_open_target = ui_session
+            .browser_open_target
+            .as_deref()
+            .and_then(crate::app::BrowserOpenTarget::from_key)
+            .unwrap_or_default();
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
@@ -980,7 +1049,8 @@ impl SettingsWindowView {
                 _ => (String::new(), String::new()),
             };
         let theme = theme_mode.resolve_theme(window.appearance());
-        let runtime_info = SettingsRuntimeInfo::detect();
+        let mut runtime_info = SettingsRuntimeInfo::detect();
+        runtime_info.environment = cx.global::<crate::environment::Environment>().0.clone();
         let signing_tools_probe = None;
         let git_executable_mode =
             GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
@@ -1072,6 +1142,34 @@ impl SettingsWindowView {
                 }
             });
 
+        let workspace_name_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Automatic name".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let workspace_name_input_subscription =
+            cx.observe(&workspace_name_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let next = input.read(cx).text().to_string();
+                if this.workspace_name_draft != next {
+                    this.workspace_name_draft = next;
+                    cx.notify();
+                }
+                if enter_pressed {
+                    this.commit_workspace_name(cx);
+                }
+            });
+        let workspaces_observer =
+            cx.observe_global::<crate::workspaces::WorkspaceManager>(|this, cx| {
+                this.reconcile_selected_workspace(cx);
+                cx.notify();
+            });
+
         let external_editor_custom_path_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -1139,6 +1237,9 @@ impl SettingsWindowView {
             {
                 this.selected_category = first;
                 this.expanded_section = None;
+                if first == SettingsCategory::Environment {
+                    crate::environment::request_refresh(cx);
+                }
             }
             cx.notify();
         });
@@ -1182,6 +1283,18 @@ impl SettingsWindowView {
             })
             .collect();
 
+        let selected_workspace = crate::workspaces::active_workspace_id(cx).or_else(|| {
+            crate::workspaces::workspaces(cx)
+                .first()
+                .map(|workspace| workspace.id)
+        });
+        let workspace_name_draft = selected_workspace
+            .and_then(|id| crate::workspaces::workspace(cx, id))
+            .and_then(|workspace| workspace.custom_name)
+            .unwrap_or_default();
+        workspace_name_input.update(cx, |input, cx| {
+            input.set_text(workspace_name_draft.clone(), cx);
+        });
         Self {
             theme_mode,
             appearance_metrics,
@@ -1189,6 +1302,8 @@ impl SettingsWindowView {
             _font_size_subscriptions: font_size_subscriptions,
             theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
+            window_controls_mode: window_controls.mode,
+            browser_open_target,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,
             use_font_ligatures: font_preferences.use_font_ligatures,
@@ -1253,6 +1368,7 @@ impl SettingsWindowView {
             nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            environment_value_inputs: FxHashMap::default(),
             signing_tools_probe,
             signing_tools_cancellation: Default::default(),
             git_executable_mode,
@@ -1274,6 +1390,12 @@ impl SettingsWindowView {
             _appearance_subscription: appearance_subscription,
             _activation_subscription: activation_subscription,
             _search_input_subscription: search_input_subscription,
+            _workspace_name_input_subscription: workspace_name_input_subscription,
+            _workspaces_observer: workspaces_observer,
+            selected_workspace,
+            workspace_name_draft,
+            workspace_name_input,
+            workspace_delete_confirm: None,
             #[cfg(test)]
             overflow_probe: false,
             #[cfg(test)]
@@ -1282,6 +1404,9 @@ impl SettingsWindowView {
     }
 
     fn select_category(&mut self, category: SettingsCategory, cx: &mut gpui::Context<Self>) {
+        if category == SettingsCategory::Environment {
+            crate::environment::request_refresh(cx);
+        }
         if self.selected_category == category {
             return;
         }
@@ -1372,10 +1497,12 @@ impl SettingsWindowView {
     }
 }
 
+mod cards;
 mod prefs;
 mod render;
 mod rows;
 mod runtime;
+mod workspaces;
 
 use runtime::*;
 

@@ -1,10 +1,11 @@
 use crate::domain::SharedLineText;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
+use std::marker::PhantomData;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,17 +63,168 @@ struct FileDiffLineFileSlice {
     text: OnceLock<Arc<str>>,
 }
 
-fn read_file_bytes(path: &PathBuf, range: Range<usize>) -> Option<Vec<u8>> {
-    if range.start > range.end {
-        return None;
-    }
+/// Largest file a batch keeps in memory; larger ones keep an open handle.
+const SLICE_BATCH_MAX_FILE_BYTES: u64 = 64 << 20;
+/// A split diff reads two files; a few more cover previews beside it.
+const SLICE_BATCH_MAX_FILES: usize = 4;
 
-    let mut file = File::open(path).ok()?;
+thread_local! {
+    static SLICE_BATCH: RefCell<SliceBatch> = const {
+        RefCell::new(SliceBatch { depth: 0, sparse: false, files: Vec::new() })
+    };
+}
+
+struct SliceBatch {
+    depth: usize,
+    /// Set by the outermost guard: keep handles and read each slice, never
+    /// a whole file.
+    sparse: bool,
+    files: Vec<(PathBuf, BatchedFile)>,
+}
+
+enum BatchedFile {
+    Bytes(Vec<u8>),
+    Handle(File),
+    Unreadable,
+}
+
+// Per thread, like the batch, so parallel tests cannot disturb a count.
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static FILE_SLICE_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FILE_SLICE_BYTES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Source-backed files this thread opened to read line slices since the
+/// last call.
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_file_slice_opens_for_tests() -> usize {
+    FILE_SLICE_OPENS.with(|opens| opens.replace(0))
+}
+
+/// Bytes this thread read from source-backed files for line slices since
+/// the last call.
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_file_slice_bytes_read_for_tests() -> usize {
+    FILE_SLICE_BYTES_READ.with(|read| read.replace(0))
+}
+
+fn count_slice_bytes_read(_bytes: usize) {
+    #[cfg(any(test, feature = "test-support"))]
+    FILE_SLICE_BYTES_READ.with(|read| read.set(read.get() + _bytes));
+}
+
+fn open_slice_file(path: &PathBuf) -> std::io::Result<File> {
+    #[cfg(any(test, feature = "test-support"))]
+    FILE_SLICE_OPENS.with(|opens| opens.set(opens.get() + 1));
+    File::open(path)
+}
+
+/// While the guard lives, source-backed line slices read on this thread come
+/// from one read of each file instead of an open, seek and read per line. A
+/// pass over every row (search) otherwise spends nearly all its time in those
+/// system calls. The files are released when the outermost guard drops.
+pub fn batch_file_slice_reads() -> FileSliceBatch {
+    begin_slice_batch(false)
+}
+
+/// [`batch_file_slice_reads`] for passes over a few rows: each file is opened
+/// once and each slice is its own seek and read, so a handful of rows never
+/// loads whole files.
+pub fn batch_file_slice_handles() -> FileSliceBatch {
+    begin_slice_batch(true)
+}
+
+fn begin_slice_batch(sparse: bool) -> FileSliceBatch {
+    SLICE_BATCH.with(|batch| {
+        let mut batch = batch.borrow_mut();
+        if batch.depth == 0 {
+            batch.sparse = sparse;
+        }
+        batch.depth += 1;
+    });
+    FileSliceBatch {
+        _thread_bound: PhantomData,
+    }
+}
+
+#[must_use = "reads are batched only while the guard lives"]
+pub struct FileSliceBatch {
+    _thread_bound: PhantomData<*const ()>,
+}
+
+impl Drop for FileSliceBatch {
+    fn drop(&mut self) {
+        SLICE_BATCH.with(|batch| {
+            let mut batch = batch.borrow_mut();
+            batch.depth -= 1;
+            if batch.depth == 0 {
+                batch.files.clear();
+            }
+        });
+    }
+}
+
+/// `None` when no batch is active on this thread.
+fn read_batched_file_bytes(path: &PathBuf, range: &Range<usize>) -> Option<Option<Vec<u8>>> {
+    SLICE_BATCH.with(|batch| {
+        let mut batch = batch.borrow_mut();
+        if batch.depth == 0 {
+            return None;
+        }
+        let ix = match batch.files.iter().position(|(cached, _)| cached == path) {
+            Some(ix) => ix,
+            None => {
+                if batch.files.len() >= SLICE_BATCH_MAX_FILES {
+                    batch.files.remove(0);
+                }
+                let sparse = batch.sparse;
+                let file = match open_slice_file(path) {
+                    Ok(mut file) => match file.metadata() {
+                        Ok(metadata) if !sparse && metadata.len() <= SLICE_BATCH_MAX_FILE_BYTES => {
+                            let mut bytes = Vec::new();
+                            match file.read_to_end(&mut bytes) {
+                                Ok(read) => {
+                                    count_slice_bytes_read(read);
+                                    BatchedFile::Bytes(bytes)
+                                }
+                                Err(_) => BatchedFile::Unreadable,
+                            }
+                        }
+                        _ => BatchedFile::Handle(file),
+                    },
+                    Err(_) => BatchedFile::Unreadable,
+                };
+                batch.files.push((path.clone(), file));
+                batch.files.len() - 1
+            }
+        };
+        Some(match &mut batch.files[ix].1 {
+            BatchedFile::Bytes(bytes) => bytes.get(range.clone()).map(<[u8]>::to_vec),
+            BatchedFile::Handle(file) => read_range(file, range.clone()),
+            BatchedFile::Unreadable => None,
+        })
+    })
+}
+
+fn read_range(file: &mut File, range: Range<usize>) -> Option<Vec<u8>> {
     file.seek(SeekFrom::Start(u64::try_from(range.start).ok()?))
         .ok()?;
     let mut bytes = vec![0u8; range.end.saturating_sub(range.start)];
     file.read_exact(&mut bytes).ok()?;
+    count_slice_bytes_read(bytes.len());
     Some(bytes)
+}
+
+fn read_file_bytes(path: &PathBuf, range: Range<usize>) -> Option<Vec<u8>> {
+    if range.start > range.end {
+        return None;
+    }
+    if let Some(bytes) = read_batched_file_bytes(path, &range) {
+        return bytes;
+    }
+
+    read_range(&mut open_slice_file(path).ok()?, range)
 }
 
 fn read_utf8_file_slice(path: &PathBuf, range: Range<usize>) -> Option<Arc<str>> {
@@ -1205,6 +1357,9 @@ impl<'a> PreparedReplacementLine<'a> {
     }
 }
 
+// Calls to `strsim::generic_levenshtein` with these wrappers need explicit type
+// args: on macOS, objc2's recursive `IntoIterator for &Retained<T>` impl
+// overflows inference (E0275).
 #[cfg(feature = "benchmarks")]
 struct CharSlice<'a>(&'a [char]);
 
@@ -2514,11 +2669,11 @@ fn replacement_pair_cost_with_strsim(
     replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
         let old_trimmed_wrapper = CharSlice(old_trimmed);
         let new_trimmed_wrapper = CharSlice(new_trimmed);
-        u32::try_from(strsim::generic_levenshtein(
+        let distance = strsim::generic_levenshtein::<CharSlice<'_>, CharSlice<'_>, char, char>(
             &old_trimmed_wrapper,
             &new_trimmed_wrapper,
-        ))
-        .unwrap_or(u32::MAX)
+        );
+        u32::try_from(distance).unwrap_or(u32::MAX)
     })
 }
 
@@ -3226,6 +3381,77 @@ fn compact_trace_get(trace: &[u32], depth: usize, k: isize) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    fn file_slice_lines(path: &Arc<PathBuf>, text: &str) -> Vec<FileDiffLineText> {
+        let mut start = 0;
+        text.split_inclusive('\n')
+            .map(|line| {
+                let range = start..start + line.trim_end_matches('\n').len();
+                start += line.len();
+                FileDiffLineText::file_slice(Arc::clone(path), range, line.is_ascii(), false)
+            })
+            .collect()
+    }
+
+    /// Search reads every row of a source-backed side. Batched, it must see
+    /// exactly what per-line reads see, opening the file once rather than
+    /// once per line, and keep nothing once the batch ends.
+    #[test]
+    fn batched_slice_reads_match_per_line_reads_and_open_each_file_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = Arc::new(dir.path().join("side.txt"));
+        let text = "plain ascii line\nβeta γamma δelta\n\ttabbed\nlast line without newline";
+        std::fs::write(&*path, text).expect("write side");
+        let read_all = |lines: &[FileDiffLineText]| {
+            lines
+                .iter()
+                .map(|line| {
+                    let len = line.len();
+                    (
+                        line.slice_bytes(0..len).map(|b| b.into_owned()),
+                        line.slice_text_resolved(1..len.min(7))
+                            .map(|(text, range)| (text.into_owned(), range)),
+                        line.as_str().to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let _ = take_file_slice_opens_for_tests();
+        let unbatched = read_all(&file_slice_lines(&path, text));
+        assert!(take_file_slice_opens_for_tests() >= 4);
+
+        let batched = {
+            let _batch = batch_file_slice_reads();
+            let _nested = batch_file_slice_reads();
+            read_all(&file_slice_lines(&path, text))
+        };
+        assert_eq!(batched, unbatched);
+        assert_eq!(take_file_slice_opens_for_tests(), 1);
+
+        // A sparse batch reads the same slices through one handle, and only
+        // the bytes asked for; the outermost guard picks the mode.
+        let _ = take_file_slice_bytes_read_for_tests();
+        let sparse = {
+            let _batch = batch_file_slice_handles();
+            let _nested = batch_file_slice_reads();
+            file_slice_lines(&path, text)[0].as_str().to_owned()
+        };
+        assert_eq!(sparse, "plain ascii line");
+        assert_eq!(take_file_slice_opens_for_tests(), 1);
+        assert_eq!(take_file_slice_bytes_read_for_tests(), sparse.len());
+
+        // The batch ended: a changed file is read afresh, not from a copy.
+        std::fs::write(&*path, text.replace("plain", "PLAIN")).expect("rewrite side");
+        let after = file_slice_lines(&path, text);
+        assert_eq!(after[0].as_str(), "PLAIN ascii line");
+        assert_eq!(take_file_slice_opens_for_tests(), 1);
+
+        // Out-of-range slices fail the same way with or without a batch.
+        let missing = FileDiffLineText::file_slice(Arc::clone(&path), 10_000..10_010, true, false);
+        let _batch = batch_file_slice_reads();
+        assert!(missing.slice_bytes(0..10).is_none());
+    }
+
     use super::*;
 
     fn remove_row(old_line: u32, old: &str) -> FileDiffRow {
@@ -4196,7 +4422,10 @@ mod tests {
             let new_wrapper = ByteSlice(new_bytes);
             assert_eq!(
                 scratch.distance(old_bytes, new_bytes),
-                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                strsim::generic_levenshtein::<ByteSlice<'_>, ByteSlice<'_>, u8, u8>(
+                    &old_wrapper,
+                    &new_wrapper
+                ),
                 "ascii mismatch for old={old:?} new={new:?}"
             );
         }
@@ -4208,7 +4437,10 @@ mod tests {
             let new_wrapper = CharSlice(new_chars.as_slice());
             assert_eq!(
                 scratch.distance(old_chars.as_slice(), new_chars.as_slice()),
-                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                strsim::generic_levenshtein::<CharSlice<'_>, CharSlice<'_>, char, char>(
+                    &old_wrapper,
+                    &new_wrapper
+                ),
                 "unicode mismatch for old={old:?} new={new:?}"
             );
         }
@@ -4244,7 +4476,10 @@ mod tests {
             for new in &cases {
                 let old_wrapper = ByteSlice(old.as_slice());
                 let new_wrapper = ByteSlice(new.as_slice());
-                let expected = strsim::generic_levenshtein(&old_wrapper, &new_wrapper);
+                let expected = strsim::generic_levenshtein::<ByteSlice<'_>, ByteSlice<'_>, u8, u8>(
+                    &old_wrapper,
+                    &new_wrapper,
+                );
 
                 assert_eq!(
                     bitparallel_levenshtein_bytes(old.as_slice(), new.as_slice()),

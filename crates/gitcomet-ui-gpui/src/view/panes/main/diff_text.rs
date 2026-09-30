@@ -469,22 +469,28 @@ impl MainPaneView {
         let revealed = if self.conflict_text_hitboxes.is_empty() {
             // Every region, not the first that matches: the split columns are
             // separate scrollables and a hit can be in both.
-            let mut revealed = false;
+            let mut painted = false;
+            let mut revealed = true;
             for region in [
                 DiffTextRegion::Inline,
                 DiffTextRegion::SplitLeft,
                 DiffTextRegion::SplitRight,
             ] {
-                revealed |= self.reveal_diff_search_match_in_region(visible_ix, region, &matcher);
+                if self.diff_text_hitboxes.contains_key(&(visible_ix, region)) {
+                    painted = true;
+                    // Evaluate every painted column even if an earlier one
+                    // needs another layout. No column may cancel its retry.
+                    revealed &=
+                        self.reveal_diff_search_match_in_region(visible_ix, region, &matcher);
+                }
             }
-            revealed
+            painted && revealed
         } else {
             self.reveal_conflict_search_match_horizontally(visible_ix, &matcher)
         };
 
-        // A frame that painted the row settles the matter either way: it either
-        // moved or it did not need to. Only a frame that has not painted it yet
-        // is worth retrying.
+        // Retry until the row is painted with usable scroll geometry in every
+        // column. A settled split column cannot cancel another column's retry.
         self.diff_search_horizontal_reveal = if revealed || attempts_left <= 1 {
             None
         } else {
@@ -529,8 +535,8 @@ impl MainPaneView {
         ranges.first().cloned()
     }
 
-    /// Reveals the match in one region, reporting whether the row was painted
-    /// there at all — which is what tells the caller to stop retrying.
+    /// Reveals the match in one region, reporting whether its painted row and
+    /// scroll geometry are ready so the caller can stop retrying that region.
     fn reveal_diff_search_match_in_region(
         &mut self,
         visible_ix: usize,
@@ -582,9 +588,20 @@ impl MainPaneView {
         let offset = handle.offset();
         // Hitbox bounds are window space with the scroll already applied.
         let to_content = |x: Pixels| row_left + x - viewport.origin.x - offset.x;
+        let match_left = to_content(local_left);
+        let match_right = to_content(local_right);
+        // A newly visible long line records its width during paint. The list
+        // uses that width in the following layout, so a hitbox can be ready
+        // while the scroll range still describes the previous, shorter rows.
+        // Retry instead of claiming a reveal clamped to that stale range.
+        if viewport.size.width <= px(0.0)
+            || match_right > viewport.size.width + handle.max_offset().x + px(1.0)
+        {
+            return false;
+        }
         let Some(target_x) = super::helpers::reveal_scroll_x(
-            to_content(local_left),
-            to_content(local_right),
+            match_left,
+            match_right,
             viewport.size.width,
             handle.max_offset().x,
             offset.x,

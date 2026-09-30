@@ -23,6 +23,7 @@ gix = ["dep:gitcomet-git-gix"]
 
 [dependencies]
 clap = { workspace = true }
+fs2 = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
@@ -33,8 +34,10 @@ rustc-hash = { workspace = true }
 rustfs-mimalloc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+smol = { workspace = true }
 sysinfo = { workspace = true, optional = true }
 tempfile = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = { workspace = true }

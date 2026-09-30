@@ -727,6 +727,8 @@ impl TextInput {
         self.interaction.enter_pressed = false;
         self.interaction.escape_pressed = false;
         self.interaction.arrow_up_pressed = false;
+        self.interaction.arrow_left_at_start_pressed = false;
+        self.interaction.arrow_right_at_end_pressed = false;
         self.interaction.document_home_pressed = false;
         self.interaction.document_end_pressed = false;
         self.interaction.page_up_pressed = false;
@@ -755,6 +757,14 @@ impl TextInput {
 
     pub fn take_arrow_up_pressed(&mut self) -> bool {
         std::mem::take(&mut self.interaction.arrow_up_pressed)
+    }
+
+    pub fn take_arrow_left_at_start_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_left_at_start_pressed)
+    }
+
+    pub fn take_arrow_right_at_end_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_right_at_end_pressed)
     }
 
     pub fn take_arrow_down_pressed(&mut self) -> bool {
@@ -1503,6 +1513,9 @@ impl TextInput {
     }
 
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.range.is_empty() && self.cursor_offset() == 0 {
+            self.interaction.arrow_left_at_start_pressed = true;
+        }
         if self.selection.range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
         } else {
@@ -1512,6 +1525,9 @@ impl TextInput {
     }
 
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection.range.is_empty() && self.cursor_offset() >= self.content.len() {
+            self.interaction.arrow_right_at_end_pressed = true;
+        }
         if self.selection.range.is_empty() {
             self.move_to(self.next_boundary(self.selection.range.end), cx);
         } else {

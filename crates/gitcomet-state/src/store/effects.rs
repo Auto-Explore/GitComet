@@ -1946,8 +1946,9 @@ pub(super) fn schedule_effect(
             path,
             contents,
             stage,
+            completion,
         } => repo_commands::schedule_save_worktree_file(
-            executor, repos, msg_tx, repo_id, path, contents, stage,
+            executor, repos, msg_tx, repo_id, path, contents, stage, completion,
         ),
         Effect::AppendGitignorePatterns { repo_id, patterns } => {
             repo_commands::schedule_append_gitignore_patterns(
@@ -3166,6 +3167,7 @@ mod tests {
             signature_executor: &executor,
             session_persist_executor: &executor,
             backend: &backend,
+            publication: &std::sync::atomic::AtomicU64::new(0),
         };
 
         let builds = selection_index_builds_for_test();

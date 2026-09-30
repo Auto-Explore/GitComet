@@ -47,12 +47,16 @@ impl MainPaneView {
             .on_activate(
                 false,
                 controls::ControlActivation::Nested,
-                cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                cx.listener(move |_this, e: &ClickEvent, window, cx| {
                     if !e.standard_click() {
                         return;
                     }
                     cx.stop_propagation();
-                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                    crate::app::open_repository_from_view(
+                        cx,
+                        window.window_handle().window_id(),
+                        open_path.clone(),
+                    );
                     cx.notify();
                 }),
             )

@@ -200,7 +200,7 @@ impl HistoryView {
                     && match key {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
-                        "enter" => this.history_open_selected_worktree(cx),
+                        "enter" => this.history_open_selected_worktree(window, cx),
                         _ => false,
                     };
 
@@ -237,7 +237,8 @@ impl HistoryView {
     /// falling through to whatever else handles it.
     pub(in crate::view) fn history_open_selected_worktree(
         &mut self,
-        _cx: &mut gpui::Context<Self>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
     ) -> bool {
         let Some(path) = self
             .active_repo()
@@ -245,7 +246,7 @@ impl HistoryView {
         else {
             return false;
         };
-        self.store.dispatch(Msg::OpenRepo(path));
+        crate::app::open_repository_from_view(cx, window.window_handle().window_id(), path);
         true
     }
 

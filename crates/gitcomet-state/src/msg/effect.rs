@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use super::RepoPathList;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
@@ -286,6 +286,7 @@ pub enum Effect {
         path: PathBuf,
         contents: super::message::ContentBytes,
         stage: bool,
+        completion: Option<smol::channel::Sender<bool>>,
     },
     AppendGitignorePatterns {
         repo_id: RepoId,

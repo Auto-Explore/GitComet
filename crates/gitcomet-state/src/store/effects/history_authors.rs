@@ -12,7 +12,7 @@ pub(super) fn schedule(
     static EXECUTOR: OnceLock<TaskExecutor> = OnceLock::new();
     let failed = work.clone();
     util::spawn_detached_with_repo_or_else(
-        EXECUTOR.get_or_init(|| TaskExecutor::new(1)),
+        EXECUTOR.get_or_init(|| TaskExecutor::named("gitcomet-history-authors", 1)),
         "history-authors",
         repos,
         work.repo_id,

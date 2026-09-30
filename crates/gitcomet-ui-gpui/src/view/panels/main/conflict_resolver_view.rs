@@ -412,6 +412,7 @@ impl MainPaneView {
                         path: save_path.clone(),
                         contents,
                         stage: false,
+                        completion: None,
                     });
                     this.mark_conflict_resolved_output_saved(cx);
                 });
@@ -452,6 +453,7 @@ impl MainPaneView {
                                             path: stage_path.clone(),
                                             contents,
                                             stage: true,
+                                            completion: None,
                                         });
                                         this.mark_conflict_resolved_output_saved(cx);
                                     }

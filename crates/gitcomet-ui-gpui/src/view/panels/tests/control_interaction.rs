@@ -41,7 +41,7 @@ fn toolbar_menu_highlights_end_on_escape_and_outside_click(cx: &mut gpui::TestAp
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     apply_state(cx, &view, app_state_with_active_repo(toolbar_repo()));
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
-    for selector in ["push_menu", "pull_menu", "stash", "bottom_status_bar_zoom"] {
+    for selector in ["push_menu", "pull_menu", "stash"] {
         for escape in [true, false] {
             leave_controls(cx);
             let resting = paint(cx, selector);
@@ -189,7 +189,9 @@ fn repository_sort_preserves_its_open_fill_on_hover_and_clears_when_closed(
     cx.update(|window, app| {
         view.update(app, |view, cx| {
             view.open_popover_at(
-                PopoverKind::RepoPicker,
+                PopoverKind::RepoPicker {
+                    scope: RepoPickerScope::All,
+                },
                 point(px(72.0), px(72.0)),
                 window,
                 cx,

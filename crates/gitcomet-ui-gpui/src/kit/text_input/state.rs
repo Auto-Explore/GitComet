@@ -792,6 +792,10 @@ pub(super) struct InteractionState {
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
     pub(super) arrow_up_pressed: bool,
+    /// Left/Right pressed with the caret already at that edge (no selection):
+    /// the caret cannot move, so a list beside the input may take the key.
+    pub(super) arrow_left_at_start_pressed: bool,
+    pub(super) arrow_right_at_end_pressed: bool,
     pub(super) document_home_pressed: bool,
     pub(super) document_end_pressed: bool,
     pub(super) page_up_pressed: bool,
@@ -825,6 +829,8 @@ impl InteractionState {
             enter_pressed: false,
             escape_pressed: false,
             arrow_up_pressed: false,
+            arrow_left_at_start_pressed: false,
+            arrow_right_at_end_pressed: false,
             document_home_pressed: false,
             document_end_pressed: false,
             page_up_pressed: false,
