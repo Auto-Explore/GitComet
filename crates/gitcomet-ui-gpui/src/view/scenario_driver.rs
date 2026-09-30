@@ -118,8 +118,13 @@ enum Step {
         #[serde(default = "default_true")]
         expect_status: bool,
     },
-    /// Runs a command-palette command (setup, e.g. `toggle-terminal`).
-    Command { id: String },
+    /// Runs a command-palette command (setup, e.g. `toggle-terminal`). A
+    /// witness makes the next step wait until the store has applied it.
+    Command {
+        id: String,
+        #[serde(default)]
+        witness: Option<WitnessKind>,
+    },
     /// Opens a repository as the Open Repository flow does once a folder is
     /// picked, as a traced input whose witness is that repository loaded.
     OpenRepo { path: PathBuf },
@@ -171,6 +176,8 @@ enum WitnessKind {
     },
     /// The repository at `path` is active with status and history loaded.
     RepoOpen { path: PathBuf },
+    /// No open repository has `path` as its work tree.
+    RepoClosed { path: PathBuf },
 }
 
 impl WitnessKind {
@@ -181,6 +188,7 @@ impl WitnessKind {
             Self::HistoryScrolled => "history_scrolled",
             Self::SearchSettled { .. } => "search_settled",
             Self::RepoOpen { .. } => "repo_open",
+            Self::RepoClosed { .. } => "repo_closed",
         }
     }
 }
@@ -508,14 +516,29 @@ impl Driver {
                 self.write_files(paths, contents, *rounds, *interval_ms, *expect_status, cx)
                     .await
             }
-            Step::Command { id } => {
+            Step::Command { id, witness } => {
                 let view = self.view.clone();
                 let id = id.clone();
-                self.window
-                    .update(cx, move |_, window, cx| {
-                        view.update(cx, |view, cx| view.execute_command(&id, Some(window), cx));
-                    })
-                    .map_err(|e| e.to_string())
+                let Some(witness) = witness else {
+                    return self
+                        .window
+                        .update(cx, move |_, window, cx| {
+                            view.update(cx, |view, cx| view.execute_command(&id, Some(window), cx));
+                        })
+                        .map_err(|e| e.to_string());
+                };
+                let witness = match witness {
+                    WitnessKind::RepoClosed { path } => WitnessKind::RepoClosed {
+                        path: std::fs::canonicalize(path)
+                            .map_err(|e| format!("{}: {e}", path.display()))?,
+                    },
+                    other => other.clone(),
+                };
+                self.scheduled(1, 0, Some(witness), cx, move |_, window, cx| {
+                    view.update(cx, |view, cx| view.execute_command(&id, Some(window), cx));
+                    true
+                })
+                .await
             }
             Step::OpenRepo { path } => {
                 let path =
@@ -643,7 +666,9 @@ impl Driver {
                 WitnessKind::SearchSettled { .. } => {
                     Baseline::Query(view.main_pane.read(cx).diff_search_query.clone())
                 }
-                WitnessKind::DiffLoaded | WitnessKind::RepoOpen { .. } => Baseline::None,
+                WitnessKind::DiffLoaded
+                | WitnessKind::RepoOpen { .. }
+                | WitnessKind::RepoClosed { .. } => Baseline::None,
             }
         })
     }
@@ -659,6 +684,13 @@ impl Driver {
     ) -> bool {
         cx.update(|cx| {
             let view = self.view.read(cx);
+            if let WitnessKind::RepoClosed { path } = kind {
+                return !view
+                    .state
+                    .repos
+                    .iter()
+                    .any(|repo| repo.spec.workdir == *path);
+            }
             let Some(repo) = view.active_repo() else {
                 return false;
             };
@@ -679,6 +711,7 @@ impl Driver {
                         && matches!(&repo.history_state.commit_details,
                             Loadable::Ready(details) if Some(&details.id) == target.as_ref())
                 }
+                WitnessKind::RepoClosed { .. } => unreachable!("answered above"),
                 WitnessKind::RepoOpen { path } => {
                     repo.spec.workdir == *path
                         && matches!(repo.open, Loadable::Ready(()))
@@ -854,6 +887,13 @@ impl Driver {
     fn describe(&self, kind: &WitnessKind, cx: &mut AsyncApp) -> String {
         cx.update(|cx| {
             let view = self.view.read(cx);
+            if let WitnessKind::RepoClosed { path } = kind {
+                return format!(
+                    "wanted closed={} open={}",
+                    path.display(),
+                    view.state.repos.len()
+                );
+            }
             let Some(repo) = view.active_repo() else {
                 return "no active repository".to_owned();
             };
@@ -863,6 +903,7 @@ impl Driver {
                     repo.history_state.selected_commit,
                     matches!(repo.history_state.commit_details, Loadable::Ready(_))
                 ),
+                WitnessKind::RepoClosed { .. } => unreachable!("answered above"),
                 WitnessKind::RepoOpen { path } => format!(
                     "wanted={} active={} open={:?}",
                     path.display(),
@@ -1055,13 +1096,15 @@ mod tests {
                 {"do": "write_files", "paths": ["target/churn-1.txt"], "contents": "x\n",
                  "rounds": 60, "interval_ms": 500, "expect_status": false},
                 {"do": "command", "id": "toggle-terminal"},
+                {"do": "command", "id": "close-repo-tab",
+                 "witness": {"kind": "repo_closed", "path": "/tmp"}},
                 {"do": "open_repo", "path": "/tmp"},
                 {"do": "minimize"},
                 {"do": "expect", "witness": {"kind": "search_settled", "matches": 100}}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 17);
+        assert_eq!(scenario.steps.len(), 18);
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {
@@ -1071,7 +1114,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            scenario.steps[16],
+            scenario.steps[17],
             Step::Expect {
                 witness: WitnessKind::SearchSettled { matches: Some(100) }
             }

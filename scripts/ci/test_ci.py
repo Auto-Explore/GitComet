@@ -302,6 +302,8 @@ class LiveUiMeasurementTests(unittest.TestCase):
         for ix, step in enumerate(steps):
             if step["do"] == "open_repo":
                 self.assertEqual([s["do"] for s in steps[ix + 1:ix + 3]], ["wait_ready", "focus"])
+            if step["do"] == "command":
+                self.assertEqual(step["witness"], {"kind": "repo_closed", "path": "/other"})
 
     def test_process_sample_survives_a_thread_exiting_mid_read(self):
         real = Path.read_text

@@ -167,7 +167,9 @@ def lifecycle_cycle(secondary):
             {"do": "focus", "target": "history"},
             {"do": "keys", "key": "down", "repeat": 3, "interval_ms": 60,
              "witness": {"kind": "commit_details"}},
-            {"do": "command", "id": "close-repo-tab"},
+            # Witnessed, or the next step reads the snapshot from before the close.
+            {"do": "command", "id": "close-repo-tab",
+             "witness": {"kind": "repo_closed", "path": str(secondary)}},
             {"do": "wait_ready", "timeout_ms": 60_000}]
 
 
