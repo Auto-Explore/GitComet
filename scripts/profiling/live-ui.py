@@ -411,6 +411,16 @@ def load_average():
     return Path("/proc/loadavg").read_text().split()[:3]
 
 
+def wait_for_quiet(max_load, timeout_s=4 * 3600, poll_s=5.0):
+    """Blocks until the 1-minute load average drops below `max_load`: on a
+    shared machine other builds would otherwise land inside a run."""
+    deadline = time.monotonic() + timeout_s
+    while float(load_average()[0]) >= max_load:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"load stayed at or above {max_load} for {timeout_s} s")
+        time.sleep(poll_s)
+
+
 class HeadlessCompositor:
     """A private headless mutter with one virtual monitor, in its own D-Bus
     session so it never touches the desktop's display configuration.
@@ -917,13 +927,15 @@ def measure(args):
                "binaries": {k: str(v) for k, v in binaries.items()}, "hashes": hashes,
                "environment": perf_metadata.collect(binaries=list(binaries.items()),
                                                     fixtures=[("repository", repository)]),
-               "samples": [], "complete": False}
+               "max_load": args.max_load, "samples": [], "complete": False}
     try:
         for pair in range(args.pairs):
             order = ["baseline", "candidate"] if (pair + args.reverse) % 2 == 0 else ["candidate", "baseline"]
             for name in args.scenarios:
                 for variant in order:
                     verify_repository()
+                    if args.max_load:
+                        wait_for_quiet(args.max_load)
                     output = args.output / f"pair-{pair + 1}-{name}-{variant}"
                     runtime = candidate if variant == "candidate" else {"wrap": None, "env": {}}
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
@@ -1008,6 +1020,8 @@ def main():
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
     paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    paired.add_argument("--max-load", type=float,
+                        help="wait before each run until the 1-minute load average is below this")
     paired.add_argument("--candidate-wrap", help="launch prefix for candidate runs only (runtime-only candidates)")
     paired.add_argument("--candidate-env", action="append", default=[], metavar="KEY=VALUE",
                         help="extra environment for candidate runs only (repeatable)")
