@@ -1,4 +1,8 @@
 use super::*;
+use gitcomet_core::domain::*;
+use gitcomet_core::services::{BlameLine, SequencerState};
+use rustc_hash::FxHashMap;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 fn summary_with_live_halves(
@@ -91,7 +95,7 @@ fn a_rows_target_is_the_entry_the_click_selects() {
 
 fn entry(name: &str) -> ViewHistoryEntry {
     ViewHistoryEntry {
-        source: FileSource::Commit(crate::model::CommitId(name.into())),
+        source: FileSource::Commit(CommitId(name.into())),
         path: PathBuf::from("src/lib.rs"),
     }
 }
