@@ -17,10 +17,24 @@ pub(crate) const AMBER_DARK_THEME_KEY: &str = "amber_dark";
 pub(crate) const GRAPH_LANE_PALETTE_SIZE: usize = 64;
 pub(crate) const THEME_SCHEMA_VERSION: u32 = 2;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ThemeOption {
     pub key: String,
     pub label: String,
+    pub is_dark: bool,
+    /// Loaded from the user themes folder rather than bundled.
+    pub custom: bool,
+    pub preview: ThemePreviewColors,
+}
+
+/// The colours a theme's picker orb is painted from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ThemePreviewColors {
+    pub is_dark: bool,
+    /// The chrome band: what tells one window's theme from another's.
+    pub base: Rgba,
+    pub glow: Rgba,
+    pub secondary: Rgba,
 }
 
 struct EmbeddedThemeFile {
@@ -500,6 +514,39 @@ pub(crate) fn available_themes() -> Vec<ThemeOption> {
     merged_theme_options(None)
 }
 
+/// Every theme and every refused theme file from one read of the themes
+/// folder, for a render that looks up more than one key.
+pub(crate) struct ThemeCatalog {
+    pub themes: Vec<ThemeOption>,
+    /// Why the themes that are *not* in the picker were left out.
+    ///
+    /// A rejected file is otherwise invisible: it disappears from the list, the
+    /// app falls back to a bundled theme, and the only account of it goes to
+    /// stderr, which nobody running a windowed build ever sees. That matters
+    /// most right after a schema break -- every v1 custom theme in the folder is
+    /// rejected at once, and "my theme is gone" needs to be answerable without a
+    /// terminal.
+    pub issues: Arc<[RuntimeThemeIssue]>,
+}
+
+impl ThemeCatalog {
+    pub(crate) fn load() -> Self {
+        let entry = runtime_theme_cache_entry(None);
+        let (runtime, issues) = entry.map_or_else(
+            || (Arc::default(), Arc::from(Vec::new())),
+            |entry| (entry.themes, entry.issues),
+        );
+        Self {
+            themes: merge_theme_options(&runtime),
+            issues,
+        }
+    }
+
+    pub(crate) fn get(&self, key: &str) -> Option<&ThemeOption> {
+        self.themes.iter().find(|option| option.key == key)
+    }
+}
+
 pub(crate) fn has_theme_key(key: &str) -> bool {
     merged_theme_options(None)
         .iter()
@@ -511,6 +558,36 @@ pub(crate) fn theme_label(key: &str) -> Option<String> {
         .into_iter()
         .find(|option| option.key == key)
         .map(|option| option.label)
+}
+
+#[cfg(test)]
+pub(crate) fn theme_preview_colors(key: &str) -> Option<ThemePreviewColors> {
+    AppTheme::from_key(key).map(|theme| theme.preview_colors())
+}
+
+impl AppTheme {
+    pub(crate) fn preview_colors(self) -> ThemePreviewColors {
+        ThemePreviewColors {
+            is_dark: self.is_dark,
+            base: self.colors.surface.chrome,
+            glow: self.colors.accent.solid,
+            secondary: self.syntax.keyword,
+        }
+    }
+}
+
+/// Every bundled theme key with its appearance, in picker order.
+#[cfg(test)]
+pub(crate) fn bundled_theme_keys() -> Vec<(String, bool)> {
+    let mut options = embedded_theme_cache()
+        .values()
+        .map(|spec| &spec.option)
+        .collect::<Vec<_>>();
+    options.sort_by(|left, right| theme_option_order(left, right));
+    options
+        .into_iter()
+        .map(|option| (option.key.clone(), option.is_dark))
+        .collect()
 }
 
 pub(crate) fn ensure_user_themes_dir_exists() -> Option<PathBuf> {
@@ -1349,8 +1426,12 @@ fn is_reserved_runtime_theme_path(path: &Path) -> bool {
 }
 
 fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
+    merge_theme_options(&runtime_themes_with_dir(runtime_dir))
+}
+
+fn merge_theme_options(runtime: &FxHashMap<String, RuntimeThemeSpec>) -> Vec<ThemeOption> {
     let mut options = BTreeMap::<String, ThemeOption>::new();
-    for spec in runtime_themes_with_dir(runtime_dir).values() {
+    for spec in runtime.values() {
         options.insert(spec.option.key.clone(), spec.option.clone());
     }
     for spec in embedded_theme_cache().values() {
@@ -1358,17 +1439,24 @@ fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
     }
 
     let mut options = options.into_values().collect::<Vec<_>>();
-    options.sort_by(|left, right| {
-        theme_option_rank(left.key.as_str())
-            .cmp(&theme_option_rank(right.key.as_str()))
-            .then_with(|| left.key.cmp(&right.key))
-    });
+    options.sort_by(theme_option_order);
     options
 }
 
-/// Keep GitComet's two defaults together at the top of the picker, followed by
-/// the alternate house palette. Every other bundled or user theme retains the
-/// existing deterministic key order after those three.
+/// Picker order, which the tile grid keeps within each group: GitComet's own
+/// themes first, then by name, ignoring case.
+fn theme_option_order(left: &ThemeOption, right: &ThemeOption) -> std::cmp::Ordering {
+    // Compared lazily: a sort must not allocate per comparison.
+    fn name(option: &ThemeOption) -> impl Iterator<Item = char> + '_ {
+        option.label.chars().flat_map(char::to_lowercase)
+    }
+    theme_option_rank(&left.key)
+        .cmp(&theme_option_rank(&right.key))
+        .then_with(|| name(left).cmp(name(right)))
+        .then_with(|| left.key.cmp(&right.key))
+}
+
+/// GitComet's two defaults, then its alternate house palette.
 fn theme_option_rank(key: &str) -> u8 {
     match key {
         DEFAULT_DARK_THEME_KEY => 0,
@@ -1385,36 +1473,39 @@ fn runtime_themes() -> Arc<FxHashMap<String, RuntimeThemeSpec>> {
 /// Custom themes from disk, re-parsed only when the directory has actually
 /// changed.
 ///
-/// Reading and parsing every theme file is far too expensive to do per call: the
-/// settings theme list asks for it from inside a `uniform_list` processor, so an
-/// unmemoized load is a directory read plus a full parse per file *per frame*
-/// while that dropdown is open. Theme authors still expect an edit to show up
-/// without a restart, so the cache is validated against a cheap stat of the
-/// directory rather than held forever.
+/// Reading and parsing every theme file is far too expensive to do per call:
+/// the settings pages look themes up on every render, so an unmemoized load is a
+/// directory read plus a full parse per file *per frame*. Theme authors still
+/// expect an edit to show up without a restart, so the cache is validated
+/// against a cheap stat of the directory rather than held forever.
 fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<FxHashMap<String, RuntimeThemeSpec>> {
     runtime_theme_cache_entry(runtime_dir)
         .map(|entry| entry.themes)
         .unwrap_or_default()
 }
 
-/// Why the themes that are *not* in the picker were left out.
-///
-/// A rejected file is otherwise invisible: it disappears from the list, the app
-/// falls back to a bundled theme, and the only account of it goes to stderr,
-/// which nobody running a windowed build ever sees. That matters most right
-/// after a schema break -- every v1 custom theme in the folder is rejected at
-/// once, and "my theme is gone" needs to be answerable without a terminal.
-pub(crate) fn runtime_theme_issues() -> Arc<[RuntimeThemeIssue]> {
-    runtime_theme_issues_with_dir(None)
-}
-
+#[cfg(test)]
 fn runtime_theme_issues_with_dir(runtime_dir: Option<&Path>) -> Arc<[RuntimeThemeIssue]> {
     runtime_theme_cache_entry(runtime_dir)
         .map(|entry| entry.issues)
         .unwrap_or_else(|| Arc::from(Vec::new()))
 }
 
+#[cfg(test)]
+thread_local! {
+    static RUNTIME_THEME_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Theme-folder lookups on this thread. Each walks the folder in the app;
+/// tests have no folder, so this is how they see the cost.
+#[cfg(test)]
+pub(crate) fn runtime_theme_lookups_for_test() -> usize {
+    RUNTIME_THEME_LOOKUPS.with(std::cell::Cell::get)
+}
+
 fn runtime_theme_cache_entry(runtime_dir: Option<&Path>) -> Option<RuntimeThemeCache> {
+    #[cfg(test)]
+    RUNTIME_THEME_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
     let dir = resolved_runtime_themes_dir(runtime_dir)?;
 
     let signature = runtime_themes_dir_signature(&dir);
@@ -1449,7 +1540,8 @@ fn runtime_theme_cache_entry(runtime_dir: Option<&Path>) -> Option<RuntimeThemeC
     Some(entry)
 }
 
-/// A theme file the loader refused, named so the picker can say so.
+/// A theme file, or themes in it, the loader refused, named so the picker can
+/// say so.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeThemeIssue {
     pub path: PathBuf,
@@ -1529,7 +1621,6 @@ fn load_runtime_themes_from_dir(
     let mut files = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .filter(|path| !is_reserved_runtime_theme_path(path))
         .collect::<Vec<_>>();
     files.sort_unstable();
 
@@ -1543,6 +1634,17 @@ fn load_runtime_themes_from_dir(
         });
     };
     for path in files {
+        // Reported, not just skipped: a later release can bundle a theme under
+        // a name an existing custom theme already uses.
+        if is_reserved_runtime_theme_path(&path) {
+            reject(
+                &mut issues,
+                &path,
+                "A bundled theme uses this file name, so the file is skipped. Rename it to load it."
+                    .to_string(),
+            );
+            continue;
+        }
         let json = match fs::read_to_string(&path) {
             Ok(json) => json,
             Err(error) => {
@@ -1558,6 +1660,26 @@ fn load_runtime_themes_from_dir(
             }
         };
 
+        let (clashing, specs): (Vec<_>, Vec<_>) = specs
+            .into_iter()
+            .partition(|spec| is_embedded_theme_key(&spec.option.key));
+        if !clashing.is_empty() {
+            let keys = clashing
+                .iter()
+                .map(|spec| format!("`{}`", spec.option.key))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let message = if clashing.len() == 1 {
+                format!(
+                    "A bundled theme already uses the key {keys}, so that theme is skipped. Give it a different `key`."
+                )
+            } else {
+                format!(
+                    "Bundled themes already use the keys {keys}, so those themes are skipped. Give them different keys."
+                )
+            };
+            reject(&mut issues, &path, message);
+        }
         for spec in specs {
             themes.insert(spec.option.key.clone(), spec);
         }
@@ -1592,7 +1714,7 @@ fn load_runtime_theme_specs_from_bundle(
 
 fn collect_theme_specs(
     bundle: ThemeBundleFile,
-    skip_embedded_keys: bool,
+    custom: bool,
 ) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
     if bundle.themes.is_empty() {
         return Err(ThemeParseError::Invalid(
@@ -1605,22 +1727,23 @@ fn collect_theme_specs(
 
     for entry in bundle.themes {
         let key = entry.key.clone();
-        if skip_embedded_keys && is_embedded_theme_key(&key) {
-            continue;
-        }
-
         if !seen_keys.insert(key.clone()) {
             return Err(ThemeParseError::Invalid(format!(
                 "theme bundle defines duplicate key `{key}`"
             )));
         }
 
+        let label = entry.name.clone();
+        let theme = entry.into_app_theme();
         themes.push(RuntimeThemeSpec {
             option: ThemeOption {
                 key,
-                label: entry.name.clone(),
+                label,
+                is_dark: theme.is_dark,
+                custom,
+                preview: theme.preview_colors(),
             },
-            theme: entry.into_app_theme(),
+            theme,
         });
     }
 
@@ -1816,10 +1939,12 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 /// needs this rather than the overlay color alone.
 pub(crate) fn composite_over(base: Rgba, overlay: Rgba) -> Rgba {
     let t = overlay.alpha.clamp(0.0, 1.0);
+    // This form, unlike `base + (overlay - base) * t`, is exact at t = 0 and 1.
+    let mix = |base: f32, overlay: f32| base * (1.0 - t) + overlay * t;
     Rgba::new(
-        base.red + (overlay.red - base.red) * t,
-        base.green + (overlay.green - base.green) * t,
-        base.blue + (overlay.blue - base.blue) * t,
+        mix(base.red, overlay.red),
+        mix(base.green, overlay.green),
+        mix(base.blue, overlay.blue),
         base.alpha,
     )
 }
@@ -1950,11 +2075,12 @@ mod tests {
     use super::{
         AMBER_DARK_THEME_KEY, AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY,
         EMBEDDED_THEME_FILES, GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, HexColor, Hsla, Rgba,
-        THEME_SCHEMA_VERSION, ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, composite_over,
-        content_header_bg, derived_syntax_color, fill_missing_color_tokens, has_theme_key,
-        hsla_from_hue_fraction, load_theme_specs_from_json, merged_theme_options,
-        resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
-        test_theme_json_with_syntax, theme_label, with_alpha,
+        THEME_SCHEMA_VERSION, ThemeColor, UNFILLED_COLOR_TOKENS, available_themes,
+        bundled_theme_keys, composite_over, content_header_bg, derived_syntax_color,
+        fill_missing_color_tokens, has_theme_key, hsla_from_hue_fraction,
+        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
+        runtime_theme_issues_with_dir, runtime_themes_with_dir, test_theme_bundle_value,
+        test_theme_json_with_syntax, theme_label, theme_preview_colors, with_alpha,
     };
     use palette::IntoColor;
     use std::{fs, path::PathBuf};
@@ -2937,7 +3063,8 @@ mod tests {
             "Sunset Veil should use a warm light-orange canvas"
         );
 
-        for key in ["gitcomet_light", "sunset_veil"] {
+        for (key, _) in bundled_theme_keys().into_iter().filter(|(_, dark)| !dark) {
+            let key = key.as_str();
             let theme = AppTheme::from_key(key).expect("light theme should load");
             let colors = theme.colors;
 
@@ -2958,7 +3085,8 @@ mod tests {
             );
         }
 
-        for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
+        for (key, _) in bundled_theme_keys().into_iter().filter(|(_, dark)| *dark) {
+            let key = key.as_str();
             let theme = AppTheme::from_key(key).expect("dark theme should load");
             assert!(
                 relative_luminance(theme.colors.surface.canvas)
@@ -2968,6 +3096,7 @@ mod tests {
         }
     }
 
+    /// The house dark palettes share one canvas; ported themes keep their own.
     #[test]
     fn bundled_dark_themes_share_the_darker_canvas_and_compact_radii() {
         for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
@@ -3037,13 +3166,8 @@ mod tests {
     /// over that, so text is measured against the two composited.
     #[test]
     fn bundled_theme_notice_text_is_readable_on_its_background() {
-        for key in [
-            DEFAULT_DARK_THEME_KEY,
-            DEFAULT_LIGHT_THEME_KEY,
-            "tokyo_night",
-            AMBER_DARK_THEME_KEY,
-            "sunset_veil",
-        ] {
+        for (key, _) in bundled_theme_keys() {
+            let key = key.as_str();
             let theme = AppTheme::from_key(key).expect("bundled theme should load");
             let notice = theme.colors.notice;
             let background = composite_over(content_header_bg(theme), notice.background);
@@ -3096,13 +3220,13 @@ mod tests {
     }
 
     #[test]
-    fn bundled_light_themes_match_the_dark_theme_radii() {
+    fn bundled_themes_share_the_dark_theme_radii() {
         let dark_radii = AppTheme::gitcomet_dark().radii;
 
-        for key in [DEFAULT_LIGHT_THEME_KEY, "sunset_veil"] {
-            let theme = AppTheme::from_key(key).expect("light theme should load");
+        for (key, is_dark) in bundled_theme_keys() {
+            let theme = AppTheme::from_key(&key).expect("bundled theme should load");
 
-            assert!(!theme.is_dark, "{key}");
+            assert_eq!(theme.is_dark, is_dark, "{key}");
             assert_eq!(theme.radii, dark_radii, "{key}");
         }
     }
@@ -3159,6 +3283,122 @@ mod tests {
                 4.5,
             );
         }
+    }
+
+    /// Contrast gaps in the house themes that predate
+    /// `every_bundled_theme_meets_the_readability_floor`. Each entry is a theme
+    /// key and a check-name prefix. New themes must not add any.
+    const READABILITY_FLOOR_EXCEPTIONS: &[(&str, &str)] = &[
+        (DEFAULT_DARK_THEME_KEY, "accent.on_solid"),
+        (AMBER_DARK_THEME_KEY, "syntax.comment"),
+        ("tokyo_night", "secondary/"),
+        ("tokyo_night", "syntax.comment"),
+    ];
+
+    /// WCAG AA for every bundled theme: 4.5:1 for text, 3:1 for syntax on a diff
+    /// wash and for graph lanes. Washes are composited over what they tint.
+    #[test]
+    fn every_bundled_theme_meets_the_readability_floor() {
+        let mut failures = Vec::new();
+        for (key, _) in bundled_theme_keys() {
+            let theme = AppTheme::from_key(&key).expect("bundled theme should load");
+            let colors = theme.colors;
+            let canvas = colors.surface.canvas;
+            let editor = colors.editor.background;
+            let mut checks: Vec<(String, Rgba, Rgba, f32)> = Vec::new();
+
+            for (surface_name, surface) in [
+                ("canvas", colors.surface.canvas),
+                ("chrome", colors.surface.chrome),
+                ("panel", colors.surface.panel),
+                ("raised", colors.surface.raised),
+                ("input", colors.surface.input),
+            ] {
+                checks.push((
+                    format!("primary/{surface_name}"),
+                    colors.foreground.primary,
+                    surface,
+                    4.5,
+                ));
+                checks.push((
+                    format!("secondary/{surface_name}"),
+                    colors.foreground.secondary,
+                    surface,
+                    4.5,
+                ));
+            }
+            checks.push((
+                "accent.foreground".into(),
+                colors.accent.foreground,
+                canvas,
+                4.5,
+            ));
+            checks.push((
+                "accent.on_solid".into(),
+                colors.accent.on_solid,
+                colors.accent.solid,
+                4.5,
+            ));
+            for (name, set) in [
+                ("status.info", colors.status.info),
+                ("status.success", colors.status.success),
+                ("status.warning", colors.status.warning),
+                ("status.danger", colors.status.danger),
+            ] {
+                checks.push((
+                    name.into(),
+                    set.foreground,
+                    composite_over(canvas, set.background),
+                    4.5,
+                ));
+            }
+            for (name, set) in [
+                ("diff.added", colors.diff.added),
+                ("diff.removed", colors.diff.removed),
+                ("diff.modified", colors.diff.modified),
+            ] {
+                checks.push((
+                    name.into(),
+                    set.foreground,
+                    composite_over(editor, set.background),
+                    4.5,
+                ));
+                checks.push((
+                    format!("{name}.word"),
+                    set.foreground,
+                    composite_over(editor, set.word_background),
+                    4.5,
+                ));
+            }
+            for (token, color) in syntax_foregrounds(theme) {
+                checks.push((format!("syntax.{token}/editor"), color, editor, 4.5));
+                for (wash, background) in [
+                    ("diff.added", colors.diff.added.background),
+                    ("diff.removed", colors.diff.removed.background),
+                ] {
+                    checks.push((
+                        format!("syntax.{token}/{wash}"),
+                        color,
+                        composite_over(editor, background),
+                        3.0,
+                    ));
+                }
+            }
+            for (index, color) in theme.graph_lane_palette.as_slice().iter().enumerate() {
+                checks.push((format!("graph_lane_palette[{index}]"), *color, canvas, 3.0));
+            }
+
+            for (name, foreground, background, minimum) in checks {
+                let exempt = READABILITY_FLOOR_EXCEPTIONS
+                    .iter()
+                    .any(|(k, prefix)| *k == key && name.starts_with(prefix));
+                let actual = contrast_ratio(foreground, background);
+                if !exempt && actual < minimum {
+                    failures.push(format!("{key} {name}: {actual:.2} < {minimum:.2}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
@@ -3324,22 +3564,21 @@ mod tests {
 
     #[test]
     fn content_header_bg_matches_the_canvas_on_dark_and_is_distinct_on_light() {
-        for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
-            let theme = AppTheme::from_key(key).expect("dark theme should load");
-            assert_eq!(
-                content_header_bg(theme),
-                theme.colors.surface.canvas,
-                "{key}: header band should be the canvas color"
-            );
-        }
-
-        for key in ["gitcomet_light", "sunset_veil"] {
-            let theme = AppTheme::from_key(key).expect("light theme should load");
-            assert_eq!(
-                content_header_bg(theme),
-                theme.colors.surface.raised,
-                "{key}: header band should stay raised"
-            );
+        for (key, is_dark) in bundled_theme_keys() {
+            let theme = AppTheme::from_key(&key).expect("bundled theme should load");
+            if is_dark {
+                assert_eq!(
+                    content_header_bg(theme),
+                    theme.colors.surface.canvas,
+                    "{key}: header band should be the canvas color"
+                );
+            } else {
+                assert_eq!(
+                    content_header_bg(theme),
+                    theme.colors.surface.raised,
+                    "{key}: header band should stay raised"
+                );
+            }
         }
     }
 
@@ -3473,6 +3712,22 @@ mod tests {
         assert_eq!(specs[1].option.label, "Classic Dark");
         assert!(specs[1].theme.is_dark);
     }
+    #[test]
+    fn every_available_theme_has_preview_colors_from_its_chrome_accent_and_keyword() {
+        let options = available_themes();
+        assert!(options.len() >= bundled_theme_keys().len());
+        for option in options {
+            let theme = AppTheme::from_key(&option.key).expect("listed theme should load");
+            let preview = theme_preview_colors(&option.key).expect("listed theme has a preview");
+            assert_eq!(preview.is_dark, option.is_dark, "{}", option.key);
+            assert_eq!(preview.base, theme.colors.surface.chrome, "{}", option.key);
+            assert_eq!(preview.glow, theme.colors.accent.solid, "{}", option.key);
+            assert_eq!(preview.secondary, theme.syntax.keyword, "{}", option.key);
+            assert!(!option.custom, "{} is bundled", option.key);
+        }
+        assert_eq!(theme_preview_colors("no_such_theme"), None);
+    }
+
     #[test]
     fn embedded_theme_registry_exposes_default_keys() {
         let themes = available_themes();
@@ -3675,6 +3930,50 @@ mod tests {
             "valid custom themes should still appear in available theme options"
         );
     }
+
+    /// Bundling a theme reserves its file name and keys, which a user's
+    /// existing custom theme may already use; the Appearance page must say so.
+    #[test]
+    fn runtime_theme_issues_explain_reserved_filenames_and_bundled_key_clashes() {
+        use serde_json::json;
+
+        let dir = tempdir().expect("temp dir should exist");
+        let mut own = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        own["key"] = json!("my_nord");
+        fs::write(
+            dir.path().join("nord.json"),
+            test_theme_bundle_json("My Nord", vec![own]),
+        )
+        .expect("reserved theme file should be written");
+        let mut clash = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        clash["key"] = json!("monokai");
+        let mut keep = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        keep["key"] = json!("custom_keep");
+        fs::write(
+            dir.path().join("mine.json"),
+            test_theme_bundle_json("Mine", vec![clash, keep]),
+        )
+        .expect("clashing theme file should be written");
+
+        let issues = runtime_theme_issues_with_dir(Some(dir.path()));
+        let issue_for = |name: &str| {
+            issues
+                .iter()
+                .find(|issue| issue.path.file_name() == Some(std::ffi::OsStr::new(name)))
+                .unwrap_or_else(|| panic!("{name} should be reported: {issues:?}"))
+        };
+        assert!(
+            issue_for("nord.json").message.contains("bundled theme"),
+            "{issues:?}"
+        );
+        assert!(
+            issue_for("mine.json").message.contains("`monokai`"),
+            "{issues:?}"
+        );
+        assert_eq!(issues.len(), 2, "{issues:?}");
+        assert!(runtime_themes_with_dir(Some(dir.path())).contains_key("custom_keep"));
+    }
+
     #[test]
     fn themes_markdown_example_matches_current_theme_parser() {
         let example = themes_markdown_example();
@@ -3740,6 +4039,37 @@ mod tests {
             assert!(
                 markdown.contains(&format!("`{key}`")),
                 "THEMES.md should mention the supported syntax key `{key}`"
+            );
+        }
+    }
+
+    /// Matches whole names in the table's Dark and Light cells: a substring
+    /// check passes "Tokyo Night" on "Tokyo Night Storm" or the Source link.
+    #[test]
+    fn themes_markdown_lists_every_bundled_theme() {
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for the built-in theme list");
+        let mut listed = [Vec::new(), Vec::new()];
+        let rows = markdown
+            .lines()
+            .skip_while(|line| !line.starts_with("| Dark | Light |"))
+            .skip(2)
+            .take_while(|line| line.starts_with('|'));
+        for row in rows {
+            for (column, cell) in row.split('|').skip(1).take(2).enumerate() {
+                listed[column].extend(
+                    cell.split(',')
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty()),
+                );
+            }
+        }
+        for (key, is_dark) in bundled_theme_keys() {
+            let label = theme_label(&key).expect("bundled theme has a label");
+            let (column, heading) = if is_dark { (0, "Dark") } else { (1, "Light") };
+            assert!(
+                listed[column].contains(&label.as_str()),
+                "THEMES.md should list the bundled theme `{label}` under {heading}"
             );
         }
     }

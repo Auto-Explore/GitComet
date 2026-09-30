@@ -283,7 +283,6 @@ fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
-    Theme,
     UiScale,
     WindowControls,
     BrowserOpenTarget,
@@ -315,12 +314,10 @@ impl SettingsSection {
     /// mapping keeps the visible page and the expanded row in sync.
     fn category(self) -> SettingsCategory {
         match self {
-            Self::Theme
-            | Self::UiScale
-            | Self::WindowControls
-            | Self::BrowserOpenTarget
-            | Self::UiFont
-            | Self::EditorFont
+            Self::UiScale | Self::WindowControls | Self::UiFont | Self::EditorFont => {
+                SettingsCategory::Appearance
+            }
+            Self::BrowserOpenTarget
             | Self::ExternalCodeEditor
             | Self::DateFormat
             | Self::Timezone => SettingsCategory::General,
@@ -347,6 +344,7 @@ impl SettingsSection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsCategory {
     General,
+    Appearance,
     Workspaces,
     SecurityPrivacy,
     Terminal,
@@ -364,6 +362,7 @@ enum SettingsCategory {
 impl SettingsCategory {
     const ALL: &'static [SettingsCategory] = &[
         SettingsCategory::General,
+        SettingsCategory::Appearance,
         SettingsCategory::Workspaces,
         SettingsCategory::SecurityPrivacy,
         SettingsCategory::Terminal,
@@ -381,6 +380,7 @@ impl SettingsCategory {
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::Appearance => "Appearance",
             Self::Workspaces => "Workspaces",
             Self::SecurityPrivacy => "Security / Privacy",
             Self::Terminal => "Terminal",
@@ -399,6 +399,7 @@ impl SettingsCategory {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "icons/cog.svg",
+            Self::Appearance => "icons/palette.svg",
             Self::Workspaces => "icons/folder.svg",
             Self::SecurityPrivacy => "icons/file_icons/lock.svg",
             Self::Terminal => "icons/terminal.svg",
@@ -417,6 +418,7 @@ impl SettingsCategory {
     fn nav_id(self) -> &'static str {
         match self {
             Self::General => "settings_window_nav_general",
+            Self::Appearance => "settings_window_nav_appearance",
             Self::Workspaces => "settings_window_nav_workspaces",
             Self::SecurityPrivacy => "settings_window_nav_security_privacy",
             Self::Terminal => "settings_window_nav_terminal",
@@ -437,9 +439,13 @@ impl SettingsCategory {
     fn search_haystack(self) -> &'static str {
         match self {
             Self::General => {
-                "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance window controls title bar \
-                 minimize maximize tiling command line cli gitcomet open repository window density compact comfortable spacious \
+                "general date format external code editor date timezone \
+                 command line cli gitcomet open repository window integrations"
+            }
+            Self::Appearance => {
+                "appearance theme themes color colour scheme dark light automatic custom \
+                 interface ui scale zoom density compact comfortable spacious window controls \
+                 title bar minimize maximize tiling typography ui font editor font ligatures \
                  font size markdown preview"
             }
             Self::Workspaces => {
@@ -485,7 +491,16 @@ impl SettingsCategory {
             return true;
         }
         self.search_haystack().contains(query.as_str())
+            || (matches!(self, Self::Appearance) && theme_names_match(&query))
     }
+}
+
+/// Theme names come from the theme list, so custom and newly bundled themes
+/// are found too. Keys match as well, for names with accents ("frappe").
+fn theme_names_match(query: &str) -> bool {
+    crate::theme::available_themes().iter().any(|option| {
+        option.label.to_lowercase().contains(query) || option.key.replace('_', " ").contains(query)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -544,7 +559,6 @@ pub(crate) struct SettingsWindowView {
     external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]>,
     external_editor_options_state: ExternalEditorOptionsState,
     settings_window_scroll: ScrollHandle,
-    theme_scroll: UniformListScrollHandle,
     ui_font_scroll: UniformListScrollHandle,
     editor_font_scroll: UniformListScrollHandle,
     external_editor_scroll: UniformListScrollHandle,
@@ -880,36 +894,6 @@ fn settings_dropdown_height(
             .min(SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX),
         ui_scale_percent,
     )
-}
-
-/// The theme rows, labels included, from a single pass over the theme list.
-///
-/// `ThemeMode::label` resolves a key by re-reading the user theme directory --
-/// a `create_dir_all`, a `read_dir`, and a `metadata` per file, all of it ahead
-/// of the memo that is supposed to make it cheap -- and the row processor below
-/// runs on every layout pass while the dropdown is open. Taking the label off
-/// the same `ThemeOption` the mode is built from spends that once per render
-/// instead of once per visible row per frame.
-fn settings_theme_mode_options() -> Vec<(ThemeMode, SharedString)> {
-    let themes = crate::theme::available_themes();
-    let mut options = Vec::with_capacity(themes.len() + 1);
-    options.push((
-        ThemeMode::Automatic,
-        SharedString::from(ThemeMode::Automatic.label()),
-    ));
-    options.extend(
-        themes
-            .into_iter()
-            .map(|theme| (ThemeMode::Named(theme.key), SharedString::from(theme.label))),
-    );
-    options
-}
-
-fn settings_theme_modes() -> Vec<ThemeMode> {
-    settings_theme_mode_options()
-        .into_iter()
-        .map(|(mode, _)| mode)
-        .collect()
 }
 
 fn history_columns_settings_label(
@@ -1297,7 +1281,6 @@ impl SettingsWindowView {
             external_editor_options,
             external_editor_options_state: ExternalEditorOptionsState::NotLoaded,
             settings_window_scroll: ScrollHandle::default(),
-            theme_scroll: UniformListScrollHandle::default(),
             ui_font_scroll: UniformListScrollHandle::default(),
             editor_font_scroll: UniformListScrollHandle::default(),
             external_editor_scroll: UniformListScrollHandle::default(),
@@ -1478,11 +1461,13 @@ impl SettingsWindowView {
     }
 }
 
+mod appearance;
 mod cards;
 mod prefs;
 mod render;
 mod rows;
 mod runtime;
+mod theme_grid;
 mod workspaces;
 
 use runtime::*;

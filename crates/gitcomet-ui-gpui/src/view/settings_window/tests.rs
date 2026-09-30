@@ -328,22 +328,122 @@ fn settings_dropdown_background_is_darker_than_card_surface() {
 }
 
 #[test]
-fn settings_theme_modes_include_automatic_and_all_available_named_themes() {
-    let modes = settings_theme_modes();
-    assert_eq!(modes.first(), Some(&ThemeMode::Automatic));
+fn theme_orbs_paint_each_themes_chrome_accent_and_keyword() {
+    use super::theme_grid::{OrbPaint, orb_svg};
+    let hex = |color: gpui::Rgba| {
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            (color.red * 255.0).round() as u8,
+            (color.green * 255.0).round() as u8,
+            (color.blue * 255.0).round() as u8
+        )
+    };
+    let tokyo = crate::theme::theme_preview_colors("tokyo_night").expect("bundled theme");
+    let svg = orb_svg(OrbPaint::Single(tokyo));
+    assert!(
+        svg.contains(&format!("stop-color=\"{}\"", hex(tokyo.glow))),
+        "{svg}"
+    );
+    assert!(
+        svg.contains(&format!("stop-color=\"{}\"", hex(tokyo.secondary))),
+        "{svg}"
+    );
+    assert!(svg.contains("radialGradient"));
+    // The circle and its edge are gpui's anti-aliased corners, not the image's.
+    assert!(!svg.contains("<circle"), "{svg}");
 
-    let named_modes = modes.iter().skip(1).map(ThemeMode::key).collect::<Vec<_>>();
-    let available_themes = crate::theme::available_themes()
+    let themes = crate::theme::ThemeCatalog::load();
+    let OrbPaint::Split { light, dark } =
+        OrbPaint::for_mode(&ThemeMode::Automatic, &themes).expect("automatic orb")
+    else {
+        panic!("Automatic paints GitComet Light and Dark halves");
+    };
+    assert_eq!(light.base, AppTheme::gitcomet_light().colors.surface.chrome);
+    assert_eq!(dark.base, AppTheme::gitcomet_dark().colors.surface.chrome);
+    let split = orb_svg(OrbPaint::Split { light, dark });
+    for color in [light.glow, dark.glow] {
+        assert!(split.contains(&hex(color)), "{split}");
+    }
+    assert!(split.contains("url(#l)") && split.contains("url(#r)"));
+}
+
+#[test]
+fn theme_orbs_keep_a_translucent_accent_translucent() {
+    use super::theme_grid::{OrbPaint, orb_svg};
+    let opaque = crate::theme::theme_preview_colors("tokyo_night").expect("bundled theme");
+    let translucent = crate::theme::ThemePreviewColors {
+        glow: crate::theme::with_alpha(opaque.glow, 0.5),
+        ..opaque
+    };
+    assert_ne!(
+        orb_svg(OrbPaint::Single(opaque)),
+        orb_svg(OrbPaint::Single(translucent)),
+        "the accent's alpha reaches the orb"
+    );
+}
+
+/// Each save of a live-reloaded custom theme is a new palette.
+#[test]
+fn orb_image_cache_stays_bounded_across_palette_edits() {
+    use super::theme_grid::{OrbImageCache, OrbPaint};
+    let mut cache = OrbImageCache::default();
+    let base = crate::theme::theme_preview_colors("tokyo_night").expect("bundled theme");
+    for step in 0..300u32 {
+        let mut glow = base.glow;
+        glow.red = (step % 256) as f32 / 255.0;
+        glow.green = (step / 256) as f32 / 255.0;
+        let _ = cache.get(OrbPaint::Single(crate::theme::ThemePreviewColors {
+            glow,
+            ..base
+        }));
+    }
+    assert!(cache.len() <= 128, "{} orb images cached", cache.len());
+}
+
+#[test]
+fn theme_tiles_list_automatic_first_then_every_theme_once_by_appearance() {
+    let groups = super::theme_grid::grouped_tile_keys();
+    assert_eq!(groups[0], ("automatic", vec!["automatic".to_string()]));
+
+    let mut listed = Vec::new();
+    for (group, keys) in &groups[1..] {
+        for key in keys {
+            let option = crate::theme::available_themes()
+                .into_iter()
+                .find(|option| &option.key == key)
+                .unwrap_or_else(|| panic!("`{key}` is not an available theme"));
+            let expected = match (option.custom, option.is_dark) {
+                (true, _) => "custom",
+                (false, true) => "dark",
+                (false, false) => "light",
+            };
+            assert_eq!(*group, expected, "{key}");
+            listed.push(key.clone());
+        }
+    }
+    let mut available = crate::theme::available_themes()
         .into_iter()
-        .map(|theme| theme.key.to_string())
+        .map(|option| option.key)
         .collect::<Vec<_>>();
+    available.sort();
+    let mut sorted = listed.clone();
+    sorted.sort();
+    assert_eq!(sorted, available, "every theme gets exactly one tile");
 
-    assert_eq!(
-        named_modes,
-        available_themes
+    let group = |name: &str| {
+        groups
             .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
+            .find(|(group, _)| *group == name)
+            .map(|(_, keys)| keys.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        group("dark").first().map(String::as_str),
+        Some("gitcomet_dark")
+    );
+    assert_eq!(
+        group("light").first().map(String::as_str),
+        Some("gitcomet_light")
     );
 }
 
@@ -433,10 +533,6 @@ fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::T
     settings_cx.run_until_parked();
 
     for (section, selector) in [
-        (
-            SettingsSection::Theme,
-            "settings_window_theme_list_container",
-        ),
         (
             SettingsSection::DateFormat,
             "settings_window_date_format_list_container",
@@ -541,10 +637,10 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
     );
 }
 
-/// The general card orders the typography controls font pickers -> ligatures ->
-/// sizes, and the size rows carry no presets popover.
+/// The Appearance page runs Theme -> Interface -> Typography, and typography
+/// orders font pickers -> ligatures -> sizes with no presets popover.
 #[gpui::test]
-fn general_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
+fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
@@ -567,7 +663,11 @@ fn general_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
 
     let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
     settings_cx.run_until_parked();
-    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1600.0)));
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(2400.0)));
+    settings_cx.run_until_parked();
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Appearance, cx);
+    });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
         let _ = window.draw(app);
@@ -576,12 +676,38 @@ fn general_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
     let mut bounds = |selector: &'static str| {
         settings_cx
             .debug_bounds(selector)
-            .unwrap_or_else(|| panic!("expected `{selector}` in the general card"))
+            .unwrap_or_else(|| panic!("expected `{selector}` in the appearance card"))
     };
+    let theme_heading = bounds("settings_window_appearance_theme");
+    let tiles = bounds("settings_window_theme_grid");
+    let interface_heading = bounds("settings_window_appearance_interface");
+    let ui_scale = bounds("settings_window_ui_scale");
+    let density = bounds("settings_window_density_controls");
+    let window_controls = bounds("settings_window_window_controls");
+    let typography_heading = bounds("settings_window_appearance_typography");
     let ui_font = bounds("settings_window_ui_font");
     let editor_font = bounds("settings_window_editor_font");
     let ligatures = bounds("settings_window_use_font_ligatures");
-    let sizes = bounds("settings_window_appearance_controls");
+    let sizes = bounds("settings_window_font_size_controls");
+
+    for (upper, lower, what) in [
+        (theme_heading, tiles, "theme heading -> tiles"),
+        (tiles, interface_heading, "tiles -> interface heading"),
+        (interface_heading, ui_scale, "interface heading -> UI scale"),
+        (ui_scale, density, "UI scale -> density"),
+        (density, window_controls, "density -> window controls"),
+        (
+            window_controls,
+            typography_heading,
+            "window controls -> typography",
+        ),
+        (typography_heading, ui_font, "typography heading -> UI font"),
+    ] {
+        assert!(
+            upper.bottom() <= lower.top(),
+            "expected {what}: {upper:?} {lower:?}"
+        );
+    }
 
     assert!(
         ui_font.bottom() <= editor_font.top()
@@ -604,9 +730,7 @@ fn general_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
 }
 
 #[gpui::test]
-fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
-    cx: &mut gpui::TestAppContext,
-) {
+fn appearance_page_renders_theme_utilities_and_opens_theme_guide(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
@@ -631,7 +755,7 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.set_expanded_section(Some(SettingsSection::Theme), cx);
+        settings.select_category(SettingsCategory::Appearance, cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -642,13 +766,13 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
         settings_cx
             .debug_bounds("settings_window_theme_links_container")
             .is_some(),
-        "expected the expanded theme section to render theme utility links"
+        "expected the appearance page to render theme utility links"
     );
     assert!(
         settings_cx
             .debug_bounds("settings_window_theme_custom_folder")
             .is_some(),
-        "expected the expanded theme section to render the custom folder action"
+        "expected the appearance page to render the custom folder action"
     );
 
     let guide_bounds = settings_cx
@@ -1249,7 +1373,6 @@ fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
     settings_cx.run_until_parked();
 
     for (section, label) in [
-        (SettingsSection::Theme, "Theme"),
         (SettingsSection::DateFormat, "Date time format"),
         (SettingsSection::ChangeTracking, "Untracked files"),
         (SettingsSection::Diff, "Diff scroll sync"),
@@ -1264,9 +1387,6 @@ fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
 
         let max_offset = settings_window
             .update(&mut settings_cx, |settings, _window, _cx| match section {
-                SettingsSection::Theme => {
-                    uniform_list_vertical_scroll_metrics(&settings.theme_scroll).2
-                }
                 SettingsSection::DateFormat => {
                     uniform_list_vertical_scroll_metrics(&settings.date_format_scroll).2
                 }
@@ -1727,7 +1847,6 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
         settings.ui_font_options = synthetic_fonts.clone();
         settings.ui_font_family = synthetic_fonts[0].clone();
-        settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
         settings.git_executable_mode = GitExecutableMode::Custom;
         settings.runtime_info.app_version_display =
             "GitComet v0.0.0-overflow-regression-build-with-extra-layout-metadata".into();
@@ -1753,6 +1872,7 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
     // category and verify the visible card fills the content-pane width.
     for (category, card_selector) in [
         (SettingsCategory::General, "settings_window_general"),
+        (SettingsCategory::Appearance, "settings_window_appearance"),
         (
             SettingsCategory::SecurityPrivacy,
             "settings_window_security_privacy_card",
@@ -1778,8 +1898,8 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
     ] {
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
             settings.select_category(category, cx);
-            // The General page keeps a dropdown expanded to exercise wrapping.
-            if category == SettingsCategory::General {
+            // The Appearance page keeps a dropdown expanded to exercise wrapping.
+            if category == SettingsCategory::Appearance {
                 settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
             }
             cx.notify();
@@ -1795,11 +1915,16 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
             card_selector,
         );
 
-        if category == SettingsCategory::General {
+        if category == SettingsCategory::Appearance {
             assert_debug_matching_horizontal_insets(
                 &mut settings_cx,
-                "settings_window_general",
+                "settings_window_appearance",
                 "settings_window_ui_font_list_container",
+            );
+            assert_debug_matching_horizontal_insets(
+                &mut settings_cx,
+                "settings_window_appearance",
+                "settings_window_theme_grid",
             );
         }
         if category == SettingsCategory::GitExecutable {
@@ -3572,8 +3697,69 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 }
 
 #[test]
-fn workspaces_category_is_listed_after_general_and_matches_its_search_terms() {
-    assert_eq!(SettingsCategory::ALL[1], SettingsCategory::Workspaces);
+fn appearance_page_owns_themes_fonts_scale_and_density_in_search() {
+    for query in [
+        "theme",
+        "solarized",
+        "catppuccin",
+        "density",
+        "font size",
+        "ui font",
+        "ligatures",
+        "ui scale",
+        "window controls",
+    ] {
+        assert!(
+            SettingsCategory::Appearance.matches_query(query),
+            "{query} should find the Appearance page"
+        );
+    }
+    for query in ["theme", "density", "font size", "ui font"] {
+        assert!(
+            !SettingsCategory::General.matches_query(query),
+            "{query} moved off the General page"
+        );
+    }
+    for query in ["external code editor", "timezone", "command line"] {
+        assert!(
+            SettingsCategory::General.matches_query(query),
+            "{query} stays on the General page"
+        );
+    }
+    for section in [
+        SettingsSection::UiScale,
+        SettingsSection::WindowControls,
+        SettingsSection::UiFont,
+        SettingsSection::EditorFont,
+    ] {
+        assert_eq!(
+            section.category(),
+            SettingsCategory::Appearance,
+            "{section:?}"
+        );
+    }
+    assert_eq!(
+        SettingsSection::BrowserOpenTarget.category(),
+        SettingsCategory::General
+    );
+}
+
+/// Custom and newly bundled themes are found by name without a hand-kept list.
+#[test]
+fn appearance_search_finds_every_theme_by_name() {
+    for option in crate::theme::available_themes() {
+        let query = option.label.to_lowercase();
+        assert!(
+            SettingsCategory::Appearance.matches_query(&query),
+            "{query} should find the Appearance page"
+        );
+    }
+}
+
+#[test]
+fn workspaces_category_is_listed_after_appearance_and_matches_its_search_terms() {
+    assert_eq!(SettingsCategory::ALL[1], SettingsCategory::Appearance);
+    assert_eq!(SettingsCategory::ALL[2], SettingsCategory::Workspaces);
     for query in ["workspace", "title bar color", "rename"] {
         assert!(
             SettingsCategory::Workspaces.matches_query(query),
@@ -3583,6 +3769,295 @@ fn workspaces_category_is_listed_after_general_and_matches_its_search_terms() {
     assert_eq!(
         SettingsSection::WorkspaceTheme.category(),
         SettingsCategory::Workspaces
+    );
+}
+
+#[gpui::test]
+fn appearance_theme_tiles_switch_main_windows_and_explain_workspace_overrides(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/appearance-tiles-a")]);
+    workspace.theme_mode = Some("tokyo_night".to_string());
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace]);
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(2400.0)));
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Appearance, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    for group in ["automatic", "dark", "light"] {
+        let selector: &'static str = format!("settings_window_theme_group_{group}").leak();
+        assert!(settings_cx.debug_bounds(selector).is_some(), "{selector}");
+    }
+    for option in crate::theme::available_themes() {
+        let selector: &'static str = format!("settings_window_theme_{}", option.key).leak();
+        assert!(
+            settings_cx.debug_bounds(selector).is_some(),
+            "expected a tile for {}",
+            option.key
+        );
+    }
+
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_theme_tokyo_night_orb")
+            .is_some(),
+        "each tile carries its orb"
+    );
+
+    let click = |settings_cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = settings_cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        settings_cx.simulate_click(bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    click(&mut settings_cx, "settings_window_theme_gitcomet_light");
+    let light = AppTheme::gitcomet_light();
+    let _ = main_view.update(&mut settings_cx, |view, _cx| {
+        assert_eq!(
+            view.theme_mode,
+            ThemeMode::Named(crate::theme::DEFAULT_LIGHT_THEME_KEY.to_string())
+        );
+        assert_eq!(
+            view.theme.colors.surface.canvas,
+            light.colors.surface.canvas
+        );
+    });
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, _cx| {
+        assert_eq!(
+            settings.theme_mode,
+            ThemeMode::Named(crate::theme::DEFAULT_LIGHT_THEME_KEY.to_string())
+        );
+    });
+
+    click(
+        &mut settings_cx,
+        "settings_window_theme_workspace_overrides",
+    );
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, _cx| {
+        assert_eq!(settings.selected_category, SettingsCategory::Workspaces);
+    });
+}
+
+#[gpui::test]
+fn appearance_page_hides_the_workspace_override_note_without_overrides(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let workspace =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/appearance-tiles-b")]);
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace]);
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Appearance, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_theme_grid")
+            .is_some()
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_theme_workspace_overrides")
+            .is_none()
+    );
+}
+
+/// A workspace whose theme was deleted follows the app theme, so the note must
+/// not count it.
+#[gpui::test]
+fn appearance_page_does_not_count_an_override_whose_theme_is_gone(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/appearance-tiles-c")]);
+    workspace.theme_mode = Some("deleted_custom_theme".to_string());
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace]);
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Appearance, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_theme_grid")
+            .is_some()
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_theme_workspace_overrides")
+            .is_none(),
+        "an override naming a deleted theme is no override"
+    );
+}
+
+/// The app theme can name a user theme deleted since it was picked; a
+/// workspace must still be able to go back to following it.
+#[gpui::test]
+fn workspace_theme_picker_offers_follow_app_when_the_app_theme_is_gone(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let mut workspace =
+        gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-c")]);
+    workspace.theme_mode = Some("tokyo_night".to_string());
+    let id = workspace.id;
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace]);
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1400.0)));
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.theme_mode = ThemeMode::Named("deleted_custom_theme".to_string());
+        settings.select_category(SettingsCategory::Workspaces, cx);
+        settings.select_workspace(id, cx);
+        settings.toggle_section(SettingsSection::WorkspaceTheme, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let follow = settings_cx
+        .debug_bounds("settings_window_workspace_theme_follow_app")
+        .expect("Follow app theme stays offered");
+    settings_cx.simulate_click(follow.center(), Modifiers::default());
+    settings_cx.run_until_parked();
+    assert_eq!(
+        settings_cx.update(|_window, app| {
+            crate::workspaces::workspace(app, id).and_then(|workspace| workspace.theme_mode)
+        }),
+        None
+    );
+}
+
+/// Every theme lookup walks the themes folder in the app, so a page resolves
+/// all its tiles, labels and overrides from one read per draw.
+#[gpui::test]
+fn theme_pages_read_the_themes_folder_once_per_draw(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let workspaces = ["tokyo_night", "nord", "deleted_custom_theme"].map(|key| {
+        let mut workspace = gitcomet_state::session::Workspace::new(vec![PathBuf::from(format!(
+            "/tmp/theme-lookups-{key}"
+        ))]);
+        workspace.theme_mode = Some(key.to_string());
+        workspace
+    });
+    let id = workspaces[0].id;
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, workspaces.to_vec());
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(2400.0)));
+    let lookups_per_draw = |settings_cx: &mut gpui::VisualTestContext| {
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+            let before = crate::theme::runtime_theme_lookups_for_test();
+            window.refresh();
+            let _ = window.draw(app);
+            crate::theme::runtime_theme_lookups_for_test() - before
+        })
+    };
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Appearance, cx);
+    });
+    let appearance = lookups_per_draw(&mut settings_cx);
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::Workspaces, cx);
+        settings.select_workspace(id, cx);
+        settings.toggle_section(SettingsSection::WorkspaceTheme, cx);
+    });
+    let workspaces_page = lookups_per_draw(&mut settings_cx);
+
+    assert_eq!(
+        (appearance, workspaces_page),
+        (1, 1),
+        "(Appearance, Workspaces) theme-folder reads per draw"
     );
 }
 

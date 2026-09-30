@@ -769,6 +769,14 @@ pub(crate) fn workspaces(cx: &App) -> Vec<Workspace> {
         .unwrap_or_default()
 }
 
+/// Reads every workspace without cloning them.
+pub(crate) fn with_workspaces<R>(cx: &App, read: impl FnOnce(&[Workspace]) -> R) -> R {
+    match manager(cx) {
+        Some(manager) => read(&manager.workspaces),
+        None => read(&[]),
+    }
+}
+
 /// Whether a live window currently holds this workspace.
 pub(crate) fn is_open_in_a_window(cx: &App, id: WorkspaceId) -> bool {
     manager(cx).is_some_and(|manager| {

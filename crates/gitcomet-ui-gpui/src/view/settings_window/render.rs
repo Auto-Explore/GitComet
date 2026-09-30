@@ -633,14 +633,26 @@ impl SettingsWindowView {
             .child(breadcrumb)
             .child(licenses_card)
     }
-    pub(super) fn appearance_controls(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    pub(super) fn density_control(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let mut density = div()
+            .debug_selector(|| "settings_window_density_controls".to_string())
+            .w_full()
+            .px_2()
+            .pt_1()
+            .pb_3()
             .flex()
             .flex_wrap()
             .items_center()
             .gap_2()
-            .child(div().flex_1().child("UI density"));
+            .border_b_1()
+            .border_color(settings_row_separator_color(theme))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(theme.ui_text(14.0))
+                    .child("UI density"),
+            );
         for value in UiDensity::ALL {
             density = density.child(
                 components::Button::new(format!("settings_density_{}", value.key()), value.label())
@@ -648,13 +660,17 @@ impl SettingsWindowView {
                     .on_click(theme, cx, move |this, _, _, cx| this.set_density(value, cx)),
             );
         }
+        density
+    }
+
+    pub(super) fn font_size_controls(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
         let mut rows = div()
-            .debug_selector(|| "settings_window_appearance_controls".to_string())
+            .debug_selector(|| "settings_window_font_size_controls".to_string())
             .flex()
             .flex_col()
             .gap_3()
-            .p_2()
-            .child(density);
+            .p_2();
         for role in FontRole::ALL {
             let value = self.appearance_metrics.size(role);
             let control = div()
