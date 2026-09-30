@@ -222,10 +222,18 @@ fn thread_tag() -> u32 {
     })
 }
 
-fn current_os_tid() -> Option<u64> {
-    // `/proc/thread-self` links to `<pid>/task/<tid>`; no unsafe syscall needed.
-    let link = std::fs::read_link("/proc/thread-self").ok()?;
-    link.file_name()?.to_str()?.parse().ok()
+/// The calling thread's kernel id (Linux only).
+pub fn current_os_tid() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        // `/proc/thread-self` links to `<pid>/task/<tid>`; no unsafe syscall needed.
+        let link = std::fs::read_link("/proc/thread-self").ok()?;
+        link.file_name()?.to_str()?.parse().ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 /// Everything recorded since the last drain.
@@ -362,12 +370,12 @@ mod tests {
         );
         assert!(ours[1].a >= 2_000_000, "queue delay covers the 2 ms wait");
         assert_ne!(ours[0].thread, ours[1].thread);
-        assert!(
-            drained
-                .threads
-                .iter()
-                .any(|t| t.name == "op-trace-worker" && t.os_tid.is_some())
-        );
+        let worker = drained
+            .threads
+            .iter()
+            .find(|t| t.name == "op-trace-worker")
+            .expect("worker thread registered");
+        assert_eq!(worker.os_tid.is_some(), cfg!(target_os = "linux"));
 
         // A consumer that stops draining costs bounded memory, and says so.
         let dropped = drain().dropped;

@@ -399,7 +399,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
         "ping_ms": ping_interval.as_millis(),
         "run_id": env("GITCOMET_PERF_RUN_ID"), "cargo_profile": env("GITCOMET_PERF_CARGO_PROFILE"),
         "scenario": env(crate::view::scenario_driver::SCENARIO_ENV),
-        "main_tid": crate::thread_cpu::current_tid(),
+        "main_tid": gitcomet_core::op_trace::current_os_tid(),
         "mimalloc_env": std::env::vars().filter(|(key, _)| key.starts_with("MIMALLOC_"))
             .collect::<std::collections::BTreeMap<_, _>>()})]);
 
@@ -680,7 +680,7 @@ impl MainThreadCpu {
             #[cfg(target_os = "windows")]
             clock: gitcomet_win32_window_utils::ThreadCpuClock::for_current_thread(),
             #[cfg(target_os = "linux")]
-            tid: crate::thread_cpu::current_tid(),
+            tid: gitcomet_core::op_trace::current_os_tid(),
         }
     }
 

@@ -300,7 +300,8 @@ class LiveUiMeasurementTests(unittest.TestCase):
         self.assertNotIn("not_comparable", result["draw_ms.p95"])
 
     def test_lifecycle_cycle_count_sets_only_the_measured_phase(self):
-        steps = live_ui.scenario("lifecycle", Path("/repo"), secondary=Path("/other"), cycles=3)["steps"]
+        secondary = Path("/other")
+        steps = live_ui.scenario("lifecycle", Path("/repo"), secondary=secondary, cycles=3)["steps"]
         phases = [ix for ix, step in enumerate(steps) if step["do"] == "phase"]
         opens = lambda start, end: sum(step["do"] == "open_repo" for step in steps[start:end])  # noqa: E731
         self.assertEqual((opens(phases[0], phases[1]), opens(phases[1], phases[2])), (10, 3))
@@ -309,7 +310,7 @@ class LiveUiMeasurementTests(unittest.TestCase):
             if step["do"] == "open_repo":
                 self.assertEqual([s["do"] for s in steps[ix + 1:ix + 3]], ["wait_ready", "focus"])
             if step["do"] == "command":
-                self.assertEqual(step["witness"], {"kind": "repo_closed", "path": "/other"})
+                self.assertEqual(step["witness"], {"kind": "repo_closed", "path": str(secondary)})
 
     def test_lifecycle_growth_is_per_measured_cycle(self):
         phase = lambda at, name, state: {"event": "scenario_phase", "at_ms": at,  # noqa: E731
@@ -354,6 +355,7 @@ class LiveUiMeasurementTests(unittest.TestCase):
                 self.assertRaises(TimeoutError):
             live_ui.wait_for_quiet(2.0, timeout_s=0)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc")
     def test_process_sample_survives_a_thread_exiting_mid_read(self):
         real = Path.read_text
 

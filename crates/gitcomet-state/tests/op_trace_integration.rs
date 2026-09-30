@@ -98,6 +98,12 @@ fn a_traced_dispatch_is_followed_through_the_store_worker_and_its_tasks() {
 
     let names: Vec<_> = threads.iter().map(|thread| thread.name.as_str()).collect();
     assert!(names.contains(&"gitcomet-store"), "{names:?}");
-    assert!(names.contains(&"gitcomet-repo-load-0"), "{names:?}");
+    // Either repo-load worker may take the task.
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with("gitcomet-repo-load-")),
+        "{names:?}"
+    );
     let _ = std::fs::remove_dir(&directory);
 }

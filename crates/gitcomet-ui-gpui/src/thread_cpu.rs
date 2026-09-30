@@ -13,20 +13,8 @@ pub(crate) struct ThreadCpu {
     pub timeslices: u64,
 }
 
-/// The calling thread's kernel id.
-pub(crate) fn current_tid() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        let link = std::fs::read_link("/proc/thread-self").ok()?;
-        link.file_name()?.to_str()?.parse().ok()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        None
-    }
-}
-
 /// Cumulative CPU time of one thread of this process.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn thread_cpu_ns(tid: u64) -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
@@ -99,7 +87,7 @@ mod tests {
         let worker = std::thread::Builder::new()
             .name("cpu-probe-busy".into())
             .spawn(move || {
-                tid_tx.send(current_tid().unwrap()).unwrap();
+                tid_tx.send(gitcomet_core::op_trace::current_os_tid().unwrap()).unwrap();
                 let started = std::time::Instant::now();
                 while started.elapsed() < std::time::Duration::from_millis(30) {
                     std::hint::black_box(0u64.wrapping_add(1));
