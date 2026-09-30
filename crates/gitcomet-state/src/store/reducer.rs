@@ -1206,7 +1206,7 @@ fn reduce_inner(
             name,
             force,
             approved_sources,
-        } => submodule_trust::add_submodule_trusted(
+        } => submodule_trust::add_submodule_approved(
             state,
             repo_id,
             url,
@@ -1220,7 +1220,7 @@ fn reduce_inner(
         Msg::UpdateSubmodulesTrusted {
             repo_id,
             approved_sources,
-        } => submodule_trust::update_submodules_trusted(state, repo_id, approved_sources),
+        } => submodule_trust::update_submodules_approved(state, repo_id, approved_sources),
         Msg::LoadSubmodule { repo_id, path } => {
             submodule_trust::load_submodule(state, repo_id, path)
         }
@@ -1228,7 +1228,7 @@ fn reduce_inner(
             repo_id,
             path,
             approved_sources,
-        } => submodule_trust::load_submodule_trusted(state, repo_id, path, approved_sources),
+        } => submodule_trust::load_submodule_approved(state, repo_id, path, approved_sources),
         Msg::ConfirmSubmoduleTrustPrompt => submodule_trust::confirm_prompt(state),
         Msg::CancelSubmoduleTrustPrompt => submodule_trust::cancel_prompt(state),
         Msg::ChangeSubmodulePointer {

@@ -50,7 +50,7 @@ pub(super) fn add_submodule(
     }]
 }
 
-pub(super) fn add_submodule_trusted(
+pub(super) fn add_submodule_approved(
     state: &mut AppState,
     repo_id: RepoId,
     url: String,
@@ -86,7 +86,7 @@ pub(super) fn update_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Ef
     }]
 }
 
-pub(super) fn update_submodules_trusted(
+pub(super) fn update_submodules_approved(
     state: &mut AppState,
     repo_id: RepoId,
     approved_sources: Vec<SubmoduleTrustTarget>,
@@ -108,7 +108,7 @@ pub(super) fn load_submodule(state: &mut AppState, repo_id: RepoId, path: PathBu
     }]
 }
 
-pub(super) fn load_submodule_trusted(
+pub(super) fn load_submodule_approved(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
