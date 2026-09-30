@@ -151,6 +151,48 @@ pub(super) fn status_navigation_context_for_repo<'a>(
     })
 }
 
+/// Whether the open working-tree target has a file before and after it in the
+/// section's display order: what the toolbar arrows show. The pane renders on
+/// every diff scroll step, so this walks the section once without copying it,
+/// where the navigation context collects the whole section.
+pub(super) fn status_navigation_neighbors(
+    repo: &RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    section_order: Option<&[usize]>,
+) -> Option<(bool, bool)> {
+    let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
+        return None;
+    };
+    let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
+    let mut len = 0usize;
+    let mut current = None;
+    let mut visit = |entry: &gitcomet_core::domain::FileStatus| {
+        if current.is_none() && entry.path == *path {
+            current = Some(len);
+        }
+        len += 1;
+    };
+    match section_order {
+        Some(order) => {
+            let entries = match section {
+                StatusSection::Staged => repo.staged_status_entries()?,
+                _ => repo.worktree_status_entries()?,
+            };
+            // Like the section iterator: an index past the end ends the list.
+            order
+                .iter()
+                .map_while(|ix| entries.get(*ix))
+                .for_each(&mut visit);
+        }
+        None => StatusSectionEntries::from_repo(repo, section)?
+            .iter()
+            .for_each(&mut visit),
+    }
+    let current = current?;
+    Some((current > 0, current + 1 < len))
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum AdjacentDiffFileTarget {
     Range {
@@ -529,6 +571,67 @@ mod tests {
             path: pb(path),
             kind,
             conflict: None,
+        }
+    }
+
+    /// The toolbar's one-pass answer must match what the prev/next actions
+    /// then do, for every entry, section order and change-tracking view.
+    #[test]
+    fn status_navigation_neighbors_match_adjacent_targets() {
+        use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        let unstaged = vec![
+            file_status("a.txt", Modified),
+            file_status("b.txt", Untracked),
+            file_status("c.txt", Modified),
+            file_status("d.txt", Untracked),
+            file_status("e.txt", Modified),
+        ];
+        let staged = vec![
+            file_status("s1.txt", Added),
+            file_status("s2.txt", Modified),
+        ];
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::new(staged.clone()),
+                unstaged: std::sync::Arc::new(unstaged.clone()),
+            }
+            .into(),
+        );
+        let orders: [Option<Vec<usize>>; 4] = [
+            None,
+            Some(vec![4, 2, 0]),
+            Some(vec![3, 1]),
+            Some(vec![1, 9, 0]),
+        ];
+        for view in [
+            ChangeTrackingView::Combined,
+            ChangeTrackingView::SplitUntracked,
+        ] {
+            for (paths, area) in [(&unstaged, DiffArea::Unstaged), (&staged, DiffArea::Staged)] {
+                for entry in paths {
+                    let target = DiffTarget::working_tree(entry.path.clone(), area);
+                    for order in &orders {
+                        let order = order.as_deref();
+                        let expected = (
+                            adjacent_diff_file_target_for_repo(
+                                &repo, &target, view, -1, None, order,
+                            )
+                            .is_some(),
+                            adjacent_diff_file_target_for_repo(
+                                &repo, &target, view, 1, None, order,
+                            )
+                            .is_some(),
+                        );
+                        assert_eq!(
+                            status_navigation_neighbors(&repo, &target, view, order)
+                                .unwrap_or((false, false)),
+                            expected,
+                            "{view:?} {target:?} {order:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 

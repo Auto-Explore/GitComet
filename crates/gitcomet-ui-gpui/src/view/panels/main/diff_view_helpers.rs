@@ -398,6 +398,25 @@ impl MainPaneView {
             )
         } else if let Some((prev_ix, next_ix)) = inline_neighbors {
             (prev_ix.is_some(), next_ix.is_some())
+        } else if self.active_repo().is_some_and(|repo| {
+            matches!(
+                self.bound_diff_state(repo).diff_target,
+                Some(DiffTarget::WorkingTree { .. })
+            )
+        }) {
+            let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
+            self.active_repo()
+                .and_then(|repo| {
+                    status_nav::status_navigation_neighbors(
+                        repo,
+                        self.bound_diff_state(repo).diff_target.as_ref()?,
+                        change_tracking_view,
+                        status_section_order.as_deref(),
+                    )
+                })
+                .unwrap_or((false, false))
         } else {
             let commit_file_source_indices = self
                 .root_view
@@ -409,8 +428,6 @@ impl MainPaneView {
                 .ok()
                 .flatten();
             let change_tracking_view = self.active_change_tracking_view(cx);
-            let status_section_order =
-                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let Some(repo) = self.active_repo() else {
                 return (None, None);
             };
@@ -424,7 +441,7 @@ impl MainPaneView {
                     change_tracking_view,
                     -1,
                     commit_file_source_indices.as_deref(),
-                    status_section_order.as_deref(),
+                    None,
                 )
                 .is_some(),
                 status_nav::adjacent_diff_file_target_for_repo(
@@ -433,7 +450,7 @@ impl MainPaneView {
                     change_tracking_view,
                     1,
                     commit_file_source_indices.as_deref(),
-                    status_section_order.as_deref(),
+                    None,
                 )
                 .is_some(),
             )
