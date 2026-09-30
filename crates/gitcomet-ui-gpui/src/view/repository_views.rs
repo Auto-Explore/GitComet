@@ -10,6 +10,7 @@
 
 use super::extension_panels::{RepoKey, repo_key};
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_extension_api::{
     ContributionId, DetailsTabDescriptor, RepositoryViewContext, RepositoryViewDescriptor,
     SidebarSectionDescriptor, ViewBuilder,
@@ -413,14 +414,18 @@ impl GitCometView {
                     ui_scale.px(12.0),
                 ))
                 .child(title)
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    if let Some(sections) = this.sidebar_sections.as_mut()
-                        && !sections.collapsed.remove(&index)
-                    {
-                        sections.collapsed.insert(index);
-                    }
-                    cx.notify();
-                }));
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                        if let Some(sections) = this.sidebar_sections.as_mut()
+                            && !sections.collapsed.remove(&index)
+                        {
+                            sections.collapsed.insert(index);
+                        }
+                        cx.notify();
+                    }),
+                );
             column = column.child(header);
             if !collapsed && let Some(view) = sections.router.built(&repo, index) {
                 column = column.child(div().flex_none().child(view));
