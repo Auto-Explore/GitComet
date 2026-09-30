@@ -278,9 +278,10 @@ Still to do, deliberately kept out of this step:
 - History's main pane keeps its own selected diff (`diff_state`); moving it
   onto a `DiffSession` needs its navigation, conflict, and preview paths
   migrated with parity tests.
-- The details pane's commit, range, worktree, and status lists still render
-  through their own code; they share the projection with hosted lists but
-  not the rendering.
+- The details pane's commit, range, and worktree lists and hosted lists
+  now render their file and directory rows through one builder
+  (`rows/file_list/changed_rows.rs`), each list supplying its ids and click
+  actions; the status lists still render through their own code.
 - The focused difftool keeps its window; snapshot panes are the intended
   replacement once the Milestone 6 parity tests exist.
 

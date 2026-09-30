@@ -36,7 +36,7 @@ impl ChangedFileList {
     };
 }
 
-/// One file row's inputs, shared by every changed-file list.
+/// One file row's inputs in a details-pane list.
 struct ChangedFileRow<'a> {
     list: ChangedFileList,
     repo_id: RepoId,
@@ -62,58 +62,38 @@ impl DetailsPaneView {
         ui_scale_percent: u32,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
-        let crate::view::rows::FileListRow::Directory {
+        let (element, toggle) = crate::view::rows::changed_file_directory_row(
+            (list.dir_id, ix).into(),
+            move || format!("{}_{}_{}", list.dir_id, repo_id.0, ix),
+            row,
+            theme,
+            ui_scale_percent,
+        )?;
+        let crate::view::rows::DirectoryToggle {
             key,
-            label,
-            depth,
-            collapsed,
             chain,
-            subtree: _,
-            additions,
-            deletions,
-        } = row
-        else {
-            return None;
-        };
+            collapsed,
+        } = toggle;
         Some(
-            crate::view::rows::directory_row(crate::view::rows::DirectoryRowProps {
-                theme,
-                ui_scale_percent,
-                id: (list.dir_id, ix).into(),
-                label: &label,
-                depth,
-                collapsed,
-                additions,
-                deletions,
-                row_height: sidebar_list_row_height(theme, ui_scale_percent),
-                row_group: None,
-                detail: crate::view::rows::directory_row_detail_for_width(
-                    // No width probe on these lists.
-                    gpui::Pixels::MAX,
-                    depth,
-                    additions.is_some() || deletions.is_some(),
-                    ui_scale_percent,
-                ),
-            })
-            .debug_selector(move || format!("{}_{}_{}", list.dir_id, repo_id.0, ix))
-            .on_activate(
-                false,
-                controls::ControlActivation::Composite,
-                cx.listener(move |this, e: &ClickEvent, _window, cx| {
-                    if !e.standard_click() {
-                        return;
-                    }
-                    this.toggle_file_list_dir(
-                        repo_id,
-                        list.list,
-                        Arc::clone(&key),
-                        Arc::clone(&chain),
-                        collapsed,
-                        cx,
-                    );
-                }),
-            )
-            .into_any_element(),
+            element
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Composite,
+                    cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                        if !e.standard_click() {
+                            return;
+                        }
+                        this.toggle_file_list_dir(
+                            repo_id,
+                            list.list,
+                            Arc::clone(&key),
+                            Arc::clone(&chain),
+                            collapsed,
+                            cx,
+                        );
+                    }),
+                )
+                .into_any_element(),
         )
     }
 
@@ -129,7 +109,7 @@ impl DetailsPaneView {
             list,
             repo_id,
             ix,
-            file: f,
+            file,
             presentation,
             is_tree,
             depth,
@@ -138,92 +118,24 @@ impl DetailsPaneView {
             path_alignment_group,
             diff_stat,
         } = row;
-        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-        let visuals = presentation.visuals;
-        let path_label = if is_tree {
-            SharedString::from(
-                f.path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| presentation.label.to_string()),
-            )
-        } else {
-            presentation.label.clone()
-        };
-        let (icon, color) = if f.is_submodule {
-            (visuals.icon, visuals.color(&theme))
-        } else {
-            crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
-        };
-        // The change kind rides the row wash and a badge on the icon's corner.
-        let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
-        let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
-        let row_group: SharedString = format!("{}_{ix}", list.row_group).into();
-        let interaction =
-            crate::view::rows::FileRowInteraction::new(theme, tint, selected, context_menu_active);
-        let badge_disc = interaction.badge_disc(row_group.clone());
-        let tooltip = path_label.clone();
-
-        let element = div()
-            .id((list.file_id, ix))
-            // Only so the badge disc can follow the row's hover fill.
-            .group(row_group.clone())
-            .debug_selector(move || format!("{}_{}_{}", list.file_id, repo_id.0, ix))
-            .h(sidebar_list_row_height(theme, ui_scale_percent))
-            .flex()
-            .items_center()
-            .gap(scaled_px(8.0))
-            .pl(if is_tree {
-                crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
-            } else {
-                scaled_px(8.0)
-            })
-            .pr(scaled_px(8.0))
-            .w_full()
-            .map(|row| interaction.apply(row))
-            .child(crate::view::rows::file_row_icon_slot(
-                icon,
-                color,
-                badge,
-                badge_disc,
-                14.0,
-                16.0,
-                ui_scale_percent,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .text_size(theme.ui_text(14.0))
-                    .line_height(theme.ui_text(18.0))
-                    .line_clamp(1)
-                    .whitespace_nowrap()
-                    .child(
-                        match path_alignment_group {
-                            Some(group) => components::TruncatedText::aligned_path(
-                                path_label,
-                                theme.ui_text(14.0),
-                                group,
-                            ),
-                            // A tree row's label is a bare file name, so
-                            // there is no path to align against.
-                            None => components::TruncatedText::new(path_label, theme.ui_text(14.0)),
-                        }
-                        .render(cx),
-                    ),
-            )
-            .when(
-                diff_stat && (f.additions.is_some() || f.deletions.is_some()),
-                |row| {
-                    row.child(div().flex_none().child(components::diff_stat(
-                        theme,
-                        ui_scale_percent,
-                        f.additions.unwrap_or(0) as usize,
-                        f.deletions.unwrap_or(0) as usize,
-                    )))
-                },
-            );
-        (element, tooltip)
+        crate::view::rows::changed_file_row(
+            crate::view::rows::ChangedFileRow {
+                element_id: (list.file_id, ix).into(),
+                row_group: format!("{}_{ix}", list.row_group).into(),
+                selector: move || format!("{}_{}_{}", list.file_id, repo_id.0, ix),
+                file,
+                presentation,
+                is_tree,
+                depth,
+                selected,
+                context_menu_active,
+                path_alignment_group,
+                diff_stat,
+            },
+            theme,
+            ui_scale_percent,
+            cx,
+        )
     }
 
     pub(in crate::view) fn render_commit_file_rows(

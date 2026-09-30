@@ -5,6 +5,7 @@
 //! decoration, so scrolling never replans.
 
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::rows::{
     CollapsedDirs, CommitFileFilter, CommitFileProjectionCache, CommitFileSort, FileListPlan,
     FileListPlanCache, FileListRow, FileTree, FileTreeItem, RowIx,
@@ -92,6 +93,7 @@ pub(in crate::view) struct FileListController {
     collapsed_groups: [bool; GROUP_ORDER.len()],
     selected: Option<PathBuf>,
     projection_cache: CommitFileProjectionCache<u64>,
+    presentations: crate::view::rows::CommitFileRowPresentationCache<u64>,
     plan_cache: FileListPlanCache,
     shown: Option<(u64, Arc<[usize]>)>,
     grouped: Option<(u64, Arc<GroupedRows>)>,
@@ -112,6 +114,7 @@ impl FileListController {
             collapsed_groups: [false; GROUP_ORDER.len()],
             selected: None,
             projection_cache: CommitFileProjectionCache::default(),
+            presentations: Default::default(),
             plan_cache: FileListPlanCache::default(),
             shown: None,
             grouped: None,
@@ -270,15 +273,21 @@ impl FileListController {
     }
 
     /// The change a file row shows.
-    pub(in crate::view) fn change_at_ordinal(
+    /// The change a file row shows, with its label and icon.
+    pub(in crate::view) fn presentation_at_ordinal(
         &mut self,
         ordinal: usize,
-    ) -> Option<CommitFileChange> {
+    ) -> Option<(
+        CommitFileChange,
+        crate::view::rows::CommitFileRowPresentation,
+    )> {
         let shown = self.shown();
-        shown
-            .get(ordinal)
-            .and_then(|&ix| self.files.get(ix))
-            .cloned()
+        let source = *shown.get(ordinal)?;
+        let presentations = self.presentations.rows_for(&self.files_rev, &self.files);
+        Some((
+            self.files.get(source)?.clone(),
+            presentations.get(source)?.clone(),
+        ))
     }
 
     pub(in crate::view) fn shown_changes(&mut self) -> Vec<CommitFileChange> {
@@ -431,52 +440,49 @@ impl FileListView {
         ix: usize,
         ordinal: usize,
         depth: usize,
-        name_only: bool,
+        is_tree: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let theme = self.host.theme(cx);
-        let ui_scale = ui_scale::UiScale::current(cx);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let list_id = self.view_id.0;
-        let change = self.controller.change_at_ordinal(ordinal)?;
-        let (icon, color) = crate::view::rows::file_row_icon(&change.path, change.kind, &theme);
-        let is_selected = self.controller.selected.as_ref() == Some(&change.path);
-        let name = if name_only {
-            change
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        } else {
-            change.path.to_string_lossy().into_owned()
-        };
+        let (change, presentation) = self.controller.presentation_at_ordinal(ordinal)?;
+        let selected = self.controller.selected.as_ref() == Some(&change.path);
         let path = change.path.clone();
+        let (row, tooltip) = crate::view::rows::changed_file_row(
+            crate::view::rows::ChangedFileRow {
+                element_id: ("hosted_file_list_file", ix).into(),
+                row_group: format!("hosted_file_list_{list_id}_row_{ix}").into(),
+                selector: move || format!("hosted_file_list_{list_id}_file_{}", path.display()),
+                file: &change,
+                presentation: &presentation,
+                is_tree,
+                depth,
+                selected,
+                context_menu_active: false,
+                path_alignment_group: None,
+                diff_stat: true,
+            },
+            theme,
+            ui_scale_percent,
+            cx,
+        );
+        let picked = change.path.clone();
         Some(
-            div()
-                .id(("hosted_file_list_file", ix))
-                .debug_selector(move || {
-                    format!("hosted_file_list_{list_id}_file_{}", path.display())
-                })
-                .h(ui_scale.px(ROW_HEIGHT_PX))
-                .flex()
-                .items_center()
-                .gap(ui_scale.px(6.0))
-                .pl(ui_scale.px(8.0 + 14.0 * depth as f32))
-                .when(is_selected, |row| {
-                    row.bg(theme.colors.interaction.selected_background)
-                })
-                .text_size(theme.ui_text(13.0))
-                .text_color(theme.colors.foreground.primary)
-                .child(crate::view::svg_icon(icon, color, ui_scale.px(14.0)))
-                .child(div().truncate().child(name))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
-                        if let Some(change) = this.controller.select(&change.path) {
-                            this.pick(change, cx);
-                        }
-                    }),
-                )
-                .into_any_element(),
+            row.on_activate(
+                false,
+                controls::ControlActivation::Composite,
+                cx.listener(move |this, e: &gpui::ClickEvent, _, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    if let Some(change) = this.controller.select(&picked) {
+                        this.pick(change, cx);
+                    }
+                }),
+            )
+            .gitcomet_tooltip(theme, tooltip)
+            .into_any_element(),
         )
     }
 
@@ -487,6 +493,9 @@ impl FileListView {
     ) -> Vec<AnyElement> {
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let row_height =
+            crate::view::rows::sidebar::sidebar_list_row_height(theme, ui_scale_percent);
         let list_id = self.view_id.0;
         if self.controller.mode == FileListMode::Grouped {
             let grouped = self.controller.grouped();
@@ -508,6 +517,7 @@ impl FileListView {
                         },
                         theme,
                         ui_scale,
+                        row_height,
                     )),
                     GroupedRow::File { ordinal } => self.file_row(ix, ordinal, 0, false, cx),
                 })
@@ -518,45 +528,47 @@ impl FileListView {
             .filter_map(|ix| {
                 let row = plan.row_at(RowIx(ix))?;
                 match row {
-                    FileListRow::Directory {
-                        key,
-                        label,
-                        depth,
-                        collapsed,
-                        chain,
-                        ..
-                    } => Some(
-                        div()
-                            .id(("hosted_file_list_dir", ix))
-                            .debug_selector(move || format!("hosted_file_list_{list_id}_dir_{ix}"))
-                            .h(ui_scale.px(ROW_HEIGHT_PX))
-                            .flex()
-                            .items_center()
-                            .pl(ui_scale.px(8.0 + 14.0 * depth as f32))
-                            .text_size(theme.ui_text(13.0))
-                            .text_color(theme.colors.foreground.secondary)
-                            .child(if collapsed { "▸ " } else { "▾ " })
-                            .child(label)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
-                                    this.controller
-                                        .toggle_dir(Arc::clone(&key), &chain, collapsed);
-                                    cx.notify();
-                                }),
-                            )
-                            .into_any_element(),
-                    ),
                     FileListRow::File { ordinal, depth } => {
                         self.file_row(ix, ordinal.0, depth, plan.is_tree(), cx)
+                    }
+                    directory => {
+                        let (element, toggle) = crate::view::rows::changed_file_directory_row(
+                            ("hosted_file_list_dir", ix).into(),
+                            move || format!("hosted_file_list_{list_id}_dir_{ix}"),
+                            directory,
+                            theme,
+                            ui_scale_percent,
+                        )?;
+                        let crate::view::rows::DirectoryToggle {
+                            key,
+                            chain,
+                            collapsed,
+                        } = toggle;
+                        Some(
+                            element
+                                .on_activate(
+                                    false,
+                                    controls::ControlActivation::Composite,
+                                    cx.listener(move |this, e: &gpui::ClickEvent, _, cx| {
+                                        if !e.standard_click() {
+                                            return;
+                                        }
+                                        this.controller.toggle_dir(
+                                            Arc::clone(&key),
+                                            &chain,
+                                            collapsed,
+                                        );
+                                        cx.notify();
+                                    }),
+                                )
+                                .into_any_element(),
+                        )
                     }
                 }
             })
             .collect()
     }
 }
-
-const ROW_HEIGHT_PX: f32 = 22.0;
 
 struct GroupHeader {
     list: gpui::WeakEntity<FileListView>,
@@ -568,9 +580,14 @@ struct GroupHeader {
     sticky: bool,
 }
 
-/// A group's header row, the same height as a file row; clicking it
-/// collapses or expands the group.
-fn group_header(header: GroupHeader, theme: AppTheme, ui_scale: ui_scale::UiScale) -> AnyElement {
+/// A group's header row, `row_height` like every file row (the list is
+/// uniform); clicking it collapses or expands the group.
+fn group_header(
+    header: GroupHeader,
+    theme: AppTheme,
+    ui_scale: ui_scale::UiScale,
+    row_height: Pixels,
+) -> AnyElement {
     let GroupHeader {
         list,
         list_id,
@@ -591,7 +608,7 @@ fn group_header(header: GroupHeader, theme: AppTheme, ui_scale: ui_scale::UiScal
             group,
         ))
         .debug_selector(move || format!("hosted_file_list_{list_id}_{role}_{label}"))
-        .h(ui_scale.px(ROW_HEIGHT_PX))
+        .h(row_height)
         .w_full()
         .flex()
         .items_center()
@@ -676,6 +693,7 @@ impl gpui::UniformListDecoration for StickyGroupHeader {
                 },
                 self.theme,
                 self.ui_scale,
+                item_height,
             ))
             .into_any_element()
     }

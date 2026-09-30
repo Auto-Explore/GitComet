@@ -19,11 +19,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod build;
+mod changed_rows;
 mod render;
 #[cfg(test)]
 mod tests;
 
 pub(in crate::view) use build::{FileTree, FileTreeItem};
+pub(in crate::view) use changed_rows::{
+    ChangedFileRow, DirectoryToggle, changed_file_directory_row, changed_file_row,
+};
 pub(in crate::view) use render::{
     DirectoryRowDetail, DirectoryRowProps, directory_row, directory_row_detail_for_width,
     file_row_indent_px,

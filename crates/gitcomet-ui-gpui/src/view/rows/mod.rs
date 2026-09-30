@@ -1123,8 +1123,9 @@ impl CommitCard {
 mod diff_canvas;
 mod file_list;
 pub(in crate::view) use file_list::{
-    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListPlan,
-    FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row,
+    ChangedFileRow, CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, DirectoryToggle,
+    FileListId, FileListPlan, FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem,
+    RowIx, changed_file_directory_row, changed_file_row, directory_row,
     directory_row_detail_for_width, file_list_projection_key, file_list_projection_key_scoped,
     file_row_indent_px,
 };
