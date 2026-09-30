@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{RepoLoadsInFlight, RepoState};
+use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::{RepoSpec, RepoStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::PathBuf;

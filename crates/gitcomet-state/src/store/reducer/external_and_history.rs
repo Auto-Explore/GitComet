@@ -10,16 +10,19 @@ use super::util::{
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
+use super::{diff_selection, repo_management};
 use crate::model::{
-    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable,
+    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoId,
     RepoLoadsInFlight, SidebarMode,
 };
-use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
+use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{GitRepository, InteractiveRebaseEntry, SequencerState};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
 const SMALL_APPEND_GROWTH_RATIO: usize = 8;
@@ -992,6 +995,53 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
             | RepoActionKind::CreateBranchAndCheckout
             | RepoActionKind::RenameBranch
     )
+}
+
+pub(super) fn repo_paths_action_finished(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    paths: RepoPathList,
+    result: Result<(), Error>,
+) -> Vec<Effect> {
+    if result.is_ok() {
+        if matches!(
+            action,
+            RepoActionKind::DiscardWorktreeChangesPath
+                | RepoActionKind::DiscardWorktreeChangesPaths
+        ) {
+            diff_selection::clear_diff_selection_after_discard(state, repo_id, paths.as_slice());
+        } else if let Some(area) = action.status_diff_area() {
+            diff_selection::clear_diff_selection_for_status_action(
+                state,
+                repo_id,
+                area,
+                paths.as_slice(),
+            );
+        }
+    }
+    repo_action_finished(repos, state, repo_id, action, result)
+}
+
+pub(super) fn repo_action_finished_in_worktree(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    worktree_path: PathBuf,
+    result: Result<(), Error>,
+) -> Vec<Effect> {
+    // Open first so the origin tab is inactive when its action finishes and
+    // only refreshes its primary state instead of reloading everything.
+    let mut effects = if result.is_ok() {
+        repo_management::open_repo(repos, id_alloc, state, worktree_path)
+    } else {
+        Vec::new()
+    };
+    effects.extend(repo_action_finished(repos, state, repo_id, action, result));
+    effects
 }
 
 #[cfg(test)]
