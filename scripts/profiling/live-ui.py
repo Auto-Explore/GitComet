@@ -489,7 +489,7 @@ class HeadlessCompositor:
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
              ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None,
-             cycles=100):
+             cycles=100, extra_env=None):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -512,6 +512,8 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     if ping_ms:
         env["GITCOMET_UI_PROBE_PING_MS"] = str(ping_ms)
     env.update(gpu_cache_environment(output, cold_gpu_cache))
+    # Runtime knobs under test, e.g. allocator options; recorded in the capture.
+    env.update(extra_env or {})
     capture = {"version": 1, "run_id": run_id, "scenario": name, "binary": str(binary),
                "binary_sha256": perf_metadata.sha256_file(binary), "repository": str(repository),
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
@@ -519,7 +521,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "refresh_hz": REFRESH_HZ if display == "headless" else None,
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
-               "cycles": cycles if name == "lifecycle" else None}
+               "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
     if metadata:
         (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
@@ -985,6 +987,8 @@ def main():
     single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     single.add_argument("--cycles", type=int, default=100,
                         help="measured lifecycle cycles; comparing two counts isolates per-cycle retention")
+    single.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                        help="extra environment for the app, e.g. MIMALLOC_ALLOW_THP=0 (repeatable)")
     single.add_argument("--cold-gpu-cache", action="store_true",
                         help="a private, empty GPU shader cache: measures a first launch")
     paired = commands.add_parser("measure")
@@ -1011,7 +1015,8 @@ def main():
         result = run_once(args.binary, args.repository, args.scenario, args.output, args.timeout,
                           display=args.display, ping_ms=args.ping_ms, save_file=args.save_file,
                           wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
-                          secondary=args.secondary_repository, cycles=args.cycles)
+                          secondary=args.secondary_repository, cycles=args.cycles,
+                          extra_env=dict(item.split("=", 1) for item in args.env))
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)
