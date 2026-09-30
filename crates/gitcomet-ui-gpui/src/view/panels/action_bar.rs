@@ -266,8 +266,10 @@ impl ActionBarView {
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.status_cache_rev().hash(&mut hasher);
-            // The historical-browse badge keys off the file browser source.
-            repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The historical-browse badge keys off the file browser source. Not
+            // `file_browser_rev`: that moves on every sidebar search keystroke.
+            repo.file_browser.active.hash(&mut hasher);
+            repo.file_browser.source.hash(&mut hasher);
             // Global back/forward buttons enable/disable with nav stack position.
             repo.navigation.main_history.cursor.hash(&mut hasher);
             repo.navigation.main_history.entries.len().hash(&mut hasher);
@@ -1496,5 +1498,34 @@ mod tests {
         let after = ActionBarView::notify_fingerprint(&state);
 
         assert_ne!(before, after);
+    }
+
+    /// Sidebar file search and folder expansion move `file_browser_rev` on
+    /// every keystroke; the bar only shows the browse badge, which follows the
+    /// browser's `active` flag and `source`.
+    #[test]
+    fn notify_fingerprint_ignores_file_browser_search() {
+        let repo_id = RepoId(1);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        let before = ActionBarView::notify_fingerprint(&state);
+
+        let browser = &mut state.repos[0].file_browser;
+        browser.search_query = "src".into();
+        browser.expanded_dirs.insert(Arc::new(PathBuf::from("src")));
+        browser.bump_rev();
+        assert_eq!(before, ActionBarView::notify_fingerprint(&state));
+
+        state.repos[0].file_browser.active = true;
+        state.repos[0].file_browser.bump_rev();
+        assert_ne!(before, ActionBarView::notify_fingerprint(&state));
     }
 }

@@ -251,8 +251,10 @@ impl MainPaneView {
                 0
             };
             commit_details_rev.hash(&mut hasher);
-            // The historical-browse tint keys off the file browser source.
-            repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The historical-browse tint keys off the file browser source. Not
+            // `file_browser_rev`: that moves on every sidebar search keystroke.
+            repo.file_browser.active.hash(&mut hasher);
+            repo.file_browser.source.hash(&mut hasher);
 
             match &repo.interactive_rebase_setup {
                 Some(setup) => {

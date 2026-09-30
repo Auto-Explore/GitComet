@@ -269,3 +269,32 @@ fn revealed_whitespace_wrap_ranges_follow_rendered_tab_markers() {
         .collect::<Vec<_>>();
     assert_eq!(revealed, vec![0..5]);
 }
+
+/// Sidebar file search and folder expansion move `file_browser_rev` on every
+/// keystroke; the pane only shows the historical-browse tint, which follows
+/// the browser's `active` flag and `source`.
+#[test]
+fn notify_fingerprint_ignores_file_browser_search() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    ));
+    let before = MainPaneView::notify_fingerprint_for(&state);
+
+    let browser = &mut state.repos[0].file_browser;
+    browser.search_query = "src".into();
+    browser.expanded_dirs.insert(Arc::new("src".into()));
+    browser.bump_rev();
+    assert_eq!(before, MainPaneView::notify_fingerprint_for(&state));
+
+    let browser = &mut state.repos[0].file_browser;
+    browser.active = true;
+    browser.source = gitcomet_core::domain::FileSource::Commit(CommitId("c1".into()));
+    browser.bump_rev();
+    assert_ne!(before, MainPaneView::notify_fingerprint_for(&state));
+}

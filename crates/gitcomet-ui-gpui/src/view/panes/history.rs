@@ -1277,7 +1277,9 @@ impl HistoryView {
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.indexed.rev.hash(&mut hasher);
-            repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The browsed commit's mark. Not `file_browser_rev`: that moves on
+            // every sidebar search keystroke.
+            repo.file_browser.source.hash(&mut hasher);
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
             // so both revs have to move the fingerprint or the rows never repaint.
