@@ -122,6 +122,18 @@ where
     if saw_cr { "\r" } else { "\n" }
 }
 
+/// Byte offset of each line's start: 0, then one past every `\n`, so text
+/// ending in a newline has an empty last line and empty text has one. Callers
+/// with another convention (no lines for empty text, or tree-sitter's, with
+/// no start after a trailing newline) adjust the result.
+pub fn line_starts(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut starts = Vec::with_capacity(bytes.len() / 64 + 1);
+    starts.push(0);
+    starts.extend(memchr::memchr_iter(b'\n', bytes).map(|ix| ix + 1));
+    starts
+}
+
 /// `(CRLF count, total LF count)` of `text` in one scan; every LF is found
 /// with `memchr` and the byte before it decides whether it was a CRLF.
 pub fn count_line_feeds(text: &str) -> (usize, usize) {
@@ -835,6 +847,15 @@ pub(crate) fn delete_last_line(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn line_starts_begin_after_every_newline() {
+        use super::line_starts;
+        assert_eq!(line_starts(""), vec![0]);
+        assert_eq!(line_starts("a"), vec![0]);
+        assert_eq!(line_starts("a\n"), vec![0, 2]);
+        assert_eq!(line_starts("a\r\nbc\n\nd"), vec![0, 3, 6, 7]);
+    }
+
     #[test]
     fn redact_url_userinfo_masks_secrets_and_keeps_the_rest() {
         use super::redact_url_userinfo;

@@ -1265,12 +1265,7 @@ pub(crate) fn build_synthetic_replacement_change_line(
 }
 
 pub(crate) fn line_starts_for_text(text: &str) -> Vec<usize> {
-    let mut line_starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-    line_starts.push(0);
-    for newline_ix in memchr::memchr_iter(b'\n', text.as_bytes()) {
-        line_starts.push(newline_ix.saturating_add(1));
-    }
-    line_starts
+    gitcomet_core::text_utils::line_starts(text)
 }
 
 pub(crate) fn bench_counter_u64(value: usize) -> u64 {

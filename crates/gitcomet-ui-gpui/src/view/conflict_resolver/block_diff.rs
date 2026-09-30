@@ -106,17 +106,11 @@ pub fn select_conflict_rendering_mode(
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn preview_line_starts(text: &str) -> Vec<usize> {
+    // Empty text previews no lines.
     if text.is_empty() {
         return Vec::new();
     }
-    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-    starts.push(0);
-    for (ix, byte) in text.bytes().enumerate() {
-        if byte == b'\n' {
-            starts.push(ix.saturating_add(1));
-        }
-    }
-    starts
+    gitcomet_core::text_utils::line_starts(text)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
