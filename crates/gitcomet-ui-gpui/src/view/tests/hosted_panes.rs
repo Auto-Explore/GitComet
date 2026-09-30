@@ -306,6 +306,29 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     });
     assert_eq!(shown(cx), (Some(PathBuf::from("a.rs")), None));
 
+    // The example flags a line from the current pane's gutter.
+    let current_id = store.snapshot().repos[0]
+        .diff_sessions
+        .keys()
+        .next()
+        .unwrap()
+        .0;
+    settle(cx, &view, &store, "the current pane's rows", |cx| {
+        cx.debug_bounds(selector(format!("hosted_diff_{current_id}_gutter_0")))
+            .is_some()
+    });
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_gutter_0")));
+    publish(cx, &view, store.snapshot());
+    let flags = cx.update(|_window, app| changes.read(app).flags().clone());
+    assert_eq!(
+        flags.into_iter().collect::<Vec<_>>(),
+        vec![(DiffLineSide::New, 1)]
+    );
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_diff_{current_id}_markers")))
+            .is_some()
+    );
+
     click_debug_selector(
         cx,
         selector(format!("hosted_file_list_{list_id}_file_b.rs")),
@@ -488,4 +511,176 @@ fn panes_show_renames_additions_deletions_and_binaries_while_history_keeps_its_d
     let history = &store.snapshot().repos[0].diff_state;
     assert_eq!(history.diff_target.as_ref(), Some(&history_target));
     assert_eq!(history.diff_target_rev, history_rev);
+}
+
+/// Mounts a pane's view as a window of its own.
+struct PaneHolder(gpui::AnyView);
+
+impl Render for PaneHolder {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.0.clone())
+    }
+}
+
+fn click_with(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    modifiers: gpui::Modifiers,
+) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
+        .center();
+    cx.simulate_mouse_move(center, None, modifiers);
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, modifiers);
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, modifiers);
+}
+
+#[gpui::test]
+fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::{
+        DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
+        DiffSelectionAction,
+    };
+    let _visual_guard = crate::test_support::lock_visual_test();
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    publish(app_cx, &view, Arc::new(AppState::test_default()));
+    let host =
+        app_cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+
+    let gutter_clicks = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let acted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (on_gutter, on_action) = (
+        std::rc::Rc::clone(&gutter_clicks),
+        std::rc::Rc::clone(&acted),
+    );
+    let pane = app_cx.update(|_window, app| {
+        host.create_snapshot_pane(
+            DiffSnapshot::new("notes.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n"),
+            DiffPaneOptions {
+                on_gutter_click: Some(std::rc::Rc::new(move |side, line, _| {
+                    on_gutter.borrow_mut().push((side, line))
+                })),
+                selection_actions: vec![DiffSelectionAction::new("Comment", move |range, _| {
+                    on_action.borrow_mut().push(range)
+                })],
+                ..DiffPaneOptions::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    app_cx.run_until_parked();
+    let red = gpui::red();
+    app_cx.update(|_window, app| {
+        pane.set_insets(
+            vec![DiffInset::new(
+                DiffLineSide::New,
+                2,
+                ["note one".into(), "note two".into()],
+            )],
+            app,
+        );
+        pane.set_annotations(
+            DiffAnnotations::new().with(
+                DiffLineSide::New,
+                3,
+                DiffAnnotation::new(red).with_label("flag"),
+            ),
+            app,
+        );
+        pane.set_legend(vec![DiffLegendItem::new("Flagged", red)], app);
+    });
+    let pane_view = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap_or_else(|_| panic!("a hosted diff pane"));
+    let (id, marker_builds) = app_cx.update(|_window, app| {
+        (
+            pane_view.read(app).view_id(),
+            pane_view.read(app).marker_builds,
+        )
+    });
+
+    let view_any = pane.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    // Rows: one, two (removed), TWO, two inset rows, three.
+    for part in ["legend", "markers", "row_3", "row_4", "row_5"] {
+        assert!(
+            cx.debug_bounds(selector(format!("hosted_diff_{id}_{part}")))
+                .is_some(),
+            "{part} is drawn"
+        );
+    }
+    assert_eq!(
+        cx.update(|_window, app| pane_view.read(app).marker_builds),
+        marker_builds,
+        "drawing never places markers"
+    );
+    assert_eq!(rows_with(cx, &pane, "note"), 0, "insets are not file lines");
+    assert_eq!(rows_with(cx, &pane, "three"), 1);
+    rows_with(cx, &pane, "");
+
+    let selection =
+        |cx: &mut gpui::VisualTestContext| cx.update(|_window, app| pane.selection(app));
+    click_with(
+        cx,
+        selector(format!("hosted_diff_{id}_row_0")),
+        gpui::Modifiers::default(),
+    );
+    click_with(
+        cx,
+        selector(format!("hosted_diff_{id}_row_2")),
+        gpui::Modifiers::shift(),
+    );
+    cx.run_until_parked();
+    let expected = DiffLineRange {
+        side: DiffLineSide::New,
+        start: 1,
+        end: 2,
+    };
+    assert_eq!(selection(cx), Some(expected));
+    assert_eq!(
+        cx.update(|_window, app| pane.selected_text(app)).as_deref(),
+        Some("one\nTWO")
+    );
+
+    // Clicking an inset or a gutter leaves the selection alone.
+    click_with(
+        cx,
+        selector(format!("hosted_diff_{id}_row_3")),
+        gpui::Modifiers::default(),
+    );
+    click_with(
+        cx,
+        selector(format!("hosted_diff_{id}_gutter_5")),
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert_eq!(selection(cx), Some(expected));
+    assert_eq!(*gutter_clicks.borrow(), vec![(DiffLineSide::New, 3)]);
+
+    for _ in 0..2 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    click_with(
+        cx,
+        selector(format!("hosted_diff_{id}_action_0")),
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert_eq!(*acted.borrow(), vec![expected]);
 }

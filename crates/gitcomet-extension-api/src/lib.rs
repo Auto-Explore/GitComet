@@ -36,9 +36,10 @@ pub use host::{
 };
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use panes::{
-    DiffLineRange, DiffLineSide, DiffPane, DiffPaneImpl, DiffPaneOptions, DiffPanePolicy,
-    DiffRowDecor, DiffRowDecorProvider, DiffRowStyle, DiffSnapshot, FileList, FileListImpl,
-    FileSelected,
+    DiffAnnotation, DiffAnnotations, DiffGutterAction, DiffInset, DiffLegendItem, DiffLineRange,
+    DiffLineSide, DiffPane, DiffPaneImpl, DiffPaneOptions, DiffPanePolicy, DiffRowDecor,
+    DiffRowDecorProvider, DiffRowStyle, DiffSelectionAction, DiffSelectionRun, DiffSnapshot,
+    FileList, FileListImpl, FileSelected,
 };
 pub use registry::{Registrar, RegistrationError, Registry};
 

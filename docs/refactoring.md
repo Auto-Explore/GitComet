@@ -282,3 +282,17 @@ Still to do, deliberately kept out of this step:
   not the rendering.
 - The focused difftool keeps its window; snapshot panes are the intended
   replacement once the Milestone 6 parity tests exist.
+
+## Milestone 6: richer contributions
+
+- Hosted diff panes take `DiffAnnotations` (indexed by file side and line,
+  replaced whole), a legend, gutter actions, selection actions, and
+  `DiffInset`s. One projection (`view/hosted/projection.rs`) places insets
+  after their lines and maps file lines to display rows; search, selection,
+  copy (`DiffPane::selected_text`), reveal, and hit testing go through it,
+  so inset rows are never taken for file lines. Scrollbar markers are
+  placed when rows, insets, or annotations change, never while drawing (a
+  UI test counts placements across frames). Actions run after the pane's
+  update, so they may read the pane.
+- The example's Changes view flags lines from the gutter (annotations and
+  a legend) and adds notes under a selection (insets).

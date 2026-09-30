@@ -9,12 +9,13 @@ use gitcomet_core::domain::{CommitFileChange, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_state::diff_session::ChangeSource;
 use gitcomet_ui_kit::gpui::{AnyView, App, Hsla, SharedString};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
 /// Which side of a file a line belongs to.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum DiffLineSide {
     Old,
     New,
@@ -121,11 +122,146 @@ impl DiffRowDecor {
 /// Decorations by file line. Asked only for the rows being drawn.
 pub type DiffRowDecorProvider = Rc<dyn Fn(DiffLineSide, u32) -> Option<DiffRowDecor>>;
 
+/// A mark on one file line, drawn beside the row and on the scrollbar.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DiffAnnotation {
+    pub color: Hsla,
+    pub label: Option<SharedString>,
+}
+
+impl DiffAnnotation {
+    pub fn new(color: Hsla) -> Self {
+        Self { color, label: None }
+    }
+
+    pub fn with_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
+/// Annotations indexed by file line and replaced whole. A pane looks up
+/// only the rows it draws and places scrollbar markers once per change,
+/// never per frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiffAnnotations {
+    lines: BTreeMap<(DiffLineSide, u32), DiffAnnotation>,
+}
+
+impl DiffAnnotations {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, side: DiffLineSide, line: u32, annotation: DiffAnnotation) {
+        self.lines.insert((side, line), annotation);
+    }
+
+    pub fn with(mut self, side: DiffLineSide, line: u32, annotation: DiffAnnotation) -> Self {
+        self.insert(side, line, annotation);
+        self
+    }
+
+    pub fn get(&self, side: DiffLineSide, line: u32) -> Option<&DiffAnnotation> {
+        self.lines.get(&(side, line))
+    }
+
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (DiffLineSide, u32, &DiffAnnotation)> {
+        self.lines
+            .iter()
+            .map(|((side, line), annotation)| (*side, *line, annotation))
+    }
+}
+
+/// One entry of a pane's legend: what a colour means.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffLegendItem {
+    pub label: SharedString,
+    pub color: Hsla,
+}
+
+impl DiffLegendItem {
+    pub fn new(label: impl Into<SharedString>, color: Hsla) -> Self {
+        Self {
+            label: label.into(),
+            color,
+        }
+    }
+}
+
+/// Runs when the user clicks a line's gutter.
+pub type DiffGutterAction = Rc<dyn Fn(DiffLineSide, u32, &mut App)>;
+
+/// Runs a selection action on the selected lines.
+pub type DiffSelectionRun = Rc<dyn Fn(DiffLineRange, &mut App)>;
+
+/// A button shown while lines are selected; `run` gets the selection.
+#[derive(Clone)]
+pub struct DiffSelectionAction {
+    pub label: SharedString,
+    pub run: DiffSelectionRun,
+}
+
+impl DiffSelectionAction {
+    pub fn new(
+        label: impl Into<SharedString>,
+        run: impl Fn(DiffLineRange, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            run: Rc::new(run),
+        }
+    }
+}
+
+/// Rows shown after a file line that are not part of the file, such as a
+/// review comment. Search, selection, copy, and reveal skip them.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DiffInset {
+    pub side: DiffLineSide,
+    pub line: u32,
+    pub lines: Vec<SharedString>,
+    pub color: Option<Hsla>,
+}
+
+impl DiffInset {
+    pub fn new(
+        side: DiffLineSide,
+        line: u32,
+        lines: impl IntoIterator<Item = SharedString>,
+    ) -> Self {
+        Self {
+            side,
+            line,
+            lines: lines.into_iter().collect(),
+            color: None,
+        }
+    }
+
+    pub fn with_color(mut self, color: Hsla) -> Self {
+        self.color = Some(color);
+        self
+    }
+}
+
+/// Build with `..DiffPaneOptions::default()`; fields are added over time.
 #[derive(Clone, Default)]
 pub struct DiffPaneOptions {
     pub policy: DiffPanePolicy,
     pub style: DiffRowStyle,
     pub decor: Option<DiffRowDecorProvider>,
+    pub on_gutter_click: Option<DiffGutterAction>,
+    pub selection_actions: Vec<DiffSelectionAction>,
 }
 
 /// Two texts compared without a repository, such as the files a difftool
@@ -173,6 +309,12 @@ pub trait DiffPaneImpl {
     fn set_search(&self, query: SharedString, cx: &mut App);
     /// The number of rows matching the search.
     fn search_matches(&self, cx: &App) -> usize;
+    fn set_annotations(&self, annotations: Arc<DiffAnnotations>, cx: &mut App);
+    fn set_legend(&self, legend: Vec<DiffLegendItem>, cx: &mut App);
+    /// Replaces the pane's insets; each shows after its line on its side.
+    fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App);
+    /// The selected file lines' text, one line each; insets never included.
+    fn selected_text(&self, cx: &App) -> Option<String>;
 }
 
 /// An owning handle to a hosted diff pane. Mount [`DiffPane::view`] in a view
@@ -223,6 +365,22 @@ impl DiffPane {
 
     pub fn search_matches(&self, cx: &App) -> usize {
         self.0.search_matches(cx)
+    }
+
+    pub fn set_annotations(&self, annotations: impl Into<Arc<DiffAnnotations>>, cx: &mut App) {
+        self.0.set_annotations(annotations.into(), cx)
+    }
+
+    pub fn set_legend(&self, legend: Vec<DiffLegendItem>, cx: &mut App) {
+        self.0.set_legend(legend, cx)
+    }
+
+    pub fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App) {
+        self.0.set_insets(insets, cx)
+    }
+
+    pub fn selected_text(&self, cx: &App) -> Option<String> {
+        self.0.selected_text(cx)
     }
 }
 

@@ -3,16 +3,18 @@
 //! rows are its own; a session pane observes only its session's revision and
 //! closes the session when dropped.
 
+use super::projection::{DisplayRow, PaneProjection, selected_text};
 use super::rows::{PaneRow, PaneRowKind, rows_from_file_text, rows_from_patch, side_text};
 use super::*;
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffLineRange, DiffLineSide, DiffPaneImpl, DiffPaneOptions, DiffSnapshot, RepositoryHandle,
-    StateSubscription, WindowHost,
+    DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPaneImpl,
+    DiffPaneOptions, DiffSnapshot, RepositoryHandle, StateSubscription, WindowHost,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
 use palette::IntoColor;
+use std::rc::Rc;
 
 enum PaneSource {
     /// A diff session in the window's store.
@@ -31,6 +33,15 @@ pub(crate) struct DiffPaneView {
     view_id: DiffViewId,
     options: DiffPaneOptions,
     rows: Arc<Vec<PaneRow>>,
+    /// `rows` with insets; search, selection, and markers index it.
+    projection: Arc<PaneProjection>,
+    insets: Arc<[DiffInset]>,
+    annotations: Arc<DiffAnnotations>,
+    /// Placed when rows, insets, or annotations change, never while drawing.
+    markers: Arc<Vec<(f32, gpui::Hsla)>>,
+    legend: Vec<DiffLegendItem>,
+    #[cfg(test)]
+    pub(crate) marker_builds: usize,
     /// The session revision `rows` were built from.
     rows_rev: Option<u64>,
     loading: bool,
@@ -56,6 +67,13 @@ impl DiffPaneView {
             view_id: DiffViewId::next(),
             options,
             rows: Arc::default(),
+            projection: Arc::default(),
+            insets: Arc::from([]),
+            annotations: Arc::default(),
+            markers: Arc::default(),
+            legend: Vec::new(),
+            #[cfg(test)]
+            marker_builds: 0,
             rows_rev: None,
             loading: true,
             error: None,
@@ -118,7 +136,44 @@ impl DiffPaneView {
         self.loading = true;
         self.error = None;
         self.selection = None;
-        self.matches.clear();
+        self.reproject();
+    }
+
+    /// Rebuilds display rows, search matches, and markers from `rows` and
+    /// `insets`.
+    fn reproject(&mut self) {
+        self.projection = Arc::new(PaneProjection::build(&self.rows, &self.insets));
+        self.refresh_search();
+        self.place_markers();
+    }
+
+    fn place_markers(&mut self) {
+        self.markers = Arc::new(self.projection.markers(&self.annotations));
+        #[cfg(test)]
+        {
+            self.marker_builds += 1;
+        }
+    }
+
+    pub(crate) fn set_annotations(
+        &mut self,
+        annotations: Arc<DiffAnnotations>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.annotations = annotations;
+        self.place_markers();
+        cx.notify();
+    }
+
+    pub(crate) fn set_insets(&mut self, insets: Vec<DiffInset>, cx: &mut gpui::Context<Self>) {
+        self.insets = insets.into();
+        self.reproject();
+        cx.notify();
+    }
+
+    pub(crate) fn set_legend(&mut self, legend: Vec<DiffLegendItem>, cx: &mut gpui::Context<Self>) {
+        self.legend = legend;
+        cx.notify();
     }
 
     fn open(&mut self, target: DiffTarget) {
@@ -244,7 +299,7 @@ impl DiffPaneView {
                 pane.error = error;
                 pane.build = None;
                 pane.building_rev = None;
-                pane.refresh_search();
+                pane.reproject();
                 if let Some((side, line)) = pane.pending_reveal.take() {
                     pane.reveal(side, line, cx);
                 }
@@ -272,11 +327,7 @@ impl DiffPaneView {
     }
 
     pub(crate) fn reveal(&mut self, side: DiffLineSide, line: u32, cx: &mut gpui::Context<Self>) {
-        match self
-            .rows
-            .iter()
-            .position(|row| row.line(side) == Some(line))
-        {
+        match self.projection.display_ix(side, line) {
             Some(ix) => {
                 self.scroll.scroll_to_item(ix, gpui::ScrollStrategy::Center);
                 cx.notify();
@@ -299,13 +350,20 @@ impl DiffPaneView {
         self.matches = if query.is_empty() {
             Vec::new()
         } else {
-            self.rows
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| row.text.to_lowercase().contains(&query))
-                .map(|(ix, _)| ix)
+            (0..self.projection.len())
+                .filter(|&ix| {
+                    self.projection
+                        .document_row(ix)
+                        .and_then(|row| self.rows.get(row))
+                        .is_some_and(|row| row.text.to_lowercase().contains(&query))
+                })
                 .collect()
         };
+    }
+
+    /// The file line at display row `ix`; `None` on insets and headers.
+    fn anchor_at(&self, ix: usize) -> Option<(DiffLineSide, u32)> {
+        self.rows.get(self.projection.document_row(ix)?)?.anchor()
     }
 
     /// A click selects the row's line; shift extends along the same side.
@@ -314,7 +372,7 @@ impl DiffPaneView {
         if !self.options.policy.select_lines {
             return;
         }
-        let Some((side, line)) = self.rows.get(ix).and_then(PaneRow::anchor) else {
+        let Some((side, line)) = self.anchor_at(ix) else {
             return;
         };
         self.selection = match self.selection {
@@ -332,6 +390,62 @@ impl DiffPaneView {
         cx.notify();
     }
 
+    /// Runs the gutter action for display row `ix`'s line, after this
+    /// update so the action may read the pane.
+    fn click_gutter(&mut self, ix: usize, cx: &mut gpui::Context<Self>) {
+        let (Some(action), Some((side, line))) =
+            (self.options.on_gutter_click.clone(), self.anchor_at(ix))
+        else {
+            return;
+        };
+        cx.defer(move |cx| action(side, line, cx));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn view_id(&self) -> u64 {
+        self.view_id.0
+    }
+
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        Some(selected_text(&self.rows, self.selection?))
+    }
+
+    fn render_inset_row(
+        &self,
+        ix: usize,
+        inset: usize,
+        line: usize,
+        theme: AppTheme,
+        ui_scale: ui_scale::UiScale,
+    ) -> Option<AnyElement> {
+        let inset = self.insets.get(inset)?;
+        let text = inset.lines.get(line)?.clone();
+        let pane_id = self.view_id.0;
+        Some(
+            div()
+                .id(("hosted_diff_row", ix))
+                .debug_selector(move || format!("hosted_diff_{pane_id}_row_{ix}"))
+                .h(ui_scale.px(20.0))
+                .w_full()
+                .flex()
+                .items_center()
+                .pl(ui_scale.px(if self.options.policy.line_numbers {
+                    102.0
+                } else {
+                    14.0
+                }))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .bg(inset
+                    .color
+                    .unwrap_or_else(|| theme.colors.surface.panel.into_color()))
+                .child(text)
+                .into_any_element(),
+        )
+    }
+
     fn render_rows(
         &mut self,
         range: std::ops::Range<usize>,
@@ -343,10 +457,25 @@ impl DiffPaneView {
         let policy = self.options.policy;
         let pane_id = self.view_id.0;
         let number_width = ui_scale.px(44.0);
+        let gutter_action = self.options.on_gutter_click.is_some();
         range
             .filter_map(|ix| {
-                let row = self.rows.get(ix)?.clone();
+                let row_ix = match *self.projection.display.get(ix)? {
+                    DisplayRow::Document(row_ix) => row_ix,
+                    DisplayRow::Inset { inset, line } => {
+                        return self.render_inset_row(ix, inset, line, theme, ui_scale);
+                    }
+                };
+                let row = self.rows.get(row_ix)?.clone();
                 let anchor = row.anchor();
+                let annotation = row
+                    .old_line
+                    .and_then(|line| self.annotations.get(DiffLineSide::Old, line))
+                    .or_else(|| {
+                        row.new_line
+                            .and_then(|line| self.annotations.get(DiffLineSide::New, line))
+                    })
+                    .cloned();
                 let decor =
                     anchor.and_then(|(side, line)| self.options.decor.as_ref()?(side, line));
                 let selected = anchor.is_some_and(|(side, line)| {
@@ -429,6 +558,15 @@ impl DiffPaneView {
                     .when(selected, |row| {
                         row.bg(theme.colors.interaction.selected_background)
                     })
+                    .child(
+                        div()
+                            .w(ui_scale.px(3.0))
+                            .h_full()
+                            .flex_none()
+                            .when_some(annotation.as_ref(), |bar, annotation| {
+                                bar.bg(annotation.color)
+                            }),
+                    )
                     .when(policy.line_numbers, |el| {
                         el.child(number(row.old_line)).child(number(row.new_line))
                     })
@@ -443,12 +581,26 @@ impl DiffPaneView {
                         )
                     })
                     .child(
-                        div().w(ui_scale.px(14.0)).flex_none().child(
-                            decor
-                                .as_ref()
-                                .and_then(|decor| decor.gutter.clone())
-                                .unwrap_or_else(|| marker.into()),
-                        ),
+                        div()
+                            .id(("hosted_diff_gutter", ix))
+                            .debug_selector(move || format!("hosted_diff_{pane_id}_gutter_{ix}"))
+                            .w(ui_scale.px(14.0))
+                            .flex_none()
+                            .child(
+                                decor
+                                    .as_ref()
+                                    .and_then(|decor| decor.gutter.clone())
+                                    .unwrap_or_else(|| marker.into()),
+                            )
+                            .when(gutter_action && anchor.is_some(), |gutter| {
+                                gutter.cursor_pointer().on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.click_gutter(ix, cx);
+                                    }),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -457,6 +609,21 @@ impl DiffPaneView {
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .child(gpui::StyledText::new(text).with_highlights(highlights)),
+                    )
+                    .when_some(
+                        annotation.and_then(|annotation| annotation.label),
+                        |el, label| {
+                            el.child(
+                                div()
+                                    .flex_none()
+                                    .max_w(ui_scale.px(160.0))
+                                    .px(ui_scale.px(6.0))
+                                    .truncate()
+                                    .text_size(theme.ui_text(11.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(label),
+                            )
+                        },
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -473,6 +640,7 @@ impl DiffPaneView {
 impl Render for DiffPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.host.theme(cx);
+        let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
         let status = if let Some(error) = &self.error {
             Some(error.clone())
@@ -485,6 +653,62 @@ impl Render for DiffPaneView {
         } else {
             None
         };
+        let legend = (!self.legend.is_empty()).then(|| {
+            div()
+                .id(("hosted_diff_legend", pane_id))
+                .debug_selector(move || format!("hosted_diff_{pane_id}_legend"))
+                .flex()
+                .flex_wrap()
+                .flex_none()
+                .gap(ui_scale.px(10.0))
+                .px(ui_scale.px(8.0))
+                .py(ui_scale.px(4.0))
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .border_b_1()
+                .border_color(theme.colors.stroke.subtle)
+                .children(self.legend.iter().map(|item| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(ui_scale.px(4.0))
+                        .child(
+                            div()
+                                .size(ui_scale.px(8.0))
+                                .rounded(ui_scale.px(2.0))
+                                .bg(item.color),
+                        )
+                        .child(item.label.clone())
+                }))
+        });
+        let actions = self
+            .selection
+            .filter(|_| self.options.policy.select_lines)
+            .filter(|_| !self.options.selection_actions.is_empty())
+            .map(|range| {
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(ui_scale.px(4.0))
+                    .px(ui_scale.px(8.0))
+                    .py(ui_scale.px(4.0))
+                    .border_b_1()
+                    .border_color(theme.colors.stroke.subtle)
+                    .children(self.options.selection_actions.iter().enumerate().map(
+                        |(index, action)| {
+                            let run = Rc::clone(&action.run);
+                            components::Button::new(
+                                format!("hosted_diff_{pane_id}_action_{index}"),
+                                action.label.clone(),
+                            )
+                            .on_click(theme, cx, move |_, _, _, cx| {
+                                let run = Rc::clone(&run);
+                                cx.defer(move |cx| run(range, cx));
+                            })
+                        },
+                    ))
+            });
+        let markers = Arc::clone(&self.markers);
         div()
             .id(("hosted_diff_pane", self.view_id.0))
             .debug_selector(move || format!("hosted_diff_{pane_id}"))
@@ -492,6 +716,8 @@ impl Render for DiffPaneView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
+            .children(legend)
+            .children(actions)
             .when_some(status, |pane, status| {
                 pane.child(
                     div()
@@ -501,13 +727,39 @@ impl Render for DiffPaneView {
                 )
             })
             .child(
-                uniform_list(
-                    "hosted_diff_rows",
-                    self.rows.len(),
-                    cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
-                )
-                .track_scroll(&self.scroll)
-                .flex_1(),
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .relative()
+                    .child(
+                        uniform_list(
+                            "hosted_diff_rows",
+                            self.projection.len(),
+                            cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
+                        )
+                        .track_scroll(&self.scroll)
+                        .size_full(),
+                    )
+                    .when(!markers.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .debug_selector(move || format!("hosted_diff_{pane_id}_markers"))
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .right_0()
+                                .w(ui_scale.px(4.0))
+                                .children(markers.iter().map(|(fraction, color)| {
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .top(gpui::relative(*fraction))
+                                        .h(ui_scale.px(2.0))
+                                        .bg(*color)
+                                })),
+                        )
+                    }),
             )
     }
 }
@@ -579,5 +831,24 @@ impl DiffPaneImpl for HostedDiffPane {
 
     fn search_matches(&self, cx: &App) -> usize {
         self.entity.read(cx).matches.len()
+    }
+
+    fn set_annotations(&self, annotations: Arc<DiffAnnotations>, cx: &mut App) {
+        self.entity
+            .update(cx, |pane, cx| pane.set_annotations(annotations, cx));
+    }
+
+    fn set_legend(&self, legend: Vec<DiffLegendItem>, cx: &mut App) {
+        self.entity
+            .update(cx, |pane, cx| pane.set_legend(legend, cx));
+    }
+
+    fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App) {
+        self.entity
+            .update(cx, |pane, cx| pane.set_insets(insets, cx));
+    }
+
+    fn selected_text(&self, cx: &App) -> Option<String> {
+        self.entity.read(cx).selected_text()
     }
 }

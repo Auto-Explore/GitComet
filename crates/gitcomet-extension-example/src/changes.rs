@@ -1,20 +1,30 @@
 //! The example's Changes view: the working tree against HEAD in a hosted
 //! file list, the picked file in one diff pane and the previous pick in a
 //! second, read-only one. Retargeting either leaves the other and History
-//! as they were.
+//! as they were. Clicking the current pane's gutter flags a line, and a
+//! selection can be given a note shown under it.
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
-    ChangeSource, DiffPane, DiffPaneOptions, DiffPanePolicy, FileList, RepositoryViewContext,
+    ChangeSource, DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
+    DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction, FileList,
+    RepositoryViewContext,
 };
 use gitcomet_ui_kit::gpui::prelude::*;
-use gitcomet_ui_kit::gpui::{AnyElement, Context, SharedString, Window, div, px};
+use gitcomet_ui_kit::gpui::{
+    AnyElement, App, Context, SharedString, WeakEntity, Window, div, px, rgb_to_hsla,
+};
+use std::collections::BTreeSet;
+use std::rc::Rc;
 
 pub struct ChangesView {
     context: RepositoryViewContext,
     list: Result<FileList, SharedString>,
     current: Option<DiffPane>,
     previous: Option<DiffPane>,
+    /// The current pane's flagged lines and notes; a new pick clears them.
+    flags: BTreeSet<(DiffLineSide, u32)>,
+    notes: Vec<DiffInset>,
 }
 
 impl ChangesView {
@@ -40,6 +50,48 @@ impl ChangesView {
             list,
             current: None,
             previous: None,
+            flags: BTreeSet::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    /// Options for the current pane: gutter flags and selection notes.
+    fn current_options(&self, cx: &mut Context<Self>) -> DiffPaneOptions {
+        let view = cx.weak_entity();
+        let noted = view.clone();
+        DiffPaneOptions {
+            on_gutter_click: Some(Rc::new(move |side, line, cx| {
+                let _ = view.update(cx, |this, cx| this.toggle_flag(side, line, cx));
+            })),
+            selection_actions: vec![DiffSelectionAction::new("Add note", move |range, cx| {
+                add_note(&noted, range, cx);
+            })],
+            ..DiffPaneOptions::default()
+        }
+    }
+
+    pub fn flags(&self) -> &BTreeSet<(DiffLineSide, u32)> {
+        &self.flags
+    }
+
+    fn toggle_flag(&mut self, side: DiffLineSide, line: u32, cx: &mut Context<Self>) {
+        if !self.flags.remove(&(side, line)) {
+            self.flags.insert((side, line));
+        }
+        let color = rgb_to_hsla(self.context.window.theme(cx).colors.accent.solid);
+        let annotations =
+            self.flags
+                .iter()
+                .fold(DiffAnnotations::new(), |annotations, (side, line)| {
+                    annotations.with(
+                        *side,
+                        *line,
+                        DiffAnnotation::new(color).with_label("flagged"),
+                    )
+                });
+        if let Some(current) = &self.current {
+            current.set_annotations(annotations, cx);
+            current.set_legend(vec![DiffLegendItem::new("Flagged", color)], cx);
         }
     }
 
@@ -54,13 +106,9 @@ impl ChangesView {
     fn pane(
         &self,
         target: DiffTarget,
-        policy: DiffPanePolicy,
+        options: DiffPaneOptions,
         cx: &mut Context<Self>,
     ) -> Option<DiffPane> {
-        let options = DiffPaneOptions {
-            policy,
-            ..DiffPaneOptions::default()
-        };
         self.context
             .window
             .create_diff_pane(&self.context.repository, target, options, cx)
@@ -71,7 +119,8 @@ impl ChangesView {
     /// previous one.
     fn show(&mut self, target: DiffTarget, cx: &mut Context<Self>) {
         let Some(current) = self.current.clone() else {
-            self.current = self.pane(target, DiffPanePolicy::default(), cx);
+            let options = self.current_options(cx);
+            self.current = self.pane(target, options, cx);
             cx.notify();
             return;
         };
@@ -82,12 +131,42 @@ impl ChangesView {
         if let Some(shown) = shown {
             match &self.previous {
                 Some(previous) => previous.set_target(shown, cx),
-                None => self.previous = self.pane(shown, DiffPanePolicy::read_only(), cx),
+                None => {
+                    let options = DiffPaneOptions {
+                        policy: DiffPanePolicy::read_only(),
+                        ..DiffPaneOptions::default()
+                    };
+                    self.previous = self.pane(shown, options, cx);
+                }
             }
         }
+        self.flags.clear();
+        self.notes.clear();
+        current.set_annotations(DiffAnnotations::new(), cx);
+        current.set_legend(Vec::new(), cx);
+        current.set_insets(Vec::new(), cx);
         current.set_target(target, cx);
         cx.notify();
     }
+}
+
+/// Notes the selection under its last line.
+fn add_note(view: &WeakEntity<ChangesView>, range: DiffLineRange, cx: &mut App) {
+    let _ = view.update(cx, |this, cx| {
+        let text = if range.start == range.end {
+            format!("Note on line {}", range.start)
+        } else {
+            format!("Note on lines {}–{}", range.start, range.end)
+        };
+        this.notes.push(DiffInset::new(
+            range.side,
+            range.end,
+            [SharedString::from(text)],
+        ));
+        if let Some(current) = &this.current {
+            current.set_insets(this.notes.clone(), cx);
+        }
+    });
 }
 
 fn slot(pane: Option<&DiffPane>, empty: &'static str) -> AnyElement {

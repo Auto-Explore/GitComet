@@ -5,4 +5,5 @@ use super::*;
 
 pub(crate) mod diff_pane;
 pub(crate) mod file_list;
+pub(crate) mod projection;
 pub(crate) mod rows;
