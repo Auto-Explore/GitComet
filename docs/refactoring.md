@@ -43,6 +43,7 @@ message routing that the extension host and History-find decoration touch.
 |---|---:|---|
 | Split the seven oversized test files by behavior | 614 | `inventory.py compare`: 7,668 mapped, 0 problems |
 | Extract inline test modules to child `tests.rs` | 0 renamed | Module paths unchanged |
+| Milestones 4–6 and the module splits (from the Milestone 3 snapshot) | 16 | `inventory.py compare`: 7,707 mapped into 7,757; 50 additions declared with reasons; 0 problems |
 
 ## Milestone 1: identity and application bootstrap
 
@@ -367,3 +368,19 @@ of `commit_details_view` (the status sections) need method extraction, not
 moves; the three changed-file row renderers in `sidebar/file_rows.rs`
 duplicate their directory and file rows and should share one; the
 remaining auth helpers in `reducer/util.rs` belong in `reducer/auth.rs`.
+
+## Verification
+
+- Performance, same runner, criterion (`--features benchmarks`), baseline
+  `2efcfc96` vs this branch: `diff_open_patch_first_window/200` 83.0 µs vs
+  81.1 µs (budget 15 ms); `diff_scroll/normal_lines_window/200` 172.6 ns vs
+  169.4 ns (budget 8 ms). Within noise of each other.
+- With no extensions registered the window has no extension host, router,
+  details tabs, sidebar sections, or bottom-panel state, and the palette and
+  status bar gain nothing (`without_extensions_the_host_adds_nothing`); the
+  details and sidebar panes mount through their old cached paths.
+- Structural budgets with tests: scrollbar markers are placed once per
+  change, never per frame; grouped lists never regroup while scrolling;
+  state observers are notified once per update cycle.
+- Test inventory: see Test moves.
+
