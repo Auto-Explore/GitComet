@@ -341,6 +341,11 @@ impl GitCometView {
                     self.open_repository_switcher_centered(window, cx);
                 }
             }
+            "open-workspace" => {
+                if let Some(window) = window {
+                    self.open_workspace_picker_centered(window, cx);
+                }
+            }
             "clone-repository" => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
@@ -1088,6 +1093,7 @@ impl GitCometView {
             focused_mergetool,
             focused_mergetool_exit_code,
             startup_crash_report,
+            workspace,
         } = config;
         if initial_path.is_none() {
             initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
@@ -1103,6 +1109,44 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
+        let (
+            workspace_id,
+            persisted_workspace_repo_paths,
+            persisted_workspace_active_repository,
+            initial_window_placement,
+            workspace_theme_key,
+        ) = match workspace {
+            WorkspaceBootstrap::LegacySession => (None, Vec::new(), None, None, None),
+            WorkspaceBootstrap::Empty => {
+                ui_session.open_repos.clear();
+                ui_session.active_repo = None;
+                ui_session.sidebar_width = None;
+                ui_session.details_width = None;
+                ui_session.sidebar_collapsed = Some(false);
+                ui_session.change_tracking_height = None;
+                ui_session.untracked_height = None;
+                (None, Vec::new(), None, None, None)
+            }
+            WorkspaceBootstrap::Saved(workspace) => {
+                let workspace = *workspace;
+                ui_session.open_repos.clone_from(&workspace.repositories);
+                ui_session
+                    .active_repo
+                    .clone_from(&workspace.active_repository);
+                ui_session.sidebar_width = workspace.layout.sidebar_width;
+                ui_session.details_width = workspace.layout.details_width;
+                ui_session.sidebar_collapsed = Some(workspace.layout.sidebar_collapsed);
+                ui_session.change_tracking_height = workspace.layout.change_tracking_height;
+                ui_session.untracked_height = workspace.layout.untracked_height;
+                (
+                    Some(workspace.id),
+                    workspace.repositories,
+                    workspace.active_repository,
+                    Some(workspace.placement),
+                    workspace.theme_mode,
+                )
+            }
+        };
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::appearance::initialize(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
@@ -1131,8 +1175,12 @@ impl GitCometView {
         let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
-        let initial_theme = theme_mode
-            .resolve_theme(window.appearance())
+        let workspace_theme_mode = workspace_theme_key.as_deref().and_then(ThemeMode::from_key);
+        let window_appearance = window.appearance();
+        let initial_theme = workspace_theme_mode
+            .as_ref()
+            .unwrap_or(&theme_mode)
+            .resolve_theme(window_appearance)
             .with_appearance(crate::appearance::current(cx));
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
@@ -1147,6 +1195,7 @@ impl GitCometView {
         let annotate_enabled = ui_preferences.diff.annotate_enabled;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
@@ -1184,6 +1233,21 @@ impl GitCometView {
         let initial_store_state = store.snapshot();
         let store_preloaded = !initial_store_state.repos.is_empty();
         let git_runtime_available = initial_store_state.git_runtime.is_available();
+        let mut pending_repo_open_reservations = FxHashMap::default();
+        let mut pending_repo_open_active = None;
+        if initial_repository_launch_mode == InitialRepositoryLaunchMode::OpenExplicitly
+            && let Some(path) = initial_path.as_ref()
+        {
+            let failure_revision = initial_store_state.repo_open_failure_revision;
+            pending_repo_open_reservations.insert(
+                path.clone(),
+                PendingRepoOpen {
+                    failure_revision,
+                    persist_in_workspace: true,
+                },
+            );
+            pending_repo_open_active = Some(path.clone());
+        }
         let should_auto_restore = !crate::startup_probe::disable_auto_restore()
             && view_mode != GitCometViewMode::FocusedMergetool
             && crate::ui_runtime::current().auto_restores_session()
@@ -1209,7 +1273,8 @@ impl GitCometView {
                 if git_runtime_available {
                     store.dispatch(Msg::OpenRepo(path.clone()));
                 } else {
-                    deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepo(path.clone()));
+                    deferred_repo_bootstrap =
+                        Some(DeferredRepoBootstrap::OpenRepos(vec![path.clone()]));
                 }
             }
         } else if let Some(path) = initial_path.as_ref() {
@@ -1217,8 +1282,13 @@ impl GitCometView {
                 store.dispatch(Msg::OpenRepo(path.clone()));
                 startup_repo_bootstrap_pending = true;
             } else {
-                deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepo(path.clone()));
+                deferred_repo_bootstrap =
+                    Some(DeferredRepoBootstrap::OpenRepos(vec![path.clone()]));
             }
+        }
+
+        if deferred_repo_bootstrap.is_some() {
+            startup_repo_bootstrap_pending = true;
         }
 
         let initial_state = store.snapshot();
@@ -1249,7 +1319,7 @@ impl GitCometView {
             TitleBarView::new(
                 initial_theme,
                 weak_view.clone(),
-                titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
+                titlebar_repo_tab_actions_enabled(view_mode, !initial_state.repos.is_empty()),
                 cx,
             )
         });
@@ -1283,7 +1353,7 @@ impl GitCometView {
         });
 
         let sidebar_pane = cx.new(|cx| {
-            SidebarPaneView::new(
+            let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
@@ -1292,7 +1362,9 @@ impl GitCometView {
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 cx,
-            )
+            );
+            pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
+            pane
         });
         let main_pane = cx.new(|cx| {
             MainPaneView::new(
@@ -1416,16 +1488,18 @@ impl GitCometView {
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             let now = Instant::now();
             if !window.is_window_active() {
+                crate::press_gesture::clear_pointer_press(window, cx);
                 // Leaving the app is one of the two moments auto-save has to
                 // mean more than "after a pause": the pending timer would
                 // otherwise fire against a window the user has already left,
                 // and an external edit to the same file could land first.
                 this.main_pane
                     .update(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
-                // Capture the focused element before the platform blur() fires and clears it.
+                // Capture the focused element before our blur policy clears it.
                 // This is the restore target when opening the palette via a global hotkey while
                 // this window is in the background.
                 this.pre_palette_focus = window.focused(cx);
+                crate::window_focus::reset_on_deactivation(window, cx);
                 // A deactivation right after we asked for a move/resize grab is
                 // the compositor taking focus for the drag, not the user leaving
                 // the app. Remember it so the matching re-activation does not
@@ -1434,6 +1508,13 @@ impl GitCometView {
                     crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE)
                         .then_some(now);
                 return;
+            }
+            crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());
+            crate::workspaces::mark_window_active(cx, this.window_handle.window_id());
+            if !this.has_repo_tabs() {
+                // Another window may have opened or closed repositories.
+                this.refresh_home_repositories();
+                cx.notify();
             }
             let self_initiated_grab =
                 consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
@@ -1459,6 +1540,26 @@ impl GitCometView {
             }
         });
 
+        let window_bounds_subscription = cx.observe_window_bounds(window, |this, window, cx| {
+            this.window_placement = Some(crate::app::capture_window_placement(
+                window,
+                cx,
+                this.window_placement.as_ref(),
+            ));
+            if let Some(placement) = this.window_placement.clone() {
+                crate::workspaces::record_window_placement(
+                    cx,
+                    this.window_handle.window_id(),
+                    placement,
+                );
+            }
+            if this.view_mode == GitCometViewMode::FocusedMergetool {
+                this.schedule_legacy_window_bounds_persist(cx);
+            } else {
+                this.schedule_workspace_persist(cx);
+            }
+        });
+
         let appearance_subscription = {
             let view = cx.weak_entity();
             let mut first = true;
@@ -1468,10 +1569,13 @@ impl GitCometView {
                     return;
                 }
                 let _ = view.update(app, |this, cx| {
-                    if !this.theme_mode.is_automatic() {
+                    this.window_appearance = window.appearance();
+                    if !this.effective_theme_mode().is_automatic() {
                         return;
                     }
-                    let theme = this.theme_mode.resolve_theme(window.appearance());
+                    let theme = this
+                        .effective_theme_mode()
+                        .resolve_theme(this.window_appearance);
                     this.set_theme(theme, cx);
                     cx.notify();
                 });
@@ -1482,19 +1586,6 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/repo".into(),
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
-        });
-
-        let error_banner_input = cx.new(|cx| {
-            components::TextInput::new(
-                components::TextInputOptions {
-                    multiline: true,
-                    read_only: true,
-                    chromeless: true,
                     ..Default::default()
                 },
                 window,
@@ -1524,6 +1615,20 @@ impl GitCometView {
             );
             input.set_masked(true, cx);
             input
+        });
+
+        let home_search_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Search workspaces and repositories".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let home_search_input_subscription = cx.observe(&home_search_input, |this, input, cx| {
+            this.handle_home_search_input(&input, cx);
         });
 
         let open_repo_input_subscription = cx.observe(&open_repo_input, |this, input, cx| {
@@ -1601,6 +1706,13 @@ impl GitCometView {
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
 
+        // The error details dialog shows what the toast host holds.
+        let toast_errors_subscription = cx.observe(&toast_host, |this, toast_host, cx| {
+            let errors = toast_host.read(cx).error_notices().len();
+            this.popover_host
+                .update(cx, |host, cx| host.error_notices_changed(errors, cx));
+        });
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1609,13 +1721,27 @@ impl GitCometView {
             _poller: poller,
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
+            _window_bounds_subscription: window_bounds_subscription,
             _appearance_subscription: appearance_subscription,
             _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _open_repo_input_subscription: open_repo_input_subscription,
+            _home_search_input_subscription: home_search_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
+            _toast_errors_subscription: toast_errors_subscription,
             view_mode,
+            workspace_id,
+            persisted_workspace_repo_paths,
+            persisted_workspace_active_repository,
+            window_placement: Some(crate::app::capture_window_placement(
+                window,
+                cx,
+                initial_window_placement.as_ref(),
+            )),
+            native_window_title: "GitComet".to_string(),
             theme_mode,
+            workspace_theme_mode,
+            window_appearance,
             theme: initial_theme,
             title_bar,
             sidebar_pane,
@@ -1637,12 +1763,17 @@ impl GitCometView {
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
+            pending_repo_open_reservations,
+            pending_repo_open_active,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: splash::load_splash_backdrop_image(initial_theme.is_dark),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             synced_repo_paths: std::sync::Arc::from(Vec::new()),
             ui_settings_persist_seq: 0,
+            workspace_persist_seq: 0,
+            #[cfg(test)]
+            ui_settings_persist_requests_for_test: 0,
             last_repo_activation_dispatch_at: FxHashMap::default(),
             window_grab_activation_suppressed_at: None,
             signing_tools_probe_seq: 0,
@@ -1674,6 +1805,7 @@ impl GitCometView {
             annotate_enabled,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
             remote_markdown_image_policy,
@@ -1684,6 +1816,14 @@ impl GitCometView {
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
+            home_search_input,
+            home_search_query: String::new(),
+            home_rows: Default::default(),
+            home_selected: None,
+            home_workspaces_scroll: gpui::UniformListScrollHandle::new(),
+            home_repositories_scroll: gpui::UniformListScrollHandle::new(),
+            home_pinned_repos: ui_session.pinned_repos.clone(),
+            home_recent_repos: ui_session.recent_repos.clone(),
             external_drag_paths: None,
             external_drag_payload: None,
             external_drag_classification_seq: 0,
@@ -1710,6 +1850,7 @@ impl GitCometView {
             pending_terminal_shutdown_prompt: None,
             pending_unsaved_file_edits_prompt: None,
             pending_unsaved_file_edits_flush: None,
+            pending_file_edits_action: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
             pending_branch_exists_prompt: initial_state.branch_exists_prompt.clone(),
@@ -1725,7 +1866,6 @@ impl GitCometView {
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
-            error_banner_input,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
@@ -1740,21 +1880,22 @@ impl GitCometView {
 
         view.drive_focused_mergetool_bootstrap();
         view.drive_submodule_diff_bootstrap();
-        view.maybe_show_user_survey_on_startup(cx);
-        view.maybe_check_for_updates_on_startup(cx);
         runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
 
-        crate::app::sync_gitcomet_window_state(
-            cx,
-            view.window_handle,
-            cx.weak_entity(),
-            view.main_pane.downgrade(),
-            view.view_mode,
-            view.synced_repo_paths_for_state(),
-        );
+        view.sync_workspace_and_registry(cx);
+        if view.is_home_screen_active() {
+            view.focus_home_search(window, cx);
+        }
 
         view
+    }
+
+    pub(crate) fn run_process_startup_hooks(&mut self, cx: &mut gpui::Context<Self>) {
+        #[cfg(test)]
+        crate::app::record_startup_hook_invocation_for_test(cx, self.window_handle.window_id());
+        self.maybe_show_user_survey_on_startup(cx);
+        self.maybe_check_for_updates_on_startup(cx);
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -1800,7 +1941,7 @@ impl GitCometView {
             .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.error_banner_input
+        self.home_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_username_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1841,11 +1982,21 @@ impl GitCometView {
         self.toast_host.update(cx, |_host, cx| cx.notify());
         self.popover_host.update(cx, |_host, cx| cx.notify());
         self.open_repo_input.update(cx, |_input, cx| cx.notify());
-        self.error_banner_input.update(cx, |_input, cx| cx.notify());
         self.auth_prompt_username_input
             .update(cx, |_input, cx| cx.notify());
         self.auth_prompt_secret_input
             .update(cx, |_input, cx| cx.notify());
+        cx.notify();
+    }
+
+    pub(crate) fn workspace_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        self.sync_workspace_theme_override(cx);
+        self.sync_native_window_title(cx);
+        // Both entities paint against the title-bar fill: the title bar owns
+        // the chrome and the tab strip owns transparent labels and hover
+        // overlays that must composite over the same color.
+        self.title_bar.update(cx, |_bar, cx| cx.notify());
+        self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
         cx.notify();
     }
 
@@ -2073,6 +2224,9 @@ impl GitCometView {
         }
 
         self.sidebar_collapsed = collapsed;
+        self.sidebar_pane.update(cx, |pane, cx| {
+            pane.set_expanded_branches_visible(!collapsed, cx)
+        });
         // The collapsed-rail popover only exists while collapsed; drop it (and any
         // in-flight fade) instantly when the full sidebar comes back so it can't
         // linger over the expanded pane.
@@ -2458,72 +2612,14 @@ impl GitCometView {
         rows
     }
 
-    pub(super) fn show_error_banner(&mut self, repo_id: Option<RepoId>, message: String) {
-        if message.trim().is_empty() {
-            return;
-        }
-
-        if self
-            .state
-            .banner_error
-            .as_ref()
-            .is_some_and(|banner| banner.repo_id == repo_id && banner.message == message)
-        {
-            return;
-        }
-
-        self.store
-            .dispatch(Msg::ShowBannerError { repo_id, message });
-    }
-
-    pub(super) fn split_error_banner_message(
-        err_text: &str,
-    ) -> (Option<SharedString>, SharedString) {
-        let lines: Vec<&str> = err_text.lines().collect();
-        let Some(cmd_start) = lines.iter().position(|line| line.starts_with("    git ")) else {
-            return (None, err_text.to_string().into());
-        };
-
-        let mut cmd_end = cmd_start;
-        while cmd_end < lines.len() && lines[cmd_end].starts_with("    ") {
-            cmd_end += 1;
-        }
-
-        let command = lines[cmd_start..cmd_end]
-            .iter()
-            .map(|line| line.strip_prefix("    ").unwrap_or(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let mut body_lines: Vec<String> = Vec::with_capacity(lines.len());
-        for line in &lines[..cmd_start] {
-            body_lines.push((*line).to_string());
-        }
-        for line in &lines[cmd_end..] {
-            body_lines.push(line.strip_prefix("    ").unwrap_or(line).to_string());
-        }
-
-        let mut collapsed: Vec<String> = Vec::with_capacity(body_lines.len());
-        let mut prev_blank = false;
-        for line in body_lines {
-            let blank = line.trim().is_empty();
-            if blank && prev_blank {
-                continue;
-            }
-            collapsed.push(line);
-            prev_blank = blank;
-        }
-
-        (Some(command.into()), collapsed.join("\n").into())
-    }
-
-    pub(super) fn should_show_error_banner_overflow_hint(err_text: &str) -> bool {
-        err_text.lines().count() > ERROR_BANNER_OVERFLOW_HINT_MIN_LINES
-            || err_text.len() > ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS
-    }
-
-    pub(super) fn should_render_generic_error_banner(auth_prompt_active: bool) -> bool {
-        !auth_prompt_active
+    /// Show an error until the user closes it.
+    pub(in crate::view) fn report_error(
+        &mut self,
+        report: ErrorReport,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toast_host
+            .update(cx, |host, cx| host.push_error(report, cx));
     }
 
     pub(super) fn auth_prompt_banner_colors(theme: AppTheme) -> (gpui::Rgba, gpui::Rgba) {
@@ -2582,8 +2678,8 @@ impl GitCometView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if matches!(kind, components::ToastKind::Error) {
-            self.show_error_banner(self.active_repo_id(), message);
+        if kind == components::ToastKind::Error {
+            self.report_error(ErrorReport::message(self.active_repo_id(), message), cx);
             return;
         }
         self.toast_host
@@ -2599,8 +2695,14 @@ impl GitCometView {
         link_label: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if matches!(kind, components::ToastKind::Error) {
-            self.show_error_banner(self.active_repo_id(), message);
+        if kind == components::ToastKind::Error {
+            let report = ErrorReport::message(self.active_repo_id(), message).with_action(
+                ErrorAction::OpenUrl {
+                    url: link_url,
+                    label: link_label,
+                },
+            );
+            self.report_error(report, cx);
             return;
         }
         self.toast_host.update(cx, |host, cx| {
@@ -2675,8 +2777,6 @@ impl GitCometView {
                                 format!("Failed to open link: {err}"),
                                 cx,
                             );
-                            // The banner an Error becomes never touches `cx`.
-                            cx.notify();
                         }
                     },
                 );
@@ -2764,23 +2864,17 @@ impl GitCometView {
         platform_open::spawn_launch(
             cx,
             move || open_url(url),
-            |this, result, cx| {
-                match result {
-                    Ok(()) => this.push_toast(
-                        components::ToastKind::Success,
-                        "Opened crash report page in your browser.".to_string(),
-                        cx,
-                    ),
-                    Err(err) => this.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open browser: {err}"),
-                        cx,
-                    ),
-                }
-                // `push_toast` sends an Error straight to `show_error_banner`,
-                // which never touches `cx`, so without this the error path would
-                // depend entirely on a store round-trip to repaint.
-                cx.notify();
+            |this, result, cx| match result {
+                Ok(()) => this.push_toast(
+                    components::ToastKind::Success,
+                    "Opened crash report page in your browser.".to_string(),
+                    cx,
+                ),
+                Err(err) => this.push_toast(
+                    components::ToastKind::Error,
+                    format!("Failed to open browser: {err}"),
+                    cx,
+                ),
             },
         );
     }
@@ -3004,9 +3098,11 @@ impl GitCometView {
                         active_repo,
                     });
                 }
-                DeferredRepoBootstrap::OpenRepo(path) => {
+                DeferredRepoBootstrap::OpenRepos(paths) => {
                     self.startup_repo_bootstrap_pending = true;
-                    self.store.dispatch(Msg::OpenRepo(path));
+                    for path in paths {
+                        self.store.dispatch(Msg::OpenRepo(path));
+                    }
                 }
             }
             return;
@@ -3037,7 +3133,7 @@ impl GitCometView {
 
         let folder_active = payload
             .as_ref()
-            .is_some_and(|classified| classified.directory().is_some());
+            .is_some_and(external_drag::ClassifiedExternalPaths::has_directory);
         self.external_drag_payload = payload;
         self.repo_tabs_bar.update(cx, |bar, cx| {
             bar.set_external_folder_drag_active(folder_active, cx);
@@ -3065,7 +3161,8 @@ impl GitCometView {
             cx.notify();
         } else {
             self.external_drag_payload = None;
-            let show_drop_zone = matches!(paths.paths(), [_]);
+            // Classification narrows this to payloads with a folder in them.
+            let show_drop_zone = !paths.paths().is_empty();
             self.repo_tabs_bar.update(cx, |bar, cx| {
                 bar.set_external_folder_drag_active(show_drop_zone, cx);
             });
@@ -3102,9 +3199,9 @@ impl GitCometView {
         repository_bar_already_cleared: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let changed = self.external_drag_paths.take().is_some()
-            || self.external_drag_payload.take().is_some()
-            || self.external_drag_drop_pending;
+        let had_paths = self.external_drag_paths.take().is_some();
+        let had_payload = self.external_drag_payload.take().is_some();
+        let changed = had_paths || had_payload || self.external_drag_drop_pending;
         self.external_drag_drop_pending = false;
         self.external_drag_classification_seq =
             self.external_drag_classification_seq.wrapping_add(1);
@@ -3123,25 +3220,40 @@ impl GitCometView {
         repository_bar_already_cleared: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let directory = self
+        let directories = self
             .external_drag_payload
             .as_ref()
-            .and_then(external_drag::ClassifiedExternalPaths::directory)
-            .cloned();
+            .map(|payload| payload.directories().to_vec())
+            .unwrap_or_default();
         self.clear_external_drag_state(repository_bar_already_cleared, cx);
-        if let Some(path) = directory {
-            self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+        // Each folder opens (or fails) on its own, in drop order, so the last
+        // one dropped ends up as the active tab.
+        let window_id = self.window_handle.window_id();
+        for path in directories {
+            crate::app::open_dropped_repository_from_view(cx, window_id, path);
         }
     }
 
-    /// Called by the repository bar after it has cleared its own highlight, so
+    pub(super) fn submit_external_drag_payload_from_home(
+        &mut self,
+        paths: gpui::ExternalPaths,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.repo_tabs_bar.update(cx, |bar, cx| {
+            bar.set_external_folder_drag_active(false, cx);
+        });
+        self.submit_external_drag_payload_after_repo_drop(paths, cx);
+    }
+
+    /// Called after the drop target has cleared the repository bar's highlight.
+    /// The repository bar itself can still be on the entity update stack, so
     /// this must not update that entity re-entrantly from its drop handler.
     pub(in crate::view) fn submit_external_drag_payload_after_repo_drop(
         &mut self,
         paths: gpui::ExternalPaths,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !matches!(paths.paths(), [_]) {
+        if paths.paths().is_empty() {
             self.clear_external_drag_state(true, cx);
             return;
         }

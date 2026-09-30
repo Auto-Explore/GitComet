@@ -165,6 +165,43 @@ fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bo
     false
 }
 
+/// Branch names a commit's menu offers to copy: the local branches pointing at
+/// it, or, when there are none, its remote branches as `remote/branch` (the
+/// same text the branch's own menu copies).
+fn commit_branch_names_to_copy(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+) -> Vec<String> {
+    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let local: Vec<String> = repo
+        .branches
+        .ready()
+        .map(|branches| {
+            branches
+                .iter()
+                .filter(|branch| branch.target == *commit_id)
+                .map(|branch| branch.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !local.is_empty() {
+        return local;
+    }
+    repo.remote_branches
+        .ready()
+        .map(|branches| {
+            branches
+                .iter()
+                .filter(|branch| branch.target == *commit_id)
+                .map(|branch| format!("{}/{}", branch.remote, branch.name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     model_with_header(this, repo_id, commit_id, true)
 }
@@ -273,7 +310,8 @@ fn model_with_header(
         let label = format!("Squash {} commits", plan.commit_count).into();
         items.push(ContextMenuItem::Entry {
             label,
-            icon: Some("icons/git_commit.svg".into()),
+            // The branch menu's "Squash into current" icon.
+            icon: Some("icons/arrow_right.svg".into()),
             shortcut: None,
             disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),
@@ -328,6 +366,21 @@ fn model_with_header(
             disabled: false,
             action: Box::new(ContextMenuAction::CopyText { text: sha.clone() }),
         });
+        let names = commit_branch_names_to_copy(this, repo_id, commit_id);
+        let single = names.len() == 1;
+        for name in names {
+            items.push(ContextMenuItem::Entry {
+                label: if single {
+                    "Copy branch name".into()
+                } else {
+                    format!("Copy branch name {name}").into()
+                },
+                icon: Some("icons/copy.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::CopyText { text: name }),
+            });
+        }
     }
     if let Some(permalink) = this
         .state

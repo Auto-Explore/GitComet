@@ -79,6 +79,8 @@ alacritty_terminal = "0.26"
 anyhow = "1"
 clap = { version = "4.6.7", features = ["derive"] }
 criterion = "0.8.2"
+# Charset guess for files that are not UTF-8 (the detector Firefox uses).
+chardetng = { version = "1.0.0", default-features = false }
 # Runs the tree-sitter allocator install before `main` in every binary that
 # links gitcomet-tree-sitter-alloc, tests included, so no process ever switches
 # allocators while tree-sitter is already holding blocks. Already in the graph
@@ -87,14 +89,18 @@ ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
 dekobon-tree-sitter-groovy = "0.3.0"
+# Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
+encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
 faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }
 fnv = "1.0.7"
 fontdb = "0.24.0"
+fs2 = "0.4.3"
 futures = "0.3.34"
 gix = { version = "0.88.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1"] }
+# Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.9.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "dd2493af9c5acfbcdee8a625570d566d9247296b" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "dd2493af9c5acfbcdee8a625570d566d9247296b", features = ["font-kit"] }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "bdd090f243921570bc0c28855ebd2ff105cd225c" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "bdd090f243921570bc0c28855ebd2ff105cd225c", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
@@ -128,6 +134,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.27.0"
+uuid = { version = "1.25.0", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a
@@ -284,6 +291,14 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.taffy]
+opt-level = 2
+
+# Text decoding runs on every non-UTF-8 file load; at opt-level 0 it is
+# tens of times slower than the file read itself.
+[profile.dev.package.encoding_rs]
+opt-level = 2
+
+[profile.dev.package.chardetng]
 opt-level = 2
 
 [profile.test]

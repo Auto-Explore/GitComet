@@ -70,6 +70,7 @@ mod support;
 mod syntax;
 mod text_fixtures;
 
+pub use crate::view::panes::SidebarStickyFrameFixture;
 pub use conflict::*;
 pub(crate) use diff_fixtures::should_hide_unified_diff_header_for_bench;
 pub use diff_fixtures::*;

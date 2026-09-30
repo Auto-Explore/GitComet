@@ -9,6 +9,8 @@ pub struct RepoExternalChange {
     /// Configuration/watch-policy inputs changed. A routine full refresh does
     /// not imply a changed verification context.
     pub verification_context: bool,
+    /// Attribute inputs changed; independent of ordinary content/index edits.
+    pub text_attributes: bool,
 }
 
 impl RepoExternalChange {
@@ -29,6 +31,7 @@ impl RepoExternalChange {
             tags: false,
             large_file_support: false,
             verification_context: false,
+            text_attributes: false,
         }
     }
 
@@ -40,6 +43,7 @@ impl RepoExternalChange {
             tags: false,
             large_file_support: false,
             verification_context: false,
+            text_attributes: false,
         }
     }
 
@@ -51,6 +55,7 @@ impl RepoExternalChange {
             tags: false,
             large_file_support: false,
             verification_context: false,
+            text_attributes: false,
         }
     }
 
@@ -62,6 +67,7 @@ impl RepoExternalChange {
             tags: true,
             large_file_support: true,
             verification_context: false,
+            text_attributes: true,
         }
     }
 
@@ -72,5 +78,6 @@ impl RepoExternalChange {
             && !self.tags
             && !self.verification_context
             && !self.large_file_support
+            && !self.text_attributes
     }
 }

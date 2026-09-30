@@ -16,7 +16,9 @@ fn repo_picker_escape_closes(cx: &mut gpui::TestAppContext) {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -200,7 +202,9 @@ fn repo_picker_lists_recently_closed_repositories_subprocess(cx: &mut gpui::Test
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -313,7 +317,9 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -335,7 +341,8 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
                             .unwrap_or_default()
                             .to_string(),
                     ),
-                    repo_picker::RepoPickerEntry::Open(_) => None,
+                    repo_picker::RepoPickerEntry::Workspace(_)
+                    | repo_picker::RepoPickerEntry::Open(_) => None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -382,7 +389,9 @@ fn repo_picker_sort_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -958,6 +967,215 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
     assert!(
         cx.update(|_window, app| popover_host.read(app).is_open()),
         "dismissing the row menu must not also close the picker"
+    );
+}
+
+#[gpui::test]
+fn workspace_row_menu_activates_other_workspaces_and_links_to_settings(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    // This window sits in an empty named workspace; "Work" is saved elsewhere.
+    let mut mine = session::Workspace::new(Vec::new());
+    mine.custom_name = Some("Mine".into());
+    let mine_id = mine.id;
+    let mut work = session::Workspace::new(vec!["/tmp/workspace-row-menu".into()]);
+    work.custom_name = Some("Work".into());
+    work.restore_on_launch = false;
+    let work_id = work.id;
+    let window_id = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, vec![mine, work]);
+        let window_id = window.window_handle().window_id();
+        crate::workspaces::sync_window(app, window_id, Some(mine_id), Vec::new(), None);
+        window_id
+    });
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let menu = |cx: &mut gpui::VisualTestContext, id| {
+        cx.update(|_window, app| {
+            row_menu_labels(
+                popover_host.read(app),
+                &repo_picker::RepoPickerEntry::Workspace(id),
+            )
+        })
+    };
+    assert_eq!(
+        as_str_pairs(&menu(cx, work_id)),
+        vec![
+            ("Activate", false),
+            ("Workspace Settings", false),
+            ("Delete workspace", false),
+        ],
+        "no colour choices; activate, a link to settings, and delete last"
+    );
+    assert_eq!(
+        as_str_pairs(&menu(cx, mine_id)),
+        vec![
+            ("Activate", true),
+            ("Workspace Settings", false),
+            ("Delete workspace", false),
+        ],
+        "the window's own workspace cannot be activated again, but can be deleted"
+    );
+
+    // Actions run through the row menu, so open it on Work's row first.
+    let activate = |cx: &mut gpui::VisualTestContext, action: ContextMenuAction| {
+        cx.update(|window, app| {
+            popover_host.update(app, |host, cx| {
+                let target = picker_row_menu::PickerRowMenuTarget::Repo(
+                    repo_picker::RepoPickerEntry::Workspace(work_id),
+                );
+                picker_row_menu::open(host, target, 0, gpui::point(px(120.0), px(120.0)), cx);
+                picker_row_menu::activate(host, action, window, cx);
+            });
+        });
+        cx.run_until_parked();
+    };
+
+    activate(
+        cx,
+        ContextMenuAction::OpenWorkspaceSettings {
+            workspace_id: work_id,
+        },
+    );
+    assert!(
+        cx.update(|_window, app| {
+            app.windows().into_iter().any(|window| {
+                window
+                    .downcast::<crate::view::SettingsWindowView>()
+                    .is_some()
+            })
+        }),
+        "the settings link opens the settings window"
+    );
+
+    open_repo_picker(&view, cx);
+    activate(
+        cx,
+        ContextMenuAction::ActivateWorkspace {
+            workspace_id: work_id,
+        },
+    );
+    assert_eq!(
+        cx.update(|_window, app| {
+            crate::workspaces::workspace_for_window(app, window_id).map(|workspace| workspace.id)
+        }),
+        Some(work_id),
+        "activating from an empty window adopts the workspace there"
+    );
+}
+
+#[gpui::test]
+fn workspace_row_menu_delete_forgets_the_workspace(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut work = session::Workspace::new(vec!["/tmp/workspace-row-delete".into()]);
+    work.custom_name = Some("Work".into());
+    work.restore_on_launch = false;
+    let work_id = work.id;
+    cx.update(|_window, app| crate::workspaces::initialize_for_test(app, vec![work]));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            let target = picker_row_menu::PickerRowMenuTarget::Repo(
+                repo_picker::RepoPickerEntry::Workspace(work_id),
+            );
+            picker_row_menu::open(host, target, 0, gpui::point(px(120.0), px(120.0)), cx);
+            picker_row_menu::activate(
+                host,
+                ContextMenuAction::DeleteWorkspace {
+                    workspace_id: work_id,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|_window, app| crate::workspaces::workspace(app, work_id).is_none()));
+    open_repo_picker(&view, cx);
+    assert!(
+        !cx.update(|_window, app| repo_picker::filtered_layout(popover_host.read(app), "").0)
+            .contains(&repo_picker::RepoPickerEntry::Workspace(work_id)),
+        "the deleted workspace's row is gone"
+    );
+}
+
+/// A workspace row shows its colour dot in place of initials, and its menu gives
+/// both entries a visible icon in one column. The right-clicked row gets the
+/// plain highlight; the Enter hint stays for keyboard selection only.
+#[gpui::test]
+fn workspace_row_shows_colour_dot_and_its_menu_icons_share_a_column(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut work = session::Workspace::new(vec!["/tmp/workspace-row-dot".into()]);
+    work.custom_name = Some("Work".into());
+    work.color = Some(session::WorkspaceColor::Blue);
+    work.restore_on_launch = false;
+    let work_id = work.id;
+    cx.update(|_window, app| crate::workspaces::initialize_for_test(app, vec![work]));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    // The only row, so it is index 0 in both index spaces.
+    assert_eq!(
+        cx.update(|_window, app| repo_picker::filtered_layout(popover_host.read(app), "").0),
+        vec![repo_picker::RepoPickerEntry::Workspace(work_id)]
+    );
+    assert!(cx.debug_bounds("picker_prompt_workspace_dot_0").is_some());
+    assert!(
+        cx.debug_bounds("picker_prompt_repository_badge_0")
+            .is_none()
+    );
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            let target = picker_row_menu::PickerRowMenuTarget::Repo(
+                repo_picker::RepoPickerEntry::Workspace(work_id),
+            );
+            picker_row_menu::open(host, target, 0, gpui::point(px(120.0), px(120.0)), cx);
+        });
+    });
+    draw(cx);
+    let activate = cx
+        .debug_bounds("context_menu_entry_icon_Activate")
+        .expect("Activate has an icon");
+    let settings = cx
+        .debug_bounds("context_menu_entry_icon_Workspace Settings")
+        .expect("Workspace Settings has an icon");
+    let delete = cx
+        .debug_bounds("context_menu_entry_icon_Delete workspace")
+        .expect("Delete workspace has an icon");
+    assert_eq!(activate.origin.x, settings.origin.x);
+    assert_eq!(activate.origin.x, delete.origin.x);
+    assert!(
+        cx.debug_bounds("picker_prompt_selected_hint_0").is_none(),
+        "a right-clicked row has no Enter hint"
+    );
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| picker_row_menu::close(host, cx));
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("picker_prompt_selected_hint_0").is_some(),
+        "keyboard selection, restored on the row after the menu, keeps its hint"
     );
 }
 
@@ -1681,12 +1899,16 @@ fn row_menu_labels(
 }
 
 fn open_repo_picker(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1714,12 +1936,13 @@ fn sectioned_row_names(
         let host = popover_host.read(app);
         repo_picker::entries(host)
             .into_iter()
-            .map(|(entry, item)| {
+            .filter_map(|(entry, item)| {
                 let section = item
                     .section_label()
                     .map(ToString::to_string)
                     .unwrap_or_default();
                 let workdir = match entry {
+                    repo_picker::RepoPickerEntry::Workspace(_) => return None,
                     repo_picker::RepoPickerEntry::Open(repo_id) => host
                         .state
                         .repos
@@ -1729,7 +1952,7 @@ fn sectioned_row_names(
                         .unwrap_or_default(),
                     repo_picker::RepoPickerEntry::Closed(path) => path,
                 };
-                (section, open_repo_name(&workdir))
+                Some((section, open_repo_name(&workdir)))
             })
             .collect()
     })
@@ -1750,7 +1973,9 @@ fn popover_feeds_pointer_positions_to_the_tooltip_host(cx: &mut gpui::TestAppCon
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::RepoPicker,
+                    PopoverKind::RepoPicker {
+                        scope: RepoPickerScope::All,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1882,4 +2107,77 @@ fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::T
             other => panic!("expected RebaseOntoConfirm popover, got {other:?}"),
         }
     });
+}
+
+#[gpui::test]
+fn workspace_chooser_lists_only_workspaces_and_ignores_a_folded_section(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut client = session::Workspace::new(vec!["/work/zeta".into()]);
+    client.custom_name = Some("Client".into());
+    let other = session::Workspace::new(vec!["/work/beta".into()]);
+    let client_id = client.id;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| crate::workspaces::initialize_for_test(app, vec![client, other]));
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    let open = |cx: &mut gpui::VisualTestContext, scope: RepoPickerScope| {
+        cx.update(|window, app| {
+            popover_host.update(app, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::RepoPicker { scope },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                // A recent repository and a Workspaces section folded in the
+                // full picker; the chooser must show neither effect.
+                host.cached_recent_repos = vec!["/work/gamma".into()];
+                host.cached_collapsed_picker_sections
+                    .insert("window_groups".to_string());
+            });
+            let _ = window.draw(app);
+        });
+    };
+    let payloads = |cx: &mut gpui::VisualTestContext, query: &str| {
+        cx.update(|_window, app| repo_picker::filtered_layout(popover_host.read(app), query).0)
+    };
+
+    open(cx, RepoPickerScope::WorkspacesOnly);
+    let rows = payloads(cx, "");
+    assert_eq!(
+        rows.len(),
+        2,
+        "only the two workspaces are listed: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|entry| matches!(entry, repo_picker::RepoPickerEntry::Workspace(_)))
+    );
+    assert_eq!(
+        payloads(cx, "zeta"),
+        vec![repo_picker::RepoPickerEntry::Workspace(client_id)],
+        "a workspace is found by the repositories it holds"
+    );
+
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            host.close_popover_and_restore_focus(window, cx)
+        });
+    });
+    open(cx, RepoPickerScope::All);
+    let rows = payloads(cx, "");
+    assert!(
+        rows.iter()
+            .all(|entry| !matches!(entry, repo_picker::RepoPickerEntry::Workspace(_))),
+        "the full picker still honours the fold: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|entry| matches!(entry, repo_picker::RepoPickerEntry::Closed(_))),
+        "and lists recent repositories"
+    );
 }

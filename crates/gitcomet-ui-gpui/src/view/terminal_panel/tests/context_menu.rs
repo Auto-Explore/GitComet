@@ -202,6 +202,129 @@ impl TerminalMenuFixture {
 }
 
 #[gpui::test]
+fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext) {
+    let _visual = crate::test_support::lock_visual_test();
+    let _clipboard = crate::test_support::lock_clipboard_test();
+    let (fixture, cx) = fixture(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    fixture.term.lock().scroll_display(Scroll::Bottom);
+    // Terminal applications that request focus reports must see one loss and
+    // regain, and no spurious regain just because the OS window is reactivated.
+    let mut parser: Processor = Processor::new();
+    parser.advance(&mut *fixture.term.lock(), b"\x1b[?1004h");
+    refresh_and_draw(cx);
+    fixture.take_input();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        refresh_and_draw(cx);
+        cx.run_until_parked();
+        let (blink_seq, drag_seq, selection, bounds) = cx.update(|_, app| {
+            fixture.viewport.update(app, |viewport, cx| {
+                assert!(viewport.cursor_blink_active);
+                assert!(viewport.cursor_blink_task_scheduled);
+                viewport.selecting = true;
+                viewport.start_selection_autoscroll(cx);
+                (
+                    viewport.cursor_blink_seq,
+                    viewport.selection_autoscroll_seq,
+                    viewport.selected_text(),
+                    viewport.viewport_bounds.unwrap(),
+                )
+            })
+        });
+        cx.deactivate_window();
+        assert_eq!(fixture.take_input(), b"\x1b[O");
+        cx.update(|window, app| {
+            assert!(window.focused(app).is_none());
+            fixture.viewport.update(app, |viewport, cx| {
+                assert!(!viewport.cursor_blink_active);
+                assert!(!viewport.cursor_blink_task_scheduled);
+                assert!(!viewport.selecting);
+                assert_ne!(viewport.selection_autoscroll_seq, drag_seq);
+                assert_eq!(viewport.selected_text(), selection);
+                viewport.advance_cursor_blink(blink_seq, window, cx);
+                assert!(
+                    !viewport.cursor_blink_active,
+                    "an old timer cannot resume blinking"
+                );
+                assert!(
+                    viewport
+                        .build_terminal_canvas_paint_state(bounds, window, cx)
+                        .cursor
+                        .is_none()
+                );
+            });
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        refresh_and_draw(cx);
+        cx.simulate_keystrokes("x");
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        assert!(
+            fixture.take_input().is_empty(),
+            "no typing or focus-in on window reactivation"
+        );
+
+        cx.update(|window, app| {
+            fixture.viewport.update(app, |viewport, cx| {
+                assert!(
+                    viewport
+                        .build_terminal_canvas_paint_state(bounds, window, cx)
+                        .cursor
+                        .is_none()
+                );
+                window.focus(&viewport.focus_handle, cx);
+            });
+        });
+        refresh_and_draw(cx);
+        assert_eq!(fixture.take_input(), b"\x1b[I");
+        cx.update(|window, app| {
+            fixture.viewport.update(app, |viewport, cx| {
+                assert!(viewport.cursor_blink_visible);
+                assert!(
+                    viewport
+                        .build_terminal_canvas_paint_state(bounds, window, cx)
+                        .cursor
+                        .is_some()
+                );
+            });
+        });
+        cx.simulate_keystrokes("y");
+        assert_eq!(fixture.take_input(), b"y");
+        cx.deactivate_window();
+    });
+}
+
+#[gpui::test]
+fn main_window_focus_shortcut_works_after_blur(cx: &mut gpui::TestAppContext) {
+    let _visual = crate::test_support::lock_visual_test();
+    let (root, _, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    cx.deactivate_window();
+    cx.update(|window, app| {
+        assert!(window.focused(app).is_none());
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TerminalTestBackend));
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    cx.simulate_keystrokes("secondary-p");
+    refresh_and_draw(cx);
+    cx.update(|window, app| {
+        let root = root.read(app);
+        assert!(root.command_palette_open);
+        let input = &root.command_palette.read(app).query_input;
+        assert!(crate::window_focus::is_active(
+            &input.read(app).focus_handle(),
+            window
+        ));
+    });
+}
+
+#[gpui::test]
 fn terminal_menu_actions_restore_focus_and_share_clipboard_commands(cx: &mut gpui::TestAppContext) {
     let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();

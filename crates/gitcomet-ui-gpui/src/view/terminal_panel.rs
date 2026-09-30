@@ -13,14 +13,10 @@ mod viewport;
 #[cfg(test)]
 mod tests;
 
-/// How long a save-and-close waits for the dispatched writes to land before
-/// closing anyway. A wedged command must not leave the user unable to quit.
+/// How long a save-and-close waits for the dispatched writes to land. A timeout
+/// is not a save: it restores those recovery copies and asks the user again.
 const UNSAVED_FILE_EDITS_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const UNSAVED_FILE_EDITS_FLUSH_POLL: std::time::Duration = std::time::Duration::from_millis(25);
-/// Minimum time to wait before believing an in-flight count of zero. A
-/// `dispatch` is a channel send; the worker needs a turn to reduce it into a
-/// running command, and until it has, "nothing in flight" means "not started".
-const UNSAVED_FILE_EDITS_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Re-run whatever the unsaved-edits prompt interrupted.
 fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
@@ -28,7 +24,22 @@ fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
         UnsavedFileEditsAction::CloseWindow(window_id) => {
             crate::app::close_window_by_id_or_warn(cx, window_id)
         }
+        UnsavedFileEditsAction::DeleteWorkspace { workspace_id, .. } => {
+            crate::app::delete_workspace(cx, workspace_id)
+        }
         UnsavedFileEditsAction::QuitApp => crate::app::quit_app_or_warn(cx),
+        UnsavedFileEditsAction::MoveRepo {
+            window_id,
+            repo_id,
+            path,
+            target_workspace,
+        } => crate::app::request_move_repository_to_workspace_by_id(
+            cx,
+            window_id,
+            repo_id,
+            path,
+            target_workspace,
+        ),
     }
 }
 
@@ -694,6 +705,7 @@ impl GitCometView {
     ) -> TerminalShutdownSummary {
         match action {
             TerminalShutdownAction::CloseRepo { repo_id }
+            | TerminalShutdownAction::MoveRepo { repo_id, .. }
             | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
                 let mut summary = self
                     .terminal_sessions
@@ -728,9 +740,9 @@ impl GitCometView {
                 }
                 summary
             }
-            TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
-                self.running_terminal_summary()
-            }
+            TerminalShutdownAction::CloseWindow
+            | TerminalShutdownAction::DeleteWorkspace { .. }
+            | TerminalShutdownAction::QuitApp => self.running_terminal_summary(),
         }
     }
 
@@ -762,6 +774,7 @@ impl GitCometView {
         window_id: gpui::WindowId,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        self.flush_workspace_environment(cx);
         if self
             .request_unsaved_file_edits_prompt(UnsavedFileEditsAction::CloseWindow(window_id), cx)
         {
@@ -770,12 +783,36 @@ impl GitCometView {
         self.request_terminal_shutdown_action(TerminalShutdownAction::CloseWindow, cx)
     }
 
+    /// The close guards, for deleting this window's workspace. Nothing is
+    /// flushed: the layout is about to be forgotten.
+    pub(crate) fn request_delete_workspace_or_warn(
+        &mut self,
+        window_id: gpui::WindowId,
+        workspace_id: gitcomet_state::session::WorkspaceId,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.request_unsaved_file_edits_prompt(
+            UnsavedFileEditsAction::DeleteWorkspace {
+                window_id,
+                workspace_id,
+            },
+            cx,
+        ) {
+            return true;
+        }
+        self.request_terminal_shutdown_action(
+            TerminalShutdownAction::DeleteWorkspace { workspace_id },
+            cx,
+        )
+    }
+
     /// [`Self::request_unsaved_file_edits_prompt`] for a quit, callable from
     /// the app-level shutdown path (which cannot name the action enum).
     pub(crate) fn request_quit_unsaved_file_edits_prompt(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        self.flush_workspace_environment(cx);
         self.request_unsaved_file_edits_prompt(UnsavedFileEditsAction::QuitApp, cx)
     }
 
@@ -790,6 +827,18 @@ impl GitCometView {
         action: UnsavedFileEditsAction,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.pending_unsaved_file_edits_flush.is_some() {
+            // Closing the window or quitting supersedes a pending move. Keep
+            // the requested action until the existing receipts have drained.
+            let pending = self.pending_file_edits_action.as_ref();
+            if !matches!(pending, Some(UnsavedFileEditsAction::QuitApp))
+                && (action.moving_repo().is_none()
+                    || pending.is_none_or(|pending| pending.moving_repo().is_some()))
+            {
+                self.pending_file_edits_action = Some(action);
+            }
+            return true;
+        }
         // `pending_*_prompt` is `take()`n by `Render` when it opens the popover,
         // so it is `None` for as long as the dialog is actually on screen. Ask
         // the popover host whether the dialog is up rather than mirroring that
@@ -806,21 +855,39 @@ impl GitCometView {
         // asked nothing. But flushing only *dispatches* the write, and returning
         // `false` here let the caller quit out from under it: the store never
         // reduced the message and the edits were lost. Take over the close and
-        // let it through once the write has actually drained.
-        let flushed_a_pending_write = self.main_pane.update(cx, |pane, cx| {
-            let pending = pane.auto_save_file_edits && !pane.unsaved_file_edit_labels().is_empty();
-            pane.flush_file_editor_buffer(cx);
-            pending
+        // let it through once the write has actually drained. If encoding
+        // fails, no write was dispatched and the dirty buffer needs the
+        // Save/Discard prompt below.
+        let moving_repo = action.moving_repo();
+        let writes_pending = self.main_pane.update(cx, |pane, cx| {
+            pane.settle_file_editor_saves(cx);
+            if moving_repo.is_none_or(|repo_id| {
+                pane.file_editor_key
+                    .as_ref()
+                    .is_some_and(|(editing_repo, _)| *editing_repo == repo_id)
+            }) {
+                // Moving is an automatic flush, not permission to overwrite a
+                // disk conflict. Dirty stashed buffers can also be held behind
+                // a conflict, so leave those for the explicit Save/Discard prompt.
+                pane.flush_file_editor_buffer(cx);
+            }
+            // Include writes dispatched before this request, even though their
+            // buffers already look clean. A queued write is still pending.
+            pane.file_editor_saves_block_action(&action)
         });
-        if flushed_a_pending_write {
+        if writes_pending {
             self.retry_once_file_edit_writes_drain(action, cx);
             return true;
         }
-        let files = self.main_pane.read(cx).unsaved_file_edit_labels();
+        let files = self.unsaved_file_edit_labels_for(moving_repo, cx);
         if files.is_empty() {
             return false;
         }
-        self.pending_unsaved_file_edits_prompt = Some(UnsavedFileEditsPrompt { action, files });
+        self.pending_unsaved_file_edits_prompt = Some(UnsavedFileEditsPrompt {
+            action,
+            files,
+            waiting_for_writes: false,
+        });
         cx.notify();
         true
     }
@@ -842,12 +909,12 @@ impl GitCometView {
 
     /// Save or discard the unsaved buffers, then retry what the user asked for.
     ///
-    /// Discarding can retry immediately, but saving cannot: the writes go
-    /// through the store's command executor, and `cx.quit()` on the next flush
-    /// would race them — the app would exit with some files still unwritten.
-    /// `local_actions_in_flight` is the store's own count of exactly those
-    /// commands, so the retry waits for it to drain (bounded, so a wedged
-    /// command cannot trap the user in an app that will not close).
+    /// Discarding lets close and quit proceed immediately; moves still wait for
+    /// dispatched writes. Saving must also wait for the store's command executor
+    /// so the app cannot exit with files still unwritten.
+    /// Each save has a completion receipt, including ones already dispatched
+    /// before the prompt. The wait is bounded: a
+    /// wedged command brings this dialog back instead of trapping the user.
     pub(in crate::view) fn resolve_unsaved_file_edits(
         &mut self,
         action: UnsavedFileEditsAction,
@@ -855,13 +922,24 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.pending_unsaved_file_edits_prompt = None;
-        self.main_pane.update(cx, |pane, cx| {
-            if save {
-                pane.save_all_file_edits(cx);
+        let moving_repo = action.moving_repo();
+        let saved = self.main_pane.update(cx, |pane, cx| {
+            if save && let Some(repo_id) = moving_repo {
+                pane.save_file_edits_for_repo(repo_id, cx)
+            } else if save {
+                pane.save_all_file_edits(cx)
+            } else if let Some(repo_id) = moving_repo {
+                pane.discard_file_edits_for_repo(repo_id, cx);
+                true
             } else {
                 pane.discard_all_file_edits(cx);
+                true
             }
         });
+
+        if !saved {
+            return;
+        }
 
         if !save {
             // Ordering note: the caller's `close_popover` defers a clear of
@@ -875,44 +953,83 @@ impl GitCometView {
         self.retry_once_file_edit_writes_drain(action, cx);
     }
 
-    /// Re-run `action` once the dispatched worktree writes have landed.
-    ///
-    /// `dispatch` is a channel send, so the store worker needs a turn before
-    /// `local_actions_in_flight` means anything — quitting on the count it reads
-    /// immediately would exit with the writes still queued.
+    fn unsaved_file_edit_labels_for(
+        &self,
+        moving_repo: Option<RepoId>,
+        cx: &gpui::App,
+    ) -> Vec<SharedString> {
+        let pane = self.main_pane.read(cx);
+        moving_repo.map_or_else(
+            || pane.unsaved_file_edit_labels(),
+            |repo_id| pane.unsaved_file_edit_labels_for_repo(repo_id),
+        )
+    }
+
+    /// Wait for receipts from the exact editor writes, rather than assuming an
+    /// idle store has already processed their queued messages.
     fn retry_once_file_edit_writes_drain(
         &mut self,
         action: UnsavedFileEditsAction,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.pending_file_edits_action = Some(action);
         self.pending_unsaved_file_edits_flush = Some(cx.spawn(async move |view, cx| {
-            let started = std::time::Instant::now();
-            let deadline = started + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
+            let deadline = cx.background_executor().now() + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
             loop {
                 cx.background_executor()
                     .timer(UNSAVED_FILE_EDITS_FLUSH_POLL)
                     .await;
-                let now = std::time::Instant::now();
-                if now >= deadline {
-                    break;
-                }
-                if now.duration_since(started) < UNSAVED_FILE_EDITS_FLUSH_GRACE {
-                    continue;
-                }
-                let drained = view
-                    .read_with(cx, |view, _cx| {
-                        !view
-                            .state
-                            .repos
-                            .iter()
-                            .any(|repo| repo.local_actions_in_flight > 0)
+                let timed_out = cx.background_executor().now() >= deadline;
+                let Ok(pending) = view.update(cx, |this, cx| {
+                    let action = this
+                        .pending_file_edits_action
+                        .as_ref()
+                        .expect("pending save action");
+                    this.main_pane.update(cx, |pane, cx| {
+                        pane.settle_file_editor_saves(cx);
+                        pane.file_editor_saves_block_action(action)
                     })
-                    .unwrap_or(true);
-                if drained {
-                    break;
+                }) else {
+                    return;
+                };
+                if !pending || timed_out {
+                    let _ = view.update(cx, |this, cx| {
+                        this.pending_unsaved_file_edits_flush = None;
+                        let action = this
+                            .pending_file_edits_action
+                            .take()
+                            .expect("pending save action");
+                        if pending {
+                            this.main_pane.update(cx, |pane, cx| {
+                                pane.restore_pending_file_editor_saves(action.moving_repo(), cx);
+                            });
+                            let mut files =
+                                this.unsaved_file_edit_labels_for(action.moving_repo(), cx);
+                            let waiting_for_writes = files.is_empty();
+                            if waiting_for_writes && let Some(repo_id) = action.moving_repo() {
+                                files = this
+                                    .main_pane
+                                    .read(cx)
+                                    .pending_file_edit_labels_for_repo(repo_id);
+                            }
+                            if !files.is_empty() {
+                                this.pending_unsaved_file_edits_prompt =
+                                    Some(UnsavedFileEditsPrompt {
+                                        action,
+                                        files,
+                                        waiting_for_writes,
+                                    });
+                                cx.notify();
+                            }
+                        } else {
+                            // Failed receipts restored dirty buffers. Re-entering
+                            // the guard prompts for those instead of detaching.
+                            cx.defer(move |cx| retry_close_action(action, cx));
+                        }
+                    });
+                    return;
                 }
             }
-            cx.update(move |cx| cx.defer(move |cx| retry_close_action(action, cx)));
         }));
     }
 
@@ -958,6 +1075,19 @@ impl GitCometView {
                 self.store.dispatch(Msg::CloseRepo { repo_id });
                 cx.notify();
             }
+            TerminalShutdownAction::MoveRepo {
+                repo_id,
+                path,
+                target_workspace,
+            } => {
+                crate::app::move_repository_to_workspace_from_view(
+                    cx,
+                    window.window_handle().window_id(),
+                    repo_id,
+                    path,
+                    target_workspace,
+                );
+            }
             TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
                 self.close_terminal_for_repo(repo_id, cx);
             }
@@ -974,8 +1104,16 @@ impl GitCometView {
                 );
             }
             TerminalShutdownAction::CloseWindow => {
-                crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
+                self.flush_workspace_environment(cx);
+                crate::app::mark_window_closing(cx, window.window_handle().window_id());
                 window.remove_window();
+            }
+            TerminalShutdownAction::DeleteWorkspace { workspace_id } => {
+                // Deferred: finishing may update this view to reset it.
+                let window_id = window.window_handle().window_id();
+                cx.defer(move |cx| {
+                    crate::app::finish_workspace_delete(cx, window_id, workspace_id);
+                });
             }
             TerminalShutdownAction::QuitApp => {
                 for weak in self.pending_quit_other_views.drain(..) {
@@ -1675,6 +1813,7 @@ fn terminal_instance_has_running_command(instance: &TerminalInstance) -> bool {
 fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShutdownAction) {
     match action {
         TerminalShutdownAction::CloseRepo { repo_id }
+        | TerminalShutdownAction::MoveRepo { repo_id, .. }
         | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
             if let Some(session) = view.terminal_sessions.get(repo_id) {
                 for instance in &session.instances {
@@ -1694,7 +1833,9 @@ fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShut
                 terminate_terminal_process_group(instance.child_pid);
             }
         }
-        TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
+        TerminalShutdownAction::CloseWindow
+        | TerminalShutdownAction::DeleteWorkspace { .. }
+        | TerminalShutdownAction::QuitApp => {
             for session in view.terminal_sessions.values() {
                 for instance in &session.instances {
                     shutdown_terminal_instance(instance, true);

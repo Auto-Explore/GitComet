@@ -179,6 +179,7 @@ struct SmokeView {
 
 impl SmokeView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
+        window.activate_window();
         let input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -286,6 +287,7 @@ struct TextInputCursorScrollView {
 
 impl TextInputCursorScrollView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
+        window.activate_window();
         let scroll_handle = ScrollHandle::new();
         let input = cx.new({
             let scroll_handle = scroll_handle.clone();
@@ -352,6 +354,7 @@ impl gpui::Render for TextInputCursorScrollView {
 
 impl TextInputHostView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
+        window.activate_window();
         let input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -574,6 +577,109 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
     cx.simulate_keystrokes("ctrl-left ctrl-delete");
     let text = cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
     assert_eq!(text, "hello brave ");
+}
+
+#[gpui::test]
+fn text_input_cmd_backspace_and_cmd_delete_delete_to_the_line_edges(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+    let set_text = |cx: &mut gpui::VisualTestContext, text: &'static str| {
+        cx.update(|window, app| {
+            let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+            window.focus(&focus, app);
+            view.update(app, |this, cx| {
+                this.input.update(cx, |input, cx| input.set_text(text, cx));
+            });
+        });
+    };
+    let text = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string())
+    };
+
+    cx.update(|_window, app| {
+        app.bind_keys([
+            KeyBinding::new("alt-left", crate::kit::WordLeft, Some("TextInput")),
+            KeyBinding::new("cmd-left", crate::kit::Home, Some("TextInput")),
+            KeyBinding::new(
+                "cmd-backspace",
+                crate::kit::DeleteToLineStart,
+                Some("TextInput"),
+            ),
+            KeyBinding::new("cmd-delete", crate::kit::DeleteToLineEnd, Some("TextInput")),
+            KeyBinding::new(
+                "ctrl-shift-backspace",
+                crate::kit::DeleteToLineStart,
+                Some("TextInput"),
+            ),
+            KeyBinding::new(
+                "ctrl-shift-delete",
+                crate::kit::DeleteToLineEnd,
+                Some("TextInput"),
+            ),
+        ]);
+    });
+
+    // With the caret at the end, the usual case in a search box, the whole
+    // query goes.
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(text(cx), "");
+
+    // Mid-line, each deletes only its own side of the caret.
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("alt-left cmd-backspace");
+    assert_eq!(text(cx), "world");
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("alt-left cmd-delete");
+    assert_eq!(text(cx), "hello brave ");
+
+    // The Windows/Linux chords do the same.
+    set_text(cx, "hello brave world");
+    cx.simulate_keystrokes("alt-left ctrl-shift-backspace");
+    assert_eq!(text(cx), "world");
+    cx.simulate_keystrokes("ctrl-shift-delete");
+    assert_eq!(text(cx), "");
+
+    // With nothing on that side there is nothing to delete.
+    set_text(cx, "hello");
+    cx.simulate_keystrokes("cmd-left cmd-backspace");
+    assert_eq!(text(cx), "hello");
+    cx.simulate_keystrokes("cmd-delete");
+    assert_eq!(text(cx), "");
+}
+
+#[gpui::test]
+fn text_input_cmd_backspace_joins_lines_at_the_start_of_a_row(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(TextInputCursorScrollView::new);
+    cx.update(|window, app| {
+        app.bind_keys([KeyBinding::new(
+            "cmd-backspace",
+            crate::kit::DeleteToLineStart,
+            Some("TextInput"),
+        )]);
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus, app);
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("first\nsecond", cx));
+        });
+        let _ = window.draw(app);
+    });
+    let text = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string())
+    };
+
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(
+        text(cx),
+        "first\n",
+        "deletes back to the start of its own row"
+    );
+    cx.simulate_keystrokes("cmd-backspace");
+    assert_eq!(
+        text(cx),
+        "first",
+        "at a row start, joins with the row above"
+    );
 }
 
 #[gpui::test]
@@ -1679,7 +1785,7 @@ fn wait_until(description: &str, ready: impl Fn() -> bool) {
     }
 }
 
-fn seed_workspace_repo(
+fn seed_worktree_repo(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
     view: gpui::Entity<crate::view::GitCometView>,
@@ -1703,7 +1809,7 @@ fn seed_workspace_repo(
         }
 
         if Instant::now() >= deadline {
-            panic!("timed out waiting for the workspace view to leave the splash state");
+            panic!("timed out waiting for the window to leave the Home screen");
         }
 
         std::thread::sleep(Duration::from_millis(10));
@@ -2230,6 +2336,8 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
 fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
     let backend = Arc::new(StashTestBackend::default());
     let gate = backend.gate.clone();
+    // The expanded sidebar requests stashes as soon as the repository opens.
+    let pending = gate.hold();
     let (store, events) = AppStore::new_test(backend);
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
@@ -2247,7 +2355,6 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
 
     let section_ix = wait_for_debug_index(cx, &_view, "stash_section", 64);
     let section_selector = debug_selector("stash_section", section_ix);
-    let pending = gate.hold();
     click_debug_selector(cx, section_selector, 1);
 
     let selector = stash_spinner_selector(repo_id);
@@ -2278,7 +2385,7 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::TestAppContext) {
+fn listed_worktree_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
@@ -2319,8 +2426,8 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &_view, "branch_workspace_badge", 64);
-    let badge_selector = debug_selector("branch_workspace_badge", badge_ix);
+    let badge_ix = wait_for_debug_index(cx, &_view, "branch_worktree_badge", 64);
+    let badge_selector = debug_selector("branch_worktree_badge", badge_ix);
     click_debug_selector(cx, badge_selector, 2);
 
     wait_until("linked repository tab to open from badge", || {
@@ -2379,10 +2486,10 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     let row_selector = Box::leak(format!("branch_row_{}_{}", repo_id.0, badge_ix).into_boxed_str());
     let badge_bounds = cx
-        .debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        .debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
         .expect("expected branch worktree badge bounds");
     let row_bounds = cx
         .debug_bounds(row_selector)
@@ -2401,15 +2508,19 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
     sync_view_for_tests(cx, &view);
 
     // Nothing is revealed on hover at the trailing edge any more: the `⋮` button
-    // is gone, so the worktree badge owns the row's right edge, one trailing pad
-    // in from it.
+    // is gone. Content keeps its inset plus trailing padding while the row's
+    // background reaches the panel edge.
     assert!(
         cx.debug_bounds(debug_selector("branch_dots", badge_ix))
             .is_none(),
         "expected the branch row's `⋮` slot to be gone"
     );
     assert!(
-        (row_bounds.right() - badge_bounds.right() - px(4.0)).abs() <= px(1.0),
+        (row_bounds.right()
+            - badge_bounds.right()
+            - px(crate::view::components::ROW_HIGHLIGHT_INSET_PX + 4.0))
+        .abs()
+            <= px(1.0),
         "expected branch worktree badge to sit one trailing pad off the row's right edge, \
          row right {:?} badge right {:?}",
         row_bounds.right(),
@@ -2434,6 +2545,8 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
 
 #[gpui::test]
 fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
@@ -2472,6 +2585,10 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
     ));
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    // The fixture backend reports unsupported loads as errors, which stay
+    // on screen over the sidebar this clicks.
+    cx.update(|_window, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    sync_view_for_tests(cx, &view);
     click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
 
     let label_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge_label", 128);
@@ -2489,6 +2606,8 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppContext) {
+    // Measures Compact layout; a fresh session now defaults to Comfortable.
+    cx.update(crate::appearance::pin_compact_for_test);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
@@ -2530,6 +2649,10 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
     ));
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    // The fixture backend reports unsupported loads as errors, which stay
+    // on screen over the sidebar this clicks.
+    cx.update(|_window, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    sync_view_for_tests(cx, &view);
     click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
 
     let row_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge", 128);
@@ -2586,7 +2709,7 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2626,16 +2749,16 @@ fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestApp
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to appear when worktree is added for a branch"
     );
 }
 
 #[gpui::test]
-fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2675,9 +2798,9 @@ fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContex
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to appear"
     );
@@ -2693,7 +2816,7 @@ fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContex
     let disappeared = loop {
         sync_view_for_tests(cx, &view);
 
-        if find_debug_index(cx, "branch_workspace_badge", 64).is_none() {
+        if find_debug_index(cx, "branch_worktree_badge", 64).is_none() {
             break true;
         }
 
@@ -2711,7 +2834,7 @@ fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContex
 }
 
 #[gpui::test]
-fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2751,9 +2874,9 @@ fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppConte
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to appear"
     );
@@ -2774,7 +2897,7 @@ fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppConte
     let disappeared = loop {
         sync_view_for_tests(cx, &view);
 
-        if find_debug_index(cx, "branch_workspace_badge", 64).is_none() {
+        if find_debug_index(cx, "branch_worktree_badge", 64).is_none() {
             break true;
         }
 
@@ -2792,7 +2915,7 @@ fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
-fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2840,9 +2963,9 @@ fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppCont
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to appear on old branch"
     );
@@ -2863,7 +2986,7 @@ fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppCont
     let index = loop {
         sync_view_for_tests(cx, &view);
 
-        if let Some(ix) = find_debug_index(cx, "branch_workspace_badge", 64) {
+        if let Some(ix) = find_debug_index(cx, "branch_worktree_badge", 64) {
             break Some(ix);
         }
 
@@ -2928,9 +3051,7 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
-fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
-    cx: &mut gpui::TestAppContext,
-) {
+fn worktree_badge_survives_reload_repo_and_manual_worktree_resupply(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2970,9 +3091,9 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to appear"
     );
@@ -3016,16 +3137,16 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to survive repo reload and manual worktree resupply"
     );
 }
 
 #[gpui::test]
-fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::TestAppContext) {
+fn worktree_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -3065,9 +3186,9 @@ fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Tes
         },
     ));
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to appear"
     );
@@ -3084,7 +3205,7 @@ fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Tes
     let deadline = Instant::now() + Duration::from_secs(1);
     let disappeared = loop {
         sync_view_for_tests(cx, &view);
-        if find_debug_index(cx, "branch_workspace_badge", 64).is_none() {
+        if find_debug_index(cx, "branch_worktree_badge", 64).is_none() {
             break true;
         }
         if Instant::now() >= deadline {
@@ -3107,9 +3228,9 @@ fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Tes
         },
     });
 
-    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        cx.debug_bounds(debug_selector("branch_worktree_badge", badge_ix))
             .is_some(),
         "expected workspace badge to still be present after re-enabling sidebar data request"
     );
@@ -3375,7 +3496,7 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
-    seed_workspace_repo(
+    seed_worktree_repo(
         cx,
         &store,
         view.clone(),
@@ -3450,7 +3571,7 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
-    seed_workspace_repo(
+    seed_worktree_repo(
         cx,
         &store,
         view.clone(),
@@ -3507,7 +3628,7 @@ fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
-    seed_workspace_repo(
+    seed_worktree_repo(
         cx,
         &store,
         view.clone(),
@@ -3558,7 +3679,7 @@ fn titlebar_hamburger_opens_from_keyboard_and_restores_focus_on_escape(
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
-    seed_workspace_repo(
+    seed_worktree_repo(
         cx,
         &store,
         view.clone(),
@@ -3608,7 +3729,7 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
-    seed_workspace_repo(
+    seed_worktree_repo(
         cx,
         &store,
         view.clone(),
@@ -4209,6 +4330,12 @@ fn repo_tab_strip_never_renders_scroll_arrows(cx: &mut gpui::TestAppContext) {
                 .join(format!("repository-number-{ix}"))
         })
         .collect();
+    // Restore preserves already-open tabs. Close the roomy fixture before
+    // replacing it with the dense one.
+    store_for_test.dispatch(Msg::CloseRepos {
+        repo_ids: roomy_repo_ids,
+        activate_after: None,
+    });
     let dense_repo_ids = restore_session_and_draw(cx, &store_for_test, view.clone(), repos);
     sync_view_for_tests(cx, &view);
 

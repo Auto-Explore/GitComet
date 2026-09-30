@@ -3,9 +3,11 @@ use super::*;
 use crate::view::markdown_preview::{
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTaskMarker,
 };
+use gitcomet_core::text_format::{
+    ContentSniffer, SideKind, SideTextFormat, TextAttributes, TextEncoding,
+};
 #[cfg(test)]
 use std::borrow::Cow;
-use std::io::Read;
 
 #[cfg(test)]
 thread_local! {
@@ -60,9 +62,55 @@ struct IndexedWorktreePreview {
     source_text: Option<SharedString>,
     /// Taken before the read, so a write during it reads as a change.
     stamp: DiskStamp,
-    /// Of the materialized text, computed here on the read's thread.
+    /// Of the bytes on disk, computed here on the read's thread.
     content_hash: Option<u64>,
+    /// How the bytes were read.
+    format: SideTextFormat,
 }
+
+/// How to read a file the preview or the editor opens.
+#[derive(Clone, Debug)]
+pub(in crate::view) struct TextDecodeRequest {
+    pub(in crate::view) kind: SideKind,
+    pub(in crate::view) attributes: Arc<TextAttributes>,
+    pub(in crate::view) encoding: Option<TextEncoding>,
+}
+
+/// The inputs a preview was decoded with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::view) struct TextDecodeKey {
+    kind: SideKind,
+    attributes: [Option<TextEncoding>; 3],
+    encoding: Option<TextEncoding>,
+}
+
+impl TextDecodeKey {
+    /// Decoding policies from the last read, while refreshed attributes are
+    /// in flight. Display-only attributes are deliberately absent from a key.
+    pub(in crate::view) fn decoding_attributes(self) -> TextAttributes {
+        let attribute = |encoding: Option<TextEncoding>| {
+            encoding.map(|encoding| gitcomet_core::text_format::EncodingAttr {
+                label: encoding.name().into(),
+                encoding: Some(encoding),
+            })
+        };
+        TextAttributes {
+            working_tree_encoding: attribute(self.attributes[0]),
+            encoding: attribute(self.attributes[1]),
+            gui_encoding: attribute(self.attributes[2]),
+            ..TextAttributes::default()
+        }
+    }
+
+    /// The same inputs with another encoding choice.
+    pub(in crate::view) fn with_encoding(self, encoding: Option<TextEncoding>) -> Self {
+        Self { encoding, ..self }
+    }
+}
+
+/// Content that is not UTF-8 is decoded whole, so it is bounded.
+const NON_UTF8_TEXT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const BINARY_PREVIEW_MESSAGE: &str = "File looks binary; text preview is not supported.";
 
 #[inline]
 fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool) -> u8 {
@@ -93,48 +141,19 @@ pub(super) fn worktree_preview_materialized_line_raw_text(
     )
 }
 
-fn validate_utf8_chunk_streaming(
-    utf8_tail: &mut Vec<u8>,
-    validation_buffer: &mut Vec<u8>,
-    chunk: &[u8],
-) -> Result<(), String> {
-    validation_buffer.clear();
-    if !utf8_tail.is_empty() {
-        validation_buffer.extend_from_slice(utf8_tail.as_slice());
-    }
-    validation_buffer.extend_from_slice(chunk);
-
-    match std::str::from_utf8(validation_buffer.as_slice()) {
-        Ok(_) => {
-            utf8_tail.clear();
-            Ok(())
-        }
-        Err(error) => {
-            if error.error_len().is_some() {
-                return Err("File is not valid UTF-8; binary preview is not supported.".to_string());
-            }
-
-            let valid_up_to = error.valid_up_to();
-            utf8_tail.clear();
-            utf8_tail.extend_from_slice(&validation_buffer[valid_up_to..]);
-            Ok(())
-        }
-    }
-}
-
-/// Read a working-tree file for the editor.
+/// Read a working-tree file for the editor, decoded as `request` says.
 ///
 /// Shares the preview's reader so both agree on what "editable text" means: it
-/// rejects directories and non-UTF-8 up front.
+/// rejects directories and binary content up front.
 ///
 /// The size limit is the *editor's*, not the syntax engine's. The reader stops
-/// materializing past the tree-sitter parse ceiling, which is a highlighting
-/// budget — a 3 MB log or CSV is perfectly editable, it just does not get a
-/// tree, and the editor already has a heuristic fallback for exactly that. So
-/// past the ceiling this re-reads the file plainly rather than refusing it.
+/// materializing UTF-8 past the tree-sitter parse ceiling, which is a
+/// highlighting budget — a 3 MB log or CSV is perfectly editable, it just does
+/// not get a tree — so past the ceiling this re-reads the file plainly.
 pub(super) fn read_worktree_file_for_editing(
     path: &std::path::Path,
-) -> Result<(SharedString, DiskStamp, u64), String> {
+    request: &TextDecodeRequest,
+) -> Result<(SharedString, DiskStamp, u64, SideTextFormat), String> {
     let len = std::fs::metadata(path)
         .map_err(|e| match e.kind() {
             // Reachable from a commit's file list: the editor always opens the
@@ -153,23 +172,54 @@ pub(super) fn read_worktree_file_for_editing(
             FILE_EDITOR_MAX_TEXT_BYTES / (1024 * 1024)
         ));
     }
-    let indexed = index_utf8_worktree_preview_file(path)?;
+    let indexed = index_worktree_preview_file(path, request)?;
     let stamp = indexed.stamp;
     if let (Some(text), Some(hash)) = (indexed.source_text, indexed.content_hash) {
-        return Ok((text, stamp, hash));
+        return Ok((text, stamp, hash, indexed.format));
     }
     // Between the parse ceiling and the editor's own limit the indexer stops
-    // materializing, so read it plainly. Already validated as UTF-8 above.
+    // materializing UTF-8, so read it plainly. Already validated above.
     std::fs::read_to_string(path)
         .map(|text| {
             let hash = disk_content_hash(text.as_bytes());
-            (SharedString::from(text), stamp, hash)
+            (SharedString::from(text), stamp, hash, indexed.format)
         })
         .map_err(|e| e.to_string())
 }
 
-fn index_utf8_worktree_preview_file(
+/// Line starts and flags of materialized text.
+fn index_text_lines(text: &str) -> (Vec<usize>, Vec<u8>) {
+    let bytes = text.as_bytes();
+    let capacity = worktree_preview_index_line_capacity_hint(bytes.len());
+    let mut line_starts = Vec::with_capacity(capacity);
+    let mut line_flags = Vec::with_capacity(capacity);
+    if bytes.is_empty() {
+        return (line_starts, line_flags);
+    }
+    line_starts.push(0);
+    let mut start = 0usize;
+    for newline in memchr::memchr_iter(b'\n', bytes) {
+        let line = &bytes[start..newline];
+        line_flags.push(packed_preview_line_flags(
+            line.is_ascii(),
+            memchr::memchr(b'\t', line).is_some(),
+        ));
+        start = newline + 1;
+        line_starts.push(start);
+    }
+    let last = &bytes[start..];
+    line_flags.push(packed_preview_line_flags(
+        last.is_ascii(),
+        memchr::memchr(b'\t', last).is_some(),
+    ));
+    (line_starts, line_flags)
+}
+
+/// Index a file for the preview. Plain UTF-8 is indexed in place (and read
+/// lazily past the parse ceiling); anything else is decoded whole.
+fn index_worktree_preview_file(
     path: &std::path::Path,
+    request: &TextDecodeRequest,
 ) -> Result<IndexedWorktreePreview, String> {
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if metadata.is_dir() {
@@ -177,24 +227,29 @@ fn index_utf8_worktree_preview_file(
             "Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string(),
         );
     }
-    let stamp = disk_stamp(&metadata);
-
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut reader =
-        std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
+    let reader = std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
+    index_worktree_preview_reader(path, request, &metadata, reader)
+}
+
+fn index_worktree_preview_reader(
+    path: &std::path::Path,
+    request: &TextDecodeRequest,
+    metadata: &std::fs::Metadata,
+    mut reader: impl std::io::Read,
+) -> Result<IndexedWorktreePreview, String> {
+    let stamp = disk_stamp(metadata);
     let source_len_hint = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
     let line_capacity_hint = worktree_preview_index_line_capacity_hint(source_len_hint);
     let mut line_starts = Vec::with_capacity(line_capacity_hint);
     let mut line_flags = Vec::with_capacity(line_capacity_hint);
-    let mut validation_buffer =
-        Vec::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES.saturating_add(4));
-    let mut utf8_tail = Vec::with_capacity(4);
+    let mut sniffer = ContentSniffer::new();
     let mut scan_buffer = vec![0u8; WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES];
     let mut source_len = 0usize;
     let mut line_ascii_only = true;
     let mut line_has_tabs = false;
     let mut source_bytes = (source_len_hint <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES)
-        .then(|| Vec::with_capacity(source_len_hint));
+        .then(|| Vec::with_capacity(source_len_hint.min(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES)));
 
     if source_len_hint > 0 {
         line_starts.push(0);
@@ -211,7 +266,10 @@ fn index_utf8_worktree_preview_file(
             line_starts.push(0);
         }
         let chunk = &scan_buffer[..read_len];
-        validate_utf8_chunk_streaming(&mut utf8_tail, &mut validation_buffer, chunk)?;
+        sniffer.feed(chunk);
+        if sniffer.is_binary(request.kind, &request.attributes, request.encoding) {
+            return Err(BINARY_PREVIEW_MESSAGE.to_string());
+        }
         if let Some(bytes) = source_bytes.as_mut() {
             if bytes.len().saturating_add(chunk.len())
                 <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
@@ -242,29 +300,60 @@ fn index_utf8_worktree_preview_file(
         }
     }
 
-    if !utf8_tail.is_empty() {
-        return Err("File is not valid UTF-8; binary preview is not supported.".to_string());
+    let sniff = sniffer.finish();
+    let mut format = sniff.resolve(request.kind, &request.attributes, request.encoding);
+    if format.binary {
+        return Err(BINARY_PREVIEW_MESSAGE.to_string());
     }
 
-    if source_len > 0 {
-        line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+    if format.format.is_plain_utf8() && sniff.utf8_valid {
+        if source_len > 0 {
+            line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+        }
+        let source_text = source_bytes
+            .map(String::from_utf8)
+            .transpose()
+            .map_err(|_| "File changed while it was read.".to_string())?
+            .map(SharedString::from);
+        let content_hash = source_text
+            .as_ref()
+            .map(|text| disk_content_hash(text.as_bytes()));
+        return Ok(IndexedWorktreePreview {
+            source_len,
+            line_starts: Arc::from(line_starts),
+            line_flags: Arc::from(line_flags),
+            source_text,
+            stamp,
+            content_hash,
+            format,
+        });
     }
-    let source_text = source_bytes
-        .map(String::from_utf8)
-        .transpose()
-        .map_err(|_| "File is not valid UTF-8; binary preview is not supported.".to_string())?
-        .map(SharedString::from);
-    let content_hash = source_text
-        .as_ref()
-        .map(|text| disk_content_hash(text.as_bytes()));
 
+    // Not plain UTF-8: decode the whole file, then index the decoded text.
+    let raw = match source_bytes {
+        Some(bytes) => bytes,
+        None if sniff.len <= NON_UTF8_TEXT_MAX_BYTES => {
+            std::fs::read(path).map_err(|e| e.to_string())?
+        }
+        None => {
+            return Err(format!(
+                "File is larger than {} MB and not UTF-8; preview is not supported.",
+                NON_UTF8_TEXT_MAX_BYTES / (1024 * 1024)
+            ));
+        }
+    };
+    let decoded = gitcomet_core::text_format::decode_in_format(&raw, format);
+    format = decoded.format;
+    let text = decoded.text.into_owned();
+    let (line_starts, line_flags) = index_text_lines(&text);
     Ok(IndexedWorktreePreview {
-        source_len,
+        source_len: text.len(),
         line_starts: Arc::from(line_starts),
         line_flags: Arc::from(line_flags),
-        source_text,
+        source_text: Some(SharedString::from(text)),
         stamp,
-        content_hash,
+        content_hash: Some(disk_content_hash(&raw)),
+        format,
     })
 }
 
@@ -574,6 +663,8 @@ impl MainPaneView {
     /// language) separately.
     pub(in crate::view) fn reset_worktree_preview_source_state(&mut self) {
         self.worktree_preview_source_path = None;
+        self.worktree_preview_decode_key = None;
+        self.worktree_preview_text_format = None;
         self.worktree_preview_source_len = 0;
         self.worktree_preview_text = SharedString::default();
         self.worktree_preview_line_starts = Arc::default();
@@ -1837,14 +1928,64 @@ impl MainPaneView {
         }
     }
 
+    /// How to read the selected file; `None` while its attributes load.
+    pub(in crate::view) fn selected_text_decode_request(
+        &self,
+        kind: SideKind,
+    ) -> Option<(TextDecodeRequest, TextDecodeKey)> {
+        let Some(repo) = self.active_repo() else {
+            let request = TextDecodeRequest {
+                kind,
+                attributes: Arc::default(),
+                encoding: None,
+            };
+            let key = TextDecodeKey {
+                kind,
+                attributes: [None; 3],
+                encoding: None,
+            };
+            return Some((request, key));
+        };
+        let attributes = match &repo.diff_state.text_attributes {
+            Loadable::Loading => return None,
+            Loadable::Ready(attributes) => Arc::clone(attributes),
+            Loadable::NotLoaded | Loadable::Error(_) => Arc::default(),
+        };
+        let encoding = repo.diff_state.selected_encoding_override();
+        let key = TextDecodeKey {
+            kind,
+            attributes: attributes.decoding_encodings(),
+            encoding,
+        };
+        Some((
+            TextDecodeRequest {
+                kind,
+                attributes,
+                encoding,
+            },
+            key,
+        ))
+    }
+
     pub(in super::super::super) fn ensure_worktree_preview_loaded(
         &mut self,
         display_path: std::path::PathBuf,
         source_path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Blob copies are git's stored form; the working-tree file is read as is.
+        let kind = if source_path == display_path {
+            SideKind::Worktree
+        } else {
+            SideKind::GitInternal
+        };
+        let Some((request, decode_key)) = self.selected_text_decode_request(kind) else {
+            self.ensure_preview_loading(display_path);
+            return;
+        };
         let should_reload = self.worktree_preview_path.as_ref() != Some(&display_path)
             || self.worktree_preview_source_path.as_ref() != Some(&source_path)
+            || self.worktree_preview_decode_key != Some(decode_key)
             || matches!(self.worktree_preview, Loadable::NotLoaded);
         if !should_reload {
             return;
@@ -1855,6 +1996,7 @@ impl MainPaneView {
         self.worktree_preview = Loadable::Loading;
         self.reset_worktree_preview_source_state();
         self.worktree_preview_source_path = Some(source_path.clone());
+        self.worktree_preview_decode_key = Some(decode_key);
         // A reload asked for by the disk notice keeps the reader's place;
         // everything else starts at the top.
         let restore_scroll_offset = self.worktree_preview_restore_scroll_offset.take();
@@ -1868,7 +2010,7 @@ impl MainPaneView {
         cx.spawn(async move |view, cx| {
             let index_preview = {
                 let source_path_for_task = source_path.clone();
-                move || index_utf8_worktree_preview_file(&source_path_for_task)
+                move || index_worktree_preview_file(&source_path_for_task, &request)
             };
             let result = if crate::ui_runtime::current().uses_background_compute() {
                 smol::unblock(index_preview).await
@@ -1878,6 +2020,7 @@ impl MainPaneView {
             let _ = view.update(cx, |this, cx| {
                 if this.worktree_preview_path.as_ref() != Some(&display_path)
                     || this.worktree_preview_source_path.as_ref() != Some(&source_path)
+                    || this.worktree_preview_decode_key != Some(decode_key)
                 {
                     return;
                 }
@@ -1889,6 +2032,7 @@ impl MainPaneView {
                     Ok(preview) => {
                         this.worktree_preview_disk =
                             DiskIdentity::loaded(preview.stamp, preview.content_hash);
+                        let format = preview.format;
                         if let Some(source_text) = preview.source_text {
                             this.set_worktree_preview_ready_materialized_source(
                                 display_path.clone(),
@@ -1917,6 +2061,7 @@ impl MainPaneView {
                                 .base_handle
                                 .set_offset(offset);
                         }
+                        this.worktree_preview_text_format = Some(format);
                         // After the ready state: only a ready preview is a
                         // surface the catch-up check can look at.
                         this.file_disk_read_landed(DiskSurface::Preview, disk_revs, cx);
@@ -1924,6 +2069,10 @@ impl MainPaneView {
                     Err(e) => {
                         this.worktree_preview = Loadable::Error(e);
                         this.reset_worktree_preview_source_state();
+                        // Keep what was asked for, so the next frame does not
+                        // retry the same read; a new choice or target does.
+                        this.worktree_preview_source_path = Some(source_path.clone());
+                        this.worktree_preview_decode_key = Some(decode_key);
                     }
                 }
                 cx.notify();
@@ -2000,6 +2149,44 @@ mod tests {
     use crate::perf_alloc::measure_allocations;
 
     use super::*;
+
+    #[test]
+    fn review_binary_preview_stops_before_indexing_the_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"\0\xff\n".repeat(1024 * 1024)).unwrap();
+        let request = TextDecodeRequest {
+            kind: gitcomet_core::text_format::SideKind::Worktree,
+            attributes: Arc::default(),
+            encoding: None,
+        };
+        struct CountReads<R> {
+            reader: R,
+            bytes: usize,
+        }
+        impl<R: std::io::Read> std::io::Read for CountReads<R> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.reader.read(out)?;
+                self.bytes += n;
+                Ok(n)
+            }
+        }
+        let mut reader = CountReads {
+            reader: std::fs::File::open(file.path()).unwrap(),
+            bytes: 0,
+        };
+        let result = index_worktree_preview_reader(
+            file.path(),
+            &request,
+            &file.as_file().metadata().unwrap(),
+            &mut reader,
+        );
+        assert_eq!(result.err().as_deref(), Some(BINARY_PREVIEW_MESSAGE));
+        assert!(
+            reader.bytes <= WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES,
+            "read {} bytes of a known binary file",
+            reader.bytes
+        );
+    }
 
     #[test]
     fn conflict_preview_mapping_decodes_identical_payloads_once() {
@@ -2211,14 +2398,20 @@ impl MainPaneView {
         let error = if self.file_edits_are_unsaved_for(repo_id, &path) {
             Some("Save or discard your unsaved edits to this file first")
         } else {
+            let format = self
+                .worktree_preview_text_format
+                .map_or(gitcomet_core::text_format::TextFormat::UTF_8, |format| {
+                    format.format
+                });
             match std::fs::read(&abs_path) {
-                Ok(bytes) => match toggle_task_marker(bytes, task) {
-                    Some(contents) => {
+                Ok(bytes) => match toggle_task_marker_in_format(bytes, task, format) {
+                    Some((contents, bytes)) => {
                         self.store.dispatch(Msg::SaveWorktreeFile {
                             repo_id,
                             path,
-                            contents: contents.clone(),
+                            contents: bytes,
                             stage: false,
+                            completion: None,
                         });
                         // The file preview only reloads when its target
                         // changes, and re-reading now could beat the write:
@@ -2252,6 +2445,34 @@ impl MainPaneView {
     }
 }
 
+/// [`toggle_task_marker`] for a file in `format`: the marker offsets are in
+/// the decoded text, and the result is written back in the same encoding.
+fn toggle_task_marker_in_format(
+    bytes: Vec<u8>,
+    task: MarkdownTaskMarker,
+    format: gitcomet_core::text_format::TextFormat,
+) -> Option<(String, gitcomet_state::msg::ContentBytes)> {
+    if format.is_plain_utf8() {
+        let text = toggle_task_marker(bytes, task)?;
+        let contents = text.as_str().into();
+        return Some((text, contents));
+    }
+    let decoded = gitcomet_core::text_format::decode_in_format(
+        &bytes,
+        SideTextFormat {
+            format,
+            ..SideTextFormat::utf8(Default::default())
+        },
+    );
+    if !decoded.format.is_writable() {
+        return None;
+    }
+    let text = toggle_task_marker(decoded.text.into_owned().into_bytes(), task)?;
+    let encoded = gitcomet_core::text_format::encode(&text, format).ok()?;
+    let contents = encoded.into_owned().into();
+    Some((text, contents))
+}
+
 /// `bytes` with the task marker flipped, or `None` when that marker is no
 /// longer where the preview found it, in the state the preview showed.
 pub(in crate::view) fn toggle_task_marker(
@@ -2274,19 +2495,69 @@ pub(in crate::view) fn toggle_task_marker(
 
 #[cfg(test)]
 mod task_marker_tests {
-    use super::toggle_task_marker;
+    use super::{MarkdownTaskMarker, toggle_task_marker, toggle_task_marker_in_format};
     use crate::view::markdown_preview::parse_markdown;
+    use gitcomet_core::text_format::{TextEncoding, TextFormat, decode, encode};
 
-    /// Toggle the task on the row reading `text`, as a click on it would.
-    fn click(source: &str, text: &str) -> Option<String> {
+    fn task_for(source: &str, text: &str) -> MarkdownTaskMarker {
         let doc = parse_markdown(source).expect("parses");
-        let task = doc
-            .rows
+        doc.rows
             .iter()
             .find(|row| row.text.as_ref() == text)
             .and_then(|row| row.task)
-            .expect("task row");
-        toggle_task_marker(source.as_bytes().to_vec(), task)
+            .expect("task row")
+    }
+
+    /// Toggle the task on the row reading `text`, as a click on it would.
+    fn click(source: &str, text: &str) -> Option<String> {
+        toggle_task_marker(source.as_bytes().to_vec(), task_for(source, text))
+    }
+
+    #[test]
+    fn encoded_task_toggles_reject_lossy_or_malformed_content() {
+        for (encoding, bytes) in [
+            ("shift_jis", b"\x87\x90\n- [ ] task\n".as_slice()),
+            ("gb18030", b"\x80\n- [ ] task\n".as_slice()),
+            ("utf-8", b"\xff\n- [ ] task\n".as_slice()),
+        ] {
+            let format = TextFormat {
+                encoding: TextEncoding::from_label(encoding).unwrap(),
+                bom: false,
+            };
+            let source = decode(bytes, format);
+            let task = task_for(&source.text, "task");
+            assert!(toggle_task_marker_in_format(bytes.to_vec(), task, format).is_none());
+        }
+    }
+
+    #[test]
+    fn encoded_task_toggles_preserve_other_bytes_and_boms() {
+        for (encoding, bom, source, task_text) in [
+            ("utf-8", false, "préface\r\n- [ ] café\r\n", "café"),
+            ("utf-8", true, "préface\r\n- [ ] café\r\n", "café"),
+            ("utf-16le", true, "préface\r\n- [ ] café\r\n", "café"),
+            ("windows-1252", false, "préface\r\n- [ ] café\r\n", "café"),
+            ("shift_jis", false, "前文\r\n- [ ] 項目\r\n", "項目"),
+            ("gb18030", false, "€\r\n- [ ] task\r\n", "task"),
+        ] {
+            let format = TextFormat {
+                encoding: TextEncoding::from_label(encoding).unwrap(),
+                bom,
+            };
+            let bytes = encode(source, format).unwrap().into_owned();
+            let task = task_for(source, task_text);
+            let (text, written) = toggle_task_marker_in_format(bytes.clone(), task, format)
+                .expect("lossless task toggles");
+            assert_eq!(text, source.replace("[ ]", "[x]"));
+            assert_eq!(written.as_bytes(), encode(&text, format).unwrap().as_ref());
+            let (_, restored) = toggle_task_marker_in_format(
+                written.as_bytes().to_vec(),
+                task_for(&text, task_text),
+                format,
+            )
+            .expect("toggle back");
+            assert_eq!(restored.as_bytes(), bytes);
+        }
     }
 
     #[test]

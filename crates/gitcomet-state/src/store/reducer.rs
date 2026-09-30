@@ -12,8 +12,8 @@ mod repo_management;
 mod util;
 
 use crate::model::{
-    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptOperation,
-    Loadable, PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    AppState, AuthPromptState, AuthRetryOperation, BranchExistsPromptOperation, Loadable,
+    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
     SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{
@@ -247,6 +247,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::SelectDiff { .. }
+            | Msg::SetTextOverride { .. }
             | Msg::SelectConflictDiff { .. }
             | Msg::SelectWorktreeUncommitted { .. }
             | Msg::LoadStashes { .. }
@@ -312,6 +313,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::SaveWorktreeFile { .. }
             | Msg::AppendGitignorePatterns { .. }
             | Msg::RunLargeFileCommand { .. }
+            | Msg::AppendGitattributesRule { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
@@ -474,24 +476,17 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
     }
 }
 
-fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthRetryOperation) {
-    match operation {
-        AuthRetryOperation::RepoCommand { repo_id, .. }
-        | AuthRetryOperation::SafePushAfterCommit { repo_id, .. }
-        | AuthRetryOperation::Commit { repo_id, .. } => {
-            util::clear_banner_error_for_repo(state, *repo_id);
-        }
-        AuthRetryOperation::Clone { .. } => clear_stale_clone_banner_error(state),
+/// Record an error for the UI to show: on its repo when there is one still
+/// open, else as an app notification.
+fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) {
+    if message.trim().is_empty() {
+        return;
     }
-}
-
-fn clear_stale_clone_banner_error(state: &mut AppState) {
-    if state
-        .banner_error
-        .as_ref()
-        .is_some_and(|banner| banner.message.starts_with("Clone failed"))
-    {
-        state.banner_error = None;
+    match repo_id.and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id)) {
+        Some(repo_state) => {
+            util::push_diagnostic(repo_state, crate::model::DiagnosticKind::Error, message)
+        }
+        None => util::push_notification(state, crate::model::AppNotificationKind::Error, message),
     }
 }
 
@@ -784,7 +779,8 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // want of credentials — and this replay path exists only to re-run a
         // command after an auth prompt. Retaining `patterns` would make a replay
         // possible; there is just nothing here that an auth prompt could fix.
-        RepoCommandKind::AppendGitignorePatterns { .. } => return None,
+        RepoCommandKind::AppendGitignorePatterns { .. }
+        | RepoCommandKind::AppendGitattributesRule { .. } => return None,
         // Network LFS/annex commands fail for want of credentials like fetch.
         RepoCommandKind::LargeFile { command } => Msg::RunLargeFileCommand { repo_id, command },
         // Not replayable because command metadata does not retain original content.
@@ -975,8 +971,6 @@ fn submit_auth_prompt(
         }
     };
 
-    clear_banner_error_for_auth_operation(state, &prompt.operation);
-
     match retry_msg_for_auth_operation(prompt.operation) {
         Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),
         None => Vec::new(),
@@ -1097,30 +1091,35 @@ fn reduce_inner(
         Msg::OpenRepoFromExternalDrop(path) => {
             repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
         }
+        Msg::AcknowledgeRepoOpenFailures { through_revision } => {
+            if state
+                .repo_open_failures
+                .values()
+                .any(|revision| *revision <= through_revision)
+            {
+                Arc::make_mut(&mut state.repo_open_failures)
+                    .retain(|_, revision| *revision > through_revision);
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
         Msg::CloseRepos {
             repo_ids,
             activate_after,
         } => repo_management::close_repos(repos, state, repo_ids, activate_after),
-        Msg::ShowBannerError { repo_id, message } => {
-            if !message.trim().is_empty() {
-                state.banner_error = Some(BannerErrorState { repo_id, message });
-            }
-            Vec::new()
-        }
-        Msg::DismissBannerError => {
-            state.banner_error = None;
+        Msg::ReportError { repo_id, message } => {
+            report_error(state, repo_id, message);
             Vec::new()
         }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.feedback.last_error = None;
             }
-            util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
         }
         Msg::CancelGitOperation {
@@ -1286,13 +1285,18 @@ fn reduce_inner(
                         | crate::msg::InternalMsg::RepoPathsActionFinished { .. }
                         | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
                 );
-            let previous_diagnostic_len = suppress_nested_diagnostics
+            let previous_diagnostics = suppress_nested_diagnostics
                 .then(|| {
                     state
                         .repos
                         .iter()
                         .find(|repo| repo.id == repo_id)
-                        .map(|repo| repo.feedback.diagnostics.len())
+                        .map(|repo| {
+                            (
+                                repo.feedback.diagnostics.clone(),
+                                repo.feedback.diagnostics_seq,
+                            )
+                        })
                 })
                 .flatten();
             if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
@@ -1303,8 +1307,9 @@ fn reduce_inner(
 
             if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
                 repo.feedback.command_log_operation_id = None;
-                if let Some(previous_diagnostic_len) = previous_diagnostic_len {
-                    repo.feedback.diagnostics.truncate(previous_diagnostic_len);
+                if let Some((entries, seq)) = previous_diagnostics {
+                    repo.feedback.diagnostics = entries;
+                    repo.feedback.diagnostics_seq = seq;
                 }
                 git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
             }
@@ -1426,6 +1431,11 @@ fn reduce_inner(
         Msg::SelectDiff { repo_id, target } => {
             diff_selection::select_diff(repos, state, repo_id, target)
         }
+        Msg::SetTextOverride {
+            repo_id,
+            path,
+            value,
+        } => diff_selection::set_text_override(state, repo_id, path, value),
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
             origin,
@@ -2006,9 +2016,10 @@ fn reduce_inner(
             path,
             contents,
             stage,
+            completion,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
+            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage, completion)
         }
         Msg::AppendGitignorePatterns { repo_id, patterns } => {
             begin_local_action(state, repo_id);
@@ -2088,6 +2099,10 @@ fn reduce_inner(
             .collect(),
         Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded { repo_id, result }) => {
             effects::lfs_locks_loaded(state, repo_id, result)
+        }
+        Msg::AppendGitattributesRule { repo_id, rule } => {
+            begin_local_action(state, repo_id);
+            vec![Effect::AppendGitattributesRule { repo_id, rule }]
         }
         Msg::Commit {
             repo_id,
@@ -2735,7 +2750,13 @@ fn reduce_inner(
             path,
             result,
             conflict_session,
-        }) => effects::conflict_file_loaded(state, repo_id, path, *result, conflict_session),
+        }) => effects::conflict_file_loaded(
+            state,
+            repo_id,
+            path,
+            *result,
+            conflict_session.map(|session| *session),
+        ),
         Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
             effects::worktrees_loaded(state, repo_id, result)
         }
@@ -2793,10 +2814,11 @@ fn reduce_inner(
                     Vec::new()
                 }
                 Err(error) => {
-                    state.banner_error = Some(BannerErrorState {
-                        repo_id: Some(repo_id),
-                        message: util::format_failure_summary("Submodule trust check", &error),
-                    });
+                    report_error(
+                        state,
+                        Some(repo_id),
+                        util::format_failure_summary("Submodule trust check", &error),
+                    );
                     Vec::new()
                 }
             }
@@ -2821,10 +2843,11 @@ fn reduce_inner(
                     Vec::new()
                 }
                 Err(error) => {
-                    state.banner_error = Some(BannerErrorState {
-                        repo_id: Some(repo_id),
-                        message: util::format_failure_summary("Submodule trust check", &error),
-                    });
+                    report_error(
+                        state,
+                        Some(repo_id),
+                        util::format_failure_summary("Submodule trust check", &error),
+                    );
                     Vec::new()
                 }
             }
@@ -2854,10 +2877,11 @@ fn reduce_inner(
                     Vec::new()
                 }
                 Err(error) => {
-                    state.banner_error = Some(BannerErrorState {
-                        repo_id: Some(repo_id),
-                        message: util::format_failure_summary("Submodule trust check", &error),
-                    });
+                    report_error(
+                        state,
+                        Some(repo_id),
+                        util::format_failure_summary("Submodule trust check", &error),
+                    );
                     Vec::new()
                 }
             }
@@ -2933,6 +2957,11 @@ fn reduce_inner(
             target,
             result,
         }) => diff_selection::diff_file_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
+            repo_id,
+            target,
+            result,
+        }) => diff_selection::text_attributes_loaded(state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
             repo_id,
             target,
@@ -3433,7 +3462,10 @@ mod nav_history_tests {
         }));
         // Background / non-navigation messages do not push a step (they are
         // folded into the current entry in place, so they can't pollute history).
-        assert!(!is_view_navigation(&Msg::DismissBannerError));
+        assert!(!is_view_navigation(&Msg::ReportError {
+            repo_id: None,
+            message: String::new(),
+        }));
     }
 
     #[test]

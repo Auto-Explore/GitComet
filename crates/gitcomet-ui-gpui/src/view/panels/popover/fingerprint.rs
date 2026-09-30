@@ -39,7 +39,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 }
             }
         },
-        PopoverKind::RepoPicker => {
+        PopoverKind::RepoPicker { .. } => {
             state.active_repo.hash(&mut hasher);
             state.repos.len().hash(&mut hasher);
             // Repo picker list is usually small; hashing all ids+workdirs is fine and avoids stale lists.
@@ -57,6 +57,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
+        | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
@@ -64,7 +65,6 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
@@ -143,15 +143,16 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
 
 fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'a RepoState> {
     let repo_id = match popover {
-        PopoverKind::RepoPicker
+        PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker => None,
+        | PopoverKind::ErrorDetails { .. } => None,
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker { .. }
@@ -207,7 +208,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
-        | PopoverKind::PinnedSectionMenu { repo_id, .. }
+        | PopoverKind::SidebarPinnedOverflow { repo_id, .. }
+        | PopoverKind::SidebarAncestorMenu { repo_id, .. }
         | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
@@ -241,7 +243,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // both read the live branch lists, so a refresh landing while the menu
         // is up has to repaint it rather than leave a stale count.
         | PopoverKind::BranchGroupMenu { .. }
-        | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::SidebarPinnedOverflow { .. }
+        | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -284,7 +287,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         } => {
             repo.worktrees_rev.hash(hasher);
             // The badge picker's create row reads HEAD for its "Based off <ref>"
-            // line (`workspace_picker::create_base_ref`), so a checkout landing
+            // line (`worktree_badge_picker::create_base_ref`), so a checkout landing
             // while the picker is open has to repaint it — otherwise the row keeps
             // promising a base the Add dialog will no longer use.
             repo.head_branch_rev.hash(hasher);
@@ -475,6 +478,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // user's cursor when a refresh lands mid-edit.
         | PopoverKind::AddToGitignorePrompt { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
@@ -482,7 +486,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
@@ -491,9 +494,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::TerminalMenu { .. }
-        | PopoverKind::RepoPicker
+        | PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::ReflogEntryMenu { .. }
+        | PopoverKind::ErrorDetails { .. }
         | PopoverKind::CommitPrompt { .. } => {}
     }
 }
@@ -514,7 +518,10 @@ fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
 
 fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     match kind {
-        PopoverKind::RepoPicker => 0u8.hash(hasher),
+        PopoverKind::RepoPicker { scope } => {
+            0u8.hash(hasher);
+            scope.hash(hasher);
+        }
         PopoverKind::AddRepoMenu => 66u8.hash(hasher),
         PopoverKind::BranchPicker { purpose } => {
             1u8.hash(hasher);
@@ -581,11 +588,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
+        PopoverKind::TextFormatMenu { section } => {
+            105u8.hash(hasher);
+            section.hash(hasher);
+        }
         PopoverKind::CommitFileSortMenu { list } => {
             104u8.hash(hasher);
             list.hash(hasher);
         }
-        PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::WebLinkMenu {
             url,
             load_remote_image_url,
@@ -766,6 +776,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::UnsavedFileEditsConfirm(prompt) => {
             68u8.hash(hasher);
             prompt.action.hash(hasher);
+            prompt.waiting_for_writes.hash(hasher);
             prompt.files.hash(hasher);
         }
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
@@ -899,10 +910,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             remote.hash(hasher);
             path.hash(hasher);
         }
-        PopoverKind::PinnedSectionMenu { repo_id, section } => {
-            101u8.hash(hasher);
+        PopoverKind::SidebarPinnedOverflow { repo_id, bottom } => {
+            "sidebar_pin_overflow".hash(hasher);
             repo_id.hash(hasher);
-            (*section as u8).hash(hasher);
+            bottom.hash(hasher);
+        }
+        PopoverKind::SidebarAncestorMenu { repo_id, section } => {
+            "sidebar_ancestors".hash(hasher);
+            repo_id.hash(hasher);
+            hash_branch_section(*section, hasher);
         }
         PopoverKind::DeleteBranchesConfirm {
             repo_id,
@@ -1014,6 +1030,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             103u8.hash(hasher);
             repo_id.hash(hasher);
             operation_id.hash(hasher);
+        }
+        PopoverKind::ErrorDetails { toast_id } => {
+            110u8.hash(hasher);
+            toast_id.hash(hasher);
         }
     }
 }
@@ -1500,8 +1520,18 @@ mod tests {
             ..AppState::test_default()
         };
 
-        let before = notify_fingerprint(&base, &PopoverKind::RepoPicker);
-        let after = notify_fingerprint(&with_active_repo, &PopoverKind::RepoPicker);
+        let before = notify_fingerprint(
+            &base,
+            &PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All,
+            },
+        );
+        let after = notify_fingerprint(
+            &with_active_repo,
+            &PopoverKind::RepoPicker {
+                scope: RepoPickerScope::All,
+            },
+        );
 
         assert_ne!(before, after);
     }

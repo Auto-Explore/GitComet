@@ -520,6 +520,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::AppendGitattributesRule { repo_id, rule } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::AppendGitattributesRule { rule },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadFileHistory {
             repo_id,
             path,
@@ -1958,8 +1965,9 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
+                let encoding = repo_load::file_encoding_override(thread_state, repo_id, &path);
                 repo_load::schedule_load_conflict_file(
-                    executor, repos, msg_tx, repo_id, path, mode,
+                    executor, repos, msg_tx, repo_id, path, mode, encoding,
                 );
             }
         }
@@ -1975,8 +1983,9 @@ pub(super) fn schedule_effect(
             path,
             contents,
             stage,
+            completion,
         } => repo_commands::schedule_save_worktree_file(
-            executor, repos, msg_tx, repo_id, path, contents, stage,
+            executor, repos, msg_tx, repo_id, path, contents, stage, completion,
         ),
         Effect::AppendGitignorePatterns { repo_id, patterns } => {
             repo_commands::schedule_append_gitignore_patterns(
@@ -2023,6 +2032,11 @@ pub(super) fn schedule_effect(
                     cancellation,
                 );
             }
+        }
+        Effect::AppendGitattributesRule { repo_id, rule } => {
+            repo_commands::schedule_append_gitattributes_rule(
+                executor, repos, msg_tx, repo_id, rule,
+            )
         }
         Effect::LoadFileHistory {
             repo_id,
@@ -2343,14 +2357,22 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
-                repo_load::schedule_load_diff(executor, repos, msg_tx, repo_id, target);
+                let encoding = target.file_path().and_then(|path| {
+                    repo_load::file_encoding_override(thread_state, repo_id, path)
+                });
+                repo_load::schedule_load_diff(executor, repos, msg_tx, repo_id, target, encoding);
             }
         }
         Effect::LoadDiffFile { repo_id, target } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
-                repo_load::schedule_load_diff_file(executor, repos, msg_tx, repo_id, target);
+                let encoding = target.file_path().and_then(|path| {
+                    repo_load::file_encoding_override(thread_state, repo_id, path)
+                });
+                repo_load::schedule_load_diff_file(
+                    executor, repos, msg_tx, repo_id, target, encoding,
+                );
             }
         }
         Effect::LoadDiffPreviewTextFile {
@@ -2459,6 +2481,7 @@ pub(super) fn schedule_effect(
                     (target, target_rev),
                     cancellation,
                     repo_load::SelectedDiffLoadOptions {
+                        load_text_attributes: true,
                         load_patch_diff,
                         load_file_text,
                         preview_text_side,
@@ -2473,8 +2496,9 @@ pub(super) fn schedule_effect(
                 && let Some((msg_tx, _)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
+                let encoding = repo_load::file_encoding_override(thread_state, repo_id, &path);
                 repo_load::schedule_load_conflict_file(
-                    executor, repos, msg_tx, repo_id, path, mode,
+                    executor, repos, msg_tx, repo_id, path, mode, encoding,
                 );
             }
         }

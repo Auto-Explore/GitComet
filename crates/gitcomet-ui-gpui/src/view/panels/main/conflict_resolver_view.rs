@@ -404,12 +404,17 @@ impl MainPaneView {
                         return;
                     }
                     let text = this.conflict_resolver_save_contents_from_text(text);
+                    let Some(contents) = this.conflict_output_bytes_for_save(text, cx) else {
+                        return;
+                    };
                     this.store.dispatch(Msg::SaveWorktreeFile {
                         repo_id,
                         path: save_path.clone(),
-                        contents: text,
+                        contents,
                         stage: false,
+                        completion: None,
                     });
+                    this.mark_conflict_resolved_output_saved(cx);
                 });
             controls = controls
                 .child(
@@ -440,12 +445,18 @@ impl MainPaneView {
                                     cx.notify();
                                 } else {
                                     let text = this.conflict_resolver_save_contents_from_text(text);
-                                    this.store.dispatch(Msg::SaveWorktreeFile {
-                                        repo_id,
-                                        path: stage_path.clone(),
-                                        contents: text,
-                                        stage: true,
-                                    });
+                                    if let Some(contents) =
+                                        this.conflict_output_bytes_for_save(text, cx)
+                                    {
+                                        this.store.dispatch(Msg::SaveWorktreeFile {
+                                            repo_id,
+                                            path: stage_path.clone(),
+                                            contents,
+                                            stage: true,
+                                            completion: None,
+                                        });
+                                        this.mark_conflict_resolved_output_saved(cx);
+                                    }
                                 }
                             });
                     if gate_unresolved > 0 {
@@ -2506,6 +2517,8 @@ impl MainPaneView {
         query: Option<rows::MarkdownPreviewQuery>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let tab_width = self.display_tab_width;
+
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let (id, list_id, vscrollbar_id, label, scroll) = match side {
             ThreeWayColumn::Base => (
@@ -2598,7 +2611,9 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .track_scroll(&handle)
                             .pr(vertical_scrollbar_gutter)
-                            .child(rows::render_markdown_document(&document, &context)),
+                            .child(rows::render_markdown_document(
+                                tab_width, &document, &context,
+                            )),
                     )
                     .when(!vertical_sync_enabled, |d| {
                         d.child(

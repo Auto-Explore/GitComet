@@ -87,6 +87,7 @@ pub(super) fn msg_name(msg: &Msg) -> &'static str {
         Msg::OpenRepoFromExternalDrop(_) => "OpenRepoFromExternalDrop",
         Msg::RestoreSession { .. } => "RestoreSession",
         Msg::CloseRepo { .. } => "CloseRepo",
+        Msg::MoveRepoOut { .. } => "MoveRepoOut",
         Msg::CloseRepos { .. } => "CloseRepos",
         Msg::SetActiveRepo { .. } => "SetActiveRepo",
         Msg::ReorderRepoTabs { .. } => "ReorderRepoTabs",
@@ -101,6 +102,7 @@ pub(super) fn msg_name(msg: &Msg) -> &'static str {
 pub(super) fn msg_repo_id(msg: &Msg) -> Option<RepoId> {
     match msg {
         Msg::CloseRepo { repo_id }
+        | Msg::MoveRepoOut { repo_id }
         | Msg::SetActiveRepo { repo_id }
         | Msg::ReorderRepoTabs { repo_id, .. }
         | Msg::ReloadRepo { repo_id }

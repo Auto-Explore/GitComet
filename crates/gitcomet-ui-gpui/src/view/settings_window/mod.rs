@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
-const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 720.0;
-const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 620.0;
+const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 880.0;
+const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 720.0;
 const SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX: f32 = 224.0;
 const SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
@@ -134,6 +134,14 @@ const FILE_LIST_LAYOUT_OPTIONS: &[(&str, FileListLayout, &str)] = &[
         FileListLayout::Tree,
         "Group changed files under their folders",
     ),
+];
+
+const DIFF_TAB_SIZE_OPTIONS: &[(&str, u8)] = &[
+    ("settings_window_diff_tab_size_2", 2),
+    ("settings_window_diff_tab_size_3", 3),
+    ("settings_window_diff_tab_size_4", 4),
+    ("settings_window_diff_tab_size_6", 6),
+    ("settings_window_diff_tab_size_8", 8),
 ];
 
 const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
@@ -277,6 +285,8 @@ fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
 enum SettingsSection {
     Theme,
     UiScale,
+    WindowControls,
+    BrowserOpenTarget,
     UiFont,
     EditorFont,
     ExternalCodeEditor,
@@ -289,12 +299,14 @@ enum SettingsSection {
     DiffContentMode,
     Diff,
     DiffViewMode,
+    DiffTabSize,
     GitLogDefaultMode,
     GitLogColumns,
     GitLogBranchNames,
     GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
+    WorkspaceTheme,
 }
 
 impl SettingsSection {
@@ -305,6 +317,8 @@ impl SettingsSection {
         match self {
             Self::Theme
             | Self::UiScale
+            | Self::WindowControls
+            | Self::BrowserOpenTarget
             | Self::UiFont
             | Self::EditorFont
             | Self::ExternalCodeEditor
@@ -313,7 +327,9 @@ impl SettingsSection {
             Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout => SettingsCategory::ChangeTracking,
-            Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
+            Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
+                SettingsCategory::Diff
+            }
             Self::GitLogDefaultMode
             | Self::GitLogColumns
             | Self::GitLogBranchNames
@@ -321,6 +337,7 @@ impl SettingsSection {
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
+            Self::WorkspaceTheme => SettingsCategory::Workspaces,
         }
     }
 }
@@ -330,6 +347,7 @@ impl SettingsSection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsCategory {
     General,
+    Workspaces,
     SecurityPrivacy,
     Terminal,
     ChangeTracking,
@@ -347,6 +365,7 @@ enum SettingsCategory {
 impl SettingsCategory {
     const ALL: &'static [SettingsCategory] = &[
         SettingsCategory::General,
+        SettingsCategory::Workspaces,
         SettingsCategory::SecurityPrivacy,
         SettingsCategory::Terminal,
         SettingsCategory::ChangeTracking,
@@ -364,6 +383,7 @@ impl SettingsCategory {
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::Workspaces => "Workspaces",
             Self::SecurityPrivacy => "Security / Privacy",
             Self::Terminal => "Terminal",
             Self::ChangeTracking => "Change tracking",
@@ -382,6 +402,7 @@ impl SettingsCategory {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "icons/cog.svg",
+            Self::Workspaces => "icons/folder.svg",
             Self::SecurityPrivacy => "icons/file_icons/lock.svg",
             Self::Terminal => "icons/terminal.svg",
             Self::ChangeTracking => "icons/file.svg",
@@ -400,6 +421,7 @@ impl SettingsCategory {
     fn nav_id(self) -> &'static str {
         match self {
             Self::General => "settings_window_nav_general",
+            Self::Workspaces => "settings_window_nav_workspaces",
             Self::SecurityPrivacy => "settings_window_nav_security_privacy",
             Self::Terminal => "settings_window_nav_terminal",
             Self::ChangeTracking => "settings_window_nav_change_tracking",
@@ -421,8 +443,13 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance density compact comfortable spacious \
+                 external code editor date timezone appearance window controls title bar \
+                 minimize maximize tiling command line cli gitcomet open repository window density compact comfortable spacious \
                  font size markdown preview"
+            }
+            Self::Workspaces => {
+                "workspaces workspace window group rename name title bar color colour theme \
+                 override delete open repositories"
             }
             Self::SecurityPrivacy => {
                 "security privacy allowed remote protocols https http ssh git file ftp ftps \
@@ -513,6 +540,8 @@ pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
+    pub(super) window_controls_mode: crate::window_controls::WindowControlsMode,
+    pub(super) browser_open_target: crate::app::BrowserOpenTarget,
     appearance_metrics: Appearance,
     font_size_inputs: [Entity<components::TextInput>; 3],
     _font_size_subscriptions: Vec<gpui::Subscription>,
@@ -534,6 +563,7 @@ pub(crate) struct SettingsWindowView {
     file_list_layout_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
+    diff_tab_size_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
     remote_protocols_scroll: UniformListScrollHandle,
     remote_markdown_images_scroll: UniformListScrollHandle,
@@ -551,6 +581,7 @@ pub(crate) struct SettingsWindowView {
     diff_view_mode: DiffViewMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
+    diff_tab_size: u8,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
     remote_url_policy: RemoteUrlPolicy,
@@ -592,13 +623,22 @@ pub(crate) struct SettingsWindowView {
     external_editor_custom_path_input: Entity<components::TextInput>,
     external_editor_custom_arguments_input: Entity<components::TextInput>,
     expanded_section: Option<SettingsSection>,
+    selected_workspace: Option<gitcomet_state::session::WorkspaceId>,
+    workspace_name_draft: String,
+    workspace_name_input: Entity<components::TextInput>,
+    workspace_delete_confirm: Option<gitcomet_state::session::WorkspaceId>,
     hover_resize_edge: Option<ResizeEdge>,
     title_drag_state: chrome::TitleBarDragState,
     _git_executable_input_subscription: gpui::Subscription,
     _external_editor_custom_path_input_subscription: gpui::Subscription,
     _external_editor_custom_arguments_input_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
+    _activation_subscription: gpui::Subscription,
     _search_input_subscription: gpui::Subscription,
+    _workspace_name_input_subscription: gpui::Subscription,
+    // Safe only because workspace reads no longer lease the global (a leasing
+    // read would notify this observer from every title-bar render).
+    _workspaces_observer: gpui::Subscription,
     #[cfg(test)]
     overflow_probe: bool,
     #[cfg(test)]
@@ -622,7 +662,11 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     let bounds = Bounds::centered(
         None,
-        settings_window_default_size_for_percent(ui_scale.percent),
+        crate::app::fit_default_window_size(
+            settings_window_default_size_for_percent(ui_scale.percent),
+            settings_window_min_size_for_percent(ui_scale.percent),
+            cx,
+        ),
         cx,
     );
     let ui_scale_percent = ui_scale.percent;
@@ -641,6 +685,27 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     .expect("failed to open settings window");
 
     cx.activate(true);
+}
+
+/// Open (or raise) Settings on the Workspaces page with `workspace_id` selected.
+pub(crate) fn open_settings_window_to_workspace(
+    cx: &mut App,
+    workspace_id: gitcomet_state::session::WorkspaceId,
+) {
+    open_settings_window(cx);
+    let Some(window) = cx
+        .windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<SettingsWindowView>())
+    else {
+        return;
+    };
+    let _ = window.update(cx, |view, _window, cx| {
+        view.current_view = SettingsView::Root;
+        view.select_category(SettingsCategory::Workspaces, cx);
+        view.select_workspace(workspace_id, cx);
+        cx.notify();
+    });
 }
 
 fn settings_window_min_size_for_percent(percent: u32) -> gpui::Size<Pixels> {
@@ -919,6 +984,13 @@ impl SettingsWindowView {
         let ui_preferences = UiPreferences::from_session(&ui_session);
         crate::appearance::initialize(&ui_session, cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        let window_controls =
+            crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+        let browser_open_target = ui_session
+            .browser_open_target
+            .as_deref()
+            .and_then(crate::app::BrowserOpenTarget::from_key)
+            .unwrap_or_default();
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
@@ -934,6 +1006,7 @@ impl SettingsWindowView {
         let diff_view_mode = ui_preferences.diff.view_mode;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
@@ -989,6 +1062,9 @@ impl SettingsWindowView {
             _ => String::new(),
         };
 
+        let activation_subscription = cx.observe_window_activation(window, |_this, window, cx| {
+            crate::window_focus::reset_on_deactivation(window, cx);
+        });
         let appearance_subscription = {
             let view = cx.weak_entity();
             let mut first = true;
@@ -1065,6 +1141,34 @@ impl SettingsWindowView {
                 if enter_pressed && this.git_executable_mode == GitExecutableMode::Custom {
                     this.apply_git_executable_settings(cx);
                 }
+            });
+
+        let workspace_name_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Automatic name".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let workspace_name_input_subscription =
+            cx.observe(&workspace_name_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let next = input.read(cx).text().to_string();
+                if this.workspace_name_draft != next {
+                    this.workspace_name_draft = next;
+                    cx.notify();
+                }
+                if enter_pressed {
+                    this.commit_workspace_name(cx);
+                }
+            });
+        let workspaces_observer =
+            cx.observe_global::<crate::workspaces::WorkspaceManager>(|this, cx| {
+                this.reconcile_selected_workspace(cx);
+                cx.notify();
             });
 
         let external_editor_custom_path_input = cx.new(|cx| {
@@ -1177,6 +1281,18 @@ impl SettingsWindowView {
             })
             .collect();
 
+        let selected_workspace = crate::workspaces::active_workspace_id(cx).or_else(|| {
+            crate::workspaces::workspaces(cx)
+                .first()
+                .map(|workspace| workspace.id)
+        });
+        let workspace_name_draft = selected_workspace
+            .and_then(|id| crate::workspaces::workspace(cx, id))
+            .and_then(|workspace| workspace.custom_name)
+            .unwrap_or_default();
+        workspace_name_input.update(cx, |input, cx| {
+            input.set_text(workspace_name_draft.clone(), cx);
+        });
         Self {
             theme_mode,
             appearance_metrics,
@@ -1184,6 +1300,8 @@ impl SettingsWindowView {
             _font_size_subscriptions: font_size_subscriptions,
             theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
+            window_controls_mode: window_controls.mode,
+            browser_open_target,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,
             use_font_ligatures: font_preferences.use_font_ligatures,
@@ -1202,6 +1320,7 @@ impl SettingsWindowView {
             file_list_layout_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
+            diff_tab_size_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
             remote_protocols_scroll: UniformListScrollHandle::default(),
             remote_markdown_images_scroll: UniformListScrollHandle::default(),
@@ -1219,6 +1338,7 @@ impl SettingsWindowView {
             diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
             remote_url_policy,
@@ -1268,7 +1388,14 @@ impl SettingsWindowView {
             _external_editor_custom_arguments_input_subscription:
                 external_editor_custom_arguments_input_subscription,
             _appearance_subscription: appearance_subscription,
+            _activation_subscription: activation_subscription,
             _search_input_subscription: search_input_subscription,
+            _workspace_name_input_subscription: workspace_name_input_subscription,
+            _workspaces_observer: workspaces_observer,
+            selected_workspace,
+            workspace_name_draft,
+            workspace_name_input,
+            workspace_delete_confirm: None,
             #[cfg(test)]
             overflow_probe: false,
             #[cfg(test)]
@@ -1367,10 +1494,12 @@ impl SettingsWindowView {
     }
 }
 
+mod cards;
 mod prefs;
 mod render;
 mod rows;
 mod runtime;
+mod workspaces;
 
 use runtime::*;
 

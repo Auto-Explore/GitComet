@@ -15,6 +15,21 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// The effect-layer tests exercise real writes and their receipts. Holding the
+/// receipt here lets the UI test deterministically cover queued/slow writes.
+pub(super) fn hold_editor_save_receipt(
+    pane: &mut MainPaneView,
+    repo_id: gitcomet_state::model::RepoId,
+    path: &Path,
+) -> smol::channel::Sender<bool> {
+    let (send, received) = smol::channel::bounded(1);
+    pane.file_editor_pending_saves
+        .get_mut(&(repo_id, path.to_path_buf()))
+        .expect("saving must retain a completion receipt")
+        .completions = vec![received];
+    send
+}
+
 pub(super) fn simulate_counted_click(
     cx: &mut gpui::VisualTestContext,
     position: gpui::Point<Pixels>,
@@ -1376,6 +1391,7 @@ mod conflict;
 mod control_interaction;
 mod diff_marker_refresh;
 mod diff_stage_gutter;
+mod error_details;
 mod file_diff;
 mod file_disk_notice;
 mod file_editor;
@@ -1385,3 +1401,4 @@ mod large_file_diff;
 mod markdown;
 mod shortcuts;
 mod status_staging;
+mod text_encoding;

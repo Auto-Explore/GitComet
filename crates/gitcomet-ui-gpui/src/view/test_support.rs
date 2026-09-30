@@ -15,7 +15,44 @@ pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppCo
     push_test_state(view, view.store.snapshot(), cx);
 }
 
-#[cfg(target_os = "macos")]
+pub(crate) fn startup_repository_state_for_test(
+    view: &GitCometView,
+) -> (bool, usize, Option<std::path::PathBuf>) {
+    (
+        view.startup_repo_bootstrap_pending,
+        view.state.repos.len(),
+        view.active_repo_workdir(),
+    )
+}
+
+pub(crate) fn dispatch_restore_session_for_test(
+    view: &GitCometView,
+    open_repos: Vec<std::path::PathBuf>,
+    active_repo: Option<std::path::PathBuf>,
+) {
+    view.store.dispatch(Msg::RestoreSession {
+        open_repos,
+        active_repo,
+    });
+}
+
+pub(crate) fn activate_closed_repo_picker_entry_for_test(
+    view: &GitCometView,
+    path: std::path::PathBuf,
+    cx: &mut gpui::Context<GitCometView>,
+) {
+    view.popover_host.update(cx, |host, cx| {
+        host.activate_closed_repo_picker_entry_for_test(path, cx);
+    });
+}
+
+/// Close every error toast, for fixtures whose backend reports errors the
+/// test is not about: error toasts stay, and would cover the controls it clicks.
+pub(crate) fn dismiss_error_toasts(view: &Entity<GitCometView>, cx: &mut App) {
+    let toast_host = view.read(cx).toast_host.clone();
+    toast_host.update(cx, |host, cx| host.dismiss_all_errors(cx));
+}
+
 pub(crate) fn apply_state_snapshot_for_test(
     view: &mut GitCometView,
     state: Arc<AppState>,

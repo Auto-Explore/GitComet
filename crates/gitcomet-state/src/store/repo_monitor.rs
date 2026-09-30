@@ -534,6 +534,7 @@ fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalCha
         tags: a.tags || b.tags,
         verification_context: a.verification_context || b.verification_context,
         large_file_support: a.large_file_support || b.large_file_support,
+        text_attributes: a.text_attributes || b.text_attributes,
     }
 }
 

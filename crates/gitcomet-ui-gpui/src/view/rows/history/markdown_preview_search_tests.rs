@@ -139,6 +139,8 @@ fn row_extent_spans_every_part_of_the_row() {
 /// reader sees — not the markdown that produced it.
 #[test]
 fn the_search_wash_covers_rendered_text_and_leaves_unmatched_rows_untouched() {
+    let tab_width = 4;
+
     let theme = AppTheme::gitcomet_dark();
     let bolded = row(
         "a bold word",
@@ -149,19 +151,31 @@ fn the_search_wash_covers_rendered_text_and_leaves_unmatched_rows_untouched() {
         }],
     );
 
-    let base = markdown_preview_styled_row_with_query(theme, &bolded, 0, None, None);
+    let base = markdown_preview_styled_row_with_query(tab_width, theme, &bolded, 0, None, None);
     // `word` sits outside the bold span, so the wash has to add a range of
     // its own rather than restyle one that was already there.
-    let washed =
-        markdown_preview_styled_row_with_query(theme, &bolded, 0, Some(&query("word", None)), None);
+    let washed = markdown_preview_styled_row_with_query(
+        tab_width,
+        theme,
+        &bolded,
+        0,
+        Some(&query("word", None)),
+        None,
+    );
     assert!(
         washed.highlights.len() > base.highlights.len(),
         "expected the query wash to add a highlight range alongside the bold span"
     );
 
     // The `**` that made it bold is not in the rendered text.
-    let unmatched =
-        markdown_preview_styled_row_with_query(theme, &bolded, 0, Some(&query("**", None)), None);
+    let unmatched = markdown_preview_styled_row_with_query(
+        tab_width,
+        theme,
+        &bolded,
+        0,
+        Some(&query("**", None)),
+        None,
+    );
     assert_eq!(
         unmatched.highlights.len(),
         base.highlights.len(),
@@ -173,13 +187,27 @@ fn the_search_wash_covers_rendered_text_and_leaves_unmatched_rows_untouched() {
 /// through hits is visible.
 #[test]
 fn the_current_match_row_is_washed_differently_from_the_others() {
+    let tab_width = 4;
+
     let theme = AppTheme::gitcomet_dark();
     let plain = row("find me here", Vec::new());
 
-    let current =
-        markdown_preview_styled_row_with_query(theme, &plain, 3, Some(&query("me", Some(3))), None);
-    let other =
-        markdown_preview_styled_row_with_query(theme, &plain, 3, Some(&query("me", Some(9))), None);
+    let current = markdown_preview_styled_row_with_query(
+        tab_width,
+        theme,
+        &plain,
+        3,
+        Some(&query("me", Some(3))),
+        None,
+    );
+    let other = markdown_preview_styled_row_with_query(
+        tab_width,
+        theme,
+        &plain,
+        3,
+        Some(&query("me", Some(9))),
+        None,
+    );
     assert_ne!(
         current.highlights, other.highlights,
         "the row the search cursor sits on should not look like every other hit"
@@ -190,6 +218,8 @@ fn the_current_match_row_is_washed_differently_from_the_others() {
 /// whole link underlines, including runs of it that are styled differently.
 #[test]
 fn a_link_underlines_only_while_hovered() {
+    let tab_width = 4;
+
     let theme = AppTheme::gitcomet_dark();
     let link = |range: std::ops::Range<usize>, style, url: &str| MarkdownInlineSpan {
         byte_range: range,
@@ -206,7 +236,7 @@ fn a_link_underlines_only_while_hovered() {
         ],
     );
     let underlined = |hovered: Option<&std::ops::Range<usize>>| {
-        markdown_preview_styled_row_with_query(theme, &linked, 0, None, hovered)
+        markdown_preview_styled_row_with_query(tab_width, theme, &linked, 0, None, hovered)
             .highlights
             .iter()
             .filter(|(_, style)| style.underline.is_some())
@@ -226,6 +256,7 @@ fn a_link_underlines_only_while_hovered() {
     );
     // The hover survives the search wash laid over it.
     let washed = markdown_preview_styled_row_with_query(
+        tab_width,
         theme,
         &linked,
         0,

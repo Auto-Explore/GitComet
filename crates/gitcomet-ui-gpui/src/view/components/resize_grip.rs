@@ -1,7 +1,10 @@
 use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{Div, SharedString, div, px, relative};
+use gpui::{
+    App, Bounds, DispatchPhase, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    SharedString, Window, canvas, div, fill, point, px, size,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResizeGripAxis {
@@ -33,10 +36,28 @@ fn drag_tint(theme: AppTheme) -> gpui::Rgba {
     theme.colors.accent.foreground
 }
 
+fn group_is_hovered(group: &str, window: &Window) -> bool {
+    let hit_test = window.mouse_hit_test();
+    hit_test.iter_hovered().any(|id| {
+        id.is_hovered(window)
+            && hit_test
+                .entry(id)
+                .is_some_and(|entry| entry.tags().iter().any(|tag| tag.as_ref() == group))
+    })
+}
+
+fn show_grip(group: &str, dragging: bool, window: &Window, cx: &App) -> bool {
+    dragging
+        || (!crate::press_gesture::pointer_is_down(window, cx)
+            && !cx.has_active_drag()
+            && group_is_hovered(group, window))
+}
+
 /// Hover/drag visual for a resize divider: the whole strip stays interactive
 /// (cursor, drag, mouse handlers live on the strip), but only this centered
-/// segment tints on hover — via `group_hover`, so the strip itself must carry
-/// `.group(group)` and no hover/active background of its own. Insert as a
+/// segment tints on hover. The strip itself must carry `.group(group)` and no
+/// hover/active background of its own. Feedback is resolved during paint so a
+/// scrollbar or text-selection drag suppresses even cached grips. Insert as a
 /// full-size child of the strip; `idle_line` draws the divider's always-on
 /// hairline when the divider separates two visible regions.
 pub fn resize_grip(
@@ -66,26 +87,81 @@ pub fn resize_grip(
         layer().child(line.bg(color))
     });
 
-    let segment = match axis {
-        ResizeGripAxis::Vertical => div()
-            .w(scale.px(GRIP_THICKNESS_PX))
-            .h(scale.px(GRIP_LEN_PX))
-            // Short strips (e.g. table headers) keep the segment inside.
-            .max_h(relative(0.8)),
-        ResizeGripAxis::Horizontal => div()
-            .h(scale.px(GRIP_THICKNESS_PX))
-            .w(scale.px(GRIP_LEN_PX))
-            .max_w(relative(0.8)),
-    };
-    let grip = layer().child(
-        segment
-            .flex_none()
-            .rounded(px(theme.radii.pill))
-            .when(dragging, |segment| segment.bg(drag_tint(theme)))
-            .when(!dragging, |segment| {
-                segment.group_hover(group.clone(), |s| s.bg(hover_tint(theme)))
-            }),
-    );
+    let grip = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, cx| {
+            let shown = show_grip(group.as_ref(), dragging, window, cx);
+            if shown {
+                let extent = match axis {
+                    ResizeGripAxis::Vertical => size(
+                        scale.px(GRIP_THICKNESS_PX),
+                        scale.px(GRIP_LEN_PX).min(bounds.size.height * 0.8),
+                    ),
+                    ResizeGripAxis::Horizontal => size(
+                        scale.px(GRIP_LEN_PX).min(bounds.size.width * 0.8),
+                        scale.px(GRIP_THICKNESS_PX),
+                    ),
+                };
+                let segment = Bounds::new(
+                    point(
+                        bounds.center().x - extent.width / 2.0,
+                        bounds.center().y - extent.height / 2.0,
+                    ),
+                    extent,
+                );
+                // Canvas quads bypass the radius clamping of styled divs. The
+                // theme's pill radius can otherwise make this narrow grip invisible.
+                let radii =
+                    gpui::Corners::all(px(theme.radii.pill)).clamp_radii_for_quad_size(extent);
+                window.paint_quad(
+                    fill(
+                        segment,
+                        if dragging {
+                            drag_tint(theme)
+                        } else {
+                            hover_tint(theme)
+                        },
+                    )
+                    .corner_radii(radii),
+                );
+            }
+            // Dirty only this grip's owning view. A window refresh also throws
+            // away unrelated cached history and diff views on every click.
+            let view = window.current_view();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture
+                    && event.button == MouseButton::Left
+                    && shown
+                    && !dragging
+                {
+                    cx.notify(view);
+                }
+            });
+            let release_group = group.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                    let released = dragging
+                        || (!cx.has_active_drag() && group_is_hovered(&release_group, window));
+                    if released != shown {
+                        cx.notify(view);
+                    }
+                }
+            });
+            let group = group.clone();
+            window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture
+                    && show_grip(group.as_ref(), dragging, window, cx) != shown
+                {
+                    cx.notify(view);
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0();
 
     div().relative().size_full().children(hairline).child(grip)
 }
+
+#[cfg(test)]
+mod tests;

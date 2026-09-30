@@ -380,6 +380,7 @@ fn metadata_noise_in_a_mixed_event_preserves_real_changes() {
             tags: false,
             verification_context: false,
             large_file_support: false,
+            text_attributes: false,
         })
     );
 }

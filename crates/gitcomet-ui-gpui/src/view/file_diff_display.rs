@@ -7,6 +7,7 @@ const LARGE_FILE_DIFF_DISPLAY_PREFIX_BYTES: usize = 16 * 1024;
 const LARGE_FILE_DIFF_DISPLAY_TRUNCATION_SUFFIX: &str = " ...";
 
 pub(in crate::view) fn expanded_diff_display_text<'a>(
+    tab_width: usize,
     text: &'a str,
     expanded_tabs: &'a mut String,
 ) -> &'a str {
@@ -15,17 +16,15 @@ pub(in crate::view) fn expanded_diff_display_text<'a>(
     }
 
     expanded_tabs.clear();
-    expanded_tabs.reserve(crate::view::diff_utils::diff_text_display_len(text));
-    for ch in text.chars() {
-        match ch {
-            '\t' => expanded_tabs.push_str("    "),
-            _ => expanded_tabs.push(ch),
-        }
-    }
+    expanded_tabs.reserve(crate::view::diff_utils::diff_text_display_len(
+        tab_width, text,
+    ));
+    crate::view::tab_width::push_expanded(tab_width, expanded_tabs, text, &mut 0);
     expanded_tabs.as_str()
 }
 
 pub(in crate::view) fn append_diff_display_text_slice(
+    tab_width: usize,
     out: &mut String,
     text: &str,
     range: Range<usize>,
@@ -35,7 +34,7 @@ pub(in crate::view) fn append_diff_display_text_slice(
         return;
     }
 
-    let display = expanded_diff_display_text(text, expanded_tabs);
+    let display = expanded_diff_display_text(tab_width, text, expanded_tabs);
     let start = range.start.min(display.len());
     let end = range.end.min(display.len());
     if start < end
@@ -58,10 +57,11 @@ pub(in crate::view) fn should_truncate_file_diff_display(
 }
 
 pub(in crate::view) fn file_diff_display_text(
+    tab_width: usize,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
 ) -> SharedString {
     if should_truncate_file_diff_display(raw_text) {
-        return truncated_file_diff_display_text(raw_text);
+        return truncated_file_diff_display_text(tab_width, raw_text);
     }
 
     if !raw_text.has_tabs_without_loading() {
@@ -72,26 +72,30 @@ pub(in crate::view) fn file_diff_display_text(
     }
 
     let text = raw_text.as_ref();
-    let mut out = String::with_capacity(crate::view::diff_utils::diff_text_display_len(text));
-    append_expanded_tabs(&mut out, text);
+    let mut out = String::with_capacity(crate::view::diff_utils::diff_text_display_len(
+        tab_width, text,
+    ));
+    append_expanded_tabs(tab_width, &mut out, text);
     out.into()
 }
 
 pub(in crate::view) fn file_diff_display_len(
+    tab_width: usize,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
 ) -> usize {
     if should_truncate_file_diff_display(raw_text) {
-        return truncated_file_diff_display_len(raw_text);
+        return truncated_file_diff_display_len(tab_width, raw_text);
     }
 
     if raw_text.has_tabs_without_loading() {
-        crate::view::diff_utils::diff_text_display_len(raw_text.as_ref())
+        crate::view::diff_utils::diff_text_display_len(tab_width, raw_text.as_ref())
     } else {
         raw_text.len()
     }
 }
 
 pub(in crate::view) fn append_file_diff_display_text_slice(
+    tab_width: usize,
     out: &mut String,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     range: Range<usize>,
@@ -102,7 +106,7 @@ pub(in crate::view) fn append_file_diff_display_text_slice(
     }
 
     if should_truncate_file_diff_display(raw_text) {
-        append_large_file_diff_display_text_slice(out, raw_text, range);
+        append_large_file_diff_display_text_slice(tab_width, out, raw_text, range);
         return;
     }
 
@@ -117,25 +121,29 @@ pub(in crate::view) fn append_file_diff_display_text_slice(
         }
     }
 
-    append_diff_display_text_slice(out, raw_text.as_ref(), range, expanded_tabs);
+    append_diff_display_text_slice(tab_width, out, raw_text.as_ref(), range, expanded_tabs);
 }
 
 fn truncated_file_diff_display_text(
+    tab_width: usize,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
 ) -> SharedString {
     let mut out = String::new();
-    append_truncated_file_diff_display_text(&mut out, raw_text);
+    append_truncated_file_diff_display_text(tab_width, &mut out, raw_text);
     out.into()
 }
 
-fn truncated_file_diff_display_len(raw_text: &gitcomet_core::file_diff::FileDiffLineText) -> usize {
+fn truncated_file_diff_display_len(
+    tab_width: usize,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+) -> usize {
     let prefix_len = raw_text.len().min(LARGE_FILE_DIFF_DISPLAY_PREFIX_BYTES);
     let Some((prefix, _)) = raw_text.slice_text_resolved(0..prefix_len) else {
         return 0;
     };
 
     let mut len = if prefix.contains('\t') {
-        crate::view::diff_utils::diff_text_display_len(prefix.as_ref())
+        crate::view::diff_utils::diff_text_display_len(tab_width, prefix.as_ref())
     } else {
         prefix.len()
     };
@@ -146,6 +154,7 @@ fn truncated_file_diff_display_len(raw_text: &gitcomet_core::file_diff::FileDiff
 }
 
 fn append_truncated_file_diff_display_text(
+    tab_width: usize,
     out: &mut String,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
 ) {
@@ -154,19 +163,20 @@ fn append_truncated_file_diff_display_text(
         return;
     };
 
-    append_expanded_tabs(out, prefix.as_ref());
+    append_expanded_tabs(tab_width, out, prefix.as_ref());
     if prefix_len < raw_text.len() {
         out.push_str(LARGE_FILE_DIFF_DISPLAY_TRUNCATION_SUFFIX);
     }
 }
 
 fn append_large_file_diff_display_text_slice(
+    tab_width: usize,
     out: &mut String,
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     range: Range<usize>,
 ) {
     let mut display = String::new();
-    append_truncated_file_diff_display_text(&mut display, raw_text);
+    append_truncated_file_diff_display_text(tab_width, &mut display, raw_text);
 
     let start = range.start.min(display.len());
     let end = range.end.min(display.len());
@@ -179,13 +189,8 @@ fn append_large_file_diff_display_text_slice(
     }
 }
 
-fn append_expanded_tabs(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        match ch {
-            '\t' => out.push_str("    "),
-            _ => out.push(ch),
-        }
-    }
+fn append_expanded_tabs(tab_width: usize, out: &mut String, text: &str) {
+    crate::view::tab_width::push_expanded(tab_width, out, text, &mut 0);
 }
 
 #[cfg(test)]
@@ -194,51 +199,65 @@ mod tests {
 
     #[test]
     fn large_file_diff_display_is_bounded() {
+        let tab_width = 4;
+
         let raw_text = gitcomet_core::file_diff::FileDiffLineText::from(format!(
             "start\t{}",
             "x".repeat(LARGE_DIFF_TEXT_MIN_BYTES)
         ));
 
-        let display = file_diff_display_text(&raw_text);
+        let display = file_diff_display_text(tab_width, &raw_text);
 
         assert!(should_truncate_file_diff_display(&raw_text));
         assert!(display.len() < raw_text.len());
         assert!(display.ends_with(LARGE_FILE_DIFF_DISPLAY_TRUNCATION_SUFFIX));
-        assert_eq!(file_diff_display_len(&raw_text), display.len());
+        assert_eq!(file_diff_display_len(tab_width, &raw_text), display.len());
     }
 
     #[test]
     fn large_tabbed_file_diff_slice_uses_display_coordinates() {
+        let tab_width = 4;
+
         let raw_text = gitcomet_core::file_diff::FileDiffLineText::from(format!(
             "abc\tdef{}",
             "x".repeat(LARGE_DIFF_TEXT_MIN_BYTES)
         ));
-        let display = file_diff_display_text(&raw_text);
-        let display_text = display.as_ref();
-        let mut out = String::new();
-        let mut expanded_tabs = String::new();
-
-        append_file_diff_display_text_slice(&mut out, &raw_text, 4..9, &mut expanded_tabs);
-
-        assert_eq!(out.as_str(), &display_text[4..9]);
-        assert_eq!(out, "   de");
-    }
-
-    #[test]
-    fn large_tabbed_file_diff_full_slice_includes_truncation_suffix() {
-        let raw_text = gitcomet_core::file_diff::FileDiffLineText::from(format!(
-            "abc\tdef{}",
-            "x".repeat(LARGE_DIFF_TEXT_MIN_BYTES)
-        ));
-        let display = file_diff_display_text(&raw_text);
+        let display = file_diff_display_text(tab_width, &raw_text);
         let display_text = display.as_ref();
         let mut out = String::new();
         let mut expanded_tabs = String::new();
 
         append_file_diff_display_text_slice(
+            tab_width,
             &mut out,
             &raw_text,
-            0..file_diff_display_len(&raw_text),
+            4..9,
+            &mut expanded_tabs,
+        );
+
+        assert_eq!(out.as_str(), &display_text[4..9]);
+        // "abc" + one space to the tab stop at column 4.
+        assert_eq!(out, "defxx");
+    }
+
+    #[test]
+    fn large_tabbed_file_diff_full_slice_includes_truncation_suffix() {
+        let tab_width = 4;
+
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::from(format!(
+            "abc\tdef{}",
+            "x".repeat(LARGE_DIFF_TEXT_MIN_BYTES)
+        ));
+        let display = file_diff_display_text(tab_width, &raw_text);
+        let display_text = display.as_ref();
+        let mut out = String::new();
+        let mut expanded_tabs = String::new();
+
+        append_file_diff_display_text_slice(
+            tab_width,
+            &mut out,
+            &raw_text,
+            0..file_diff_display_len(tab_width, &raw_text),
             &mut expanded_tabs,
         );
 

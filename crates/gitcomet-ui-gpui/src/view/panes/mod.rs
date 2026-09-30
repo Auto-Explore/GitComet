@@ -24,5 +24,7 @@ pub(in crate::view) use history::{
 pub(in crate::view) use main::MainPaneInit;
 pub(crate) use main::MainPaneView;
 pub(super) use reflog::{ReflogPaneInit, ReflogPaneView};
+#[cfg(feature = "benchmarks")]
+pub use sidebar::SidebarStickyFrameFixture;
 pub(in crate::view) use sidebar::file_browser_search_is_active;
 pub(super) use sidebar::{CollapsedSidebarSection, SidebarPaneView};

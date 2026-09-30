@@ -1,9 +1,9 @@
 use super::util::{
     DiffReloadMode, SelectedConflictTarget, apply_selected_diff_load_plan_state,
-    apply_selected_diff_load_plan_state_with_reload_mode, clear_banner_error_for_repo,
-    diff_reload_effects, format_failure_summary, push_action_log, push_command_log,
-    refresh_full_effects, refresh_primary_effects, selected_conflict_target,
-    selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
+    apply_selected_diff_load_plan_state_with_reload_mode, diff_reload_effects,
+    format_failure_summary, push_action_log, push_command_log, refresh_full_effects,
+    refresh_primary_effects, selected_conflict_target, selected_diff_load_plan,
+    start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
     AppState, InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoId,
@@ -264,14 +264,16 @@ pub(super) fn discard_worktree_changes_paths(repo_id: RepoId, paths: Vec<PathBuf
 pub(super) fn save_worktree_file(
     repo_id: RepoId,
     path: PathBuf,
-    contents: String,
+    contents: crate::msg::ContentBytes,
     stage: bool,
+    completion: Option<smol::channel::Sender<bool>>,
 ) -> Vec<Effect> {
     vec![Effect::SaveWorktreeFile {
         repo_id,
         path,
         contents,
         stage,
+        completion,
     }]
 }
 
@@ -904,7 +906,7 @@ fn commit_completion_finished(
     kind: CommitCompletionKind,
 ) -> Vec<Effect> {
     let label = kind.label();
-    let mut clear_banner = false;
+    let mut succeeded = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -916,7 +918,7 @@ fn commit_completion_finished(
     match result {
         Ok(()) => {
             repo_state.feedback.last_error = None;
-            clear_banner = true;
+            succeeded = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
@@ -941,13 +943,11 @@ fn commit_completion_finished(
             push_action_log(repo_state, false, label.to_string(), summary, Some(&e));
         }
     }
-    if clear_banner {
+    if succeeded {
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
         };
-        let effects = refresh_primary_effects(repo_state);
-        clear_banner_error_for_repo(state, repo_id);
-        return effects;
+        return refresh_primary_effects(repo_state);
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1035,6 +1035,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::MergeAbort
         | RepoCommandKind::ApplyPatch { .. }
         | RepoCommandKind::SaveWorktreeFile { .. }
+        | RepoCommandKind::AppendGitattributesRule { .. }
         // Annex repositories are listed under their remote names.
         | RepoCommandKind::AddRemote { .. }
         | RepoCommandKind::RemoveRemote { .. }
@@ -1241,7 +1242,6 @@ pub(super) fn repo_command_finished(
                 | RepoCommandKind::DeleteTag { .. }
                 | RepoCommandKind::PruneLocalTags
         );
-    let mut clear_banner = false;
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1308,7 +1308,6 @@ pub(super) fn repo_command_finished(
     match result {
         Ok(output) => {
             repo_state.feedback.last_error = None;
-            clear_banner = true;
             if command_clears_pending_force_push_lease(&command) {
                 repo_state.pending.force_push_lease = None;
             }
@@ -1437,6 +1436,12 @@ pub(super) fn repo_command_finished(
             extra_effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
         }
     }
+    if command_succeeded && matches!(command, RepoCommandKind::AppendGitattributesRule { .. }) {
+        // A root rule can be shadowed by deeper attributes or info/attributes.
+        // Keep the user's choice for this open file; Auto-detect or selecting
+        // another file ends it. The refreshed attributes decide any reload.
+        extra_effects.extend(super::util::reload_selected_text_attributes(repo_state));
+    }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
         if repo_state
@@ -1510,9 +1515,6 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
-    if clear_banner {
-        clear_banner_error_for_repo(state, repo_id);
-    }
     effects
 }
 

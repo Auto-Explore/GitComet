@@ -68,6 +68,8 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let tab_width = this.display_tab_width;
+
         let min_width = this.diff_horizontal_content_width();
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
@@ -161,7 +163,7 @@ impl MainPaneView {
                     )
                 });
                 let Some(raw_text) = this.worktree_preview_line_raw_text(ix) else {
-                    return diff_canvas::worktree_preview_row_canvas(
+                    return diff_canvas::worktree_preview_row_canvas(tab_width,
                         theme,
                         cx.entity(),
                         ui_scale_percent,
@@ -207,7 +209,7 @@ impl MainPaneView {
                 {
                     let line = raw_text.as_ref();
                     let (styled, is_pending) =
-                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(tab_width,
                             theme,
                             &highlight_palette,
                             PreparedDiffTextBuildRequest {
@@ -251,7 +253,7 @@ impl MainPaneView {
                 let cached_styled = this.worktree_preview_segments_cache_get(ix);
                 let styled = pending_styled.as_ref().or(cached_styled);
 
-                diff_canvas::worktree_preview_row_canvas(
+                diff_canvas::worktree_preview_row_canvas(tab_width,
                     theme,
                     cx.entity(),
                     ui_scale_percent,

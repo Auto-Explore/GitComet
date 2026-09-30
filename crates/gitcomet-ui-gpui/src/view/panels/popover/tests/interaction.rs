@@ -85,7 +85,7 @@ fn replacing_menu_in_one_update_publishes_only_the_current_invoker(cx: &mut gpui
     cx.update(|window, app| {
         view.update(app, |view, cx| {
             view.open_popover_at(
-                PopoverKind::UiScalePicker,
+                PopoverKind::DiffContentModeSettings,
                 point(px(72.0), px(72.0)),
                 window,
                 cx,

@@ -18,7 +18,7 @@ pub(super) const SETTINGS_LICENSE_VERSION_COLUMN_PX: f32 = 90.0;
 const SETTINGS_NAV_COLUMN_WIDTH_PX: f32 = 200.0;
 
 impl SettingsWindowView {
-    fn row_scale(&self, theme: AppTheme) -> crate::ui_scale::UiScale {
+    pub(super) fn row_scale(&self, theme: AppTheme) -> crate::ui_scale::UiScale {
         crate::ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics)
     }
 
@@ -1193,6 +1193,35 @@ impl SettingsWindowView {
                     controls::ControlActivation::Action,
                     cx.listener(move |this, _e: &ClickEvent, _window, cx| {
                         this.set_file_list_layout(option, cx);
+                    }),
+                )
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    pub(super) fn render_diff_tab_size_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| DIFF_TAB_SIZE_OPTIONS.get(ix).copied())
+            .map(|(id, size)| {
+                this.option_row(
+                    id,
+                    format!("{size} spaces"),
+                    None,
+                    this.diff_tab_size == size,
+                    theme,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_diff_tab_size(size, cx);
                     }),
                 )
                 .into_any_element()

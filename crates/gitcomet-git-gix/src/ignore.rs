@@ -166,6 +166,20 @@ pub(crate) fn repository_watch_info(
         {
             info.ignore_inputs.push(path);
         }
+        if let Some(path) = config
+            .trusted_path("core.attributesFile")
+            .map_err(|error| Error::new(ErrorKind::Backend(format!("watch attributes: {error}"))))?
+        {
+            info.ignore_inputs.push(if path.is_absolute() {
+                path
+            } else {
+                workdir.join(path)
+            });
+        } else if let Some(path) =
+            gix::path::env::xdg_config("attributes", &mut |key| std::env::var_os(key))
+        {
+            info.ignore_inputs.push(path);
+        }
         if let Some(submodules) = repo
             .submodules()
             .map_err(|error| Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))))?

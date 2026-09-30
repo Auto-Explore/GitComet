@@ -496,7 +496,7 @@ impl Scrollbar {
                     show
                 };
                 let thumb_color = if is_dragging {
-                    theme.colors.scrollbar.thumb_pressed
+                    theme.colors.accent.foreground
                 } else if hovered {
                     theme.colors.scrollbar.thumb_hover
                 } else {

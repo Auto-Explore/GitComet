@@ -808,6 +808,8 @@ fn terraform_files_get_tree_sitter_tokens() {
 /// And with a tree in hand, both click features work in Terraform.
 #[test]
 fn terraform_supports_pairs_and_occurrences() {
+    let tab_width = 4;
+
     let text = concat!(
         "resource \"aws_instance\" \"web\" {\n",
         "  ami   = var.ami_id\n",
@@ -817,7 +819,7 @@ fn terraform_supports_pairs_and_occurrences() {
     let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
 
     // The block braces pair across the whole resource.
-    let hit = prepared_document_syntax_pair_at_display_offset(document, 1, 4)
+    let hit = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, 4)
         .expect("the resource block braces should pair");
     assert_eq!(hit.kind, SyntaxPairKind::Bracket);
     assert_eq!(hit.open[0].line_ix, 0);
@@ -830,7 +832,7 @@ fn terraform_supports_pairs_and_occurrences() {
         .expect("line")
         .find("ami_id")
         .expect("name");
-    let spans = prepared_document_occurrences_at_display_offset(document, 1, column);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 1, column);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![1, 2]
@@ -954,6 +956,8 @@ fn assembly_local_label_references_are_labels_not_registers() {
 /// between them the feature did nothing at all on `.s`.
 #[test]
 fn assembly_directives_and_dotted_mnemonics_answer_a_click() {
+    let tab_width = 4;
+
     let text = concat!(
         ".section .text\n",
         "    .p2align 4\n",
@@ -966,7 +970,7 @@ fn assembly_directives_and_dotted_mnemonics_answer_a_click() {
     let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
 
     // A leading `.` is the whole point: the directive is the name.
-    let spans = prepared_document_occurrences_at_display_offset(document, 0, 3);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 0, 3);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![0, 6],
@@ -975,7 +979,7 @@ fn assembly_directives_and_dotted_mnemonics_answer_a_click() {
 
     // And the dot is interior here, in a token the vendored grammar keeps
     // whole. `b.ne` on line 4 must not match.
-    let spans = prepared_document_occurrences_at_display_offset(document, 3, 6);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 3, 6);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![3, 5],
@@ -991,6 +995,8 @@ fn assembly_directives_and_dotted_mnemonics_answer_a_click() {
 /// well the heuristic colours it.
 #[test]
 fn perl_brackets_and_names_answer_a_click() {
+    let tab_width = 4;
+
     let text = "my %hash = (one => 1);\nmy $v = $hash{one};\nmy $w = $hash{two};\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Perl, text);
     for line_ix in 0..3 {
@@ -999,7 +1005,7 @@ fn perl_brackets_and_names_answer_a_click() {
 
     let line = text.lines().nth(1).expect("line");
     let brace = line.find('{').expect("subscript brace");
-    let hit = prepared_document_syntax_pair_at_display_offset(document, 1, brace)
+    let hit = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, brace)
         .expect("a hash subscript's braces should pair");
     assert_eq!(hit.kind, SyntaxPairKind::Bracket);
     assert_eq!(
@@ -1009,7 +1015,7 @@ fn perl_brackets_and_names_answer_a_click() {
 
     // ...and `hash` is a name the grammar tokenised, so a click finds its uses.
     let at = line.find("hash").expect("name");
-    let spans = prepared_document_occurrences_at_display_offset(document, 1, at + 1);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 1, at + 1);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![1, 2],
@@ -1235,13 +1241,15 @@ fn unevaluated_predicates_do_not_swallow_whole_files() {
 /// parses the injection and puts its tree in the cache.
 #[test]
 fn a_click_in_an_injected_region_uses_the_injected_grammar() {
+    let tab_width = 4;
+
     let text = concat!("<?php f($t); ?>\n", "<html lang=\"en\">\n");
     let document = prepare_test_document(DiffSyntaxLanguage::Php, text);
     let _ = syntax_tokens_for_prepared_document_line(document, 1);
 
     let line = text.lines().nth(1).expect("line");
     let quote = line.find('"').expect("attribute quote");
-    let hit = prepared_document_syntax_pair_at_display_offset(document, 1, quote)
+    let hit = prepared_document_syntax_pair_at_display_offset(tab_width, document, 1, quote)
         .expect("the attribute's quotes are HTML's to pair, not PHP's");
     assert_eq!(hit.kind, SyntaxPairKind::Quote);
     assert_eq!(hit.open.first().map(|span| span.line_ix), Some(1));
@@ -1251,7 +1259,7 @@ fn a_click_in_an_injected_region_uses_the_injected_grammar() {
     let _ = syntax_tokens_for_prepared_document_line(document, 0);
     let php = text.lines().next().expect("line");
     let paren = php.find('(').expect("php call");
-    let hit = prepared_document_syntax_pair_at_display_offset(document, 0, paren)
+    let hit = prepared_document_syntax_pair_at_display_offset(tab_width, document, 0, paren)
         .expect("the call's parens are PHP's");
     assert_eq!(hit.kind, SyntaxPairKind::Bracket);
     assert_eq!(
@@ -1263,6 +1271,8 @@ fn a_click_in_an_injected_region_uses_the_injected_grammar() {
 
 #[test]
 fn review_nested_injected_pair_uses_inner_grammar() {
+    let tab_width = 4;
+
     TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
     let text = "<script>const x = (1);</script>\n<?php f(); ?>\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Php, text);
@@ -1270,7 +1280,7 @@ fn review_nested_injected_pair_uses_inner_grammar() {
     let line = text.lines().next().unwrap();
     let open = line.find('(').unwrap();
     let close = line.find(')').unwrap();
-    let hit = prepared_document_syntax_pair_at_display_offset(document, 0, open)
+    let hit = prepared_document_syntax_pair_at_display_offset(tab_width, document, 0, open)
         .expect("nested JavaScript's parens should pair");
     assert_eq!(hit.kind, SyntaxPairKind::Bracket, "got {hit:?}");
     assert_eq!(hit.open[0].display_range, open..open + 1, "got {hit:?}");
@@ -1410,6 +1420,8 @@ fn hcl_heredoc_bodies_are_injected_by_attribute_name() {
 /// Dockerfile is, and none of it answered a click.
 #[test]
 fn dockerfile_arg_names_answer_a_click() {
+    let tab_width = 4;
+
     let text = concat!(
         "ARG BASE_TAG=bookworm\n",
         "FROM debian:${BASE_TAG} AS builder\n",
@@ -1418,7 +1430,7 @@ fn dockerfile_arg_names_answer_a_click() {
     );
     let document = prepare_test_document(DiffSyntaxLanguage::Dockerfile, text);
 
-    let spans = prepared_document_occurrences_at_display_offset(document, 0, 6);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 0, 6);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![0, 1, 2],
@@ -1428,7 +1440,7 @@ fn dockerfile_arg_names_answer_a_click() {
     // The expansion form resolves to the same set from the other end.
     let line = text.lines().nth(1).expect("line");
     let column = line.find("BASE_TAG").expect("needle");
-    let spans = prepared_document_occurrences_at_display_offset(document, 1, column + 2);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 1, column + 2);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![0, 1, 2]
@@ -1463,6 +1475,8 @@ fn gitignore_negation_is_prominent() {
 /// but keys, which is where this was reported.
 #[test]
 fn yaml_plain_mapping_keys_answer_a_click() {
+    let tab_width = 4;
+
     let text = concat!(
         "- hosts: web\n",
         "  become: true\n",
@@ -1475,7 +1489,7 @@ fn yaml_plain_mapping_keys_answer_a_click() {
     );
     let document = prepare_test_document(DiffSyntaxLanguage::Yaml, text);
 
-    let spans = prepared_document_occurrences_at_display_offset(document, 0, 4);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 0, 4);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![0, 6],
@@ -1483,7 +1497,7 @@ fn yaml_plain_mapping_keys_answer_a_click() {
     );
 
     // A dotted module name is one plain scalar, so it is one name.
-    let spans = prepared_document_occurrences_at_display_offset(document, 4, 10);
+    let spans = prepared_document_occurrences_at_display_offset(tab_width, document, 4, 10);
     assert_eq!(
         spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
         vec![4],

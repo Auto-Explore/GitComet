@@ -5,7 +5,7 @@ use gitcomet_core::domain::{
 };
 use std::path::PathBuf;
 
-fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<AppState> {
+pub(super) fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<AppState> {
     let mut repo = RepoState::new_opening(
         RepoId(81),
         RepoSpec {
@@ -123,19 +123,13 @@ fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::Test
                 })
             });
             test_support::redraw(cx);
-            let built = cx.update(|_window, app| {
-                let pane = pane.read(app);
-                let cached = pane
-                    .collapsed_popover_rows_cache
-                    .as_ref()
-                    .expect("popup cache");
-                assert_eq!(cached.rows.len(), count);
-                assert!(
-                    pane.rendered_rows > 0 && pane.rendered_rows < 160,
-                    "popup {section:?} / {count}: {} rows",
-                    pane.rendered_rows
-                );
-                Rc::clone(&cached.rows)
+            let built = cx.update(|_, app| {
+                pane.update(app, |pane, _| {
+                    let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+                    assert_eq!(presentation.rows.len(), count);
+                    assert!(pane.rendered_rows > 0 && pane.rendered_rows < 160);
+                    presentation.rows
+                })
             });
             assert!(cx.debug_bounds(row_selector(section, 0)).is_some());
             assert!(cx.debug_bounds(row_selector(section, count - 1)).is_none());
@@ -145,11 +139,14 @@ fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::Test
                 pane.update(app, |pane, cx| {
                     assert!(Rc::ptr_eq(
                         &built,
-                        &pane.collapsed_popover_rows_cache.as_ref().unwrap().rows
+                        &pane.branch_sidebar_presentation_cached().unwrap().rows
                     ));
-                    let max = pane.collapsed_popover_scroll.max_offset();
+                    let max = pane.branches_scroll.0.borrow().base_handle.max_offset();
                     assert!(max.y > px(0.0));
-                    pane.collapsed_popover_scroll
+                    pane.branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
                         .set_offset(point(px(0.0), -max.y));
                     cx.notify();
                 })
@@ -167,7 +164,7 @@ fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::Test
     }
 }
 
-fn branch_fixture(count: usize) -> Arc<AppState> {
+pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
     let mut repo = RepoState::new_opening(
         RepoId(81),
         RepoSpec {
@@ -210,236 +207,80 @@ fn branch_fixture(count: usize) -> Arc<AppState> {
     })
 }
 
-/// A cross-section filter is the only case that mixes the 8px spacer into the
-/// 24px rows, so it is the only one that exercises the mixed-height prefix sum.
 #[gpui::test]
-fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui::TestAppContext) {
+fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
     let state = branch_fixture(400);
-
-    cx.update(|_window, app| {
+    cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.store.replace_snapshot_for_test(Arc::clone(&state));
-            test_support::push_test_state(view, Arc::clone(&state), cx);
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
             view.set_sidebar_collapsed(true, cx);
             view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
         })
     });
-    test_support::redraw(cx);
-    cx.update(|_window, app| {
-        pane.update(app, |pane, cx| {
-            pane.collapsed_popover_filter_open = true;
-            pane.collapsed_popover_filter_query = "shared/topic".to_string();
-            pane.collapsed_popover_rows_cache = None;
-            cx.notify();
-        })
-    });
-    test_support::redraw(cx);
-
-    let (spacer_ix, next_branch_ix, tops, row_count, row_height_px) = cx.update(|_window, app| {
-        let pane = pane.read(app);
-        let row_height_px = crate::view::rows::sidebar::sidebar_list_row_height_px(pane.theme);
-        let cache = pane
-            .collapsed_popover_rows_cache
-            .as_ref()
-            .expect("popover rows cached");
-        let spacer_ix = cache
-            .rows
-            .iter()
-            .position(|row| matches!(row, BranchSidebarRow::SectionSpacer))
-            .unwrap_or_else(|| {
-                let repo = &pane.state.repos[0];
-                let full = branch_sidebar::branch_sidebar_rows(
-                    repo,
-                    &BTreeSet::new(),
-                    &Default::default(),
-                    "shared/topic",
-                );
-                let kinds: Vec<String> = full
-                    .iter()
-                    .filter(|r| !matches!(r, BranchSidebarRow::Branch { .. }))
-                    .map(|r| format!("{r:?}").chars().take(60).collect())
-                    .collect();
-                panic!("no spacer; full non-branch rows: {kinds:#?}")
+    for density in [
+        crate::appearance::UiDensity::Compact,
+        crate::appearance::UiDensity::Comfortable,
+        crate::appearance::UiDensity::Spacious,
+    ] {
+        cx.update(|_, app| {
+            app.set_global(crate::appearance::Appearance {
+                density,
+                ..Default::default()
             });
-        let next_branch_ix = cache.rows[spacer_ix + 1..]
-            .iter()
-            .position(|row| matches!(row, BranchSidebarRow::Branch { .. }))
-            .map(|offset| spacer_ix + 1 + offset)
-            .expect("a branch row after the spacer");
-        (
-            spacer_ix,
-            next_branch_ix,
-            cache.tops.clone(),
-            cache.rows.len(),
-            row_height_px,
-        )
-    });
-
-    assert_eq!(tops.len(), row_count + 1);
-    assert_eq!(
-        tops[spacer_ix + 1] - tops[spacer_ix],
-        crate::view::rows::sidebar::BRANCH_TREE_SPACER_HEIGHT_PX,
-        "the spacer must be measured with the spacer height"
-    );
-    assert_eq!(
-        tops[spacer_ix] - tops[spacer_ix - 1],
-        row_height_px,
-        "the row before it must be measured with the row height"
-    );
-
-    cx.update(|_window, app| {
-        pane.update(app, |pane, cx| {
-            let top = crate::ui_scale::UiScale::current(cx).px(tops[spacer_ix - 1]);
-            pane.collapsed_popover_scroll
-                .set_offset(gpui::point(px(0.0), -top));
-            cx.notify();
-        })
-    });
-    test_support::redraw(cx);
-
-    let before: &'static str = format!("branch_row_81_{}", spacer_ix - 1).leak();
-    let after: &'static str = format!("branch_row_81_{next_branch_ix}").leak();
-    let before_bounds = cx.debug_bounds(before).expect("row before the spacer");
-    let after_bounds = cx
-        .debug_bounds(after)
-        .expect("first branch row after the spacer");
-    let measured = f32::from(after_bounds.origin.y - before_bounds.origin.y);
-    let predicted = tops[next_branch_ix] - tops[spacer_ix - 1];
-    assert!(
-        (measured - predicted).abs() < 0.5,
-        "tops predicted {predicted}px between rows {} and {next_branch_ix}, laid out {measured}px",
-        spacer_ix - 1
-    );
-
-    cx.update(|_window, app| {
-        assert!(
-            pane.read(app).rendered_rows > 0 && pane.read(app).rendered_rows < 160,
-            "filtered popover must stay virtualized: {} rows",
-            pane.read(app).rendered_rows
-        );
-    });
-}
-
-/// Every row kind has to lay out at the height `branch_sidebar_row_height_px`
-/// claims. Measured across a window spanning headers and the section spacer:
-/// one wrong height in between moves every row after it.
-#[gpui::test]
-fn collapsed_popover_row_heights_match_what_is_laid_out(cx: &mut gpui::TestAppContext) {
-    assert_popover_row_heights_match_layout(cx, crate::appearance::UiDensity::Compact);
-}
-
-/// The claimed height rides the density ramp, so the far end of it has to agree
-/// with the layout too -- and the cached prefix sum has to be rebuilt for it.
-#[gpui::test]
-fn collapsed_popover_row_heights_match_what_is_laid_out_when_spacious(
-    cx: &mut gpui::TestAppContext,
-) {
-    assert_popover_row_heights_match_layout(cx, crate::appearance::UiDensity::Spacious);
-}
-
-fn assert_popover_row_heights_match_layout(
-    cx: &mut gpui::TestAppContext,
-    density: crate::appearance::UiDensity,
-) {
-    let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
-    let state = branch_fixture(400);
-
-    cx.update(|_window, app| {
-        // After the view exists: its constructor installs the session's own
-        // appearance, which would undo a density set before it.
-        app.set_global(crate::appearance::Appearance {
-            density,
-            ..crate::appearance::Appearance::default()
+            view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+            pane.update(app, |pane, cx| {
+                pane.branch_search_open = true;
+                pane.branch_filter_query = "shared/topic".into();
+                pane.branches_scroll
+                    .scroll_to_item(20, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
         });
-        view.update(app, |view, cx| {
-            view.notify_font_preferences_changed(cx);
-            view.store.replace_snapshot_for_test(Arc::clone(&state));
-            test_support::push_test_state(view, Arc::clone(&state), cx);
-            view.set_sidebar_collapsed(true, cx);
-            view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
-        })
-    });
-    test_support::redraw(cx);
-    cx.update(|_window, app| {
-        pane.update(app, |pane, cx| {
-            pane.collapsed_popover_filter_open = true;
-            pane.collapsed_popover_filter_query = "shared/topic".to_string();
-            pane.collapsed_popover_rows_cache = None;
-            cx.notify();
-        })
-    });
-    test_support::redraw(cx);
-
-    let (rows, tops) = cx.update(|_window, app| {
-        let pane = pane.read(app);
-        let cache = pane
-            .collapsed_popover_rows_cache
-            .as_ref()
-            .expect("popover rows cached");
-        (Rc::clone(&cache.rows), cache.tops.clone())
-    });
-    let spacer_ix = rows
-        .iter()
-        .position(|row| matches!(row, BranchSidebarRow::SectionSpacer))
-        .expect("a cross-section filter separates the two sections with a spacer");
-
-    // Park the window over the spacer, where the mixed kinds are.
-    cx.update(|_window, app| {
-        pane.update(app, |pane, cx| {
-            let top = crate::ui_scale::UiScale::current(cx).px(tops[spacer_ix.saturating_sub(4)]);
-            pane.collapsed_popover_scroll
-                .set_offset(gpui::point(px(0.0), -top));
-            cx.notify();
-        })
-    });
-    test_support::redraw(cx);
-
-    // Two branch rows either side of the spacer, chosen from the row list so the
-    // probe leaks exactly two selectors (`debug_bounds` takes `&'static str`).
-    let is_branch = |ix: &usize| matches!(rows[*ix], BranchSidebarRow::Branch { .. });
-    let first_ix = (0..spacer_ix)
-        .rev()
-        .find(is_branch)
-        .expect("a branch row before the spacer");
-    let last_ix = (spacer_ix + 1..rows.len())
-        .filter(is_branch)
-        .nth(14)
-        .expect("branch rows after the spacer");
-    let bounds_of = |cx: &mut gpui::VisualTestContext, ix: usize| {
-        let selector: &'static str = format!("branch_row_81_{ix}").leak();
-        cx.debug_bounds(selector)
-            .unwrap_or_else(|| panic!("row {ix} must be inside the rendered window"))
-    };
-    let first = bounds_of(cx, first_ix);
-    let last = bounds_of(cx, last_ix);
-    let covered: Vec<&BranchSidebarRow> = rows[first_ix..last_ix].iter().collect();
-    assert!(
-        covered
-            .iter()
-            .any(|row| matches!(row, BranchSidebarRow::FilterGroupHeader { .. })),
-        "and a header, so the check is not only about branch rows"
-    );
-
-    let measured = f32::from(last.origin.y - first.origin.y);
-    let predicted = tops[last_ix] - tops[first_ix];
-    assert!(
-        (measured - predicted).abs() < 0.5,
-        "rows {first_ix}..{last_ix} ({} of them, kinds {:?}) predicted {predicted}px, laid out {measured}px",
-        covered.len(),
-        covered
-            .iter()
-            .map(|row| format!("{row:?}").chars().take(24).collect::<String>())
-            .collect::<std::collections::BTreeSet<_>>(),
-    );
+        test_support::redraw(cx);
+        // Let density anchoring finish before issuing a fresh navigation.
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.branches_scroll
+                    .scroll_to_item(20, gpui::ScrollStrategy::Top);
+                cx.notify();
+            })
+        });
+        test_support::redraw(cx);
+        let search = cx.debug_bounds("sidebar_branches_search").unwrap();
+        let rows = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                pane.branch_sidebar_presentation_cached().unwrap().rows
+            })
+        });
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::Branch {
+                section: BranchSection::Remote,
+                ..
+            }
+        )));
+        let first = cx.debug_bounds("branch_row_81_22").unwrap();
+        let second = cx.debug_bounds("branch_row_81_23").unwrap();
+        let height = cx.update(|_, app| {
+            sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+        });
+        assert!((second.top() - first.top() - height).abs() < px(0.5));
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.branches_scroll
+                    .scroll_to_item(80, gpui::ScrollStrategy::Top);
+                cx.notify();
+            })
+        });
+        test_support::redraw(cx);
+        assert_eq!(cx.debug_bounds("sidebar_branches_search").unwrap(), search);
+    }
 }
 
 /// The popover rebuilds its presentation on every frame it is open, so a hit
@@ -494,17 +335,14 @@ fn an_open_popover_reuses_its_rows_without_copying_the_persisted_sets(
     });
 
     cx.update(|_window, app| {
-        let cached = pane.read(app);
-        let cached = cached
-            .collapsed_popover_rows_cache
-            .as_ref()
-            .expect("popover rows cached");
-        assert!(
-            Rc::ptr_eq(&rows, &cached.rows),
-            "a repeat frame must hand back the rows it already built"
-        );
-        assert_eq!(cached.collapsed.len(), 400);
-        assert_eq!(cached.pinned.len(), 400);
+        pane.update(app, |pane, _| {
+            assert!(Rc::ptr_eq(
+                &rows,
+                &pane.branch_sidebar_presentation_cached().unwrap().rows
+            ));
+            assert_eq!(pane.sidebar_collapsed_items_by_repo[&workdir].len(), 400);
+            assert_eq!(pane.sidebar_pinned_branches_by_repo[&workdir].len(), 400);
+        });
     });
     assert!(
         allocations < 200,
@@ -512,7 +350,7 @@ fn an_open_popover_reuses_its_rows_without_copying_the_persisted_sets(
     );
 }
 
-fn file_fixture(count: usize) -> Arc<AppState> {
+pub(super) fn file_fixture(count: usize) -> Arc<AppState> {
     let mut repo = RepoState::new_opening(
         RepoId(81),
         RepoSpec {
@@ -563,7 +401,10 @@ fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContex
                 view.set_sidebar_collapsed(true, cx);
                 view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
                 view.sidebar_pane.update(cx, |pane, cx| {
-                    pane.collapsed_popover_scroll
+                    pane.file_browser_scroll
+                        .0
+                        .borrow()
+                        .base_handle
                         .set_offset(point(px(0.0), px(0.0)));
                     cx.notify();
                 });
@@ -579,7 +420,7 @@ fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContex
             );
         });
         assert!(
-            cx.debug_bounds("collapsed_file_browser_rows").is_some(),
+            cx.debug_bounds("file_browser_scroll_container").is_some(),
             "{count}: popover row band missing"
         );
         assert!(
@@ -587,11 +428,22 @@ fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContex
             "{count}: first row missing"
         );
 
-        let max = cx.update(|_window, app| pane.read(app).collapsed_popover_scroll.max_offset().y);
+        let max = cx.update(|_window, app| {
+            pane.read(app)
+                .file_browser_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .y
+        });
         assert!(max > px(0.0), "{count} files must overflow the popover");
         cx.update(|_window, app| {
             pane.update(app, |pane, cx| {
-                pane.collapsed_popover_scroll
+                pane.file_browser_scroll
+                    .0
+                    .borrow()
+                    .base_handle
                     .set_offset(point(px(0.0), -max));
                 cx.notify();
             })

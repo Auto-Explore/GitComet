@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 /// What activating a row in the workspace picker does.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum WorkspaceRow {
+pub(super) enum WorktreeBadgeRow {
     /// Open (or re-activate) the worktree at this path.
     Worktree(std::path::PathBuf),
     /// Hand off to the Add-worktree dialog, prefilled from the query.
@@ -18,9 +18,9 @@ pub(super) enum WorkspaceRow {
 ///
 /// Both the panel and keyboard navigation go through this, so the list the user
 /// sees and the list Enter walks can never disagree.
-pub(super) struct WorkspaceRows {
+pub(super) struct WorktreeBadgeRows {
     pub(super) items: Vec<components::PickerPromptItem>,
-    pub(super) rows: Vec<WorkspaceRow>,
+    pub(super) rows: Vec<WorktreeBadgeRow>,
     /// Index of the active worktree **before filtering** — `PickerPrompt`
     /// compares `marked_index` against the pre-filter index.
     pub(super) marked_index: Option<usize>,
@@ -54,7 +54,7 @@ pub(super) fn suggested_worktree_path(repo: &RepoState, query: &str) -> String {
 /// Takes the repository rather than the host so the result is a pure function of
 /// its inputs, which is what lets [`rows_cache`](super::rows_cache) memoise it
 /// across frames.
-pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
+pub(super) fn rows(repo: &RepoState, query: &str) -> WorktreeBadgeRows {
     let capacity = repo
         .worktrees
         .ready()
@@ -96,10 +96,10 @@ pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
             ])
             .icon("icons/plus.svg"),
     );
-    rows.push(WorkspaceRow::CreateNew);
+    rows.push(WorktreeBadgeRow::CreateNew);
 
     let Loadable::Ready(worktrees) = &repo.worktrees else {
-        return WorkspaceRows {
+        return WorktreeBadgeRows {
             items,
             rows,
             marked_index,
@@ -161,10 +161,10 @@ pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
                 .secondary_parts(secondary)
                 .icon("icons/git_worktree.svg"),
         );
-        rows.push(WorkspaceRow::Worktree(worktree.path.clone()));
+        rows.push(WorktreeBadgeRow::Worktree(worktree.path.clone()));
     }
 
-    WorkspaceRows {
+    WorktreeBadgeRows {
         items,
         rows,
         marked_index,
@@ -196,7 +196,7 @@ pub(super) fn cached(
     this: &PopoverHost,
     repo_id: RepoId,
     query: &str,
-) -> Rc<super::rows_cache::CachedRows<WorkspaceRow>> {
+) -> Rc<super::rows_cache::CachedRows<WorktreeBadgeRow>> {
     let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
         return super::rows_cache::CachedRows::empty();
     };
@@ -206,7 +206,7 @@ pub(super) fn cached(
         query,
     )
     .with_query_dependent_model();
-    super::rows_cache::get_or_build(&this.workspace_picker_rows_cache, key, |_now| {
+    super::rows_cache::get_or_build(&this.worktree_badge_picker_rows_cache, key, |_now| {
         let built = rows(repo, query);
         (built.items, built.rows, built.marked_index)
     })
@@ -214,7 +214,11 @@ pub(super) fn cached(
 
 /// Payloads for the rows surviving `query`, in the order the picker renders them
 /// — the list keyboard navigation walks.
-pub(super) fn nav_targets(this: &PopoverHost, repo_id: RepoId, query: &str) -> Vec<WorkspaceRow> {
+pub(super) fn nav_targets(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    query: &str,
+) -> Vec<WorktreeBadgeRow> {
     cached(this, repo_id, query).filtered_payloads()
 }
 
@@ -222,15 +226,15 @@ pub(super) fn nav_targets(this: &PopoverHost, repo_id: RepoId, query: &str) -> V
 pub(super) fn activate(
     this: &mut PopoverHost,
     repo_id: RepoId,
-    row: WorkspaceRow,
+    row: WorktreeBadgeRow,
     query: &str,
     window: &mut Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match row {
         // Menu entries never reach here: they run through the row menu itself.
-        WorkspaceRow::RowAction(_) => {}
-        WorkspaceRow::Worktree(path) => {
+        WorktreeBadgeRow::RowAction(_) => {}
+        WorktreeBadgeRow::Worktree(path) => {
             let is_current = this
                 .state
                 .repos
@@ -240,11 +244,11 @@ pub(super) fn activate(
             // Re-opening the active worktree would only re-activate its own
             // tab; just dismiss instead.
             if !is_current {
-                this.store.dispatch(Msg::OpenRepo(path));
+                crate::app::open_repository_from_view(cx, window.window_handle().window_id(), path);
             }
             this.close_popover(cx);
         }
-        WorkspaceRow::CreateNew => {
+        WorktreeBadgeRow::CreateNew => {
             let path = this
                 .state
                 .repos
@@ -278,7 +282,7 @@ pub(super) fn panel(
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let width = super::LARGE_PICKER_WIDTH;
 
-    let Some(search) = this.workspace_picker_search_input.clone() else {
+    let Some(search) = this.worktree_badge_picker_search_input.clone() else {
         return components::context_menu_label(
             theme,
             ui_scale_percent,
@@ -314,7 +318,7 @@ pub(super) fn panel(
                 this.picker_row_menu
                     .as_ref()
                     .map(|menu| menu.display_index)
-                    .or(this.workspace_picker_selected_index),
+                    .or(this.worktree_badge_picker_selected_index),
             )
             .marked_index(built.marked_index)
             // Right-click offers the worktree its sidebar row offers, floating
@@ -340,7 +344,7 @@ pub(super) fn panel(
                         return;
                     };
                     let query = this
-                        .workspace_picker_search_input
+                        .worktree_badge_picker_search_input
                         .as_ref()
                         .map(|input| input.read(cx).text().trim().to_string())
                         .unwrap_or_default();

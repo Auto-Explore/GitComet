@@ -353,6 +353,10 @@ pub(crate) struct ConflictResolverUiState {
     pub(crate) binary_side_sizes: [Option<usize>; 3],
     /// The resolver strategy for the current conflict (set during sync).
     pub(crate) strategy: Option<gitcomet_core::conflict_session::ConflictResolverStrategy>,
+    /// A pending conversion belongs only to this loaded conflict.
+    pub(crate) output_save_format: Option<gitcomet_core::text_format::TextFormat>,
+    /// The encoding written in this session, after consuming a save choice.
+    pub(crate) output_saved_format: Option<gitcomet_core::text_format::SideTextFormat>,
     /// The conflict kind for the current file (set during sync).
     pub(crate) conflict_kind: Option<gitcomet_core::domain::FileConflictKind>,
     /// Last autosolve trace summary shown in resolver UI.
@@ -433,6 +437,8 @@ impl Default for ConflictResolverUiState {
             is_binary_conflict: false,
             binary_side_sizes: [None; 3],
             strategy: None,
+            output_save_format: None,
+            output_saved_format: None,
             conflict_kind: None,
             last_autosolve_summary: None,
             open_summary_counts: None,

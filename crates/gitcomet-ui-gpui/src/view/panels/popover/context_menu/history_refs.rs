@@ -81,6 +81,9 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
                 HistoryMenuRef::Tag(name) => tag::model_for_tag(this, repo_id, commit_id, name),
             };
             append_actions(&mut model, actions, true);
+        }
+        model.groups.push(index..model.items.len());
+        if expanded {
             model.items.push(ContextMenuItem::Separator);
         }
     }

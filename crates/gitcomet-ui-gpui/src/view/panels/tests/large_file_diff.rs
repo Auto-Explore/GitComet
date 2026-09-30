@@ -142,6 +142,8 @@ fn source_backed_pair_text_tracks_accepted_file_diff_generation(cx: &mut gpui::T
 fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
     cx: &mut gpui::TestAppContext,
 ) {
+    let tab_width = 4;
+
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -315,8 +317,10 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
                     .file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
                     .expect("a two-megabyte source-backed side should be cached after its worker");
                 let line_ix = target_line - 1;
-                let pair = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, 12)
-                    .expect("clicking the target function's brace should find its pair");
+                let pair = rows::prepared_diff_syntax_pair_at_display_offset(
+                    tab_width, document, line_ix, 12,
+                )
+                .expect("clicking the target function's brace should find its pair");
                 assert_eq!(
                     pair.open
                         .iter()
@@ -327,7 +331,7 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
                 );
                 assert_eq!(
                     rows::prepared_diff_syntax_occurrences_at_display_offset(
-                        document, line_ix, 18,
+                        tab_width, document, line_ix, 18,
                     )
                     .iter()
                     .map(|span| (span.line_ix, span.display_range.clone()))

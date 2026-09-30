@@ -591,6 +591,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
+        id: "open-workspace",
+        label: "Open Workspace",
+        shortcut: Shortcut::Secondary("Shift+R"),
+        category: "Window",
+        keywords: "workspace switch window restore saved",
+        requires_repo: false,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
         id: "open-settings",
         label: "Open Settings",
         shortcut: Shortcut::Secondary(","),

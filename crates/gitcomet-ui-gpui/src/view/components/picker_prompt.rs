@@ -45,7 +45,6 @@ pub struct PickerPrompt {
     marked_index: Option<usize>,
     leading_icon: Option<&'static str>,
     selected_hint: Option<SharedString>,
-    accent_selection: bool,
     attached_list_surface: bool,
     padded_query_row: bool,
     query_row_trailing: Option<gpui::AnyElement>,
@@ -75,9 +74,16 @@ pub struct PickerPromptItem {
     secondary: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
     repository_initials: Option<SharedString>,
+    workspace_swatch: Option<WorkspaceSwatch>,
     section: Option<SharedString>,
     removable: bool,
 }
+
+/// A workspace row's colour: a dot in the leading slot and, once one is chosen,
+/// its window's title-bar tint behind the row. Resolved against the theme at
+/// render time, so a cached row follows a theme switch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkspaceSwatch(Option<gitcomet_state::session::WorkspaceColor>);
 
 /// Row and header metrics, taken from Zed's title-bar menus so the two read the
 /// same: a row's fill is inset from the popover edge rather than spanning it, and
@@ -509,7 +515,7 @@ pub struct PickerPromptItemPart {
 
 type OnSelectFn<V> =
     dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static;
-type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
+pub type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
 /// Section-header and right-click handlers are supplied as ready-made
 /// `cx.listener` closures rather than as `render` arguments, so they can be
 /// stored on the (view-agnostic) builder instead of widening every `render`
@@ -532,7 +538,6 @@ impl PickerPrompt {
             marked_index: None,
             leading_icon: None,
             selected_hint: None,
-            accent_selection: false,
             attached_list_surface: false,
             padded_query_row: false,
             query_row_trailing: None,
@@ -599,11 +604,6 @@ impl PickerPrompt {
 
     pub fn selected_hint(mut self, hint: impl Into<SharedString>) -> Self {
         self.selected_hint = Some(hint.into());
-        self
-    }
-
-    pub fn accent_selection(mut self) -> Self {
-        self.accent_selection = true;
         self
     }
 
@@ -687,7 +687,6 @@ impl PickerPrompt {
         let scroll_handle = self.scroll_handle;
         let leading_icon = self.leading_icon;
         let selected_hint = self.selected_hint;
-        let accent_selection = self.accent_selection;
         let attached_list_surface = self.attached_list_surface;
         let padded_query_row = self.padded_query_row;
         let ui_scale = ui_scale.into();
@@ -835,138 +834,57 @@ impl PickerPrompt {
                     .cloned()
                     .unwrap_or_default();
                 list = section_header(list, display_ix);
-                let label = picker_item_label(
-                    theme,
-                    &self.items[original_index],
-                    match_range,
-                    self.tooltip_host.clone(),
-                    cx,
-                );
+                let item = &self.items[original_index];
                 let on_select = Arc::clone(&on_select);
-                let row_initials = self.items[original_index].repository_initials.clone();
-                let has_initials = row_initials.is_some();
                 let is_selected = selected_index == Some(display_ix);
-                let is_marked = self.marked_index == Some(original_index);
-                let row_icon = (!has_initials)
-                    .then(|| row_leading_icon(&self.items[original_index], leading_icon, is_marked))
-                    .flatten();
-                let is_removable = self.items[original_index].removable;
                 // Only the remove button reveals itself on row hover, so only
                 // removable rows pay for a hover group — naming one costs a
                 // formatted string and a group-hitbox registration per row, per
                 // frame.
-                let row_group: Option<SharedString> =
-                    is_removable.then(|| format!("picker_prompt_row_{original_index}").into());
-                let mut row = div()
-                    .id(("picker_prompt_item", original_index))
-                    .debug_selector(move || format!("picker_prompt_item_{original_index}"))
-                    .when_some(row_group.clone(), |row, group| row.group(group))
-                    // Sized by its own text rather than pinned to a height, so a
-                    // row with a detail line grows by exactly one line box.
-                    // `flex_shrink_0` is what keeps that honest: once the rows
-                    // overflow the list's max height, a shrinkable row would be
-                    // squashed below its content and its two lines would overlap.
-                    .flex_shrink_0()
-                    .min_h(control_height_md(ui_scale))
-                    .py(scaled_px(ROW_PAD_Y_PX))
-                    .w_full()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .gap(scaled_px(ROW_ICON_GAP_PX))
-                    .px(scaled_px(ROW_PAD_X_PX))
-                    .rounded(scaled_px(ROW_CORNER_PX))
-                    .cursor(CursorStyle::PointingHand)
-                    .when_some(row_icon, |row, icon| {
-                        row.child(
-                            crate::view::icons::svg_icon(
-                                icon,
-                                if is_marked {
-                                    theme.colors.accent.foreground
-                                } else {
-                                    theme.colors.foreground.secondary
-                                },
-                                scaled_px(14.0),
-                            )
-                            .debug_selector(move || {
-                                format!("picker_prompt_item_icon_{original_index}")
-                            }),
-                        )
-                    })
-                    .when_some(row_initials, |row, initials| {
-                        row.child(
-                            super::repository_initials_box(
-                                theme,
-                                ui_scale,
-                                initials,
-                                is_selected || is_marked,
-                            )
-                            .debug_selector(move || {
-                                format!("picker_prompt_repository_badge_{original_index}")
-                            }),
-                        )
-                    })
-                    .child(div().flex_1().min_w(px(0.0)).child(label))
-                    // Only rows with repository initials still need this: they have
-                    // no icon slot to turn into a check.
-                    .when(is_marked && has_initials, |row| {
-                        row.child(
-                            div()
-                                .flex_shrink_0()
-                                .pl(scaled_px(6.0))
-                                .debug_selector(move || {
-                                    format!("picker_prompt_item_trailing_check_{original_index}")
-                                })
-                                .child(crate::view::icons::svg_icon(
-                                    "icons/check.svg",
-                                    theme.colors.accent.foreground,
-                                    scaled_px(12.0),
-                                )),
-                        )
-                    })
-                    .when(is_selected, |row| {
-                        row.when_some(selected_hint.clone(), |row, hint| {
-                            row.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_w(scaled_px(34.0))
-                                    .h(ui_scale.row_height(
-                                        PICKER_HINT_PILL_HEIGHT_PX,
-                                        PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX,
-                                    ))
-                                    .px(scaled_px(6.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(scaled_px(4.0))
-                                    .bg(with_alpha(
-                                        theme.colors.foreground.primary,
-                                        if theme.is_dark { 0.06 } else { 0.035 },
-                                    ))
-                                    .font_family(
-                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                    )
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(hint),
-                            )
-                        })
-                    })
-                    .when_some(row_group.clone(), |row, row_group| {
-                        row.child(remove_row_button(
-                            theme,
-                            ui_scale,
-                            original_index,
-                            row_group,
-                            // Keyboard users never hover, so the row the
-                            // selection sits on keeps its button visible.
-                            is_selected,
-                            remove_tooltip.clone(),
-                            self.tooltip_host.clone(),
-                            Arc::clone(&on_remove),
-                            cx,
+                let row_group: Option<SharedString> = item
+                    .removable
+                    .then(|| format!("picker_prompt_row_{original_index}").into());
+                let mut row = picker_row(
+                    theme,
+                    ui_scale,
+                    item,
+                    PickerRowSpec {
+                        id: ("picker_prompt_item", original_index).into(),
+                        selector_prefix: "picker_prompt",
+                        key: PickerRowKey::Index(original_index),
+                        row_selector: None,
+                        selected: is_selected,
+                        marked: self.marked_index == Some(original_index),
+                        match_range,
+                        leading_icon,
+                    },
+                    self.tooltip_host.clone(),
+                    cx,
+                )
+                .when_some(row_group.clone(), |row, group| row.group(group))
+                .when(is_selected, |row| {
+                    row.when_some(selected_hint.clone(), |row, hint| {
+                        row.child(selected_hint_pill(theme, ui_scale, hint).debug_selector(
+                            move || format!("picker_prompt_selected_hint_{original_index}"),
                         ))
-                    });
+                    })
+                })
+                .when_some(row_group, |row, row_group| {
+                    row.child(remove_row_button(
+                        "picker_prompt_item_remove",
+                        theme,
+                        ui_scale,
+                        original_index,
+                        row_group,
+                        // Keyboard users never hover, so the row the
+                        // selection sits on keeps its button visible.
+                        is_selected,
+                        remove_tooltip.clone(),
+                        self.tooltip_host.clone(),
+                        Arc::clone(&on_remove),
+                        cx,
+                    ))
+                });
                 row = row.on_activate(
                     false,
                     controls::ControlActivation::PreserveFocus,
@@ -991,28 +909,6 @@ impl PickerPrompt {
                         },
                     );
                 }
-                // Text-alpha overlays keep the highlight visible on the
-                // elevated popover surface, unlike the canvas-tuned tokens.
-                let active_overlay = theme.active_overlay();
-                if is_selected {
-                    row = row.bg(active_overlay).when(accent_selection, |row| {
-                        row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(scaled_px(3.0))
-                                .rounded_tr(px(theme.radii.row))
-                                .rounded_br(px(theme.radii.row))
-                                .bg(theme.colors.accent.foreground),
-                        )
-                    });
-                }
-                row = row.control_interaction(
-                    InteractionStyle::new(theme).selection_outline(false),
-                    InteractionState::default().selected(is_selected, active_overlay),
-                );
                 list = list.child(row);
             }
             if window.rows.end == row_count {
@@ -1073,6 +969,7 @@ impl PickerPromptItem {
             secondary: Vec::new(),
             icon: None,
             repository_initials: None,
+            workspace_swatch: None,
             section: None,
             removable: false,
         }
@@ -1104,6 +1001,17 @@ impl PickerPromptItem {
     /// This takes precedence over both item and picker-level SVG icons.
     pub fn repository_initials(mut self, repository_name: &str) -> Self {
         self.repository_initials = Some(super::repository_initials(repository_name).into());
+        self
+    }
+
+    /// Uses a workspace's colour dot in the row's leading slot, and tints the row
+    /// the way that workspace tints its title bar. Takes the leading slot the way
+    /// [`Self::repository_initials`] does.
+    pub fn workspace_color(
+        mut self,
+        color: Option<gitcomet_state::session::WorkspaceColor>,
+    ) -> Self {
+        self.workspace_swatch = Some(WorkspaceSwatch(color));
         self
     }
 
@@ -1411,6 +1319,214 @@ fn match_items(
     out
 }
 
+/// A workspace as every workspace list shows it: its name and state, its
+/// repositories underneath, and its colour.
+pub fn workspace_picker_item(workspace: &gitcomet_state::session::Workspace) -> PickerPromptItem {
+    let state = if workspace.restore_on_launch {
+        "Open"
+    } else {
+        "Saved"
+    };
+    let detail = format!(
+        "{state} · {}",
+        crate::workspaces::repository_count_label(workspace.repositories.len())
+    );
+    let repositories = workspace
+        .repositories
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    PickerPromptItem::from_parts([
+        PickerPromptItemPart::new(workspace.display_name())
+            .profile(super::TextTruncationProfile::End)
+            .flexible(false),
+        PickerPromptItemPart::separator(" - "),
+        PickerPromptItemPart::path(detail),
+    ])
+    .secondary_parts([PickerPromptItemPart::path(repositories)])
+    .workspace_color(workspace.color)
+}
+
+/// How a row's debug selectors are keyed.
+#[derive(Clone, Debug)]
+pub enum PickerRowKey {
+    Index(usize),
+    Text(SharedString),
+}
+
+impl std::fmt::Display for PickerRowKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Index(ix) => ix.fmt(f),
+            Self::Text(text) => text.fmt(f),
+        }
+    }
+}
+
+/// A row's identity and state for [`picker_row`].
+pub struct PickerRowSpec {
+    pub id: gpui::ElementId,
+    /// Parts are selected as `{selector_prefix}_{part}_{key}`; the row itself
+    /// as `{selector_prefix}_item_{key}` unless `row_selector` names it.
+    pub selector_prefix: &'static str,
+    pub key: PickerRowKey,
+    pub row_selector: Option<SharedString>,
+    pub selected: bool,
+    pub marked: bool,
+    pub match_range: Option<Range<usize>>,
+    pub leading_icon: Option<&'static str>,
+}
+
+/// One picker row: leading icon, workspace dot or repository badge, label,
+/// and the selection fill over a workspace's tint. Every list that shows
+/// workspaces draws them with this; callers add activation, hint, remove
+/// button and context menu.
+pub fn picker_row<V: 'static>(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    item: &PickerPromptItem,
+    spec: PickerRowSpec,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    cx: &gpui::Context<V>,
+) -> gpui::Stateful<Div> {
+    let PickerRowSpec {
+        id,
+        selector_prefix,
+        key,
+        row_selector,
+        selected,
+        marked,
+        match_range,
+        leading_icon,
+    } = spec;
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
+    let part_selector = |part: &'static str| {
+        let key = key.clone();
+        move || format!("{selector_prefix}_{part}_{key}")
+    };
+    let row_debug_selector = {
+        let key = key.clone();
+        move || {
+            row_selector.map_or_else(
+                || format!("{selector_prefix}_item_{key}"),
+                |selector| selector.to_string(),
+            )
+        }
+    };
+    let label = picker_item_label(theme, item, match_range, tooltip_host, cx);
+    let row_initials = item.repository_initials.clone();
+    let row_swatch = item.workspace_swatch;
+    let has_initials = row_initials.is_some() || row_swatch.is_some();
+    // Opaque, so hover and selection below flatten onto it instead
+    // of replacing it.
+    let row_tint = row_swatch
+        .and_then(|WorkspaceSwatch(color)| crate::view::chrome::workspace_row_tint(color, theme));
+    let row_icon = (!has_initials)
+        .then(|| row_leading_icon(item, leading_icon, marked))
+        .flatten();
+    let mut row = div()
+        .id(id)
+        .debug_selector(row_debug_selector)
+        // Sized by its own text rather than pinned to a height, so a
+        // row with a detail line grows by exactly one line box.
+        // `flex_shrink_0` is what keeps that honest: once the rows
+        // overflow the list's max height, a shrinkable row would be
+        // squashed below its content and its two lines would overlap.
+        .flex_shrink_0()
+        .min_h(control_height_md(ui_scale))
+        .py(scaled_px(ROW_PAD_Y_PX))
+        .w_full()
+        .relative()
+        .flex()
+        .items_center()
+        .gap(scaled_px(ROW_ICON_GAP_PX))
+        .px(scaled_px(ROW_PAD_X_PX))
+        .rounded(scaled_px(ROW_CORNER_PX))
+        .cursor(CursorStyle::PointingHand)
+        .when_some(row_icon, |row, icon| {
+            row.child(
+                crate::view::icons::svg_icon(
+                    icon,
+                    if marked {
+                        theme.colors.accent.foreground
+                    } else {
+                        theme.colors.foreground.secondary
+                    },
+                    scaled_px(14.0),
+                )
+                .debug_selector(part_selector("item_icon")),
+            )
+        })
+        .when_some(row_swatch, |row, WorkspaceSwatch(color)| {
+            row.child(
+                workspace_dot(theme, ui_scale, color)
+                    .debug_selector(part_selector("workspace_dot")),
+            )
+        })
+        .when_some(row_initials, |row, initials| {
+            row.child(
+                super::repository_initials_box(theme, ui_scale, initials, selected || marked)
+                    .debug_selector(part_selector("repository_badge")),
+            )
+        })
+        .child(div().flex_1().min_w(px(0.0)).child(label))
+        // Only rows with a repository or workspace badge still need
+        // this: they have no icon slot to turn into a check.
+        .when(marked && has_initials, |row| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .pl(scaled_px(6.0))
+                    .debug_selector(part_selector("item_trailing_check"))
+                    .child(crate::view::icons::svg_icon(
+                        "icons/check.svg",
+                        theme.colors.accent.foreground,
+                        scaled_px(12.0),
+                    )),
+            )
+        });
+    // Text-alpha overlays keep the highlight visible on the
+    // elevated popover surface, unlike the canvas-tuned tokens.
+    let active_overlay = theme.active_overlay();
+    let selected_fill = row_tint.map_or(active_overlay, |tint| {
+        crate::theme::composite_over(tint, active_overlay)
+    });
+    if selected {
+        row = row.bg(selected_fill);
+    }
+    let style = InteractionStyle::new(theme).selection_outline(false);
+    row.control_interaction(
+        match row_tint {
+            Some(tint) => style.on_surface(tint),
+            None => style,
+        },
+        InteractionState::default().selected(selected, selected_fill),
+    )
+}
+
+/// A workspace's colour dot, centred in a slot as wide as the repository badge so
+/// workspace and repository rows start their text at the same edge.
+fn workspace_dot(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    color: Option<gitcomet_state::session::WorkspaceColor>,
+) -> Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
+    div()
+        .flex_none()
+        .size(scaled_px(super::REPOSITORY_BADGE_SIZE_PX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .size(scaled_px(10.0))
+                .rounded_full()
+                .bg(crate::view::chrome::workspace_color(color, theme)),
+        )
+}
+
 /// The icon in a row's leading slot.
 ///
 /// The marked row says "this is the current one" by turning its icon into a check
@@ -1667,7 +1783,36 @@ fn picker_item_line<V: 'static>(
 /// close affordance: hidden until the row is hovered (or carries the keyboard
 /// selection) and tinted with the danger colour.
 #[allow(clippy::too_many_arguments)]
-fn remove_row_button<V: 'static>(
+/// The keycap-style hint ("Enter") a list shows on its selected row.
+pub fn selected_hint_pill(theme: AppTheme, ui_scale: UiScale, hint: SharedString) -> gpui::Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
+    div()
+        .flex_shrink_0()
+        .min_w(scaled_px(34.0))
+        .h(ui_scale.row_height(
+            PICKER_HINT_PILL_HEIGHT_PX,
+            PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX,
+        ))
+        .px(scaled_px(6.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(scaled_px(4.0))
+        .bg(with_alpha(
+            theme.colors.foreground.primary,
+            if theme.is_dark { 0.06 } else { 0.035 },
+        ))
+        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+        .text_size(theme.ui_text(12.0))
+        .text_color(theme.colors.foreground.secondary)
+        .child(hint)
+}
+
+/// A row's hover-revealed remove cross. `id_prefix` names its element id and
+/// debug selector (`{id_prefix}_{index}`); the row must set `.group(row_group)`.
+#[allow(clippy::too_many_arguments)]
+pub fn remove_row_button<V: 'static>(
+    id_prefix: &'static str,
     theme: AppTheme,
     ui_scale: UiScale,
     index: usize,
@@ -1684,8 +1829,8 @@ fn remove_row_button<V: 'static>(
     let host_for_hover = tooltip_host;
 
     div()
-        .id(("picker_prompt_item_remove", index))
-        .debug_selector(move || format!("picker_prompt_item_remove_{index}"))
+        .id((id_prefix, index))
+        .debug_selector(move || format!("{id_prefix}_{index}"))
         .flex_shrink_0()
         .flex()
         .items_center()
@@ -2279,7 +2424,10 @@ mod tests {
     /// Why the round-trip matters: Comfortable changes the heights.
     #[test]
     fn comfortable_density_makes_picker_rows_taller() {
-        let compact = UiScale::from_percent(100);
+        let compact = UiScale::from_percent(100).with_appearance(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        });
         let comfortable = compact.with_appearance(crate::appearance::Appearance {
             density: crate::appearance::UiDensity::Comfortable,
             ..crate::appearance::Appearance::default()
@@ -2289,8 +2437,11 @@ mod tests {
     }
 
     #[test]
-    fn a_detail_line_makes_a_row_one_line_box_taller() {
-        let ui_scale = UiScale::from_percent(100);
+    fn a_detail_line_adds_one_line_box_when_content_determines_row_height() {
+        let ui_scale = UiScale::from_percent(100).with_appearance(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        });
 
         assert_eq!(
             row_height(ui_scale, true) - row_height(ui_scale, false),

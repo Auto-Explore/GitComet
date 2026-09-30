@@ -171,10 +171,11 @@ impl gpui::IntoElement for MarkdownPreviewSharedHighlightsText {
 
 /// Map a `row.text` byte range onto the tab-expanded text that is painted.
 ///
-/// Styled preview text replaces every tab with [`DIFF_WRAP_TAB_EXPANDED_COLUMNS`]
+/// Styled preview text expands every tab to its tab stop
 /// spaces, so raw offsets would slice the painted text in the wrong place —
 /// shifted by three bytes per preceding tab, and cutting the tail short.
 pub(in crate::view) fn markdown_preview_expanded_slice_range(
+    tab_width: usize,
     raw_text: &str,
     expanded_len: usize,
     range: &Range<usize>,
@@ -184,12 +185,7 @@ pub(in crate::view) fn markdown_preview_expanded_slice_range(
     }
 
     let expand = |offset: usize| {
-        let offset = offset.min(raw_text.len());
-        let tabs = raw_text.as_bytes()[..offset]
-            .iter()
-            .filter(|byte| **byte == b'\t')
-            .count();
-        offset + tabs * (DIFF_WRAP_TAB_EXPANDED_COLUMNS - 1)
+        crate::view::tab_width::display_offset_for_raw_offset(tab_width, raw_text, offset)
     };
 
     expand(range.start)..expand(range.end)
@@ -555,6 +551,7 @@ pub(in crate::view) fn markdown_preview_reveal_offset_y(
 /// frame rather than stored. Rows with no match return the base untouched, so
 /// the extra work is a substring scan per visible row.
 pub(in crate::view) fn markdown_preview_styled_row_with_query<'a>(
+    tab_width: usize,
     theme: AppTheme,
     row: &'a MarkdownPreviewRow,
     visible_ix: usize,
@@ -563,8 +560,8 @@ pub(in crate::view) fn markdown_preview_styled_row_with_query<'a>(
 ) -> std::borrow::Cow<'a, CachedDiffStyledText> {
     // Only the hovered row pays for a restyle; every other row keeps its cache.
     let base = match hovered_link {
-        Some(range) => markdown_preview_hovered_link_styled_text(theme, row, range),
-        None => markdown_preview_row_styled_text(theme, row),
+        Some(range) => markdown_preview_hovered_link_styled_text(tab_width, theme, row, range),
+        None => markdown_preview_row_styled_text(tab_width, theme, row),
     };
     let Some(query) = query.filter(|query| query.matcher.is_match(base.text.as_ref())) else {
         return std::borrow::Cow::Owned(base);
@@ -579,6 +576,7 @@ pub(in crate::view) fn markdown_preview_styled_row_with_query<'a>(
 
 /// The row's styling with the link in `hovered` underlined.
 fn markdown_preview_hovered_link_styled_text(
+    tab_width: usize,
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     hovered: &Range<usize>,
@@ -598,7 +596,11 @@ fn markdown_preview_hovered_link_styled_text(
             (style != gpui::HighlightStyle::default()).then_some((span.byte_range.clone(), style))
         })
         .collect::<Vec<_>>();
-    build_cached_diff_styled_text_from_relative_highlights(row.text.as_ref(), &highlights)
+    build_cached_diff_styled_text_from_relative_highlights(
+        tab_width,
+        row.text.as_ref(),
+        &highlights,
+    )
 }
 
 /// The underline a link shows while the pointer is on it.
@@ -1233,6 +1235,7 @@ pub(in crate::view) fn markdown_preview_theme_signature(theme: AppTheme) -> u64 
 }
 
 pub(in crate::view) fn markdown_preview_row_styled_text(
+    tab_width: usize,
     theme: AppTheme,
     row: &MarkdownPreviewRow,
 ) -> CachedDiffStyledText {
@@ -1240,6 +1243,7 @@ pub(in crate::view) fn markdown_preview_row_styled_text(
     row.styled_text_cache.get_or_insert_with(signature, || {
         if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
             return build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 row.text.as_ref(),
                 &[],
@@ -1259,7 +1263,11 @@ pub(in crate::view) fn markdown_preview_row_styled_text(
                     .then_some((span.byte_range.start..span.byte_range.end, style))
             })
             .collect::<Vec<_>>();
-        build_cached_diff_styled_text_from_relative_highlights(row.text.as_ref(), &highlights)
+        build_cached_diff_styled_text_from_relative_highlights(
+            tab_width,
+            row.text.as_ref(),
+            &highlights,
+        )
     })
 }
 
