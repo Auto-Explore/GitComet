@@ -293,6 +293,19 @@ class LiveUiMeasurementTests(unittest.TestCase):
         self.assertIn("not_comparable", result["inputs.input_to_witness_ms.p95"])
         self.assertNotIn("not_comparable", result["draw_ms.p95"])
 
+    def test_process_sample_survives_a_thread_exiting_mid_read(self):
+        real = Path.read_text
+
+        def exited(path, *args, **kwargs):
+            if "/task/" in str(path):
+                raise ProcessLookupError(3, "No such process")
+            return real(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", exited):
+            sample = live_ui.read_proc(os.getpid())
+        self.assertIsNotNone(sample)
+        self.assertEqual(sample["voluntary_switches"], 0)
+
     def test_live_gpu_state_does_not_split_a_pair_but_the_driver_does(self):
         base = {"gpu": {"cards": [], "vulkan": [], "nvidia": "RTX, 580.1, P8, 210 MHz, 40"}}
         warm = {"gpu": {"cards": [], "vulkan": [], "nvidia": "RTX, 580.1, P0, 1800 MHz, 55"}}

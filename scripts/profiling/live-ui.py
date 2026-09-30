@@ -375,7 +375,8 @@ def read_proc(pid):
     for task in tasks:
         try:
             task_status = Path(f"/proc/{pid}/task/{task}/status").read_text()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # The thread exited after the listing (ESRCH once it is reaped).
             continue
         for line in task_status.splitlines():
             if line.startswith("voluntary_ctxt_switches:"):
