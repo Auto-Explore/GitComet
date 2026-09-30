@@ -281,6 +281,12 @@ class LiveUiMeasurementTests(unittest.TestCase):
                                                                  complete=False)), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "complete sessions"):
                 live_ui.report([first, second])
+            # Same binaries, but the candidate ran with other runtime settings.
+            (second / "session.json").write_text(json.dumps(dict(
+                session, measurement_id="two",
+                candidate_runtime={"wrap": None, "env": {"MIMALLOC_ALLOW_THP": "0"}})), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "disagree on candidate_runtime"):
+                live_ui.report([first, second])
 
     def test_latency_over_different_completed_inputs_is_flagged(self):
         def sample(variant, witnessed, p95):

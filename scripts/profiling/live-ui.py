@@ -907,7 +907,11 @@ def measure(args):
     args.output.mkdir(parents=True, exist_ok=False)
     binaries = {"baseline": args.baseline.resolve(), "candidate": args.candidate.resolve()}
     hashes = {name: perf_metadata.sha256_file(path) for name, path in binaries.items()}
+    # A runtime-only candidate (same binary, other settings) differs here instead.
+    candidate = {"wrap": args.candidate_wrap,
+                 "env": dict(item.split("=", 1) for item in args.candidate_env)}
     session = {"measurement_id": str(uuid.uuid4()), "session": args.session, "pairs": args.pairs,
+               "candidate_runtime": candidate,
                "display": args.display,
                "scenarios": args.scenarios, "repository": str(repository), "repository_head": head,
                "binaries": {k: str(v) for k, v in binaries.items()}, "hashes": hashes,
@@ -921,9 +925,11 @@ def measure(args):
                 for variant in order:
                     verify_repository()
                     output = args.output / f"pair-{pair + 1}-{name}-{variant}"
+                    runtime = candidate if variant == "candidate" else {"wrap": None, "env": {}}
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
                                        metadata=False, display=args.display, save_file=args.save_file,
-                                       secondary=args.secondary_repository)
+                                       secondary=args.secondary_repository, wrap=runtime["wrap"],
+                                       extra_env=runtime["env"])
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -945,8 +951,8 @@ def report(directories):
         raise ValueError("a copied session is not an independent measurement")
     reference = sessions[0]
     for other in sessions[1:]:
-        for key in ("hashes", "scenarios", "repository_head", "display"):
-            if other[key] != reference[key]:
+        for key in ("hashes", "scenarios", "repository_head", "display", "candidate_runtime"):
+            if other.get(key) != reference.get(key):
                 raise ValueError(f"sessions disagree on {key}")
         invalid = perf_metadata.compare(reference["environment"], other["environment"])["invalidating"]
         if invalid:
@@ -1002,6 +1008,9 @@ def main():
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
     paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    paired.add_argument("--candidate-wrap", help="launch prefix for candidate runs only (runtime-only candidates)")
+    paired.add_argument("--candidate-env", action="append", default=[], metavar="KEY=VALUE",
+                        help="extra environment for candidate runs only (repeatable)")
     summary = commands.add_parser("summarize")
     summary.add_argument("directory", type=Path)
     combined = commands.add_parser("report")
