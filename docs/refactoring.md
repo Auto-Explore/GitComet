@@ -322,3 +322,18 @@ Still to do, deliberately kept out of this step:
   run their `on_closed` once however they close. The example's Changes view
   pops its current pane out and takes it back; side by side is the two
   independent panes it already lays out.
+
+Still to do, deliberately kept out of this step:
+
+- History's split and inline diff do not take insets yet; hosted panes have
+  one (inline) layout, and their projection is the one both History layouts
+  should share once History moves onto a diff session.
+- History-find decoration comes with #532, which is not merged; once it is,
+  its row highlighting becomes annotations drawn in the History canvas.
+- The focused difftool keeps its renderer. Its contract is pinned by unit
+  tests in `focused_diff.rs` (parsing, whitespace, change navigation, key
+  dispatch) and by `difftool_git_integration.rs` and
+  `standalone_tool_mode_integration.rs` (launch and exit codes). Moving it
+  onto a hosted pane first needs a unified-patch snapshot source,
+  whitespace mode, change navigation, and a pane that runs without a main
+  window's extension host.
