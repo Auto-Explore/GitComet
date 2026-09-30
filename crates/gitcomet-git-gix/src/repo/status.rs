@@ -566,7 +566,7 @@ fn remove_conflicted_paths_from_staged(
 /// cover `index.skipHash` repositories whose trailer is a useless null hash.
 ///
 /// Opens `.git/index` a single time and derives every field from that one handle.
-fn repo_index_stamp(repo: &gix::Repository) -> RepoFileStamp {
+pub(super) fn repo_index_stamp(repo: &gix::Repository) -> RepoFileStamp {
     index_stamp_for(repo.index_path().as_path(), repo.object_hash())
 }
 

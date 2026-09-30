@@ -1313,3 +1313,83 @@ fn fetch_refspecs_fetches_exactly_the_named_refs() {
     assert!(error.to_string().contains("refspec"), "{error}");
     assert!(opened.fetch_refspecs_with_output("origin", &[]).is_err());
 }
+
+/// Backend cost of the listings a git-state refresh (commit, checkout, fetch,
+/// focus) reloads, on real repositories: `GITCOMET_PROBE_REPOS=/a:/b`.
+/// Each call is repeated with nothing changed, as a watcher refresh is.
+#[test]
+#[ignore = "timing probe"]
+fn timing_refresh_listings_real_repos() {
+    use std::time::{Duration, Instant};
+    let Ok(repos) = std::env::var("GITCOMET_PROBE_REPOS") else {
+        eprintln!("GITCOMET_PROBE_REPOS not set");
+        return;
+    };
+    fn best<T>(mut f: impl FnMut() -> T) -> (Duration, T) {
+        let mut best = Duration::MAX;
+        let mut out = f();
+        for _ in 0..5 {
+            let start = Instant::now();
+            out = f();
+            best = best.min(start.elapsed());
+        }
+        (best, out)
+    }
+    for path in repos.split(':') {
+        let opened = GixBackend.open(Path::new(path)).unwrap();
+        let name = Path::new(path).file_name().unwrap().to_string_lossy();
+        let (t, v) = best(|| opened.list_branches().unwrap().len());
+        println!(
+            "timing list_branches {name} n={v} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, v) = best(|| opened.list_remote_branches().unwrap().len());
+        println!(
+            "timing list_remote_branches {name} n={v} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, v) = best(|| opened.list_tags().unwrap().len());
+        println!(
+            "timing list_tags {name} n={v} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, v) = best(|| opened.list_remotes().unwrap().len());
+        println!(
+            "timing list_remotes {name} n={v} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, _) = best(|| opened.upstream_divergence().unwrap());
+        println!(
+            "timing upstream_divergence {name} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, _) = best(|| opened.current_branch().unwrap());
+        println!(
+            "timing current_branch {name} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, v) = best(|| opened.stash_list().unwrap().len());
+        println!(
+            "timing stash_list {name} n={v} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+        let (t, v) = best(|| {
+            let s = opened.status().unwrap();
+            s.staged.len() + s.unstaged.len()
+        });
+        println!("timing status {name} n={v} {:.3}ms", t.as_secs_f64() * 1e3);
+        // What a refresh runs after its status load: the counts for that status.
+        let status = opened.status().unwrap();
+        let cancellation = gitcomet_core::services::CancellationToken::new();
+        let (t, v) = best(|| {
+            let stats = opened
+                .uncommitted_line_stats_for_status_cancellable(&status, &cancellation)
+                .unwrap();
+            stats.staged.len() + stats.unstaged.len()
+        });
+        println!(
+            "timing line_stats {name} n={v} {:.3}ms",
+            t.as_secs_f64() * 1e3
+        );
+    }
+}

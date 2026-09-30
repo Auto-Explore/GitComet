@@ -15,8 +15,7 @@ const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Counts keyed by both sides' content ids (`None` is no content), kept from
 /// the last scan so a refresh re-diffs only files whose content moved.
-pub(super) type LineStatsMemo =
-    FxHashMap<(Option<gix::ObjectId>, Option<gix::ObjectId>), LineStats>;
+pub(super) type LineStatsMemo = FxHashMap<ContentPair, LineStats>;
 
 /// One scan's view of the memo: hits carry over into `next`, which replaces
 /// the memo, so it only ever holds the current changes.
@@ -27,11 +26,7 @@ struct MemoScan {
 }
 
 impl MemoScan {
-    fn counts(
-        &mut self,
-        key: (Option<gix::ObjectId>, Option<gix::ObjectId>),
-        diff: impl FnOnce() -> LineStats,
-    ) -> LineStats {
+    fn counts(&mut self, key: ContentPair, diff: impl FnOnce() -> LineStats) -> LineStats {
         if let Some(&stats) = self.previous.get(&key).or_else(|| self.next.get(&key)) {
             self.next.insert(key, stats);
             return stats;
@@ -58,6 +53,30 @@ fn take_line_stats_diffs_for_tests() -> usize {
     LINE_STATS_DIFFS.with(|diffs| diffs.replace(0))
 }
 
+#[cfg(test)]
+thread_local! {
+    static STAGED_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn take_staged_walks_for_tests() -> usize {
+    STAGED_WALKS.with(|walks| walks.replace(0))
+}
+
+type ContentPair = (Option<gix::ObjectId>, Option<gix::ObjectId>);
+
+/// One staged change: its path, the content ids the memo keys on, its counts.
+type StagedLineStatsRow = (PathBuf, ContentPair, LineStats);
+
+/// The last staged walk. Its counts depend on HEAD and the index alone, and a
+/// worktree save, the usual reason to recount, changes neither; the walk
+/// itself costs a tree-vs-index comparison over the whole index.
+pub(super) struct StagedLineStatsCache {
+    head_oid: Option<gix::ObjectId>,
+    index_stamp: super::RepoFileStamp,
+    rows: Vec<StagedLineStatsRow>,
+}
+
 impl super::GixRepo {
     pub(super) fn uncommitted_line_stats_impl(
         &self,
@@ -79,11 +98,12 @@ impl super::GixRepo {
             previous: std::mem::take(&mut *self.line_stats_memo()),
             next: LineStatsMemo::default(),
         };
-        let result = staged_line_stats(&repo, &mut scan, cancellation).and_then(|staged| {
-            cancellation.check_cancelled()?;
-            let unstaged = unstaged_line_stats(self, &repo, entries, &mut scan, cancellation)?;
-            Ok(UncommittedLineStats { staged, unstaged })
-        });
+        let result =
+            cached_staged_line_stats(self, &repo, &mut scan, cancellation).and_then(|staged| {
+                cancellation.check_cancelled()?;
+                let unstaged = unstaged_line_stats(self, &repo, entries, &mut scan, cancellation)?;
+                Ok(UncommittedLineStats { staged, unstaged })
+            });
         let MemoScan { mut previous, next } = scan;
         // A cancelled scan saw only part of the changes; keep both.
         *self.line_stats_memo() = if result.is_ok() {
@@ -102,14 +122,62 @@ impl super::GixRepo {
     }
 }
 
+/// Staged counts, from the last walk while HEAD and the index are unchanged.
+fn cached_staged_line_stats(
+    gix_repo: &super::GixRepo,
+    repo: &gix::Repository,
+    memo: &mut MemoScan,
+    cancellation: &CancellationToken,
+) -> Result<FxHashMap<PathBuf, LineStats>> {
+    let head_oid = super::history::gix_head_id_or_none(repo)?;
+    let index_stamp = super::status::repo_index_stamp(repo);
+    let cached = gix_repo
+        .staged_line_stats_cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+        .filter(|cached| cached.head_oid == head_oid && cached.index_stamp == index_stamp);
+    let rows = match cached {
+        Some(cached) => {
+            // Keep the memo as the walk would have left it, so the next walk
+            // (after a stage or commit) still skips unchanged pairs.
+            for (_, pair, stats) in &cached.rows {
+                if stats.additions.is_some() {
+                    memo.next.insert(*pair, *stats);
+                }
+            }
+            cached.rows
+        }
+        None => staged_line_stats(repo, memo, cancellation)?,
+    };
+    let out = rows
+        .iter()
+        .map(|(path, _, stats)| (path.clone(), *stats))
+        .collect();
+    // Kept only if the index did not move under the walk.
+    if super::status::repo_index_stamp(repo) == index_stamp {
+        *gix_repo
+            .staged_line_stats_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(StagedLineStatsCache {
+            head_oid,
+            index_stamp,
+            rows,
+        });
+    }
+    Ok(out)
+}
+
 /// HEAD tree vs index. The walk hands us both blob ids, so this costs two
 /// object reads per changed pair the memo lacks and no worktree traversal.
 fn staged_line_stats(
     repo: &gix::Repository,
     memo: &mut MemoScan,
     cancellation: &CancellationToken,
-) -> Result<FxHashMap<PathBuf, LineStats>> {
-    let mut out = FxHashMap::default();
+) -> Result<Vec<StagedLineStatsRow>> {
+    #[cfg(test)]
+    STAGED_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let mut out = Vec::new();
     // `tree_index_status` wants a tree; an unborn HEAD measures against the
     // empty tree.
     let head_tree_id = match super::history::gix_head_id_or_none(repo)? {
@@ -159,7 +227,7 @@ fn staged_line_stats(
             let stats = memo.counts((old_id, new_id), || {
                 commit_file_line_stats(repo, old_id, new_id, &mut scratch).into()
             });
-            out.insert(path, stats);
+            out.push((path, (old_id, new_id), stats));
             Ok(std::ops::ControlFlow::Continue(()))
         },
     );
@@ -685,6 +753,57 @@ mod tests {
                 .unstaged
                 .contains_key(std::path::Path::new("big.txt"))
         );
+    }
+
+    /// A worktree save changes neither HEAD nor the index, so the staged lane
+    /// reuses its last walk; staging and committing each walk again.
+    #[test]
+    fn staged_counts_walk_again_only_when_head_or_index_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "a.txt", &lines("base", 10));
+        write_file(dir, "b.txt", &lines("base", 10));
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "a.txt", &lines("base", 12));
+        git_success(dir, &["add", "a.txt"]);
+
+        let token = CancellationToken::new();
+        let scan = |repo: &super::super::GixRepo| {
+            let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+            repo.line_stats_for_entries_impl(&entries, &token).unwrap()
+        };
+        let repo = open_repo(dir);
+        take_staged_walks_for_tests();
+        let first = scan(&repo);
+        assert_eq!(take_staged_walks_for_tests(), 1);
+
+        write_file(dir, "b.txt", &lines("edited", 10));
+        let saved = scan(&repo);
+        assert_eq!(take_staged_walks_for_tests(), 0, "a save reuses the walk");
+        assert_eq!(saved.staged, first.staged);
+        assert_eq!(saved, scan(&open_repo(dir)));
+
+        git_success(dir, &["add", "b.txt"]);
+        take_staged_walks_for_tests();
+        let staged = scan(&repo);
+        assert_eq!(take_staged_walks_for_tests(), 1, "staging moves the index");
+        assert_eq!(staged, scan(&open_repo(dir)));
+        assert!(staged.staged.contains_key(std::path::Path::new("b.txt")));
+
+        git_success(dir, &["commit", "-m", "both"]);
+        take_staged_walks_for_tests();
+        let committed = scan(&repo);
+        assert_eq!(take_staged_walks_for_tests(), 1, "a commit moves HEAD");
+        assert!(committed.staged.is_empty());
+
+        // HEAD alone: a soft reset leaves the index file untouched.
+        git_success(dir, &["reset", "--soft", "HEAD~1"]);
+        let reset = scan(&repo);
+        assert_eq!(take_staged_walks_for_tests(), 1, "a reset moves HEAD");
+        assert_eq!(reset, scan(&open_repo(dir)));
+        assert_eq!(reset.staged.len(), 2);
     }
 
     #[test]
