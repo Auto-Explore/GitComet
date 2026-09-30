@@ -75,7 +75,8 @@ Scenarios: `startup`, `idle`, `idle-minimized`, `two-windows-idle`,
 `history-select`, `history-select-burst` (selections faster than details load:
 superseded inputs and their worker time are reported), `history-scroll`,
 `status-save` and `status-burst` (real file writes through the native
-watcher), `ignored-churn` (build output in an ignored directory),
+watcher), `status-touch` (saves of unchanged bytes), `ignored-churn` (build
+output in an ignored directory), `idle-hidden-terminal`,
 `diff-search` (first and repeated search), `terminal-output` (sustained output
 while scrolling) and `lifecycle` (110 open/select/close cycles of a
 `--secondary-repository`, then a plateau phase for retained memory, threads

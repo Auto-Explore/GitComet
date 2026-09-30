@@ -207,6 +207,21 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None):
              "flip_every": 100, "witness": {"kind": "history_scrolled"}},
             {"do": "phase", "name": "output_settling"},
             {"do": "settle", "ms": 10_000}],
+        # Saves that rewrite identical bytes: an editor's save-all. The
+        # watcher fires, but nothing should change or redraw.
+        "status-touch": ready + [
+            {"do": "phase", "name": "touch"},
+            {"do": "write_files", "paths": [SAVE_FILE], "contents": "saved content\n",
+             "rounds": 40, "interval_ms": 500, "expect_status": False},
+            {"do": "settle", "ms": 3000}],
+        # A terminal opened, then hidden, must stop costing anything.
+        "idle-hidden-terminal": ready + [
+            {"do": "command", "id": "toggle-terminal"},
+            {"do": "settle", "ms": 3000},
+            {"do": "command", "id": "toggle-terminal"},
+            {"do": "settle", "ms": 2000},
+            {"do": "phase", "name": "idle_hidden_terminal"},
+            {"do": "settle", "ms": 60_000}],
         # A second (Home) window beside the repository window.
         "two-windows-idle": ready + [
             {"do": "command", "id": "new-window"},
@@ -259,8 +274,9 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None):
     return {"name": name, "steps": steps[name], "quit": True}
 
 
-SCENARIOS = ("startup", "idle", "idle-minimized", "two-windows-idle", "history-select",
-             "history-select-burst", "history-scroll", "status-save", "status-burst", "ignored-churn",
+SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
+             "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
+             "ignored-churn",
              "diff-search", "terminal-output", "lifecycle")
 
 
