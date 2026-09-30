@@ -26,8 +26,6 @@ struct StatusViewInputs {
     untracked: StatusSectionState,
     split_unstaged: StatusSectionState,
     staged: StatusSectionState,
-    untracked_paths: Vec<std::path::PathBuf>,
-    split_unstaged_paths: Vec<std::path::PathBuf>,
 }
 
 impl StatusViewInputs {
@@ -119,6 +117,13 @@ impl DetailsPaneView {
             .into_any_element()
     }
 
+    /// The paths a section lists, in its display order.
+    fn status_section_paths(&self, section: StatusSection) -> Vec<std::path::PathBuf> {
+        self.active_repo()
+            .and_then(|repo| self.status_section_entries(repo, section))
+            .map_or_else(Vec::new, |entries| entries.path_vec())
+    }
+
     fn status_view_inputs(&self, cx: &mut gpui::Context<Self>) -> StatusViewInputs {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
@@ -141,17 +146,6 @@ impl DetailsPaneView {
                 )
             })
             .unwrap_or((0, 0, 0, 0));
-        let (untracked_paths, split_unstaged_paths) = self
-            .active_repo()
-            .map(|repo| {
-                (
-                    self.status_section_entries(repo, StatusSection::Untracked)
-                        .map_or_else(Vec::new, |entries| entries.path_vec()),
-                    self.status_section_entries(repo, StatusSection::Unstaged)
-                        .map_or_else(Vec::new, |entries| entries.path_vec()),
-                )
-            })
-            .unwrap_or_else(|| (Vec::new(), Vec::new()));
         let (unstaged_loading, untracked_loading, split_unstaged_loading, staged_loading) = self
             .active_repo()
             .map(|repo| {
@@ -166,28 +160,16 @@ impl DetailsPaneView {
 
         let repo_id = self.active_repo_id();
         let selected_combined_unstaged = repo_id
-            .map(|rid| {
-                self.status_section_action_selection(rid, StatusSection::CombinedUnstaged)
-                    .count()
-            })
+            .map(|rid| self.status_section_action_count(rid, StatusSection::CombinedUnstaged))
             .unwrap_or(0);
         let selected_untracked = repo_id
-            .map(|rid| {
-                self.status_section_action_selection(rid, StatusSection::Untracked)
-                    .count()
-            })
+            .map(|rid| self.status_section_action_count(rid, StatusSection::Untracked))
             .unwrap_or(0);
         let selected_split_unstaged = repo_id
-            .map(|rid| {
-                self.status_section_action_selection(rid, StatusSection::Unstaged)
-                    .count()
-            })
+            .map(|rid| self.status_section_action_count(rid, StatusSection::Unstaged))
             .unwrap_or(0);
         let selected_staged = repo_id
-            .map(|rid| {
-                self.status_section_action_selection(rid, StatusSection::Staged)
-                    .count()
-            })
+            .map(|rid| self.status_section_action_count(rid, StatusSection::Staged))
             .unwrap_or(0);
 
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
@@ -305,8 +287,6 @@ impl DetailsPaneView {
                 loading: staged_loading,
                 labels: staged_labels,
             },
-            untracked_paths,
-            split_unstaged_paths,
         }
     }
 
@@ -714,19 +694,20 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
         let theme = v.theme;
-        let untracked_paths_for_stage_all =
-            gitcomet_state::msg::RepoPathList::from(v.untracked_paths.clone());
         components::Button::new(
             "stage_all_untracked",
             status_action_all_label(v.untracked.labels, "Stage all"),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(v.local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
+        .disabled(v.local_actions_in_flight || v.untracked.count == 0)
         .on_click(theme, cx, move |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            if untracked_paths_for_stage_all.is_empty() {
+            // Collected on click: copying the section's paths on every render
+            // cost one allocation per file.
+            let paths = this.status_section_paths(StatusSection::Untracked);
+            if paths.is_empty() {
                 return;
             }
             this.status_multi_selection.remove(&repo_id);
@@ -734,7 +715,7 @@ impl DetailsPaneView {
                 &this.store,
                 repo_id,
                 DiffArea::Unstaged,
-                untracked_paths_for_stage_all.clone(),
+                gitcomet_state::msg::RepoPathList::from(paths),
             );
             cx.notify();
         })
@@ -747,17 +728,18 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
         let theme = v.theme;
-        let split_unstaged_paths_for_stage_all = v.split_unstaged_paths.clone();
         components::Button::new(
             "stage_all_split_unstaged",
             status_action_all_label(v.split_unstaged.labels, "Stage all"),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(v.local_actions_in_flight || split_unstaged_paths_for_stage_all.is_empty())
+        .disabled(v.local_actions_in_flight || v.split_unstaged.count == 0)
         .on_click(theme, cx, move |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
+            let split_unstaged_paths_for_stage_all =
+                this.status_section_paths(StatusSection::Unstaged);
             if split_unstaged_paths_for_stage_all.is_empty() {
                 return;
             }
@@ -766,7 +748,7 @@ impl DetailsPaneView {
             // combined view's button gets.
             this.stage_all_with_conflict_confirmation(
                 repo_id,
-                split_unstaged_paths_for_stage_all.clone(),
+                split_unstaged_paths_for_stage_all,
                 _w,
                 cx,
             );

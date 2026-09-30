@@ -193,10 +193,6 @@ pub(super) struct StatusSectionActionSelection {
 }
 
 impl StatusSectionActionSelection {
-    pub(super) fn count(&self) -> usize {
-        self.paths.len()
-    }
-
     pub(super) fn popover_path(&self) -> Option<std::path::PathBuf> {
         (!self.from_explicit_selection && self.paths.len() == 1).then(|| self.paths[0].clone())
     }
@@ -255,6 +251,44 @@ pub(super) fn status_section_action_selection(
             from_explicit_selection: false,
         })
         .unwrap_or_default()
+}
+
+/// How many paths `status_section_action_selection` picks, without building
+/// the list: the header reads it on every render of the details pane.
+pub(super) fn status_section_action_count(
+    repo: &RepoState,
+    diff_target: Option<&DiffTarget>,
+    selection: Option<&StatusMultiSelection>,
+    section: StatusSection,
+) -> usize {
+    if let Some(selection) = selection {
+        let count = match section {
+            StatusSection::CombinedUnstaged => {
+                selection.selected_paths_for_area(DiffArea::Unstaged).len()
+            }
+            StatusSection::Untracked => selection.untracked.len(),
+            StatusSection::Unstaged => selection.unstaged.len(),
+            StatusSection::Staged => selection.staged.len(),
+        };
+        if selection.explicit_section == Some(section) || count > 0 {
+            return count;
+        }
+    }
+    let Some(DiffTarget::WorkingTree { path, area, .. }) = diff_target else {
+        return 0;
+    };
+    if *area != section.diff_area() {
+        return 0;
+    }
+    // One lookup instead of a filtered copy of the section per call.
+    let Some(entry) = repo.status_entry_for_path(*area, path.as_path()) else {
+        return 0;
+    };
+    usize::from(match section {
+        StatusSection::Untracked => entry.kind == FileStatusKind::Untracked,
+        StatusSection::Unstaged => entry.kind != FileStatusKind::Untracked,
+        StatusSection::CombinedUnstaged | StatusSection::Staged => true,
+    })
 }
 
 impl DetailsPaneView {
@@ -331,6 +365,22 @@ impl DetailsPaneView {
         };
 
         status_section_action_selection(
+            repo,
+            repo.diff_state.diff_target.as_ref(),
+            self.status_multi_selection.get(&repo_id),
+            section,
+        )
+    }
+
+    pub(super) fn status_section_action_count(
+        &self,
+        repo_id: RepoId,
+        section: StatusSection,
+    ) -> usize {
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return 0;
+        };
+        status_section_action_count(
             repo,
             repo.diff_state.diff_target.as_ref(),
             self.status_multi_selection.get(&repo_id),

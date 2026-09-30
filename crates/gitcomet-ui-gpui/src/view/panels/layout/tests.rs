@@ -588,6 +588,83 @@ fn status_section_action_selection_limits_active_row_to_matching_split_section()
     assert!(unstaged.paths.is_empty());
 }
 
+/// The header counts through `status_section_action_count`; it must agree
+/// with the selection the actions use, for every section and target.
+#[test]
+fn status_section_action_count_matches_the_selection() {
+    let repo = repo_with_status(RepoStatus {
+        unstaged: Arc::new(vec![
+            file_status("new.txt", FileStatusKind::Untracked),
+            file_status("src/lib.rs", FileStatusKind::Modified),
+        ]),
+        staged: Arc::new(vec![file_status("staged.rs", FileStatusKind::Added)]),
+    });
+    let targets = [
+        None,
+        Some(DiffTarget::working_tree(
+            "new.txt".into(),
+            DiffArea::Unstaged,
+        )),
+        Some(DiffTarget::working_tree(
+            "src/lib.rs".into(),
+            DiffArea::Unstaged,
+        )),
+        Some(DiffTarget::working_tree(
+            "staged.rs".into(),
+            DiffArea::Staged,
+        )),
+        Some(DiffTarget::working_tree(
+            "gone.rs".into(),
+            DiffArea::Unstaged,
+        )),
+    ];
+    let selections = [
+        None,
+        Some(StatusMultiSelection {
+            explicit_section: Some(StatusSection::Untracked),
+            ..Default::default()
+        }),
+        Some(StatusMultiSelection {
+            untracked: vec!["new.txt".into()],
+            unstaged: vec!["src/lib.rs".into(), "x.rs".into()],
+            ..Default::default()
+        }),
+        Some(StatusMultiSelection {
+            explicit_section: Some(StatusSection::Staged),
+            staged: vec!["staged.rs".into()],
+            ..Default::default()
+        }),
+    ];
+    for target in &targets {
+        for selection in &selections {
+            for section in [
+                StatusSection::CombinedUnstaged,
+                StatusSection::Untracked,
+                StatusSection::Unstaged,
+                StatusSection::Staged,
+            ] {
+                assert_eq!(
+                    status_section_action_count(
+                        &repo,
+                        target.as_ref(),
+                        selection.as_ref(),
+                        section
+                    ),
+                    status_section_action_selection(
+                        &repo,
+                        target.as_ref(),
+                        selection.as_ref(),
+                        section
+                    )
+                    .paths
+                    .len(),
+                    "{section:?} {target:?} {selection:?}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn status_explicit_empty_selection_does_not_fall_back_to_the_preview() {
     let repo = repo_with_status(RepoStatus {
