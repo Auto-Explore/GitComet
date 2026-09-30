@@ -87,7 +87,9 @@ mod tests {
         let worker = std::thread::Builder::new()
             .name("cpu-probe-busy".into())
             .spawn(move || {
-                tid_tx.send(gitcomet_core::op_trace::current_os_tid().unwrap()).unwrap();
+                tid_tx
+                    .send(gitcomet_core::op_trace::current_os_tid().unwrap())
+                    .unwrap();
                 let started = std::time::Instant::now();
                 while started.elapsed() < std::time::Duration::from_millis(30) {
                     std::hint::black_box(0u64.wrapping_add(1));

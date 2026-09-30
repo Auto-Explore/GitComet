@@ -3472,7 +3472,10 @@ fn history_bounds_belong_to_the_active_repository(cx: &mut gpui::TestAppContext)
         let _ = window.draw(app);
     });
     ensure_history_cache_for_tests(cx, &view, state_for(RepoId(1)));
-    assert!(bounds(cx).is_some(), "the first repository's list is laid out");
+    assert!(
+        bounds(cx).is_some(),
+        "the first repository's list is laid out"
+    );
 
     // The second repository's log is ready, but its list was never drawn.
     cx.update(|_window, app| {
