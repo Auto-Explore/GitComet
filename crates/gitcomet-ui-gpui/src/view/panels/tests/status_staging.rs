@@ -39,22 +39,11 @@ enum Viewed {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    git_output(dir, args);
+    crate::test_support::git(dir, args);
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> Vec<u8> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
+    crate::test_support::git(dir, args)
 }
 
 fn commit(dir: &Path, message: &str) {

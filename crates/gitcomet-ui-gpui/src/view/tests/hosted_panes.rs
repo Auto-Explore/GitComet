@@ -9,17 +9,12 @@ use gitcomet_extension_api::{
 use gitcomet_state::model::Loadable;
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    crate::test_support::git(dir, args);
+}
+
+fn head(dir: &Path) -> String {
+    let out = crate::test_support::git(dir, &["rev-parse", "HEAD"]);
+    String::from_utf8(out).unwrap().trim().to_string()
 }
 
 fn numbered(prefix: &str, count: usize, edit_at: Option<usize>) -> String {
@@ -59,6 +54,8 @@ fn open_repository(
     git(root, &["init", "-q", "-b", "main"]);
     git(root, &["config", "user.email", "t@example.com"]);
     git(root, &["config", "user.name", "T"]);
+    // Same bytes under any user or system config (Windows CI sets autocrlf).
+    git(root, &["config", "core.autocrlf", "false"]);
     std::fs::write(root.join("a.rs"), numbered("a", 30, None)).unwrap();
     std::fs::write(root.join("b.rs"), numbered("b", 30, None)).unwrap();
     git(root, &["add", "."]);
@@ -427,13 +424,7 @@ fn commit_every_kind_of_change(root: &Path) -> String {
     std::fs::write(root.join("img.bin"), [0u8, 9, 9, 9, 0, 5]).unwrap();
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", "after"]);
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
+    head(root)
 }
 
 #[gpui::test]
@@ -711,13 +702,7 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
     }
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "after"]);
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    let head = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let head = head(root);
 
     let (host, repository) = app_cx.update(|_window, app| {
         let host = view.read(app).extension_window.as_ref().unwrap().host();

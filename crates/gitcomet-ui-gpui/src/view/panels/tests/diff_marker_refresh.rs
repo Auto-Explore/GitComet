@@ -5,17 +5,7 @@ use super::*;
 use gitcomet_core::services::GitBackend;
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    crate::test_support::git(dir, args);
 }
 
 fn lines(edits: &[(usize, &str)]) -> String {
