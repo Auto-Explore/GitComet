@@ -198,11 +198,10 @@ pub(crate) fn emit_github_warning(message: &str) {
     println!("::warning title=View performance budget::{message}");
 }
 
-/// Every verdict as JSON, so suite drivers can refuse runs whose structural
-/// budgets (deterministic work witnesses) failed.
+/// Structural verdicts (deterministic work witnesses) as JSON, so suite
+/// drivers can refuse runs where one failed.
 pub(crate) fn write_summary_json(
     path: &Path,
-    timing_results: &[BudgetResult],
     structural_results: &[StructuralBudgetResult],
 ) -> Result<(), String> {
     let status = |status: BudgetStatus| match status {
@@ -211,23 +210,12 @@ pub(crate) fn write_summary_json(
         BudgetStatus::Skipped => "skipped",
     };
     let summary = serde_json::json!({
-        "timing": timing_results.iter().map(|result| serde_json::json!({
-            "bench": result.spec.label,
-            "kind": measurement_kind_for_bench(result.spec.label).as_str(),
-            "status": status(result.status),
-            "threshold_ns": result.spec.threshold_ns,
-            "mean_ns": result.mean_ns,
-            "mean_upper_ns": result.mean_upper_ns,
-            "details": result.details,
-        })).collect::<Vec<_>>(),
         "structural": structural_results.iter().map(|result| serde_json::json!({
             "bench": result.spec.bench,
-            "kind": measurement_kind_for_bench(result.spec.bench).as_str(),
             "metric": result.spec.metric,
             "status": status(result.status),
             "expectation": result.spec.comparator.format_expectation(result.spec.threshold),
             "observed": result.observed,
-            "details": result.details,
         })).collect::<Vec<_>>(),
     });
     let mut content = serde_json::to_vec_pretty(&summary)

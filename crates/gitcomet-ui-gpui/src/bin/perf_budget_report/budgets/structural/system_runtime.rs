@@ -170,7 +170,8 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 100.0,
     },
-    // Split status: a worktree call and a staged call per refreshed repo.
+    // Split status: a worktree call and a staged call per refreshed repo,
+    // here and in every `status_calls` budget below.
     StructuralBudgetSpec {
         bench: "idle/background_refresh_cost_per_cycle",
         metric: "status_calls",
@@ -207,7 +208,6 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 10.0,
     },
-    // Split status: a worktree call and a staged call per refreshed repo.
     StructuralBudgetSpec {
         bench: "idle/wake_from_sleep_resume",
         metric: "status_calls",
@@ -435,7 +435,6 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::AtLeast,
         threshold: 1.0,
     },
-    // Split status: a worktree call and a staged call per refreshed repo.
     StructuralBudgetSpec {
         bench: "fs_event/single_file_save_to_status_update",
         metric: "status_calls",
@@ -460,7 +459,6 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::AtLeast,
         threshold: 200.0,
     },
-    // Split status: a worktree call and a staged call per refreshed repo.
     StructuralBudgetSpec {
         bench: "fs_event/git_checkout_200_files_to_status_update",
         metric: "status_calls",
@@ -479,7 +477,6 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::AtLeast,
         threshold: 50.0,
     },
-    // Split status: a worktree call and a staged call per refreshed repo.
     StructuralBudgetSpec {
         bench: "fs_event/rapid_saves_debounce_coalesce",
         metric: "status_calls",
@@ -504,7 +501,6 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::AtLeast,
         threshold: 100.0,
     },
-    // Split status: a worktree call and a staged call per refreshed repo.
     StructuralBudgetSpec {
         bench: "fs_event/false_positive_rate_under_churn",
         metric: "status_calls",

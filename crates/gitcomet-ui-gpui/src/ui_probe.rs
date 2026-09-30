@@ -392,16 +392,11 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     if jsonl_enabled {
         gitcomet_core::op_trace::enable(started);
     }
-    let env = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
     write_json(&[json!({"event": "start", "version": 3, "unix_ms": unix_ms,
         "pid": std::process::id(), "os": std::env::consts::OS,
         "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis(),
-        "ping_ms": ping_interval.as_millis(),
-        "run_id": env("GITCOMET_PERF_RUN_ID"), "cargo_profile": env("GITCOMET_PERF_CARGO_PROFILE"),
-        "scenario": env(crate::view::scenario_driver::SCENARIO_ENV),
-        "main_tid": gitcomet_core::op_trace::current_os_tid(),
-        "mimalloc_env": std::env::vars().filter(|(key, _)| key.starts_with("MIMALLOC_"))
-            .collect::<std::collections::BTreeMap<_, _>>()})]);
+        "run_id": std::env::var("GITCOMET_PERF_RUN_ID").ok().filter(|id| !id.is_empty()),
+        "main_tid": gitcomet_core::op_trace::current_os_tid()})]);
 
     log_line(&format!(
         "ui-probe start os={} debug_assertions={} interval={}ms ping={}ms main_cpu={}",
@@ -473,11 +468,8 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
                                 dropped = dropped.saturating_sub(previous.mid_draw_events_dropped);
                             }
                             previous_input.insert(handle.window_id(), snapshot);
-                            let bounds = window.bounds();
                             records.push(json!({"event": "input_interval", "window": format!("{:?}", handle.window_id()),
                                 "at_ms": milliseconds(now.duration_since(started)), "count": latency.len(),
-                                "size": [f32::from(bounds.size.width), f32::from(bounds.size.height)],
-                                "scale": window.scale_factor(), "active": window.is_window_active(),
                                 "wall_ms": milliseconds(now.duration_since(interval_started)),
                                 "p95_ms": if latency.is_empty() { None } else { Some(latency.value_at_quantile(0.95) as f64 / 1e6) },
                                 "max_ms": if latency.is_empty() { None } else { Some(latency.max() as f64 / 1e6) },

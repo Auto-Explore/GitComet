@@ -63,7 +63,7 @@ pub fn measurement_kind_for_bench(bench: &str) -> MeasurementKind {
         | "markdown_preview_render_diff"
         | "markdown_preview_scroll"
         | "diff_open_markdown_preview_first_window" => MeasurementKind::GpuiTestPlatformDraw,
-        "app_launch" | "live" => MeasurementKind::LiveApplication,
+        "app_launch" => MeasurementKind::LiveApplication,
         _ => MeasurementKind::PreparedRowWork,
     }
 }
@@ -82,10 +82,6 @@ pub struct PerfSidecarMeasurement {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PerfSidecarAllocator {
-    /// True when allocation counting wraps the global allocator, as in the
-    /// Criterion and harness binaries. It adds work to every allocation, so
-    /// such timings explain mechanisms rather than user-facing latency.
-    pub tracking: bool,
     /// `MIMALLOC_*` settings in effect; unset options use mimalloc defaults.
     #[serde(default)]
     pub mimalloc_env: BTreeMap<String, String>,
@@ -99,7 +95,6 @@ impl PerfSidecarMeasurement {
             cargo_profile: env_string(CARGO_PROFILE_ENV),
             debug_assertions: cfg!(debug_assertions),
             allocator: PerfSidecarAllocator {
-                tracking: crate::perf_alloc::tracking_allocator_is_global(),
                 mimalloc_env: env::vars()
                     .filter(|(key, _)| key.starts_with("MIMALLOC_"))
                     .collect(),

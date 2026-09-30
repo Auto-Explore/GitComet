@@ -85,7 +85,7 @@ fn run_report(cli: CliArgs) -> Result<(), String> {
     println!("{markdown}");
     append_github_summary(&markdown)?;
     if let Some(path) = cli.summary_json.as_deref() {
-        write_summary_json(path, &timing_results, &structural_results)?;
+        write_summary_json(path, &structural_results)?;
     }
 
     let mut has_alert = false;

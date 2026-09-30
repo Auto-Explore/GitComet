@@ -57,7 +57,7 @@ impl Poller {
                         0,
                         "set_state",
                         publication,
-                        u64::try_from(applying.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                        gitcomet_core::op_trace::duration_ns(applying.elapsed()),
                     );
                 }
             }

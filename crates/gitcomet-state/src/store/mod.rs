@@ -214,7 +214,7 @@ impl WorkerLoopContext<'_> {
         gitcomet_core::op_trace::record_current(
             gitcomet_core::op_trace::Stage::Reduced,
             "reduce",
-            u64::try_from(reduce_duration.as_nanos()).unwrap_or(u64::MAX),
+            gitcomet_core::op_trace::duration_ns(reduce_duration),
             publication,
         );
         // Cancel changed/cleared selections before dispatching their effects,

@@ -101,7 +101,7 @@ pub(crate) struct CliArgs {
     /// Optional freshness gate. Artifacts older than this file's mtime are
     /// treated like missing data.
     pub(crate) fresh_reference: Option<PathBuf>,
-    /// Optional machine-readable copy of every budget verdict.
+    /// Optional machine-readable copy of the structural verdicts.
     pub(crate) summary_json: Option<PathBuf>,
 }
 

@@ -370,9 +370,11 @@ class LiveUiMeasurementTests(unittest.TestCase):
         self.assertEqual(sample["voluntary_switches"], 0)
 
     def test_live_gpu_state_does_not_split_a_pair_but_the_driver_does(self):
-        base = {"gpu": {"cards": [], "vulkan": [], "nvidia": "RTX, 580.1, P8, 210 MHz, 40"}}
-        warm = {"gpu": {"cards": [], "vulkan": [], "nvidia": "RTX, 580.1, P0, 1800 MHz, 55"}}
-        newer = {"gpu": {"cards": [], "vulkan": [], "nvidia": "RTX, 590.2"}}
+        gpu = lambda driver, state: {"gpu": {"cards": [], "vulkan": [],  # noqa: E731
+                                             "nvidia": f"RTX, {driver}", "nvidia_state": state}}
+        base = gpu("580.1", "P8, 210 MHz, 40")
+        warm = gpu("580.1", "P0, 1800 MHz, 55")
+        newer = gpu("590.2", "P8, 210 MHz, 40")
         self.assertNotIn("gpu.nvidia", perf_metadata.compare(base, warm)["invalidating"])
         self.assertIn("gpu.nvidia", perf_metadata.compare(base, newer)["invalidating"])
 

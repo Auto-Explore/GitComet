@@ -83,12 +83,8 @@ Environment:
     case with parsed Criterion estimates and sidecar metrics when available.
 
 Notes:
-  - Every result is labelled with what it measures (sidecar
-    .measurement.kind): backend_operation, prepared_row_work,
-    gpui_test_platform_draw or live_application. Criterion and harness
-    binaries count allocations in their global allocator, so their timings
-    explain mechanisms; confirm user-facing latency with the ordinary
-    application (scripts/profiling/live-ui.py).
+  - Each sidecar's .measurement.kind says what it timed; see
+    scripts/profiling/README.md before reading timings as user latency.
   - The run is accepted only when every selected scenario exited 0 and left
     fresh artifacts: Criterion estimates newer than the suite start, and
     sidecars stamped with this run's id. manifest.json records the verdict;
@@ -763,12 +759,10 @@ write_manifest_and_verify() {
     --slurpfile binaries "${run_dir}/binaries.jsonl" \
     --slurpfile scenarios "${checked}" \
     --slurpfile cases "${run_dir}/cases.jsonl" \
-    --argjson mimalloc "$(env | grep '^MIMALLOC_' | jq -R 'split("=") | {(.[0]): (.[1:] | join("="))}' | jq -s 'add // {}')" \
     '{version: 1, run_id: $run_id, workload_profile: $workload_profile,
       cargo_profile: $cargo_profile, source_revision: $source_revision,
       patch_sha256: $patch_sha256, criterion_root: $criterion_root,
       fresh_reference: $fresh_reference, command: $command,
-      allocator: {mimalloc_env: $mimalloc, tracking_global_allocator: true},
       binaries: $binaries, scenarios: $scenarios, cases: $cases,
       launch_environment_blocked: ($launch_blocked == 1),
       budget_summary: $budget_summary,
@@ -972,7 +966,6 @@ fi
 
 prepare_fresh_reference
 validate_fresh_reference
-
 
 main_criterion_args=()
 if [[ -n "${main_measurement_time}" ]]; then

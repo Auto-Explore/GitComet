@@ -23,14 +23,8 @@ process from /proc, and turns the records into per-phase distributions.
 Measure alternates baseline and candidate within each pair and reverses the
 order on odd pairs; pass --reverse in a second session.
 
-By default (--display headless) each run gets its own headless mutter (the
-GNOME compositor) with one virtual monitor: the app window is the only,
-focused, unoccluded window, so the compositor paces frames steadily and the
-desktop is untouched. On the desktop GNOME denies a background launch focus,
-and an occluded window gets no frame callbacks: it then draws only when the
-next key event forces a draw, and every latency is wrong. --display desktop
-keeps the old behaviour for checking native presentation, with the window
-brought to front by hand. Input is always dispatched inside the app.
+Each run gets its own headless mutter unless --display desktop (see
+scripts/profiling/README.md). Input is always dispatched inside the app.
 """
 
 import argparse
@@ -61,10 +55,8 @@ SEARCH_FILE = "search-target.txt"
 IGNORED_DIR = "build"
 WINDOW_SIZE = (1400, 900)
 REFRESH_HZ = 60
-# GPU drivers compile the renderer's pipelines at window creation and keep the
-# result in a disk cache. A fresh sandbox per run would make every launch a
-# first launch (~570 ms of shader compilation on the NVIDIA driver here), so
-# runs share one cache unless --cold-gpu-cache asks for that first launch.
+# Runs share the drivers' pipeline cache, or every launch would be a first
+# launch; --cold-gpu-cache measures that one.
 GPU_SHADER_CACHE = ROOT / "target/profiling/gpu-shader-cache"
 
 
@@ -145,7 +137,6 @@ def clone_fixture(source, path, revision):
     subprocess.run(["git", "clone", "-q", "--local", "--no-checkout", str(source), str(path)],
                    check=True, env=fixture_env())
     git(path, "checkout", "-q", "--detach", revision or "HEAD", env=fixture_env())
-    # One branch keeps the ref sidebar comparable between clones.
     return path
 
 
@@ -180,7 +171,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
         if secondary is None:
             raise ValueError("lifecycle needs --secondary-repository")
         # Warm caches first; resources should then plateau across cycles.
-        return {"name": name, "quit": True, "steps": ready
+        return {"steps": ready
                 + [{"do": "phase", "name": "warmup_cycles"}]
                 + [step for _ in range(10) for step in lifecycle_cycle(secondary)]
                 + [{"do": "phase", "name": "cycles"}]
@@ -188,7 +179,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
                 + [{"do": "phase", "name": "after_cycles"}, {"do": "settle", "ms": 10_000}]}
     if name == "status-burst":
         # A 50-file save burst (formatter, branch switch), restored each round.
-        return {"name": name, "quit": True, "steps": ready + [
+        return {"steps": ready + [
             {"do": "phase", "name": "burst"},
             {"do": "write_files", "paths": tracked_files(repository, 50),
              "contents": "burst\n", "rounds": 20, "interval_ms": 2500}]}
@@ -253,8 +244,8 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
              "flip_every": 150, "witness": {"kind": "history_scrolled"}}],
         "status-save": ready + [
             {"do": "phase", "name": "save"},
-            {"do": "write_file", "path": save_file, "contents": "edited by the scenario\n",
-             "repeat": 40, "interval_ms": 1500}],
+            {"do": "write_files", "paths": [save_file], "contents": "edited by the scenario\n",
+             "rounds": 40, "interval_ms": 1500}],
         "diff-search": ready + [
             {"do": "phase", "name": "open_diff"},
             {"do": "click", "target": {"list": "unstaged_row", "index": 0},
@@ -275,7 +266,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     }
     if name not in steps:
         raise ValueError(f"unknown scenario {name}; choose from {', '.join(steps)}")
-    return {"name": name, "steps": steps[name], "quit": True}
+    return {"steps": steps[name]}
 
 
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
@@ -386,7 +377,7 @@ def read_proc(pid):
             if line.startswith("voluntary_ctxt_switches:"):
                 switches += int(line.split(":")[1])
     return {"unix_ms": time.time() * 1000, "rss_kib": kib(fields.get("VmRSS")),
-            "hwm_kib": kib(fields.get("VmHWM")), "pss_kib": pss, "threads": len(tasks), "fds": fds,
+            "pss_kib": pss, "threads": len(tasks), "fds": fds,
             "cpu_s": (int(after[11]) + int(after[12])) / ticks,
             "children_cpu_s": (int(after[13]) + int(after[14])) / ticks,
             "voluntary_switches": switches}
@@ -684,10 +675,10 @@ def summarize(directory):
     if capture["scenario"] == "lifecycle" and all(name in phases for name in
                                                   ("warmup_cycles", "cycles", "after_cycles")):
         # Resources must return to a plateau: the measured cycles may not
-        # keep what the 10 warm-up cycles did not. Older captures ran 100.
+        # keep what the 10 warm-up cycles did not.
         warm, cycles, after = (phases[name]["end_sample"] or {} for name in
                                ("warmup_cycles", "cycles", "after_cycles"))
-        count = capture.get("cycles") or 100
+        count = capture["cycles"]
         retention = {key: {"after_warmup": warm.get(key), "after_cycles": cycles.get(key),
                            "settled": after.get(key),
                            "growth_per_cycle": (after.get(key) - warm.get(key)) / count
@@ -773,9 +764,8 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
             key = re.sub(r"-\d+$", "", name)
             before = first.get(tid, [tid, name, 0, 0, 0])
             thread_cpu[key] = thread_cpu.get(key, 0) + (row[2] - before[2]) / 1e6
-            if len(row) >= 5 and len(before) >= 5:
-                thread_wait[key] = thread_wait.get(key, 0) + (row[3] - before[3]) / 1e6
-                thread_wakeups[key] = thread_wakeups.get(key, 0) + row[4] - before[4]
+            thread_wait[key] = thread_wait.get(key, 0) + (row[3] - before[3]) / 1e6
+            thread_wakeups[key] = thread_wakeups.get(key, 0) + row[4] - before[4]
     return {
         "seconds": seconds,
         "frames": len(phase_draws), "frames_per_second": len(phase_draws) / seconds if seconds else None,
@@ -994,6 +984,13 @@ def report(directories):
                      "calibrated noise; investigate guarded regressions above 5%.")}
 
 
+def positive_int(text):
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
+
+
 def main():
     # Turn SIGTERM into SystemExit so cleanup kills the app and compositor.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -1018,7 +1015,7 @@ def main():
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save rewrites")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
     single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
-    single.add_argument("--cycles", type=int, default=100,
+    single.add_argument("--cycles", type=positive_int, default=100,
                         help="measured lifecycle cycles; comparing two counts isolates per-cycle retention")
     single.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
                         help="extra environment for the app, e.g. MIMALLOC_ALLOW_THP=0 (repeatable)")

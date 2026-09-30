@@ -4,8 +4,7 @@
 Importable (`collect`) and usable as a command:
 
   python3 scripts/profiling/perf_metadata.py --output run/environment.json \
-      --binary gitcomet=target/release/gitcomet --fixture repo=/path/to/fixture \
-      --cargo-profile release --command "..."
+      --binary gitcomet=target/release/gitcomet --cargo-profile release --command "..."
 
 Everything is best effort: a missing tool is recorded as unavailable rather than
 failing the run. Compare two captures with `--compare A B`, which lists the
@@ -187,15 +186,15 @@ def display_info():
     return info
 
 
-def git_info(env=None):
+def git_info():
     return {
         "version": run(["git", "--version"]),
-        "config": run(["git", "config", "--list", "--show-origin"], env=env),
+        "config": run(["git", "config", "--list", "--show-origin"]),
         "lfs": run(["git", "lfs", "version"]),
     }
 
 
-def collect(binaries=(), fixtures=(), cargo_profile=None, features=None, command=None, git_env=None, notes=None):
+def collect(binaries=(), fixtures=(), cargo_profile=None, features=None, command=None):
     return {
         "version": 1,
         "captured_unix_ms": int(time.time() * 1000),
@@ -215,18 +214,14 @@ def collect(binaries=(), fixtures=(), cargo_profile=None, features=None, command
         "busy_processes": busy_processes(),
         "gpu": gpu_info(),
         "display": display_info(),
-        "git": git_info(git_env),
+        "git": git_info(),
         "allocator": {key: value for key, value in os.environ.items() if key.startswith("MIMALLOC_")},
-        "notes": notes,
     }
 
 
 def lookup(data, dotted):
     for key in dotted.split("."):
         data = data.get(key) if isinstance(data, dict) else None
-    if dotted == "gpu.nvidia" and isinstance(data, str):
-        # Captures before nvidia_state existed appended clocks and temperature.
-        data = ",".join(part.strip() for part in data.split(",")[:2])
     return data
 
 
@@ -252,11 +247,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--binary", action="append", help="NAME=PATH of a measured executable")
-    parser.add_argument("--fixture", action="append", help="NAME=PATH of a fixture repository or file")
     parser.add_argument("--cargo-profile")
     parser.add_argument("--features")
     parser.add_argument("--command")
-    parser.add_argument("--notes")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"))
     args = parser.parse_args()
     if args.compare:
@@ -265,8 +258,7 @@ def main():
         return
     if args.output is None:
         parser.error("--output is required unless --compare is used")
-    data = collect(pairs(args.binary, "--binary"), pairs(args.fixture, "--fixture"), args.cargo_profile,
-                   args.features, args.command, notes=args.notes)
+    data = collect(pairs(args.binary, "--binary"), (), args.cargo_profile, args.features, args.command)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 

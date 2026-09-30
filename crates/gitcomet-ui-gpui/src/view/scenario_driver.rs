@@ -28,7 +28,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-pub(crate) const SCENARIO_ENV: &str = "GITCOMET_UI_SCENARIO";
+const SCENARIO_ENV: &str = "GITCOMET_UI_SCENARIO";
 const DEFAULT_WITNESS_TIMEOUT: Duration = Duration::from_secs(15);
 /// Re-check spacing while witnesses are pending. Entity notifications catch
 /// most changes at once, but some results land in several steps (a search
@@ -37,11 +37,7 @@ const WITNESS_POLL: Duration = Duration::from_millis(4);
 
 #[derive(Debug, Deserialize)]
 struct Scenario {
-    name: String,
     steps: Vec<Step>,
-    /// Quit the application after the last step (default).
-    #[serde(default = "default_true")]
-    quit: bool,
 }
 
 fn default_true() -> bool {
@@ -96,15 +92,6 @@ enum Step {
         #[serde(default)]
         witness: Option<WitnessKind>,
     },
-    /// Rewrites a work-tree file on a fixed schedule, alternating `contents`
-    /// and the file's original bytes: an editor saving. The witness is the
-    /// status list reflecting each save, through the native watcher.
-    WriteFile {
-        path: PathBuf,
-        contents: String,
-        repeat: usize,
-        interval_ms: u64,
-    },
     /// Writes every path at once (a checkout or build touching many files),
     /// then restores them (or deletes the new ones) the next round. With
     /// `expect_status` each round's witness is the status list showing all
@@ -130,8 +117,6 @@ enum Step {
     OpenRepo { path: PathBuf },
     /// Minimizes the window (idle measurements).
     Minimize,
-    /// Checks final state; a mismatch fails the scenario.
-    Expect { witness: WitnessKind },
 }
 
 fn default_ready_timeout_ms() -> u64 {
@@ -155,8 +140,6 @@ enum ScrollTarget {
 enum ClickTarget {
     /// A row of the unstaged/changed files list, by display index.
     UnstagedRow { index: usize },
-    /// A row of the history list, by visible index from the top.
-    HistoryRow { index: usize },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -168,12 +151,8 @@ enum WitnessKind {
     DiffLoaded,
     /// The history list moved.
     HistoryScrolled,
-    /// The diff search settled on the expected query, optionally with an
-    /// exact match count.
-    SearchSettled {
-        #[serde(default)]
-        matches: Option<usize>,
-    },
+    /// The diff search settled on the typed query.
+    SearchSettled,
     /// The repository at `path` is active with status and history loaded.
     RepoOpen { path: PathBuf },
     /// No open repository has `path` as its work tree.
@@ -186,7 +165,7 @@ impl WitnessKind {
             Self::CommitDetails => "commit_details",
             Self::DiffLoaded => "diff_loaded",
             Self::HistoryScrolled => "history_scrolled",
-            Self::SearchSettled { .. } => "search_settled",
+            Self::SearchSettled => "search_settled",
             Self::RepoOpen { .. } => "repo_open",
             Self::RepoClosed { .. } => "repo_closed",
         }
@@ -217,8 +196,6 @@ struct Driver {
     _observers: Vec<gpui::Subscription>,
     errors: Vec<String>,
     phase: Option<String>,
-    witnessed: usize,
-    superseded: usize,
 }
 
 pub(crate) fn start_if_requested(cx: &mut App) {
@@ -244,7 +221,6 @@ pub(crate) fn start_if_requested(cx: &mut App) {
 }
 
 async fn run(scenario: Scenario, cx: &mut AsyncApp) {
-    record("scenario_begin", json!({"name": scenario.name}));
     let mut driver = match Driver::attach(cx).await {
         Ok(driver) => driver,
         Err(error) => {
@@ -252,7 +228,7 @@ async fn run(scenario: Scenario, cx: &mut AsyncApp) {
                 "scenario_end",
                 json!({"outcome": "failed", "errors": [error]}),
             );
-            finish(scenario.quit, cx).await;
+            finish(cx).await;
             return;
         }
     };
@@ -272,22 +248,19 @@ async fn run(scenario: Scenario, cx: &mut AsyncApp) {
     };
     record(
         "scenario_end",
-        json!({"outcome": outcome, "errors": driver.errors, "witnessed": driver.witnessed,
-            "superseded": driver.superseded}),
+        json!({"outcome": outcome, "errors": driver.errors}),
     );
-    finish(scenario.quit, cx).await;
+    finish(cx).await;
 }
 
-async fn finish(quit: bool, cx: &mut AsyncApp) {
+async fn finish(cx: &mut AsyncApp) {
     // The probe drains frames and stage records once per interval; wait for
     // one more so the last inputs keep their records.
     cx.background_executor()
         .timer(crate::ui_probe::interval() + Duration::from_millis(300))
         .await;
     crate::ui_probe::flush(Duration::from_secs(5));
-    if quit {
-        cx.update(|cx| cx.quit());
-    }
+    cx.update(|cx| cx.quit());
 }
 
 /// The keystroke typing `ch` produces. Built directly because
@@ -375,8 +348,6 @@ impl Driver {
             _observers: observers,
             errors: Vec::new(),
             phase: None,
-            witnessed: 0,
-            superseded: 0,
         })
     }
 
@@ -418,7 +389,9 @@ impl Driver {
                     *interval_ms,
                     witness.clone(),
                     cx,
-                    |_, window, cx| window.dispatch_keystroke(keystroke.clone(), cx),
+                    |_, window, cx| {
+                        window.dispatch_keystroke(keystroke.clone(), cx);
+                    },
                 )
                 .await
             }
@@ -435,7 +408,9 @@ impl Driver {
                     *interval_ms,
                     witness.clone(),
                     cx,
-                    |ix, window, cx| window.dispatch_keystroke(keystrokes[ix].clone(), cx),
+                    |ix, window, cx| {
+                        window.dispatch_keystroke(keystrokes[ix].clone(), cx);
+                    },
                 )
                 .await
             }
@@ -459,17 +434,15 @@ impl Driver {
                         let flipped =
                             flip_every.is_some_and(|every| every > 0 && (ix / every) % 2 == 1);
                         let delta = if flipped { -delta_px } else { *delta_px };
-                        !window
-                            .dispatch_event(
-                                PlatformInput::ScrollWheel(ScrollWheelEvent {
-                                    position,
-                                    delta: ScrollDelta::Pixels(point(px(0.0), px(delta))),
-                                    modifiers: Modifiers::default(),
-                                    touch_phase: TouchPhase::Moved,
-                                }),
-                                cx,
-                            )
-                            .propagate
+                        window.dispatch_event(
+                            PlatformInput::ScrollWheel(ScrollWheelEvent {
+                                position,
+                                delta: ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                                modifiers: Modifiers::default(),
+                                touch_phase: TouchPhase::Moved,
+                            }),
+                            cx,
+                        );
                     },
                 )
                 .await
@@ -486,8 +459,8 @@ impl Driver {
                         click_count: 1,
                         first_mouse: false,
                     };
-                    let pressed = window.dispatch_event(PlatformInput::MouseDown(down), cx);
-                    let released = window.dispatch_event(
+                    window.dispatch_event(PlatformInput::MouseDown(down), cx);
+                    window.dispatch_event(
                         PlatformInput::MouseUp(MouseUpEvent {
                             button: MouseButton::Left,
                             position,
@@ -496,24 +469,7 @@ impl Driver {
                         }),
                         cx,
                     );
-                    !pressed.propagate || !released.propagate
                 })
-                .await
-            }
-            Step::WriteFile {
-                path,
-                contents,
-                repeat,
-                interval_ms,
-            } => {
-                self.write_files(
-                    std::slice::from_ref(path),
-                    contents,
-                    *repeat,
-                    *interval_ms,
-                    true,
-                    cx,
-                )
                 .await
             }
             Step::WriteFiles {
@@ -546,7 +502,6 @@ impl Driver {
                 };
                 self.scheduled(1, 0, Some(witness), cx, move |_, window, cx| {
                     view.update(cx, |view, cx| view.execute_command(&id, Some(window), cx));
-                    true
                 })
                 .await
             }
@@ -557,7 +512,6 @@ impl Driver {
                 let witness = WitnessKind::RepoOpen { path: path.clone() };
                 self.scheduled(1, 0, Some(witness), cx, move |_, _, _| {
                     store.dispatch(Msg::OpenRepo(path.clone()));
-                    true
                 })
                 .await
             }
@@ -565,14 +519,6 @@ impl Driver {
                 .window
                 .update(cx, |_, window, _| window.minimize_window())
                 .map_err(|e| e.to_string()),
-            Step::Expect { witness } => {
-                let baseline = Baseline::None;
-                if self.witness_holds(witness, &baseline, &mut None, cx) {
-                    Ok(())
-                } else {
-                    Err(format!("final state does not satisfy {witness:?}"))
-                }
-            }
         }
     }
 
@@ -645,15 +591,6 @@ impl Driver {
                         )
                     })
                 }
-                ClickTarget::HistoryRow { index } => {
-                    let history = view.main_pane.read(cx).history_view.read(cx);
-                    let bounds = history.history_viewport_bounds()?;
-                    let row = crate::view::rows::history_row_height(history.ui_scale());
-                    Some(point(
-                        bounds.left() + bounds.size.width * 0.5,
-                        bounds.top() + row * (index as f32 + 0.5),
-                    ))
-                }
             }
         })
     }
@@ -673,7 +610,7 @@ impl Driver {
                         .read(cx)
                         .history_scroll_position(),
                 ),
-                WitnessKind::SearchSettled { .. } => {
+                WitnessKind::SearchSettled => {
                     Baseline::Query(view.main_pane.read(cx).diff_search_query.clone())
                 }
                 WitnessKind::DiffLoaded
@@ -747,16 +684,13 @@ impl Driver {
                         _ => true,
                     }
                 }
-                WitnessKind::SearchSettled { matches } => {
+                WitnessKind::SearchSettled => {
                     let main = view.main_pane.read(cx);
                     let changed = match baseline {
                         Baseline::Query(before) => main.diff_search_query != *before,
                         _ => true,
                     };
-                    changed
-                        && main.diff_search_active
-                        && !main.diff_search_result_pending()
-                        && matches.is_none_or(|count| main.diff_search_matches.len() == count)
+                    changed && main.diff_search_active && !main.diff_search_result_pending()
                 }
             }
         })
@@ -770,12 +704,11 @@ impl Driver {
         interval_ms: u64,
         witness: Option<WitnessKind>,
         cx: &mut AsyncApp,
-        mut input: impl FnMut(usize, &mut Window, &mut App) -> bool,
+        mut input: impl FnMut(usize, &mut Window, &mut App),
     ) -> Result<(), String> {
         let started = Instant::now();
         let interval = Duration::from_millis(interval_ms);
         let mut pending: Vec<Pending> = Vec::new();
-        let mut late = 0usize;
         for ix in 0..repeat {
             let scheduled = started + interval * u32::try_from(ix).unwrap_or(u32::MAX);
             // Resolve witnesses until the next input is due.
@@ -783,9 +716,6 @@ impl Driver {
                 self.resolve(&mut pending, cx);
                 let now = Instant::now();
                 if now >= scheduled {
-                    if now.duration_since(scheduled) > Duration::from_millis(2) {
-                        late += 1;
-                    }
                     break;
                 }
                 let wait = scheduled - now;
@@ -811,17 +741,16 @@ impl Driver {
                     expects,
                 );
                 let handling = Instant::now();
-                let handled = {
+                {
                     let _scope = op_trace::scope(op);
-                    input(ix, window, cx)
-                };
-                // `b` records whether anything consumed the input.
+                    input(ix, window, cx);
+                }
                 op_trace::record(
                     Stage::InputHandled,
                     op,
                     "scenario",
-                    u64::try_from(handling.elapsed().as_nanos()).unwrap_or(u64::MAX),
-                    u64::from(handled),
+                    op_trace::duration_ns(handling.elapsed()),
+                    0,
                 );
             });
             dispatched.map_err(|e| format!("window closed: {e}"))?;
@@ -852,17 +781,12 @@ impl Driver {
             self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
                 .await;
         }
-        record(
-            "scenario_inputs",
-            json!({"phase": self.phase, "inputs": repeat, "late": late,
-                "interval_ms": interval_ms}),
-        );
         Ok(())
     }
 
     /// Marks the newest satisfied witness complete and every older pending
     /// input superseded: later input replaced its result before it showed.
-    fn resolve(&mut self, pending: &mut Vec<Pending>, cx: &mut AsyncApp) {
+    fn resolve(&self, pending: &mut Vec<Pending>, cx: &mut AsyncApp) {
         let mut satisfied = None;
         for ix in (0..pending.len()).rev() {
             let mut target = pending[ix].target.clone();
@@ -885,11 +809,6 @@ impl Driver {
                 "superseded"
             };
             op_trace::record(Stage::Witness, item.op, label, u64::from(complete), 0);
-            if complete {
-                self.witnessed += 1;
-            } else {
-                self.superseded += 1;
-            }
         }
     }
 
@@ -932,7 +851,7 @@ impl Driver {
                         .read(cx)
                         .history_scroll_position()
                 ),
-                WitnessKind::SearchSettled { .. } => {
+                WitnessKind::SearchSettled => {
                     let main = view.main_pane.read(cx);
                     format!(
                         "active={} query={:?} running={} pending={:?} matches={}",
@@ -1018,7 +937,7 @@ impl Driver {
                 Stage::InputHandled,
                 op,
                 "file_write",
-                u64::try_from(handling.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                op_trace::duration_ns(handling.elapsed()),
                 1,
             );
             if result.is_err() {
@@ -1047,7 +966,6 @@ impl Driver {
                 });
                 if reflected {
                     op_trace::record(Stage::Witness, op, "status_reflects_save", 1, 0);
-                    self.witnessed += 1;
                     break;
                 }
                 let now = Instant::now();
@@ -1082,8 +1000,6 @@ mod tests {
     #[test]
     fn harness_step_shapes_parse() {
         let scenario: Scenario = serde_json::from_value(json!({
-            "name": "all-steps",
-            "quit": true,
             "steps": [
                 {"do": "wait_ready", "timeout_ms": 180000},
                 {"do": "settle", "ms": 3000},
@@ -1098,9 +1014,6 @@ mod tests {
                  "interval_ms": 16, "flip_every": 150, "witness": {"kind": "history_scrolled"}},
                 {"do": "click", "target": {"list": "unstaged_row", "index": 0},
                  "witness": {"kind": "diff_loaded"}},
-                {"do": "click", "target": {"list": "history_row", "index": 3}},
-                {"do": "write_file", "path": "save-target.txt", "contents": "x\n",
-                 "repeat": 40, "interval_ms": 1500},
                 {"do": "write_files", "paths": ["src/a.txt", "src/b.txt"], "contents": "x\n",
                  "rounds": 10, "interval_ms": 2000},
                 {"do": "write_files", "paths": ["target/churn-1.txt"], "contents": "x\n",
@@ -1109,24 +1022,17 @@ mod tests {
                 {"do": "command", "id": "close-repo-tab",
                  "witness": {"kind": "repo_closed", "path": "/tmp"}},
                 {"do": "open_repo", "path": "/tmp"},
-                {"do": "minimize"},
-                {"do": "expect", "witness": {"kind": "search_settled", "matches": 100}}
+                {"do": "minimize"}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 18);
+        assert_eq!(scenario.steps.len(), 15);
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {
                 repeat: 240,
                 witness: Some(WitnessKind::CommitDetails),
                 ..
-            }
-        ));
-        assert!(matches!(
-            scenario.steps[17],
-            Step::Expect {
-                witness: WitnessKind::SearchSettled { matches: Some(100) }
             }
         ));
     }
@@ -1147,7 +1053,7 @@ mod tests {
     #[test]
     fn unknown_steps_are_rejected_rather_than_skipped() {
         let parsed = serde_json::from_value::<Scenario>(json!({
-            "name": "typo", "steps": [{"do": "wait_redy"}]
+            "steps": [{"do": "wait_redy"}]
         }));
         assert!(parsed.is_err());
     }

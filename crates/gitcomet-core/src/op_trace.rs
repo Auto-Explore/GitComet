@@ -4,7 +4,7 @@
 //!
 //! Inert until [`enable`] runs (the UI probe enables it for JSONL captures):
 //! every call site costs one relaxed load. Records are fixed-size and buffered
-//! in memory up to [`MAX_BUFFERED`]; the probe drains them off the hot path and
+//! in memory up to a fixed bound; the probe drains them off the hot path and
 //! reports anything dropped.
 //!
 //! An operation id travels with the thread that works on it: [`scope`] sets it
@@ -15,9 +15,9 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-pub const MAX_BUFFERED: usize = 1 << 16;
+const MAX_BUFFERED: usize = 1 << 16;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ORIGIN: OnceLock<Instant> = OnceLock::new();
@@ -113,7 +113,7 @@ pub fn enabled() -> bool {
 }
 
 /// Nanoseconds since the origin, or 0 while disabled.
-pub fn now_ns() -> u64 {
+fn now_ns() -> u64 {
     ORIGIN
         .get()
         .map_or(0, |origin| since(*origin, Instant::now()))
@@ -125,7 +125,12 @@ pub fn instant_ns(at: Instant) -> u64 {
 }
 
 fn since(origin: Instant, at: Instant) -> u64 {
-    u64::try_from(at.saturating_duration_since(origin).as_nanos()).unwrap_or(u64::MAX)
+    duration_ns(at.saturating_duration_since(origin))
+}
+
+/// A duration in trace units (nanoseconds), saturating.
+pub fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// A fresh operation id; ids are never reused within a process.
@@ -134,7 +139,7 @@ pub fn next_op() -> u64 {
 }
 
 /// The operation the current thread is working on, or 0.
-pub fn current() -> u64 {
+fn current() -> u64 {
     CURRENT_OP.with(Cell::get)
 }
 
@@ -259,9 +264,9 @@ pub fn drain() -> Drained {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Stamp {
     pub op: u64,
-    pub queued_ns: u64,
+    queued_ns: u64,
     /// The spawning thread's [`label_scope`], or empty.
-    pub label: &'static str,
+    label: &'static str,
 }
 
 impl Stamp {
@@ -300,7 +305,7 @@ pub fn wrap_task<F: FnOnce()>(pool: &'static str, task: F) -> impl FnOnce() {
                 Stage::TaskFinished,
                 stamp.op,
                 label,
-                u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                duration_ns(started.elapsed()),
                 0,
             );
         }
@@ -310,7 +315,6 @@ pub fn wrap_task<F: FnOnce()>(pool: &'static str, task: F) -> impl FnOnce() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     // The trace is process-global; one test exercises it end to end so
     // parallel tests cannot interleave records.

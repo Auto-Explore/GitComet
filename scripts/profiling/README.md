@@ -71,39 +71,41 @@ python3 scripts/profiling/live-ui.py measure ... --session second --reverse --ou
 python3 scripts/profiling/live-ui.py report target/profiling/live/s1 target/profiling/live/s2
 ```
 
-Scenarios: `startup`, `idle`, `idle-minimized`, `two-windows-idle`,
-`history-select`, `history-select-burst` (selections faster than details load:
-superseded inputs and their worker time are reported), `history-scroll`,
-`status-save` and `status-burst` (real file writes through the native
-watcher), `status-touch` (saves of unchanged bytes), `ignored-churn` (build
-output in an ignored directory), `idle-hidden-terminal`,
-`diff-search` (first and repeated search), `terminal-output` (sustained output
-while scrolling) and `lifecycle` (10 warm-up plus `--cycles` (default 100)
-open/select/close cycles of a `--secondary-repository`, then a plateau phase
-for retained memory, threads and descriptors; comparing two cycle counts
-under `--wrap 'heaptrack --record-only -o {output}/heap'` on a build without
-mimalloc separates live-heap growth from allocator retention). Runs share a warm GPU shader cache under
-`target/profiling/gpu-shader-cache`; `--cold-gpu-cache` measures a first
-launch, where the NVIDIA driver here spends ~570 ms compiling pipelines.
-Memory is reported with a PSS breakdown (allocator heap, memory-mapped Git
-packs, GPU driver, binary), since mapped packs can double the resident size. Each run gets a private headless mutter with a
-virtual monitor, so the window is focused and paced by a real compositor
-without touching the desktop; `--display desktop` uses the session instead,
-where GNOME denies a background launch focus and an occluded window receives
-no frame callbacks. Runs are rejected when the app exits non-zero, a witness
-never holds, the probe drops records, or a frame waits over a second to draw.
-Summaries report per-phase draw time, dirty-to-draw, wake delay, input to
-witness/draw, store/worker stage times, main-thread and per-thread CPU,
-wakeups, RSS/PSS, threads and file descriptors. Linux records no submission
-(present) timing, and draw is CPU work: neither is GPU or display completion.
-Freeze both binaries (copy them) before a paired session. `run --env
-KEY=VALUE` sets runtime knobs (allocator options, say) and records them;
-`measure --candidate-wrap PREFIX` / `--candidate-env KEY=VALUE` measure a
-runtime-only candidate against the same binary, and the report refuses to
-combine sessions that ran different candidate settings. A witness reads the
-applied state after each publication, so a driver step that changes state
-(`command` with a `repo_closed` witness, `open_repo`) must be witnessed before
-the next step reads it.
+- **Scenarios:** `startup`, `idle`, `idle-minimized`, `two-windows-idle`,
+  `idle-hidden-terminal`, `history-select`, `history-select-burst` (selections
+  faster than details load; superseded inputs and their worker time are
+  reported), `history-scroll`, `status-save`, `status-burst` and `status-touch`
+  (real writes through the native watcher; `status-touch` rewrites unchanged
+  bytes), `ignored-churn` (build output in an ignored directory), `diff-search`
+  (first and repeated search), `terminal-output` (output while scrolling) and
+  `lifecycle` (10 warm-up plus `--cycles` open/select/close cycles of a
+  `--secondary-repository`, then a plateau phase for retained memory, threads
+  and descriptors).
+- **Display:** each run gets a private headless mutter with one virtual
+  monitor, so the window is focused and paced by a real compositor.
+  `--display desktop` uses the session instead, where GNOME denies a
+  background launch focus and an occluded window gets no frame callbacks.
+- **GPU cache:** runs share a warm shader cache under
+  `target/profiling/gpu-shader-cache`; `--cold-gpu-cache` measures a first
+  launch.
+- **Rejection:** a run is rejected when the app exits non-zero, a witness never
+  holds, the probe drops records, or a frame waits over a second to draw.
+- **Output:** per-phase draw time, dirty-to-draw, wake delay, input to
+  witness/draw, store/worker stage times, main-thread and per-thread CPU,
+  wakeups, RSS/PSS (split into allocator heap, mapped Git packs, GPU driver
+  and binary), threads and file descriptors. Linux records no present timing,
+  and draw is CPU work: neither is GPU or display completion.
+- **Runtime knobs:** `run --env KEY=VALUE` sets and records them;
+  `measure --candidate-wrap PREFIX` / `--candidate-env KEY=VALUE` measure a
+  runtime-only candidate against the same binary. `--wrap` runs the app under
+  a tool: comparing two `--cycles` counts under
+  `--wrap 'heaptrack --record-only -o {output}/heap'` on a build without
+  mimalloc separates live-heap growth from allocator retention.
+- **Pairs:** freeze (copy) both binaries first. The report refuses to combine
+  sessions that ran different candidate settings.
+- **Witnesses:** a witness reads the applied state after each publication, so
+  a step that changes state (`command` with a `repo_closed` witness,
+  `open_repo`) must be witnessed before the next step reads it.
 
 ## GUI and process captures
 
