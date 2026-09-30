@@ -334,15 +334,25 @@ impl Driver {
         };
         let (tx, changed) = smol::channel::bounded(1);
         let observers = cx.update(|cx| {
-            let (main_pane, details_pane) = {
+            let (ui_model, main_pane, details_pane) = {
                 let view = view.read(cx);
-                (view.main_pane.clone(), view.details_pane.clone())
+                (
+                    view.ui_model.clone(),
+                    view.main_pane.clone(),
+                    view.details_pane.clone(),
+                )
             };
             let history = main_pane.read(cx).history_view.clone();
             let notify = move |tx: &smol::channel::Sender<()>| {
                 let _ = tx.try_send(());
             };
             vec![
+                // Every state publication, so a witness never waits on a pane
+                // happening to notify (the fallback is WITNESS_POLL).
+                cx.observe(&ui_model, {
+                    let tx = tx.clone();
+                    move |_, _| notify(&tx)
+                }),
                 cx.observe(&view, {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
