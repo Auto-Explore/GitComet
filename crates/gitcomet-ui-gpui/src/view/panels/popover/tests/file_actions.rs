@@ -2104,6 +2104,60 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn annex_text_prompts_submit_on_enter(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for (prompt, text) in [
+        (
+            AnnexPrompt::AddSpecialRemote,
+            "backup directory directory=/tmp/backup encryption=none",
+        ),
+        (
+            AnnexPrompt::EnableSpecialRemote {
+                name: "backup".into(),
+            },
+            "backup directory=/tmp/backup",
+        ),
+        (
+            AnnexPrompt::Describe {
+                repository: "here".into(),
+                current: String::new(),
+            },
+            "laptop",
+        ),
+        (AnnexPrompt::Numcopies { current: Some(1) }, "2"),
+    ] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, app| {
+            crate::app::bind_text_input_keys_for_test(app);
+            view.update(app, |view, cx| {
+                view.open_popover_at(
+                    PopoverKind::annex(RepoId(1), AnnexPopoverKind::Prompt(prompt)),
+                    point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+                view.popover_host.update(cx, |host, cx| {
+                    host.submodule_ref_input
+                        .update(cx, |input, cx| input.set_text(text, cx));
+                });
+            });
+        });
+        cx.run_until_parked();
+        crate::test_support::refresh_and_draw(cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert!(
+                !view.read(app).popover_host.read(app).is_open(),
+                "Enter should submit {text}"
+            )
+        });
+    }
+}
+
+#[gpui::test]
 fn annex_unused_prompt_drops_only_a_loaded_listing(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -2158,6 +2212,7 @@ fn annex_unused_prompt_drops_only_a_loaded_listing(cx: &mut gpui::TestAppContext
         cx,
         Loadable::Ready(Arc::new(gitcomet_core::large_files::AnnexUnused {
             entries: vec![gitcomet_core::large_files::AnnexUnusedEntry {
+                number: 1,
                 key: "SHA256E-s4--old.bin".into(),
                 kind: gitcomet_core::large_files::AnnexUnusedKind::Unused,
             }],

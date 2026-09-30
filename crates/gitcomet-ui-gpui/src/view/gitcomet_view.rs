@@ -3006,7 +3006,6 @@ impl GitCometView {
         self.signing_tools_probe_in_flight = false;
     }
 
-    /// Discovery runs only after explicit opt-in, startup, or diagnostics.
     /// Probe `git lfs` / `git annex` once per Git runtime. Not gated by any
     /// preference: the answer decides whether their commands are offered.
     pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
@@ -3036,6 +3035,7 @@ impl GitCometView {
         .detach();
     }
 
+    /// Discover signing tools after opt-in, on opted-in startup, or diagnostics.
     pub(super) fn refresh_signing_tools(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
         if cfg!(test)
             || !self

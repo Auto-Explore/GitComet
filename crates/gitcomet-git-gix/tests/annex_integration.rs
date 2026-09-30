@@ -594,10 +594,9 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
     );
 }
 
-/// git-annex's own bookkeeping must not look like repository changes to the
-/// file watcher, or reading it (line stats, `git annex find`) refreshes forever.
+/// Bulky stores are never walked; the watcher classifies the rest of `annex/`.
 #[test]
-fn watch_info_treats_the_annex_directory_as_private_cache() {
+fn watch_info_only_excludes_annex_content_and_databases() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -606,13 +605,31 @@ fn watch_info_treats_the_annex_directory_as_private_cache() {
         .repository_watch_info(&repo)
         .unwrap()
         .expect("watch info");
-    assert!(
-        info.cache_dirs
-            .iter()
-            .any(|dir| dir.ends_with(".git/annex")),
-        "{:?}",
-        info.cache_dirs
-    );
+    for file in [
+        "annex/restage.log",
+        "annex/journal/uuid.log",
+        "annex/daemon.pid",
+    ] {
+        assert!(
+            !info
+                .cache_dirs
+                .iter()
+                .any(|dir| repo.join(".git").join(file).starts_with(dir)),
+            "{file}"
+        );
+    }
+    for file in [
+        "annex/objects/key",
+        "annex/keysdb/db-wal",
+        "annex/transfer/upload",
+    ] {
+        assert!(
+            info.cache_dirs
+                .iter()
+                .any(|dir| repo.join(".git").join(file).starts_with(dir)),
+            "{file}"
+        );
+    }
 }
 
 /// Status refreshes run constantly, so they must never start git-annex: its
@@ -713,7 +730,7 @@ fn refresh_restages_files_left_stale_by_an_interrupted_command() {
 }
 
 /// git-annex restages at the end of a command; a failed or cancelled one
-/// skips it, so GitComet restages afterwards regardless of the outcome.
+/// can skip it, so GitComet restages after those unsuccessful commands.
 #[cfg(unix)]
 #[test]
 fn failed_annex_commands_still_restage() {
@@ -861,7 +878,14 @@ fn unused_lists_old_versions_and_drop_unused_honours_numcopies() {
     );
     assert_eq!(listed.known_bytes(), 4096);
 
-    let refused = run(&repo, LargeFileCommand::AnnexDropUnused { force: false }).unwrap_err();
+    let refused = run(
+        &repo,
+        LargeFileCommand::AnnexDropUnused {
+            unused: listed.clone().into(),
+            force: false,
+        },
+    )
+    .unwrap_err();
     assert!(refused.contains("Could not verify"), "{refused}");
     assert_eq!(
         unused().entries.len(),
@@ -873,8 +897,78 @@ fn unused_lists_old_versions_and_drop_unused_honours_numcopies() {
         &repo,
         &["annex", "copy", "-q", "--unused", "--to", "backup"],
     );
-    run(&repo, LargeFileCommand::AnnexDropUnused { force: false }).unwrap();
+    run(
+        &repo,
+        LargeFileCommand::AnnexDropUnused {
+            unused: listed.into(),
+            force: false,
+        },
+    )
+    .unwrap();
     assert!(unused().entries.is_empty());
+}
+
+#[test]
+fn unused_drop_refuses_a_listing_that_changed_after_confirmation() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let replace = |byte| {
+        git(&repo, &["annex", "unlock", "-q", "big.bin"]);
+        fs::write(repo.join("big.bin"), vec![byte; 100]).unwrap();
+        git(&repo, &["annex", "add", "-q", "big.bin"]);
+        git(&repo, &["commit", "-qm", "replace big.bin"]);
+    };
+    replace(8);
+    let listed = open(&repo)
+        .annex_unused_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert_eq!(listed.entries.len(), 1);
+    replace(9);
+    let result = run(
+        &repo,
+        LargeFileCommand::AnnexDropUnused {
+            unused: listed.into(),
+            force: true,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a stale confirmation must not drop newly unused content"
+    );
+    let remaining = open(&repo)
+        .annex_unused_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert_eq!(
+        remaining.entries.len(),
+        2,
+        "both unseen and confirmed content survive"
+    );
+}
+
+#[test]
+fn describe_accepts_a_leading_dash() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    run(
+        &repo,
+        LargeFileCommand::AnnexDescribe {
+            repository: "here".into(),
+            description: "-old laptop".into(),
+        },
+    )
+    .unwrap();
+    let support = open(&repo)
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    assert!(
+        support
+            .annex
+            .repositories
+            .iter()
+            .any(|r| r.description == "-old laptop")
+    );
 }
 
 #[test]
@@ -1659,6 +1753,96 @@ fn with_annex_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
             ("PATH", path_with(&bin)),
             ("GITCOMET_ANNEX_TEST_ROOT", dir.path().as_os_str().into()),
         ],
+    );
+}
+
+/// One argument per unused key overflows Windows' 32 KiB command line in a
+/// repository with thousands of old versions, so numbers go as ranges. The
+/// safety rescan is bookkeeping: its JSON must not flood the activity output.
+#[cfg(unix)]
+#[test]
+fn drop_unused_passes_ranges_and_keeps_the_rescan_quiet() {
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$*" in
+*restage*) exit 0 ;;
+*dropunused*) printf '%s\n' "$@" > "$GITCOMET_ANNEX_TEST_ROOT/argv"
+  printf '{"command":"dropunused","success":true}\n' ;;
+*unused*) awk 'BEGIN { printf "{\"command\":\"unused\",\"unused-list\":{"
+  for (i = 1; i <= 10000; i++) printf "%s\"%d\":\"WORM-s1-m1--old%d\"", (i > 1 ? "," : ""), i, i
+  printf "},\"tmp-list\":{\"10002\":\"WORM-s1-m1--tmp\"},\"success\":true}\n" }' ;;
+esac
+"#;
+    with_annex_shim(
+        "drop_unused_passes_ranges_and_keeps_the_rescan_quiet",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let opened = open(repo);
+            let listed = opened
+                .annex_unused_cancellable(&CancellationToken::new())
+                .unwrap();
+            assert_eq!(listed.entries.len(), 10_001);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let context = gitcomet_core::git_operation::GitOperationContext::new(
+                "drop unused",
+                move |_, event| {
+                    let _ = sender.send(event);
+                },
+            );
+            {
+                let _scope = gitcomet_core::git_operation::attach(&context);
+                opened
+                    .run_large_file_command(&LargeFileCommand::AnnexDropUnused {
+                        unused: listed.into(),
+                        force: false,
+                    })
+                    .unwrap();
+            }
+            let argv = fs::read_to_string(repo.join("argv")).unwrap();
+            assert!(argv.len() < 200, "{} bytes of arguments", argv.len());
+            let numbers: Vec<_> = argv
+                .lines()
+                .skip_while(|a| *a != "dropunused")
+                .skip(1)
+                .collect();
+            assert_eq!(numbers, ["1-10000", "10002"]);
+            let output: usize = receiver
+                .try_iter()
+                .filter_map(|event| match event {
+                    gitcomet_core::git_operation::GitOperationEvent::Output { chunks } => {
+                        Some(chunks.iter().map(|chunk| chunk.text.len()).sum::<usize>())
+                    }
+                    _ => None,
+                })
+                .sum();
+            assert!(output < 1000, "{output} bytes of activity output");
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_annex_commands_do_not_spawn_an_extra_restage() {
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$*" in *restage*) echo restage >> "$GITCOMET_ANNEX_TEST_ROOT/restages"; exit 0 ;; esac
+printf '{"command":"get","file":"big.bin","success":true}\n'
+"#;
+    with_annex_shim(
+        "successful_annex_commands_do_not_spawn_an_extra_restage",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            open(repo)
+                .run_large_file_command(&LargeFileCommand::AnnexGet {
+                    paths: paths("big.bin"),
+                    from: None,
+                })
+                .unwrap();
+            assert!(
+                !repo.join("restages").exists(),
+                "successful git-annex already restages"
+            );
+        },
     );
 }
 

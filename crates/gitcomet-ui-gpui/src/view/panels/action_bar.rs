@@ -1446,7 +1446,13 @@ mod tests {
         support.annex.uuid = Some("u".into());
         state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
         let detected = ActionBarView::notify_fingerprint(&state);
-        assert_ne!(before, detected);
+        assert_eq!(
+            before, detected,
+            "unknown support already protects the adjusted branch"
+        );
+        state.repos[0].large_file_support = Loadable::Ready(Arc::default());
+        assert_ne!(detected, ActionBarView::notify_fingerprint(&state));
+        state.repos[0].large_file_support = Loadable::Loading;
         state.large_file_settings.annex_pull_push = false;
         assert_ne!(detected, ActionBarView::notify_fingerprint(&state));
     }

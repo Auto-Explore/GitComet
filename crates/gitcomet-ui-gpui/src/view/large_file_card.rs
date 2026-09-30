@@ -24,9 +24,14 @@ pub(in crate::view) fn large_file_card_lines(
     new: Option<&LargeFileSide>,
 ) -> Vec<(&'static str, String)> {
     let describe = |side: &LargeFileSide| {
-        let size = side
-            .pointer
-            .size()
+        // Measured content beats the pointer's record: an edited unlocked
+        // annex file is still described by the key it was added with.
+        let measured = match side.content {
+            LargeFileContent::TooLarge { bytes } => Some(bytes),
+            _ => None,
+        };
+        let size = measured
+            .or(side.pointer.size())
             .map(human_readable_bytes)
             .unwrap_or_else(|| "size unknown".to_string());
         let id = match &side.pointer {
@@ -37,12 +42,7 @@ pub(in crate::view) fn large_file_card_lines(
             LargeFileContent::Available => "content here".to_string(),
             LargeFileContent::MissingLocally => "not downloaded".to_string(),
             LargeFileContent::Unknown => "presence unknown".to_string(),
-            LargeFileContent::TooLarge { bytes } => {
-                format!(
-                    "content here, too large to diff ({})",
-                    human_readable_bytes(bytes)
-                )
-            }
+            LargeFileContent::TooLarge { .. } => "content here, too large to diff".to_string(),
         };
         format!("{size} · {id} · {presence}")
     };
@@ -189,6 +189,20 @@ mod tests {
             "added file"
         );
         assert_eq!(large_file_card_title(None, Some(&new)), "Git LFS file");
+    }
+
+    /// An edited unlocked annex file is described by the key it was added
+    /// with; the measured size is the one that matches the content.
+    #[test]
+    fn too_large_content_reports_its_measured_size() {
+        let edited = lfs(5, LargeFileContent::TooLarge { bytes: 4 << 30 });
+        assert_eq!(
+            large_file_card_lines(None, Some(&edited)),
+            [(
+                "After",
+                "4.3 GB · sha256 abababababab · content here, too large to diff".to_string()
+            )]
+        );
     }
 
     #[test]

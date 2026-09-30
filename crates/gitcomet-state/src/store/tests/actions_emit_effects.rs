@@ -5514,9 +5514,26 @@ fn support_changes_refresh_selected_content_but_unchanged_support_does_not() {
             pattern: "*.bin".into(),
             source: ".gitattributes".into(),
         });
+    let mut metadata_only = support.clone();
+    metadata_only.annex.restage_pending = true;
+    metadata_only.annex.numcopies = Some(2);
+    metadata_only.annex.assistant_running = true;
+    metadata_only
+        .annex
+        .repositories
+        .push(gitcomet_core::large_files::AnnexRepository {
+            uuid: "test".into(),
+            description: "new description".into(),
+            remote_name: None,
+            special_type: None,
+            special_name: None,
+            trust: gitcomet_core::large_files::AnnexTrust::Untrusted,
+            here: true,
+        });
     for (support, refresh) in [
         (support.clone(), true),
         (support, false),
+        (metadata_only, false),
         (Default::default(), true),
     ] {
         let effects = reduce(
@@ -5735,7 +5752,7 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
 }
 
 #[test]
-fn adjusted_branch_name_requires_confirmed_annex_support() {
+fn adjusted_branch_never_uses_plain_git_while_support_is_unknown() {
     for support in [
         Loadable::NotLoaded,
         Loadable::Loading,
@@ -5745,7 +5762,7 @@ fn adjusted_branch_name_requires_confirmed_annex_support() {
         let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
         annex_repo_on(&mut state, "adjusted/main(unlocked)");
         state.repos[0].large_file_support = support;
-        assert!(state.repos[0].annex_adjusted_branch().is_none());
+        let confirmed_inactive = matches!(state.repos[0].large_file_support, Loadable::Ready(_));
         for message in [
             Msg::Pull {
                 repo_id,
@@ -5755,15 +5772,17 @@ fn adjusted_branch_name_requires_confirmed_annex_support() {
         ] {
             let effects = reduce(&mut repos, &id_alloc, &mut state, message);
             assert!(
-                !effects
+                effects
                     .iter()
-                    .any(|e| matches!(e, Effect::RunLargeFileCommand { .. })),
+                    .any(|e| matches!(e, Effect::RunLargeFileCommand { .. }))
+                    != confirmed_inactive,
                 "{effects:?}"
             );
             assert!(
                 effects
                     .iter()
-                    .any(|e| matches!(e, Effect::Push { .. } | Effect::Pull { .. })),
+                    .any(|e| matches!(e, Effect::Push { .. } | Effect::Pull { .. }))
+                    == confirmed_inactive,
                 "{effects:?}"
             );
         }
@@ -5771,48 +5790,78 @@ fn adjusted_branch_name_requires_confirmed_annex_support() {
 }
 
 #[test]
-fn command_without_hooks_logs_its_operation_id() {
+fn command_log_only_links_reportable_operations() {
     use crate::msg::InternalMsg;
     use gitcomet_core::git_operation::GitOperationId;
-    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
-    let operation_id = GitOperationId(4242);
-    for message in [
-        InternalMsg::GitOperationStarted {
-            repo_id,
-            operation_id,
-            label: "Get content".into(),
-            context: None,
-            time: std::time::SystemTime::UNIX_EPOCH,
-        },
-        InternalMsg::GitOperationFinished {
-            repo_id,
-            operation_id,
-            outer_outcome: crate::model::GitOperationOuterOutcome::Succeeded,
-            duration: std::time::Duration::from_millis(1),
-            message: Box::new(InternalMsg::RepoCommandFinished {
-                repo_id,
-                command: RepoCommandKind::LargeFile {
-                    command: gitcomet_core::large_files::LargeFileCommand::AnnexGetKeys {
-                        keys: vec!["WORM-s1-m1--file".into()],
-                    },
-                },
-                result: Ok(gitcomet_core::services::CommandOutput {
-                    command: "git annex get".into(),
-                    stdout: "file".into(),
-                    stderr: String::new(),
-                    exit_code: Some(0),
+    for reportable in [false, true] {
+        for success in [false, true] {
+            let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+            let operation_id = GitOperationId(4242);
+            reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                Msg::Internal(InternalMsg::GitOperationStarted {
+                    repo_id,
+                    operation_id,
+                    label: "Push".into(),
+                    context: None,
+                    time: std::time::SystemTime::UNIX_EPOCH,
                 }),
-            }),
-        },
-    ] {
-        reduce(&mut repos, &id_alloc, &mut state, Msg::Internal(message));
+            );
+            if reportable {
+                reduce(
+                    &mut repos,
+                    &id_alloc,
+                    &mut state,
+                    Msg::Internal(InternalMsg::GitOperationEvent {
+                        repo_id,
+                        operation_id,
+                        event: gitcomet_core::git_operation::GitOperationEvent::CommandStarted,
+                    }),
+                );
+            }
+            reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                Msg::Internal(InternalMsg::GitOperationFinished {
+                    repo_id,
+                    operation_id,
+                    outer_outcome: if success {
+                        crate::model::GitOperationOuterOutcome::Succeeded
+                    } else {
+                        crate::model::GitOperationOuterOutcome::Failed
+                    },
+                    duration: std::time::Duration::from_millis(1),
+                    message: Box::new(InternalMsg::RepoCommandFinished {
+                        repo_id,
+                        command: RepoCommandKind::Push,
+                        result: if success {
+                            Ok(gitcomet_core::services::CommandOutput {
+                                command: "git push".into(),
+                                stdout: "file".into(),
+                                stderr: String::new(),
+                                exit_code: Some(0),
+                            })
+                        } else {
+                            Err(gitcomet_core::error::Error::new(
+                                gitcomet_core::error::ErrorKind::Backend("rejected push".into()),
+                            ))
+                        },
+                    }),
+                }),
+            );
+            let repo = &state.repos[0];
+            assert_eq!(
+                repo.feedback.command_log.last().unwrap().hook_operation_id,
+                reportable.then_some(operation_id)
+            );
+            assert_eq!(repo.feedback.command_log.last().unwrap().ok, success);
+            assert_eq!(repo.feedback.hook_activity.len(), usize::from(reportable));
+            assert_eq!(repo.feedback.command_log_operation_id, None);
+        }
     }
-    let repo = &state.repos[0];
-    assert_eq!(
-        repo.feedback.command_log.last().unwrap().hook_operation_id,
-        Some(operation_id)
-    );
-    assert_eq!(repo.feedback.command_log_operation_id, None);
 }
 
 /// An annex repo whose support was loaded while HEAD was on `main`.
@@ -6214,7 +6263,10 @@ fn unused_listing_loads_on_request_and_reloads_after_content_moves() {
         &mut repos,
         &id_alloc,
         &mut state,
-        finished(LargeFileCommand::AnnexDropUnused { force: false }),
+        finished(LargeFileCommand::AnnexDropUnused {
+            unused: Default::default(),
+            force: false,
+        }),
     );
     assert!(!reloads(&effects), "{effects:?}");
 
@@ -6237,6 +6289,7 @@ fn unused_listing_loads_on_request_and_reloads_after_content_moves() {
             repo_id,
             result: Ok(gitcomet_core::large_files::AnnexUnused {
                 entries: vec![gitcomet_core::large_files::AnnexUnusedEntry {
+                    number: 1,
                     key: "SHA256E-s4--old.bin".into(),
                     kind: gitcomet_core::large_files::AnnexUnusedKind::Unused,
                 }],
@@ -6252,7 +6305,10 @@ fn unused_listing_loads_on_request_and_reloads_after_content_moves() {
         &mut repos,
         &id_alloc,
         &mut state,
-        finished(LargeFileCommand::AnnexDropUnused { force: false }),
+        finished(LargeFileCommand::AnnexDropUnused {
+            unused: Default::default(),
+            force: false,
+        }),
     );
     assert!(reloads(&effects), "a shown listing reloads: {effects:?}");
     let effects = reduce(

@@ -306,6 +306,18 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffTextSource>> {
         cancellation.check_cancelled()?;
+        use super::large_files::AnnexWorktreeSide;
+        match self.annex_worktree_side(repo, path) {
+            Some(AnnexWorktreeSide::Indexed(id)) => {
+                return self.file_diff_source_from_blob_id(id, path, cancellation);
+            }
+            Some(AnnexWorktreeSide::EditedTooLarge { id, identity }) => {
+                return Ok(self
+                    .file_diff_source_from_blob_id(id, path, cancellation)?
+                    .map(|source| FileDiffTextSource::with_identity(source.path, identity)));
+            }
+            None => {}
+        }
         self.cached_git_normalized_worktree_file_source_cancellable(repo, path, cancellation)
     }
 
@@ -390,6 +402,11 @@ impl GixRepo {
                 hit.identity,
             )));
         }
+
+        // Only a miss runs filters; the fingerprint above never hashes annex's.
+        let mut read_repo = repo.clone();
+        super::large_files::strip_annex_filter(&mut read_repo);
+        let repo = &read_repo;
 
         // Record the identity before verification and check it again afterwards.
         let file_stamp =
@@ -524,10 +541,8 @@ impl GixRepo {
                                     3,
                                     cancellation,
                                 )?;
-                                return Ok(Some(FileDiffText::new_sources(
-                                    path.clone(),
-                                    ours,
-                                    theirs,
+                                return Ok(Some(self.with_large_file_sides(
+                                    &repo, path, &repo_path, ours, theirs, false,
                                 )));
                             }
                         };
@@ -1953,6 +1968,7 @@ impl GixRepo {
 /// bypasses it: the driver is an external program whose output can change
 /// without any input we can stamp changing. `filter=lfs` is the exception: its
 /// clean output is the sha256 of the bytes, so the file stamp already covers it.
+/// Annex is also safe here: background readers strip its filter entirely.
 fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Option<u64> {
     let index = repo.index_or_empty().ok()?;
     let mut attributes = repo
@@ -1980,6 +1996,7 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         let assignment = matched.assignment;
         if assignment.name.as_str() == "filter" {
             match assignment.state {
+                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"annex" => {}
                 gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs" => {
                     for key in [
                         "filter.lfs.clean",

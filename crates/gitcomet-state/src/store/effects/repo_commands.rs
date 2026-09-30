@@ -83,7 +83,7 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         C::AnnexTrust { repository, trust } => format!("{repository} · {}", trust.label()),
         C::AnnexDescribe { repository, .. } => repository.clone(),
         C::AnnexNumcopies { copies } => copies.to_string(),
-        C::AnnexDropUnused { force } => {
+        C::AnnexDropUnused { force, .. } => {
             format!("unused content{}", if *force { " · force" } else { "" })
         }
         C::AnnexInit | C::AnnexFsck | C::AnnexRestage | C::AnnexWebapp | C::AnnexStopAssistant => {

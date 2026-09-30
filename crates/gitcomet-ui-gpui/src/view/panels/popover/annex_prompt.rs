@@ -58,6 +58,7 @@ pub(super) fn initial_text(prompt: &AnnexPrompt) -> String {
 pub(super) fn prompt_command(
     prompt: &AnnexPrompt,
     text: &str,
+    unused: Option<&Arc<AnnexUnused>>,
 ) -> Result<LargeFileCommand, &'static str> {
     let text = text.trim();
     match prompt {
@@ -110,13 +111,19 @@ pub(super) fn prompt_command(
             from: None,
             force: true,
         }),
-        AnnexPrompt::Unused => Ok(LargeFileCommand::AnnexDropUnused { force: false }),
+        AnnexPrompt::Unused => Ok(LargeFileCommand::AnnexDropUnused {
+            unused: unused
+                .filter(|unused| !unused.entries.is_empty())
+                .ok_or("Load and review unused content first")?
+                .clone(),
+            force: false,
+        }),
         AnnexPrompt::Webapp => Ok(LargeFileCommand::AnnexWebapp),
     }
 }
 
 /// The listing when it has something to drop.
-pub(super) fn droppable_unused(repo: Option<&RepoState>) -> Option<&AnnexUnused> {
+pub(super) fn droppable_unused(repo: Option<&RepoState>) -> Option<&Arc<AnnexUnused>> {
     match &repo?.annex_unused {
         Loadable::Ready(unused) if !unused.entries.is_empty() => Some(unused),
         _ => None,
@@ -212,7 +219,9 @@ pub(super) fn panel(
         .submodule_ref_input
         .read_with(cx, |input, _| input.text().to_string());
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
-    let verdict = prompt_command(prompt, &text);
+    // Shared with state: this runs on every repaint of every annex prompt.
+    let unused = droppable_unused(repo).cloned();
+    let verdict = prompt_command(prompt, &text, unused.as_ref());
     let force_drop = matches!(prompt, AnnexPrompt::ForceDrop { .. });
     let is_unused = matches!(prompt, AnnexPrompt::Unused);
     let can_drop_unused = droppable_unused(repo).is_some();
@@ -279,9 +288,15 @@ pub(super) fn panel(
             .style(components::ButtonStyle::Danger)
             .disabled(!can_drop_unused)
             .on_click(theme, cx, move |this, _e, window, cx| {
+                let Some(unused) = unused.clone() else {
+                    return;
+                };
                 this.store.dispatch(Msg::RunLargeFileCommand {
                     repo_id,
-                    command: LargeFileCommand::AnnexDropUnused { force: true },
+                    command: LargeFileCommand::AnnexDropUnused {
+                        unused,
+                        force: true,
+                    },
                 });
                 this.dismiss_inline_popover(window, cx);
             })
@@ -314,8 +329,18 @@ pub(super) fn panel(
                                 components::ButtonStyle::Filled
                             })
                             .disabled(verdict.is_err() || (is_unused && !can_drop_unused))
-                            .on_click(theme, cx, |this, _e, window, cx| {
-                                this.submit_annex_prompt(window, cx);
+                            .on_click(theme, cx, move |this, _e, window, cx| {
+                                if is_unused {
+                                    if let Ok(command) = verdict.clone() {
+                                        this.store.dispatch(Msg::RunLargeFileCommand {
+                                            repo_id,
+                                            command,
+                                        });
+                                        this.dismiss_inline_popover(window, cx);
+                                    }
+                                } else {
+                                    this.submit_annex_prompt(window, cx);
+                                }
                             }),
                     ),
             ),
@@ -325,6 +350,10 @@ pub(super) fn panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prompt_command(prompt: &AnnexPrompt, text: &str) -> Result<LargeFileCommand, &'static str> {
+        super::prompt_command(prompt, text, None)
+    }
 
     #[test]
     fn special_remote_prompts_parse_quotes_and_escapes_without_shell_expansion() {
@@ -414,10 +443,21 @@ mod tests {
             prompt_command(&copies, " 3 "),
             Ok(LargeFileCommand::AnnexNumcopies { copies: 3 })
         ));
-        assert!(matches!(
-            prompt_command(&AnnexPrompt::Unused, ""),
-            Ok(LargeFileCommand::AnnexDropUnused { force: false })
-        ));
+        assert!(prompt_command(&AnnexPrompt::Unused, "").is_err());
+        let listed = Arc::new(AnnexUnused {
+            entries: vec![gitcomet_core::large_files::AnnexUnusedEntry {
+                number: 4,
+                key: "WORM-s1-m1--old".into(),
+                kind: AnnexUnusedKind::Unused,
+            }],
+        });
+        assert_eq!(
+            super::prompt_command(&AnnexPrompt::Unused, "", Some(&listed)),
+            Ok(LargeFileCommand::AnnexDropUnused {
+                unused: listed,
+                force: false
+            })
+        );
         assert!(matches!(
             prompt_command(&AnnexPrompt::Webapp, ""),
             Ok(LargeFileCommand::AnnexWebapp)
@@ -435,6 +475,7 @@ mod tests {
     fn unused_summary_counts_items_and_known_sizes() {
         use gitcomet_core::large_files::{AnnexUnusedEntry, AnnexUnusedKind};
         let entry = |key: &str| AnnexUnusedEntry {
+            number: 1,
             key: key.into(),
             kind: AnnexUnusedKind::Unused,
         };

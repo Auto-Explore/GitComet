@@ -370,9 +370,6 @@ fn remote_name_is_config_key_safe(remote: &str) -> bool {
     !remote.is_empty() && !remote.contains(['=', '\n', '\r'])
 }
 
-/// Read a boolean directly from the matching `[remote "..."]` sections. This
-/// avoids interpolating the remote name into a dotted config key, where names
-/// containing `=` can be parsed as part of the value instead.
 /// A `[remote]` section git-annex wrote for a special remote (S3, directory,
 /// httpalso, ...): it carries `annex-uuid` but no URL, so Git cannot fetch it.
 fn is_annex_special_remote(config: &gix::config::Snapshot<'_>, remote_name: &str) -> bool {
@@ -389,6 +386,9 @@ fn is_annex_special_remote(config: &gix::config::Snapshot<'_>, remote_name: &str
     has("annex-uuid") && !has("url")
 }
 
+/// Read a boolean directly from the matching `[remote "..."]` sections. This
+/// avoids interpolating the remote name into a dotted config key, where names
+/// containing `=` can be parsed as part of the value instead.
 fn remote_config_boolean(
     config: &gix::config::Snapshot<'_>,
     remote_name: &str,

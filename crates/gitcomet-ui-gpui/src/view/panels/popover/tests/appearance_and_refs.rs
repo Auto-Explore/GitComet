@@ -441,7 +441,11 @@ fn pull_controls_on_adjusted_branches_follow_annex_support_and_settings(
                 annex_pull_push: takeover,
                 ..Default::default()
             };
-            let enabled = takeover && repo.large_file_support_active();
+            let enabled = takeover
+                && match &repo.large_file_support {
+                    Loadable::Ready(support) => support.annex.in_use(),
+                    _ => true,
+                };
             assert_eq!(pull_enabled(&repo, &settings), enabled, "main Pull button");
             if enabled {
                 assert_eq!(

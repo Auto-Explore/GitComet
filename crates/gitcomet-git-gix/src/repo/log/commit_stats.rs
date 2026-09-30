@@ -2,6 +2,9 @@ use super::super::large_files::CommittedPointerScan;
 use super::*;
 
 pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
+/// Large-file badges cost ~1-2.5 us per file (measured on 20k-file commits),
+/// far less than line stats, so asset imports keep them.
+pub(crate) const COMMIT_POINTER_MAX_FILES: usize = 10_000;
 /// Blobs larger than this are treated as "stats unknown" instead of diffed.
 pub(crate) const COMMIT_STATS_MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
 /// Git's binary heuristic: a NUL byte within the leading window.
@@ -211,7 +214,8 @@ pub(crate) fn tree_diff_file_changes(
         return Ok(Vec::new());
     }
     let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
-    let pointers = owner.committed_pointer_scan(repo);
+    let pointers =
+        (changes.len() <= COMMIT_POINTER_MAX_FILES).then(|| owner.committed_pointer_scan(repo));
     let mut scratch = CommitStatsScratch::default();
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
@@ -219,7 +223,7 @@ pub(crate) fn tree_diff_file_changes(
             repo,
             change,
             compute_stats,
-            Some(&pointers),
+            pointers.as_deref(),
             &mut scratch,
         )? {
             files.push(file);

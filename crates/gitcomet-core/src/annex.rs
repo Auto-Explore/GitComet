@@ -180,6 +180,52 @@ pub fn adjusted_branch(head: &str) -> Option<(&str, &str)> {
     (!base.is_empty() && !mode.is_empty()).then_some((base, mode))
 }
 
+/// Bulky directories below a Git directory that the file watcher never walks.
+pub const WATCH_PRIVATE_DIRS: [&str; 5] = [
+    "annex/objects",
+    "annex/keysdb",
+    "annex/transfer",
+    "annex/tmp",
+    "annex/othertmp",
+];
+
+/// Logs the support summary reads from the git-annex branch and journals.
+pub const SUPPORT_LOGS: [&str; 4] = ["uuid.log", "trust.log", "remote.log", "numcopies.log"];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WatchPath {
+    /// Locks, databases, temp files and location logs git-annex rewrites on
+    /// every command. Never a reason to refresh.
+    Private,
+    /// A directory holding support metadata; only its creation or removal matters.
+    Directory,
+    /// A file the support summary reads.
+    Support,
+}
+
+/// How the file watcher treats `relative` (to a Git directory), or `None`
+/// outside `annex/`. Anything not named here is private, so new git-annex
+/// bookkeeping files can never start a refresh loop.
+pub fn watch_path(relative: &std::path::Path) -> Option<WatchPath> {
+    // Non-UTF-8 names match nothing below, so they stay private.
+    let mut parts = relative
+        .components()
+        .map(|part| part.as_os_str().to_str().unwrap_or_default());
+    if parts.next()? != "annex" {
+        return None;
+    }
+    let journal = |dir: &str| dir == "journal" || dir == "journal-private";
+    Some(match (parts.next(), parts.next(), parts.next()) {
+        (None, ..) => WatchPath::Directory,
+        (Some(dir), None, _) if journal(dir) => WatchPath::Directory,
+        (Some("restage.log" | "daemon.pid"), None, _) => WatchPath::Support,
+        (Some(dir), Some(log), None) if journal(dir) && SUPPORT_LOGS.contains(&log) => {
+            WatchPath::Support
+        }
+        _ => WatchPath::Private,
+    })
+}
+
 /// Branches git-annex maintains for itself: the location-tracking branch and
 /// the `synced/*` staging refs. Pass the branch name without any remote
 /// prefix; a local `feature/git-annex` is an ordinary branch.

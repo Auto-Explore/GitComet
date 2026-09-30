@@ -2320,8 +2320,9 @@ impl RepoState {
         self.annex_whereis.get(key)
     }
 
-    /// The adjusted branch HEAD is on, as `(base, mode)`, in an annex repo.
-    /// Read from HEAD itself: support loads once, HEAD moves under it.
+    /// The adjusted branch HEAD is on, as `(base, mode)`. Until detection
+    /// succeeds, conservatively treat the name as adjusted: plain Git must
+    /// never merge into an adjusted branch just because support is loading.
     pub fn annex_adjusted_branch(&self) -> Option<(&str, &str)> {
         let Loadable::Ready(head) = &self.head_branch else {
             return None;
@@ -2329,8 +2330,8 @@ impl RepoState {
         let adjusted = gitcomet_core::annex::adjusted_branch(head)?;
         match &self.large_file_support {
             // Outside an annex repo the name is an ordinary branch.
-            Loadable::Ready(support) if support.annex.in_use() => Some(adjusted),
-            _ => None,
+            Loadable::Ready(support) if !support.annex.in_use() => None,
+            _ => Some(adjusted),
         }
     }
 

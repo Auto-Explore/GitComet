@@ -2522,10 +2522,11 @@ pub(super) fn large_file_support_loaded(
     };
     let was_active = repo_state.large_file_support_active();
     let support_changed = result.as_ref().is_ok_and(|support| {
-        repo_state
-            .large_file_support
-            .ready()
-            .is_none_or(|old| old.as_ref() != support)
+        repo_state.large_file_support.ready().is_none_or(|old| {
+            // Repository descriptions, trust, numcopies, restage and
+            // assistant state affect the sidebar, not content resolution.
+            old.lfs != support.lfs || old.annex.in_use() != support.annex.in_use()
+        })
     });
     match result {
         Ok(support) => {

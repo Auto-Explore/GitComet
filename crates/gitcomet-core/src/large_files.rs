@@ -207,6 +207,8 @@ impl AnnexUnused {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AnnexUnusedEntry {
+    /// Number assigned by this exact `git annex unused` scan.
+    pub number: u64,
     pub key: String,
     pub kind: AnnexUnusedKind,
 }
@@ -427,6 +429,8 @@ pub enum LargeFileCommand {
     /// Drop everything `git annex unused` currently lists. git-annex refuses
     /// keys without enough verified copies elsewhere, unless `force`.
     AnnexDropUnused {
+        /// The listing the user confirmed. Refuse if a fresh scan differs.
+        unused: std::sync::Arc<AnnexUnused>,
         force: bool,
     },
     /// Start git-annex's own web interface (and its assistant) in the background.

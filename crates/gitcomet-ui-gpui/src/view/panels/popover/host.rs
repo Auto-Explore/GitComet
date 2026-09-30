@@ -147,12 +147,12 @@ impl PopoverHost {
         submit: fn(&mut Self, &mut Window, &mut gpui::Context<Self>),
     ) -> gpui::Subscription {
         cx.observe_in(input, window, move |this, input, window, cx| {
-            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-            let _ = input.update(cx, |input, _| input.take_escape_pressed());
-
             if !is_active(this) {
                 return;
             }
+
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let _ = input.update(cx, |input, _| input.take_escape_pressed());
 
             if enter_pressed {
                 submit(this, window, cx);
@@ -1782,16 +1782,11 @@ impl PopoverHost {
         let text = self
             .submodule_ref_input
             .read_with(cx, |input, _| input.text().to_string());
-        let Ok(command) = annex_prompt::prompt_command(&prompt, &text) else {
+        let unused =
+            annex_prompt::droppable_unused(self.state.repos.iter().find(|r| r.id == repo_id));
+        let Ok(command) = annex_prompt::prompt_command(&prompt, &text, unused) else {
             return;
         };
-        // Enter must not drop while the listing is loading or empty.
-        if matches!(prompt, AnnexPrompt::Unused)
-            && annex_prompt::droppable_unused(self.state.repos.iter().find(|r| r.id == repo_id))
-                .is_none()
-        {
-            return;
-        }
         self.store
             .dispatch(Msg::RunLargeFileCommand { repo_id, command });
         self.dismiss_inline_popover(window, cx);

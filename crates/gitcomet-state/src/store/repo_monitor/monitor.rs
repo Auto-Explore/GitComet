@@ -386,6 +386,10 @@ pub(super) fn summarize(
                     })
                 });
             }
+            // A directory's own timestamp moves with every lock file inside it.
+            PathClass::AnnexSupport { directory } => {
+                change.large_file_support |= !directory || structural;
+            }
             PathClass::Worktree => {
                 let relative = path.strip_prefix(&snapshot.workdir).unwrap();
                 if path

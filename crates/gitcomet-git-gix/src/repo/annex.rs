@@ -420,12 +420,35 @@ fn parse_unused(json: &str) -> Result<AnnexUnused> {
             .filter_map(|(number, key)| Some((number.parse().ok()?, key.as_str()?)))
             .collect();
         numbered.sort_unstable_by_key(|(number, _)| *number);
-        entries.extend(numbered.into_iter().map(|(_, key)| AnnexUnusedEntry {
+        entries.extend(numbered.into_iter().map(|(number, key)| AnnexUnusedEntry {
+            number,
             key: key.to_string(),
             kind,
         }));
     }
     Ok(AnnexUnused { entries })
+}
+
+/// `dropunused` numbers as `N` or `N-M` runs: the listing is mostly one
+/// contiguous run, and one argument per key can overflow a command line.
+fn number_ranges(numbers: impl IntoIterator<Item = u64>) -> impl Iterator<Item = String> {
+    let mut numbers: Vec<u64> = numbers.into_iter().collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    let mut runs: Vec<(u64, u64)> = Vec::new();
+    for number in numbers {
+        match runs.last_mut() {
+            Some((_, end)) if *end + 1 == number => *end = number,
+            _ => runs.push((number, number)),
+        }
+    }
+    runs.into_iter().map(|(start, end)| {
+        if start == end {
+            start.to_string()
+        } else {
+            format!("{start}-{end}")
+        }
+    })
 }
 
 /// The assistant writes its pid to `.git/annex/daemon.pid` and leaves it
@@ -533,8 +556,13 @@ impl super::GixRepo {
         let by_key = args
             .iter()
             .any(|arg| arg.to_string_lossy().starts_with("--key="));
-        // `dropunused all` names its targets itself.
-        let names_targets = by_key || args.iter().any(|arg| arg == "all");
+        // `dropunused` carries the numbers from the confirmed listing.
+        let numbered_unused = args.first().is_some_and(|arg| arg == "dropunused")
+            && args.iter().skip(1).any(|arg| {
+                arg.to_str()
+                    .is_some_and(|arg| arg.split('-').all(|n| n.parse::<u64>().is_ok()))
+            });
+        let names_targets = by_key || numbered_unused;
         if paths.is_empty() && !names_targets {
             return Err(backend(format!("{label}: no paths given")));
         }
@@ -667,8 +695,8 @@ impl super::GixRepo {
 
     pub(super) fn run_annex_command(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
         let result = crate::util::with_shared_git_auth(|| self.run_annex_command_inner(command));
-        if command.restages_after() {
-            // Also after a failure or a cancel, which kill git-annex before its
+        if result.is_err() && command.restages_after() {
+            // After a failure or a cancel, which can kill git-annex before its
             // own restage. A fresh operation keeps a cancelled one's flag from
             // refusing this run; its output is not worth reporting.
             let quiet = gitcomet_core::git_operation::GitOperationContext::new(
@@ -835,7 +863,7 @@ impl super::GixRepo {
                     return Err(backend("a description cannot be empty"));
                 }
                 self.run_annex_plain(
-                    &["describe"],
+                    &["describe", "--"],
                     &[repository.as_str(), description.as_str()],
                     "git annex describe",
                 )
@@ -849,15 +877,36 @@ impl super::GixRepo {
             }
             C::AnnexFsck => self.run_annex_plain(&["fsck", "--fast"], &[], "git annex fsck"),
             C::AnnexRestage => self.run_annex_plain(&["restage"], &[], "git annex restage"),
-            C::AnnexDropUnused { force } => {
-                // `dropunused` works on the numbers the last `unused` wrote, so
-                // refresh them first rather than trust an older listing.
-                self.run_annex_plain(&["unused", "--quiet"], &[], "git annex unused")?;
+            C::AnnexDropUnused { unused, force } => {
+                if unused.entries.is_empty() {
+                    return Err(backend("No unused content was selected"));
+                }
+                // Numbers can be reassigned and refs can move while the prompt
+                // is open. Never broaden a confirmation to a new set of keys.
+                // Parsed from stdout, so the listing stays out of the activity
+                // output; cancellable like the drop, with no silence deadline.
+                let fresh = run_git_parsed_stdout_until_done(
+                    self.git_annex(&["unused", "--json"]),
+                    "git annex unused",
+                    |mut stdout| {
+                        let mut json = String::new();
+                        std::io::Read::read_to_string(&mut stdout, &mut json)
+                            .map_err(|error| backend(format!("git annex unused: {error}")))?;
+                        parse_unused(&json)
+                    },
+                )?;
+                if fresh != **unused {
+                    return Err(backend(
+                        "Unused content changed. Reopen the unused-content listing and review it before dropping.",
+                    ));
+                }
                 let mut args = os(&["dropunused"]);
                 if *force {
                     args.push("--force".into());
                 }
-                args.push("all".into());
+                args.extend(
+                    number_ranges(unused.entries.iter().map(|e| e.number)).map(OsString::from),
+                );
                 self.run_annex_json(&args, &[], "git annex dropunused")
             }
             C::AnnexWebapp => self.spawn_annex_webapp(),

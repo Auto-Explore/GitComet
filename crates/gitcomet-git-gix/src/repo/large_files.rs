@@ -211,10 +211,17 @@ fn has_annex_branch(repo: &gix::Repository) -> bool {
         })
 }
 
+pub(super) enum AnnexWorktreeSide {
+    /// Unchanged since `git annex add`: the indexed key is its key.
+    Indexed(gix::ObjectId),
+    /// Edited and too large to read as text: the index pointer stands in for
+    /// the unknown new key, under an identity of its own.
+    EditedTooLarge { id: gix::ObjectId, identity: String },
+}
+
 /// Commit rows are classified only in repositories that use either tool, and
 /// only blobs small enough to be a pointer of the tools in use are read.
 pub(super) struct CommittedPointerScan {
-    repo: gix::ThreadSafeRepository,
     stores: LocalStores,
     lfs: bool,
     annex: bool,
@@ -236,12 +243,7 @@ impl CommittedPointerScan {
                 pattern.is_some()
             })
             .unwrap_or(false);
-        Self {
-            repo: repo.clone().into_sync(),
-            stores,
-            lfs,
-            annex,
-        }
+        Self { stores, lfs, annex }
     }
 
     fn supports(&self, pointer: &LargeFilePointer) -> bool {
@@ -396,14 +398,11 @@ fn scan_lfs_attributes(
 }
 
 impl super::GixRepo {
-    /// Reuse the handle loaded with support metadata, including its refreshed
-    /// filter config. No config parse or cold index per click.
+    /// Share the ordinary config cache and object store with other readers.
+    /// Support metadata must not retain a separately opened repository.
     pub(super) fn large_file_read_repo(&self) -> gix::Repository {
-        self.large_file_scan
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .map_or_else(|| self.repo(), |scan| scan.repo.to_thread_local())
+        self.repo_with_current_config()
+            .unwrap_or_else(|_| self.repo())
     }
 
     pub(super) fn committed_pointer_scan(
@@ -415,6 +414,64 @@ impl super::GixRepo {
             .unwrap_or_else(|e| e.into_inner())
             .get_or_insert_with(|| std::sync::Arc::new(CommittedPointerScan::of(repo)))
             .clone()
+    }
+
+    /// Describe an unlocked annexed file's worktree side through its index
+    /// entry, without hashing the worktree through git-annex. `None` reads
+    /// the file normally: not unlocked annex content, or a small edit.
+    pub(super) fn annex_worktree_side(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+    ) -> Option<AnnexWorktreeSide> {
+        if !self.committed_pointer_scan(repo).annex {
+            return None;
+        }
+        let full = self.spec.workdir.join(path);
+        let metadata = std::fs::symlink_metadata(&full).ok()?;
+        if !metadata.is_file()
+            || read_pointer_candidate(&full)
+                .and_then(|bytes| classify_git_form(&bytes))
+                .is_some()
+        {
+            return None;
+        }
+        let index = repo.index_or_empty().ok()?;
+        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+        let entry = index.entry_by_path(key.as_ref())?;
+        // A locked (symlink) entry replaced by a file is ordinary content.
+        if entry.mode == gix::index::entry::Mode::SYMLINK
+            || !matches!(
+                classify_blob(repo, entry.id, false)?.pointer,
+                LargeFilePointer::Annex(_)
+            )
+        {
+            return None;
+        }
+        // The key describes the file only while it is as `git annex add` left it.
+        let options = repo.stat_options().ok()?;
+        let unchanged = gix::index::fs::Metadata::from_path_no_follow(&full)
+            .ok()
+            .and_then(|metadata| gix::index::entry::Stat::from_fs(&metadata).ok())
+            .is_some_and(|stat| {
+                entry.stat.matches(&stat, options)
+                    && !entry.stat.is_racy(index.timestamp(), options)
+            });
+        if unchanged {
+            Some(AnnexWorktreeSide::Indexed(entry.id))
+        } else if metadata.len() > LARGE_FILE_TEXT_DIFF_MAX_BYTES {
+            Some(AnnexWorktreeSide::EditedTooLarge {
+                id: entry.id,
+                identity: format!(
+                    "annex-worktree:{}:{}:{:?}",
+                    path.display(),
+                    metadata.len(),
+                    metadata.modified().ok()
+                ),
+            })
+        } else {
+            None
+        }
     }
 
     /// Describe one side of a text diff whose git form is a pointer, and point
@@ -563,7 +620,7 @@ impl super::GixRepo {
         cancellation.check_cancelled()?;
         // Commands and external tools can change configuration on the same
         // open handle (annex init/enableremote, LFS install, custom storage).
-        let repo = self.reopen_repo()?;
+        let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let storage_dir = lfs_storage_dir(&repo);
         let skip_flag = |key: &str| {
@@ -612,7 +669,6 @@ impl super::GixRepo {
             .large_file_scan
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(CommittedPointerScan {
-            repo: repo.clone().into_sync(),
             stores: LocalStores::of(&repo),
             lfs: lfs.in_use(),
             annex: annex.in_use(),

@@ -6,7 +6,9 @@
 mod test_git_env;
 
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus};
-use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileWorktree};
+use gitcomet_core::large_files::{
+    LargeFileContent, LargeFilePointer, LargeFileSide, LargeFileWorktree,
+};
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -351,6 +353,201 @@ fn unstaged(path: &str) -> DiffTarget {
         path: PathBuf::from(path),
         area: DiffArea::Unstaged,
     }
+}
+
+#[test]
+fn conflicted_large_file_text_diff_resolves_both_index_stages() {
+    use std::io::Write;
+    for annex in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        init_repo(&repo);
+        if annex {
+            git(&repo, &["config", "annex.uuid", "test-annex"]);
+        } else {
+            fs::write(repo.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+        }
+        let mut index_info = String::new();
+        let mut objects = Vec::new();
+        for (stage, key, content) in [(2, ANNEX_KEY, "hello"), (3, OTHER_ANNEX_KEY, "abc")] {
+            let key = gitcomet_core::annex::parse_key(key).unwrap();
+            let oid = key.raw.split("--").nth(1).unwrap().trim_end_matches(".bin");
+            let (pointer, object) = if annex {
+                (
+                    format!("/annex/objects/{}\n", key.raw),
+                    repo.join(".git/annex/objects")
+                        .join(gitcomet_core::annex::object_paths(&key.raw, 2)[0].clone()),
+                )
+            } else {
+                (
+                    format!(
+                        "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+                        content.len()
+                    ),
+                    repo.join(format!(
+                        ".git/lfs/objects/{}/{}/{oid}",
+                        &oid[..2],
+                        &oid[2..4]
+                    )),
+                )
+            };
+            fs::create_dir_all(object.parent().unwrap()).unwrap();
+            fs::write(&object, content).unwrap();
+            objects.push(object);
+            fs::write(repo.join("a.bin"), pointer).unwrap();
+            let id = git(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
+            index_info.push_str(&format!("100644 {} {stage}\ta.bin\n", id.trim()));
+        }
+        let mut cmd = Command::new("git");
+        test_git_env::apply(&mut cmd);
+        let mut child = cmd
+            .arg("-C")
+            .arg(&repo)
+            .args(["update-index", "--index-info"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(index_info.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        fs::write(repo.join("a.bin"), "unrelated worktree resolution").unwrap();
+        let opened = GixBackend.open(&repo).unwrap();
+        let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+        assert_eq!(
+            source_text(diff.old_source.as_ref()).as_deref(),
+            Some("hello")
+        );
+        assert_eq!(
+            source_text(diff.new_source.as_ref()).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(diff.old_large.unwrap().content, LargeFileContent::Available);
+        assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
+        fs::remove_file(&objects[1]).unwrap();
+        let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+        assert_eq!(
+            diff.new_large.unwrap().content,
+            LargeFileContent::MissingLocally
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn annex_worktree_diffs_never_run_the_clean_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    git(&repo, &["config", "annex.uuid", "test-annex"]);
+    fs::write(repo.join("a.bin"), format!("/annex/objects/{ANNEX_KEY}\n")).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "pointer"]);
+    fs::write(repo.join(".gitattributes"), "*.bin filter=annex\n").unwrap();
+    // Filters get no GIT_WORK_TREE, so the marker path is absolute. The filter
+    // succeeds: the marker, not an error, is what catches a regression.
+    let marker = dir.path().join("filter-invoked");
+    let filter = format!("touch '{}'; cat", marker.display());
+    git(&repo, &["config", "filter.annex.clean", &filter]);
+    fs::write(repo.join("a.bin"), "edited content\n").unwrap();
+    let opened = GixBackend.open(&repo).unwrap();
+    for _ in 0..2 {
+        let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+        assert_eq!(
+            source_text(diff.new_source.as_ref()).as_deref(),
+            Some("edited content\n")
+        );
+    }
+    assert!(!marker.exists(), "the annex filter ran");
+    let bytes = 4 * 1024 * 1024 * 1024;
+    fs::File::create(repo.join("a.bin"))
+        .unwrap()
+        .set_len(bytes)
+        .unwrap();
+    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    assert_eq!(
+        diff.new_large.unwrap().content,
+        LargeFileContent::TooLarge { bytes }
+    );
+    assert!(
+        fs::metadata(&diff.new_source.unwrap().path).unwrap().len() < 1024,
+        "large content stays behind its pointer without copying or hashing it"
+    );
+}
+
+/// An unlocked file edited after `git annex add` no longer holds the indexed
+/// key's content. Reusing that key must stop at the first edit, or the edited
+/// side is described by the old key and a huge edit compares equal.
+#[test]
+fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    git(&repo, &["config", "annex.uuid", "test-annex"]);
+    fs::write(repo.join(".gitattributes"), "*.bin filter=annex\n").unwrap();
+    // What `git annex add` leaves for an unlocked file: the pointer in the
+    // index, stamped with the worktree content's stat.
+    fs::write(repo.join("a.bin"), "hello").unwrap();
+    // Older than the index, so the recorded stat is not racy.
+    fs::File::options()
+        .write(true)
+        .open(repo.join("a.bin"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30))
+        .unwrap();
+    let clean =
+        format!("filter.annex.clean=cat >/dev/null; printf '/annex/objects/{ANNEX_KEY}\\n'");
+    git(&repo, &["-c", &clean, "add", "."]);
+    git(&repo, &["-c", &clean, "commit", "-qm", "unlocked"]);
+    let opened = GixBackend.open(&repo).unwrap();
+    let pointer = |side: Option<LargeFileSide>| side.map(|side| side.pointer);
+    let annexed = gitcomet_core::annex::parse_key(ANNEX_KEY).map(LargeFilePointer::Annex);
+
+    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    assert_eq!(
+        pointer(diff.new_large),
+        annexed,
+        "unchanged content keeps its key"
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("hello")
+    );
+
+    fs::write(repo.join("a.bin"), "edited content\n").unwrap();
+    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    assert_eq!(
+        pointer(diff.new_large),
+        None,
+        "an edit has no key until it is added"
+    );
+    assert_eq!(
+        source_text(diff.new_source.as_ref()).as_deref(),
+        Some("edited content\n")
+    );
+
+    let bytes = 4 * 1024 * 1024 * 1024;
+    fs::File::create(repo.join("a.bin"))
+        .unwrap()
+        .set_len(bytes)
+        .unwrap();
+    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let (old, new) = (diff.old_source.unwrap(), diff.new_source.unwrap());
+    assert_ne!(
+        old.identity, new.identity,
+        "a huge edit must not equal the index"
+    );
+    assert!(
+        fs::metadata(&new.path).unwrap().len() < 1024,
+        "never copied"
+    );
+    assert_eq!(
+        diff.new_large.unwrap().content,
+        LargeFileContent::TooLarge { bytes }
+    );
 }
 
 /// With content in the store and the worktree, the diff shows the real text

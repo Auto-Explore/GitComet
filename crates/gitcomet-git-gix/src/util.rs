@@ -412,6 +412,8 @@ impl LfsProgressMonitor {
         context: Option<&GitOperationContext>,
         liveness: &LivenessClock,
     ) -> Option<Self> {
+        // Not gated on the repository using LFS: the command itself (checkout,
+        // pull, merge...) can be what brings LFS attributes in.
         if !may_transfer_lfs_content(cmd) {
             return None;
         }
@@ -462,6 +464,9 @@ fn lfs_progress_tail_loop(
     };
     let mut pending = Vec::<u8>::new();
     loop {
+        // Observe completion before reading: a stop racing the read/emit must
+        // leave another pass to drain the writer's final line.
+        let final_read = done.load(Ordering::Acquire);
         let before = pending.len();
         let _ = file.read_to_end(&mut pending);
         let grew = pending.len() != before;
@@ -482,7 +487,7 @@ fn lfs_progress_tail_loop(
                 context.emit(GitOperationEvent::TransferProgress(progress));
             }
         }
-        if done.load(Ordering::Acquire) {
+        if final_read {
             break;
         }
         if !grew {
@@ -2751,6 +2756,82 @@ mod tests {
                 .matches("tick")
                 .count(),
             6
+        );
+    }
+
+    /// git-lfs prints nothing without a TTY, so its progress file is the only
+    /// sign of life. A checkout can bring LFS into a repository whose current
+    /// commit has none, so it must be monitored all the same.
+    #[cfg(unix)]
+    #[test]
+    fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = dir.path();
+        let git = |args: &[&str]| {
+            let mut cmd = Command::new("git");
+            cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+                .arg(workdir)
+                .args(args);
+            assert!(cmd.status().unwrap().success(), "{args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "no lfs"]);
+        git(&["switch", "-q", "-c", "assets"]);
+        std::fs::write(workdir.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+        std::fs::write(workdir.join("a.bin"), "content\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "lfs"]);
+        git(&["switch", "-q", "main"]);
+        git(&[
+            "config",
+            "filter.lfs.smudge",
+            "for i in 1 2 3 4 5 6; do if [ -n \"$GIT_LFS_PROGRESS\" ]; then \
+             echo \"download $i/6 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.25; done; cat",
+        ]);
+        git(&["config", "filter.lfs.required", "true"]);
+        let repo = crate::repo::GixRepo::new(
+            workdir.to_path_buf(),
+            gix::open(workdir).unwrap().into_sync(),
+        );
+        let mut cmd = repo.git_workdir_cmd();
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(["checkout", "-q", "assets"]);
+        run_command_with_timeout(cmd, "git checkout", Duration::from_millis(600), None)
+            .expect("progress lines keep the smudging checkout alive");
+        assert_eq!(
+            std::fs::read_to_string(workdir.join("a.bin")).unwrap(),
+            "content\n"
+        );
+    }
+
+    #[test]
+    fn lfs_progress_drains_a_line_written_during_the_last_emit() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "download 1/2 500/1000 a.bin\n").unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let writer_done = Arc::clone(&done);
+        let path = file.path().to_path_buf();
+        let (sender, receiver) = mpsc::channel();
+        let context = GitOperationContext::new("lfs progress", move |_, event| {
+            if !writer_done.load(Ordering::Acquire) {
+                use std::io::Write;
+                let mut writer = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap();
+                writeln!(writer, "download 2/2 1000/1000 a.bin").unwrap();
+                writer_done.store(true, Ordering::Release);
+            }
+            sender.send(event).unwrap();
+        });
+        lfs_progress_tail_loop(file.path(), Some(&context), &done, &LivenessClock::new());
+        let events: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            matches!(events.last(), Some(GitOperationEvent::TransferProgress(p)) if p.bytes_done == 1000),
+            "{events:?}"
         );
     }
 

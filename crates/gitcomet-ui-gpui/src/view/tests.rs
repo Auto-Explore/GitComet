@@ -530,13 +530,15 @@ fn push_request_on_an_annex_adjusted_branch_never_offers_set_upstream() {
         Loadable::Error("failed".into()),
     ] {
         repo.large_file_support = support;
-        assert_eq!(
-            push_request(&repo, &Default::default()),
-            PushRequest::SetUpstream {
-                remote: "origin".into()
-            }
-        );
+        assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
     }
+    repo.large_file_support = Loadable::Ready(Arc::default());
+    assert_eq!(
+        push_request(&repo, &Default::default()),
+        PushRequest::SetUpstream {
+            remote: "origin".into()
+        }
+    );
 }
 
 #[test]

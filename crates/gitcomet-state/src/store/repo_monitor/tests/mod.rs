@@ -1140,9 +1140,10 @@ fn tag_file_changes_refresh_tags() {
     );
 }
 
-/// git-annex writes its keys database and journal while GitComet reads
-/// status-related data (line stats, `git annex find`). Treating those writes
-/// as Git state changes re-ran the same reads forever.
+/// git-annex writes its keys database while GitComet reads status-related
+/// data, and every command touches locks, temp files and per-key location
+/// logs (paths seen under strace). Treating those writes as Git state changes
+/// re-ran the same reads forever.
 #[test]
 fn annex_bookkeeping_writes_cannot_schedule_another_refresh() {
     let dir = unique_temp_dir("gitcomet-annex-policy");
@@ -1152,10 +1153,30 @@ fn annex_bookkeeping_writes_cannot_schedule_another_refresh() {
     let mut rules = load_gitignore_rules(workdir);
     for path in [
         "annex/keysdb/db-wal",
-        "annex/journal/abc.log",
+        "annex/keysdb.lck",
+        "annex/keysdb.tmp/db",
         "annex/index",
-        "annex/restage.log",
+        "annex/index.lck",
+        "annex/index.lck2569681-4.tmp",
         "annex/objects/Xk/Wq/KEY/KEY",
+        "annex/journal.lck",
+        "annex/journal/3cb_894_SHA256E-s1000--db02.bin.log",
+        "annex/journal-private/3cb_894_SHA256E-s1000--db02.bin.log",
+        "annex/journal-private.lck",
+        "annex/mergedrefs",
+        "annex/mergedrefs2569681-0.tmp",
+        "annex/ignoredrefs",
+        "annex/gitqueue.lck",
+        "annex/othertmp.lck",
+        "annex/misctmp/x",
+        "annex/reposize/db/db-wal",
+        "annex/unused",
+        "annex/badunused",
+        "annex/tmpunused",
+        "annex/daemon.log",
+        "annex/daemon.status",
+        "annex/smudge.log",
+        "annex/ssh/socket",
     ] {
         for kind in [
             EventKind::Create(CreateKind::File),
@@ -1169,6 +1190,75 @@ fn annex_bookkeeping_writes_cannot_schedule_another_refresh() {
                 "{path}"
             );
         }
+    }
+}
+
+#[test]
+fn annex_support_metadata_changes_schedule_a_refresh() {
+    let dir = unique_temp_dir("gitcomet-annex-metadata-policy");
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
+    init_repo_for_ignore_tests(workdir);
+    let git_dir = workdir.join(".git");
+    let mut rules = load_gitignore_rules(workdir);
+    for path in [
+        "annex/restage.log",
+        "annex/journal/uuid.log",
+        "annex/journal/numcopies.log",
+        "annex/journal/trust.log",
+        "annex/journal/remote.log",
+        "annex/journal-private/uuid.log",
+        "annex/daemon.pid",
+    ] {
+        for kind in [
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Remove(RemoveKind::File),
+        ] {
+            let event = notify::Event::new(kind).add_path(git_dir.join(path));
+            let change = classify_change(workdir, Some(&git_dir), &mut rules, &event).expect(path);
+            assert!(change.large_file_support, "{path}");
+            assert!(
+                !change.git_state && !change.index && !change.worktree,
+                "metadata must not reload file contents: {path}"
+            );
+        }
+    }
+}
+
+/// Non-recursive backends see only registered directories: the journals must
+/// be walked, git-annex's bulky and churning directories must not.
+#[test]
+fn watch_plan_walks_annex_journals_but_not_its_bookkeeping() {
+    let dir = unique_temp_dir("gitcomet-annex-plan");
+    let root = normalized(&dir.path().canonicalize().unwrap());
+    init_repo_for_ignore_tests(&root);
+    let private = [
+        "objects/Xk/Wq",
+        "keysdb",
+        "keysdb.tmp",
+        "transfer/upload",
+        "tmp",
+        "othertmp",
+        "misctmp",
+        "reposize/db",
+        "ssh",
+    ];
+    for path in private.iter().chain(&["journal", "journal-private"]) {
+        fs::create_dir_all(root.join(".git/annex").join(path)).unwrap();
+    }
+    let mut rules = load_gitignore_rules(&root);
+    let plan = TestPlan::build(&root, Some(&root.join(".git")), &mut rules);
+    for path in ["annex", "annex/journal", "annex/journal-private"] {
+        assert!(plan.dirs.contains(&root.join(".git").join(path)), "{path}");
+    }
+    for path in private {
+        let first = path.split('/').next().unwrap();
+        assert!(
+            plan.dirs
+                .iter()
+                .all(|dir| !dir.starts_with(root.join(".git/annex").join(first))),
+            "{path}"
+        );
     }
 }
 
